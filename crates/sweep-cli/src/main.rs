@@ -4,6 +4,7 @@
 //! The undo journal is sealed with a key held in the login keychain; if sealing
 //! is unavailable sweep refuses rather than writing plaintext.
 
+mod inspect;
 mod review;
 
 use std::path::PathBuf;
@@ -30,6 +31,8 @@ FLAGS
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
     --no-journal    apply without recording undo
+    --inspect-content  read text file contents to refuse MORE files
+                       (asks first; never affects where anything moves)
 
 Only `apply` moves anything. Files that look like personal records are
 never moved, in any mode.";
@@ -83,24 +86,56 @@ fn expand_tilde(p: &str) -> String {
     }
 }
 
-fn run_scan(path: &PathBuf, args: &[String]) -> ExitCode {
-    let quiet = has(args, "--quiet");
-    let explain = has(args, "--explain");
+/// Scan and build a plan, running content inspection when the user asked for
+/// it AND consented. Returns the plan plus any inspection stats to disclose.
+fn scan_and_plan(
+    path: &PathBuf,
+    args: &[String],
+) -> Result<(plan::Plan, Option<sweep_read::Stats>), ExitCode> {
     let cfg = ScanConfig {
         depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
-
     let outcome = match scan::scan(path, &cfg) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("sweep: {e}");
-            return ExitCode::from(2);
+            return Err(ExitCode::from(2));
         }
     };
 
-    let plan = plan::build(&outcome);
+    if !has(args, "--inspect-content") {
+        return Ok((plan::build(&outcome), None));
+    }
+
+    // Consent to reading is separate from consent to moving. --yes does not
+    // cover it, deliberately.
+    match inspect::consent_interactive() {
+        Ok(true) => {}
+        Ok(false) => {
+            println!("  Contents were not read. Continuing on names and dates only.\n");
+            return Ok((plan::build(&outcome), None));
+        }
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            return Err(ExitCode::from(3));
+        }
+    }
+
+    let mut insp = inspect::ContentInspector::new();
+    let p = plan::build_with(&outcome, Some(&mut insp));
+    Ok((p, Some(insp.stats)))
+}
+
+fn run_scan(path: &PathBuf, args: &[String]) -> ExitCode {
+    let quiet = has(args, "--quiet");
+    let explain = has(args, "--explain");
+
+    let (plan, stats) = match scan_and_plan(path, args) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
 
     if plan.groups.is_empty() {
         println!(
@@ -112,15 +147,21 @@ fn run_scan(path: &PathBuf, args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    render(&plan, quiet, explain);
+    render(&plan, quiet, explain, stats.is_some());
+    if let Some(st) = stats {
+        inspect::report(&st);
+    }
     ExitCode::SUCCESS
 }
 
-fn render(p: &plan::Plan, quiet: bool, explain: bool) {
-    println!(
-        "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read\n",
-        p.scanned
-    );
+fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
+    // This line must never claim more restraint than actually happened.
+    let basis = if read_contents {
+        "names, dates, and the contents of some text files"
+    } else {
+        "names, sizes and dates only  ·  no contents read"
+    };
+    println!("\nScanned {} items  ·  {basis}\n", p.scanned);
 
     let width = p.groups.iter().map(|g| g.name.chars().count()).max().unwrap_or(10).max(12);
     for g in &p.groups {

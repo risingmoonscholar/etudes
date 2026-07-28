@@ -34,9 +34,9 @@ sweep refuses rather than degrading.
 
 Not implemented, and they say so rather than pretending:
 
-- **Content inspection.** Not compiled in. See `docs/SPEC.md` for why it is
-  deferred to v0.3 rather than shipped weakly.
 - **`x` (extract files from a group)** during review.
+- **Parsing PDFs, Office documents or archives.** `--inspect-content` reads
+  plain text only, on purpose. See `docs/V03-CONTENT.md`.
 
 ## The privacy claims, and how to check them
 
@@ -44,7 +44,8 @@ Not implemented, and they say so rather than pretending:
 |---|---|
 | Nothing leaves the machine | **`scripts/no-network-test.sh`** — runs the whole suite with `socket(2)` denied by the OS, after proving the sandbox actually denies. Plus `cargo deny check bans` and a symbol scan of the shipped binary. |
 | The engine is auditable | `sweep-core` has **zero dependencies**, asserted by a test. No third-party code in the classification path. |
-| No contents are read | v0.1 never opens a file for reading. Only `symlink_metadata` and `read_dir`. |
+| No contents are read by default | sweep opens no file unless `--inspect-content` is passed **and** you answer `y` to a separate prompt. `--yes` does not cover it. |
+| Reading can only make sweep act less | `cargo test --test content` — `inspection_never_creates_or_renames_a_group`. Content can move a file into "left alone" and nothing else. |
 | Private files are not moved | `cargo test` — `sensitive_files_survive_a_full_apply_untouched` checks the filesystem, not the plan |
 | The journal reveals nothing | `cargo test` — `no_filename_is_readable_in_the_written_journal` greps the bytes on disk |
 | No filenames on screen when asked | `sweep --quiet` |
@@ -74,7 +75,7 @@ No real file is read during development. Everything is tested against a
 synthetic adversarial fixture tree.
 
 ```sh
-cargo test                        # 44 tests
+cargo test                        # 66 tests
 scripts/no-network-test.sh        # the suite, with sockets denied by the OS
 cargo run -p fixtures --bin mkfx -- /tmp/sweep-demo   # build a fake messy folder
 cargo run -p sweep-cli --bin sweep -- /tmp/sweep-demo

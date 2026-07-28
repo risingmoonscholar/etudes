@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 sweep-core = { path = "../sweep-core" }
 sweep-keep = { version = "0.1.0", path = "../sweep-keep" }
+sweep-read = { version = "0.1.0", path = "../sweep-read" }
 
 [dev-dependencies]
 fixtures = { path = "../fixtures" }

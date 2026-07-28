@@ -78,6 +78,20 @@ impl Plan {
     }
 }
 
+
+/// Optional content inspection, injected by the caller.
+///
+/// `sweep-core` deliberately cannot read file contents itself — the engine has
+/// zero dependencies and never opens a file. When the user passes
+/// `--inspect-content` the CLI supplies an implementation.
+///
+/// The return type is the whole safety story: `Option<Category>` and nothing
+/// else. There is no way for an inspector to suggest a group, a label, or a
+/// destination, so content can only ever widen refusal.
+pub trait Inspector {
+    fn inspect(&mut self, path: &std::path::Path, ext: &str) -> Option<Category>;
+}
+
 /// Minimum members before a shared token justifies a group. Below this, the
 /// grouping is noise and the honest answer is "no clear group".
 const MIN_TOKEN_GROUP: usize = 5;
@@ -85,17 +99,34 @@ const MIN_STRUCTURAL_GROUP: usize = 3;
 /// Window within which camera files count as one burst.
 const BURST_DAYS: u32 = 3;
 
-/// Build a plan. Pure: reads only the scan outcome, writes nothing.
+/// Build a plan from metadata alone. Pure: reads no file contents.
 pub fn build(scan: &ScanOutcome) -> Plan {
+    build_with(scan, None)
+}
+
+/// Build a plan, optionally inspecting contents to refuse more files.
+///
+/// The inspector runs in pass 1 only, alongside the filename check, and its
+/// result can do exactly one thing: move a file into the untouched set.
+pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>) -> Plan {
     let mut untouched: Vec<(PathBuf, Untouched)> = Vec::new();
     let mut remaining: Vec<&Entry> = Vec::new();
 
-    // Pass 1 — the refusal detector. Runs first, removes from all others.
+    // Pass 1 — the refusal detectors. Run first, remove from all others.
     for e in &scan.entries {
-        match classify::sensitive(e) {
-            Some(cat) => untouched.push((e.path.clone(), Untouched::LooksPersonal(cat))),
-            None => remaining.push(e),
+        // Filename first: it is free, and a file already refused by name is
+        // never opened. Reading it could only confirm what we already decided.
+        if let Some(cat) = classify::sensitive(e) {
+            untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
+            continue;
         }
+        if let Some(insp) = inspector.as_deref_mut() {
+            if let Some(cat) = insp.inspect(&e.path, &e.ext) {
+                untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
+                continue;
+            }
+        }
+        remaining.push(e);
     }
 
     let mut groups: Vec<Group> = Vec::new();

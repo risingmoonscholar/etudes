@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sweep-core", "crates/sweep-cli", "crates/sweep-keep", "crates/fixtures"]
+members = ["crates/sweep-core", "crates/sweep-cli", "crates/sweep-keep", "crates/sweep-read", "crates/fixtures"]
 
 [workspace.package]
 version = "0.1.0"

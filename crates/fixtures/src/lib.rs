@@ -91,6 +91,22 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
         fs::write(root.join(name), b"synthetic\n")?;
     }
 
+    // --- Innocent names, sensitive contents ---------------------------------
+    // These are the v0.3 case: metadata alone cannot refuse them, so only
+    // content inspection can. Names are deliberately boring.
+    fs::write(root.join("notes-a.txt"), b"call mom\nSSN 123-45-6789\npick up milk\n")?;
+    fs::write(root.join("notes-b.txt"), b"card 4111 1111 1111 1111 exp 03/29\n")?;
+    fs::write(
+        root.join("notes-c.md"),
+        b"patient: J Doe\ndiagnosis: flu\nprescription: rest\n",
+    )?;
+    fs::write(
+        root.join("notes-d.txt"),
+        b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
+    )?;
+    // A control: same shape of name, nothing sensitive inside.
+    fs::write(root.join("notes-e.txt"), b"Ship the redesign in March. Budget fine.\n")?;
+
     // --- Adversarial filesystem cases --------------------------------------
 
     // Case collision: distinct on a case-sensitive fs, colliding on APFS default.
@@ -147,6 +163,14 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
         escaping_symlink,
     })
 }
+
+/// Files whose NAMES are innocent but whose CONTENTS are sensitive.
+/// Only content inspection can refuse these.
+pub const INNOCENT_NAMES_SENSITIVE_CONTENT: &[&str] =
+    &["notes-a.txt", "notes-b.txt", "notes-c.md", "notes-d.txt"];
+
+/// Same shape of name, genuinely harmless content. Must NOT be refused.
+pub const INNOCENT_CONTROL: &str = "notes-e.txt";
 
 /// Every filename the generator produces, for output-leak assertions.
 pub fn all_names() -> Vec<String> {

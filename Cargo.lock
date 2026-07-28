@@ -152,6 +152,7 @@ dependencies = [
  "fixtures",
  "sweep-core",
  "sweep-keep",
+ "sweep-read",
 ]
 
 [[package]]
@@ -167,6 +168,10 @@ version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
 ]
+
+[[package]]
+name = "sweep-read"
+version = "0.1.0"
 
 [[package]]
 name = "typenum"
