@@ -4,6 +4,8 @@
 //! The undo journal is sealed with a key held in the login keychain; if sealing
 //! is unavailable sweep refuses rather than writing plaintext.
 
+mod review;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -15,6 +17,7 @@ sweep — organise the obvious, leave the private alone
 
 USAGE
     sweep [PATH] [FLAGS]         analyse and build a plan; changes nothing
+    sweep review PATH            walk each group, rename or skip, then apply
     sweep apply PATH --yes       move every proposed group
     sweep apply PATH --only NAME move one group
     sweep undo                   reverse the most recent apply
@@ -38,6 +41,13 @@ fn main() -> ExitCode {
     // to upload. Close that before doing any work. THREAT-MODEL § T5.
     disable_core_dumps();
 
+    // Journals past their TTL are dropped before anything else. Keeping an
+    // index of the user's filenames forever keeps the exposure forever.
+    let expired = sweep_core::journal::prune_expired();
+    if expired > 0 {
+        eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
+    }
+
     match args.first().map(String::as_str) {
         None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
         Some("help" | "--help" | "-h") => {
@@ -48,14 +58,7 @@ fn main() -> ExitCode {
         Some("apply") => cmd_apply(&args),
         Some("undo") => cmd_undo(),
         Some("forget") => cmd_forget(),
-        Some("review") => {
-            eprintln!(
-                "sweep: interactive review is not implemented yet.\n\
-                 Use `sweep PATH` to see the plan, then `sweep apply PATH --yes`\n\
-                 to accept every group, or --only NAME to accept one."
-            );
-            ExitCode::from(3)
-        }
+        Some("review") => cmd_review(&args),
         Some(p) if p.starts_with('-') => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
         Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
     }
@@ -175,7 +178,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool) {
     if !quiet {
         println!("Note: this listing is in your terminal scrollback.");
     }
-    println!("Apply: sweep apply <path> --yes");
+    println!("Review: sweep review <path>     Apply: sweep apply <path> --yes");
 }
 
 /// `sweep apply PATH --yes | --only NAME`
@@ -212,6 +215,86 @@ fn sealer() -> Option<KeychainSeal> {
                  Re-run with --no-journal to proceed without undo."
             );
             None
+        }
+    }
+}
+
+
+/// `sweep review PATH` — scan, decide interactively, apply in one pass.
+///
+/// No plan is persisted between commands. See the module docs in review.rs:
+/// a stored plan is a second plaintext index of the user's filenames, and
+/// deleting the asset beats protecting it.
+fn cmd_review(args: &[String]) -> ExitCode {
+    let path = args
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-'))
+        .map(|p| PathBuf::from(expand_tilde(p)))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let cfg = ScanConfig {
+        depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
+        allow_sync: has(args, "--allow-sync"),
+        ..Default::default()
+    };
+    let outcome = match scan::scan(&path, &cfg) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut p = plan::build(&outcome);
+    if p.groups.is_empty() {
+        println!("\nNothing here needs organising.");
+        return ExitCode::from(1);
+    }
+
+    match review::run(&mut p) {
+        Ok(review::Outcome::Cancelled) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            ExitCode::from(3)
+        }
+        Ok(review::Outcome::Apply) => {
+            let use_journal = !has(args, "--no-journal");
+            let sl = if use_journal {
+                match sealer() {
+                    Some(s) => Some(s),
+                    None => return ExitCode::from(2),
+                }
+            } else {
+                None
+            };
+            run_apply(&p, sl)
+        }
+    }
+}
+
+/// Shared tail of `apply` and `review`.
+fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
+    match sweep_core::apply::apply(
+        p,
+        sl.as_ref().map(|s| s as &dyn sweep_core::journal::Sealer),
+        None,
+    ) {
+        Ok(r) => {
+            println!("\nMoved {} files.", r.moved);
+            match r.journal_path {
+                Some(jp) => {
+                    println!("Undo with: sweep undo");
+                    println!("Encrypted journal: {}", jp.display());
+                }
+                None => println!("No journal was written. This cannot be undone."),
+            }
+            println!("\nNothing left this machine.");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
+            ExitCode::from(3)
         }
     }
 }
@@ -275,25 +358,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         None
     };
 
-    match sweep_core::apply::apply(&p, sl.as_ref().map(|s| s as &dyn sweep_core::journal::Sealer), None) {
-        Ok(r) => {
-            println!("\nMoved {} files.", r.moved);
-            match r.journal_path {
-                Some(jp) => {
-                    println!("Undo with: sweep undo");
-                    println!("Encrypted journal: {}", jp.display());
-                }
-                None => println!("No journal was written. This cannot be undone."),
-            }
-            println!("\nNothing left this machine.");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("sweep: {e}");
-            eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
-            ExitCode::from(3)
-        }
-    }
+    run_apply(&p, sl)
 }
 
 fn cmd_undo() -> ExitCode {
@@ -367,11 +432,13 @@ fn verify() -> ExitCode {
          journals held:           {count} in {}\n  \
          journal encryption:      XChaCha20-Poly1305, key in the login keychain\n  \
          journal path synced:     {}\n  \
-         interactive review:      not implemented\n\n\
+         journal expiry:          {} days\n  \
+         interactive review:      available\n\n\
          Destroy all journals with: sweep forget\n",
         env!("CARGO_PKG_VERSION"),
         dir.display(),
         if scan::is_synced(&dir) { "YES — move it" } else { "no" },
+        sweep_core::journal::TTL_DAYS,
     );
     ExitCode::SUCCESS
 }

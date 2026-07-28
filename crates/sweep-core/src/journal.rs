@@ -244,6 +244,38 @@ impl Journal {
 }
 
 
+/// Journals older than this are dropped on the next run.
+///
+/// A journal is an index of the user's filenames. Even sealed, keeping it
+/// forever means keeping the exposure forever, and undo is only useful for as
+/// long as the user remembers what they ran (docs/THREAT-MODEL.md § A4).
+pub const TTL_DAYS: u64 = 30;
+
+/// Delete journals older than [`TTL_DAYS`]. Returns how many were removed.
+///
+/// Called at the start of every run that touches the state directory. Failure
+/// is not fatal: a journal that cannot be removed is a housekeeping problem,
+/// not a reason to refuse the user's actual request.
+pub fn prune_expired() -> usize {
+    let cutoff = match SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400)) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let Ok(rd) = fs::read_dir(state_dir()) else { return 0 };
+    let mut removed = 0;
+    for e in rd.flatten() {
+        if !e.file_name().to_string_lossy().ends_with(".journal") {
+            continue;
+        }
+        let Ok(md) = e.metadata() else { continue };
+        let Ok(t) = md.modified() else { continue };
+        if t < cutoff && fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Newest journal id in the state directory, by modification time.
 pub fn latest_id() -> Result<String, JournalError> {
     let dir = state_dir();
@@ -332,6 +364,54 @@ pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_journals_are_pruned_and_fresh_ones_are_kept() {
+        let dir = std::env::temp_dir().join(format!("sweep_ttl_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("SWEEP_STATE_DIR", &dir) };
+
+        let old = dir.join("old.journal");
+        let new = dir.join("new.journal");
+        fs::write(&old, b"x").expect("write");
+        fs::write(&new, b"x").expect("write");
+
+        // Backdate one past the TTL. filetime is not in the dependency tree, so
+        // this uses the libc utimes we already link.
+        let past = (TTL_DAYS + 5) * 86_400;
+        set_mtime_secs_ago(&old, past);
+
+        let removed = prune_expired();
+
+        assert_eq!(removed, 1, "prune removed {removed} journals, expected 1");
+        assert!(!old.exists(), "an expired journal survived");
+        assert!(new.exists(), "a fresh journal was destroyed");
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("SWEEP_STATE_DIR") };
+    }
+
+    fn set_mtime_secs_ago(p: &Path, secs: u64) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs() as i64;
+        let t = now - secs as i64;
+        let times = [TimeVal { sec: t, usec: 0 }, TimeVal { sec: t, usec: 0 }];
+        let c = std::ffi::CString::new(p.to_string_lossy().as_bytes()).expect("path");
+        // SAFETY: valid path pointer and a two-element timeval array, as utimes requires.
+        unsafe { utimes(c.as_ptr(), times.as_ptr()) };
+    }
+
+    #[repr(C)]
+    struct TimeVal {
+        sec: i64,
+        usec: i64,
+    }
+    unsafe extern "C" {
+        fn utimes(path: *const std::ffi::c_char, times: *const TimeVal) -> i32;
+    }
 
     #[test]
     fn round_trips_names_containing_tabs_and_newlines() {

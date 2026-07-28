@@ -34,11 +34,9 @@ sweep refuses rather than degrading.
 
 Not implemented, and they say so rather than pretending:
 
-- **Interactive `review`.** Use `--yes` or `--only NAME` instead.
 - **Content inspection.** Not compiled in. See `docs/SPEC.md` for why it is
   deferred to v0.3 rather than shipped weakly.
-- **Journal TTL.** `sweep forget` destroys journals and the key; nothing expires
-  on its own yet.
+- **`x` (extract files from a group)** during review.
 
 ## The privacy claims, and how to check them
 
@@ -76,7 +74,8 @@ No real file is read during development. Everything is tested against a
 synthetic adversarial fixture tree.
 
 ```sh
-cargo test
+cargo test                        # 44 tests
+scripts/no-network-test.sh        # the suite, with sockets denied by the OS
 cargo run -p fixtures --bin mkfx -- /tmp/sweep-demo   # build a fake messy folder
 cargo run -p sweep-cli --bin sweep -- /tmp/sweep-demo
 ```
