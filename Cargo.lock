@@ -140,6 +140,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "stash-cli"
+version = "0.3.0"
+dependencies = [
+ "fixtures",
+ "sweep-core",
+ "sweep-keep",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

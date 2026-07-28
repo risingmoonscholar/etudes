@@ -61,11 +61,20 @@ pub struct ScanConfig {
     pub allow_sync: bool,
     /// Hard ceiling on entries. Above this, sweep refuses rather than churn.
     pub max_entries: usize,
+    /// Treat every top-level item as one opaque unit: directories are returned
+    /// as entries instead of being descended into, and symlinks are returned as
+    /// links rather than skipped.
+    ///
+    /// sweep leaves this off — it organises *files*, and moving a symlink versus
+    /// its target are different operations its plan cannot express. stash turns
+    /// it on, because "clear this folder" is meaningless if a directory stays
+    /// behind. Added when stash became the second caller.
+    pub whole_units: bool,
 }
 
 impl Default for ScanConfig {
     fn default() -> Self {
-        Self { depth: 1, allow_sync: false, max_entries: 20_000 }
+        Self { depth: 1, allow_sync: false, max_entries: 20_000, whole_units: false }
     }
 }
 
@@ -247,6 +256,20 @@ fn walk(
         };
 
         if meta.file_type().is_symlink() {
+            if cfg.whole_units {
+                // Move the link itself. No target is followed, so an escaping
+                // or cyclic link is inert — it is just a small file to relocate.
+                out.entries.push(Entry {
+                    path,
+                    name,
+                    ext: String::new(),
+                    size: meta.len(),
+                    modified: meta.modified().ok(),
+                    is_dir: false,
+                    is_package: false,
+                });
+                continue;
+            }
             // A symlink is followed only if its target stays inside root.
             match path.canonicalize() {
                 Ok(target) if target.starts_with(root) && target != *root => {
@@ -270,7 +293,7 @@ fn walk(
         }
 
         let is_dir = meta.is_dir();
-        let pkg = is_dir && is_package(&name);
+        let pkg = is_dir && (is_package(&name) || cfg.whole_units);
 
         if is_dir && !pkg {
             #[cfg(unix)]

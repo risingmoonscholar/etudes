@@ -309,9 +309,22 @@ fn restrict(_p: &Path) {}
 fn restrict_dir(_p: &Path) {}
 
 /// Facts about a file, captured at apply time and re-checked at undo time.
+///
+/// Package directories (`.app`, `.photoslibrary`) are moved as single units, so
+/// this must accept a directory. There is nothing to hash — opening a directory
+/// fails — so the edge hash is 0 and identity rests on inode and mtime. Found by
+/// stash, which moves everything including packages; sweep would have hit the
+/// same panic the first time a `.app` landed in a group.
 pub fn fingerprint(p: &Path) -> io::Result<(u64, i64, u64, u64)> {
-    let md = fs::metadata(p)?;
+    // symlink_metadata, not metadata: a symlink must be identified by the LINK,
+    // never by its target. Following it makes the link's fingerprint change
+    // whenever the target does — stash found this with a link pointing at the
+    // folder being emptied, which reported the link as modified and refused to
+    // restore it.
+    let md = fs::symlink_metadata(p)?;
     let size = md.len();
+    // Neither a directory nor a symlink can be opened for hashing.
+    let opaque = md.is_dir() || md.file_type().is_symlink();
     let mtime = md
         .modified()
         .ok()
@@ -325,7 +338,8 @@ pub fn fingerprint(p: &Path) -> io::Result<(u64, i64, u64, u64)> {
     };
     #[cfg(not(unix))]
     let inode = 0u64;
-    Ok((size, mtime, inode, edge_hash(p, size)?))
+    let hash = if opaque { 0 } else { edge_hash(p, size)? };
+    Ok((size, mtime, inode, hash))
 }
 
 /// FNV-1a over the first and last 4 KiB.
