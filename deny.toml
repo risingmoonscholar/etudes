@@ -1,0 +1,56 @@
+# cargo-deny policy — the mechanical half of the no-network claim.
+#
+# A policy is not a property. This file plus the symbol scan in
+# crates/sweep-cli/tests/no_network.rs is what turns "sweep does not use the
+# network" from an assurance into something a reviewer can check in one command:
+#
+#     cargo deny check bans
+#
+# See docs/THREAT-MODEL.md § T1 and § T7.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+# Nothing that can open a socket, resolve a name, or drive an async runtime.
+# If any of these ever appears — directly or transitively — the check fails and
+# the reason is that sweep would have gained network capability.
+deny = [
+    { name = "reqwest" },
+    { name = "hyper" },
+    { name = "h2" },
+    { name = "ureq" },
+    { name = "curl" },
+    { name = "curl-sys" },
+    { name = "isahc" },
+    { name = "attohttpc" },
+    { name = "surf" },
+    { name = "tokio" },
+    { name = "async-std" },
+    { name = "smol" },
+    { name = "mio" },
+    { name = "socket2" },
+    { name = "trust-dns-resolver" },
+    { name = "hickory-resolver" },
+    { name = "rustls" },
+    { name = "native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "tungstenite" },
+    { name = "quinn" },
+    # Telemetry and crash reporting are banned for the same reason: they are
+    # egress. docs/THREAT-MODEL.md forbids both.
+    { name = "sentry" },
+    { name = "opentelemetry" },
+    { name = "tracing-opentelemetry" },
+]
+
+[licenses]
+allow = ["Apache-2.0", "MIT", "BSD-3-Clause", "Unicode-3.0", "ISC"]
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

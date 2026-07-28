@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::journal::{fingerprint, Entry, Journal, Method};
+use crate::journal::{fingerprint, Entry, Journal, Method, Sealer};
 use crate::plan::Plan;
 
 #[derive(Debug)]
@@ -51,9 +51,15 @@ pub type FailAt = Option<usize>;
 
 /// Execute the accepted groups of `plan`.
 ///
-/// `journal` false is the privacy-maximal mode: nothing is recorded and undo
-/// becomes impossible. The caller must have told the user so.
-pub fn apply(plan: &Plan, journal: bool, fail_at: FailAt) -> Result<ApplyReport, ApplyError> {
+/// Pass `sealer: None` for the privacy-maximal mode: nothing is recorded and
+/// undo becomes impossible. The caller must have told the user so.
+///
+/// There is no plaintext journal path. Either it is sealed or it is absent.
+pub fn apply(
+    plan: &Plan,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+) -> Result<ApplyReport, ApplyError> {
     let id = journal_id(plan);
     let mut j = Journal { id: id.clone(), root: plan.root.clone(), entries: Vec::new() };
 
@@ -90,8 +96,8 @@ pub fn apply(plan: &Plan, journal: bool, fail_at: FailAt) -> Result<ApplyReport,
     }
 
     // Journal first. Nothing has moved yet.
-    if journal {
-        j.save().map_err(ApplyError::Journal)?;
+    if let Some(sl) = sealer {
+        j.save_sealed(sl).map_err(ApplyError::Journal)?;
     }
 
     let mut moved = 0usize;
@@ -109,15 +115,15 @@ pub fn apply(plan: &Plan, journal: bool, fail_at: FailAt) -> Result<ApplyReport,
         moved += 1;
         // Rewrite after each success. The journal never claims more than the
         // filesystem actually shows.
-        if journal {
-            j.save().map_err(ApplyError::Journal)?;
+        if let Some(sl) = sealer {
+            j.save_sealed(sl).map_err(ApplyError::Journal)?;
         }
     }
 
     Ok(ApplyReport {
         moved,
         journal_id: id,
-        journal_path: if journal { Some(j.path()) } else { None },
+        journal_path: sealer.map(|_| j.path()),
     })
 }
 

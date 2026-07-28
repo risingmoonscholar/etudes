@@ -1,14 +1,15 @@
 //! The undo journal.
 //!
-//! # Honest status
+//! # Encryption
 //!
-//! **The journal is NOT encrypted in v0.1.** It is written `0600` in the state
-//! directory. Encryption is M7 and is not done. Until it is, the journal is a
-//! plaintext index of the user's filenames, which docs/THREAT-MODEL.md § A4
-//! identifies as the densest asset in the system.
+//! The journal is sealed by a [`Sealer`] supplied by the caller. `sweep-core`
+//! deliberately does not know how — keeping the engine dependency-free is what
+//! makes the no-network claim cheap to check, so the cipher lives in
+//! `sweep-keep` and is injected here.
 //!
-//! `sweep verify` says so, and `--no-journal` is the mode that avoids it
-//! entirely at the cost of undo.
+//! There is no plaintext fallback. If sealing is unavailable the journal is not
+//! written and the caller is told, because silently degrading to plaintext is
+//! exactly the failure a privacy tool must not have.
 //!
 //! # Ordering
 //!
@@ -70,11 +71,18 @@ pub struct Journal {
     pub entries: Vec<Entry>,
 }
 
+/// Supplied by the caller so `sweep-core` need not depend on a cipher.
+pub trait Sealer {
+    fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str>;
+    fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str>;
+}
+
 #[derive(Debug)]
 pub enum JournalError {
     Io(io::Error),
     Malformed(&'static str),
     NotFound,
+    Seal(&'static str),
 }
 
 impl std::fmt::Display for JournalError {
@@ -83,6 +91,7 @@ impl std::fmt::Display for JournalError {
             JournalError::Io(e) => write!(f, "journal io: {}", e.kind()),
             JournalError::Malformed(w) => write!(f, "journal malformed: {w}"),
             JournalError::NotFound => write!(f, "no journal found"),
+            JournalError::Seal(m) => write!(f, "journal seal: {m}"),
         }
     }
 }
@@ -136,7 +145,7 @@ impl Journal {
     /// Serialise. Line-oriented so a truncated write loses at most one entry.
     pub fn encode(&self) -> String {
         let mut s = String::new();
-        s.push_str("sweep-journal 1 PLAINTEXT-NOT-ENCRYPTED-SEE-M7\n");
+        s.push_str("sweep-journal 1\n");
         s.push_str(&format!("root\t{}\n", esc(&self.root)));
         for e in &self.entries {
             s.push_str(&format!(
@@ -184,9 +193,33 @@ impl Journal {
         Ok(j)
     }
 
-    /// Persist. Written before the first move and rewritten after each one, so
-    /// the on-disk state never claims more than actually happened.
-    pub fn save(&self) -> Result<(), JournalError> {
+    /// Persist, sealed. Written before the first move and rewritten after each
+    /// one, so the on-disk state never claims more than actually happened.
+    pub fn save_sealed(&self, sealer: &dyn Sealer) -> Result<(), JournalError> {
+        let bytes = sealer
+            .seal(self.encode().as_bytes())
+            .map_err(|m| JournalError::Seal(m))?;
+        self.write_bytes(&bytes)
+    }
+
+    /// Load and unseal.
+    pub fn load_sealed(id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
+        let p = state_dir().join(format!("{id}.journal"));
+        let raw = fs::read(&p).map_err(|_| JournalError::NotFound)?;
+        let plain = sealer.open(&raw).map_err(|m| JournalError::Seal(m))?;
+        let text = String::from_utf8(plain).map_err(|_| JournalError::Malformed("not utf-8"))?;
+        let mut j = Journal::decode(&text)?;
+        j.id = id.to_string();
+        Ok(j)
+    }
+
+    /// Most recent sealed journal by modification time.
+    pub fn latest_sealed(sealer: &dyn Sealer) -> Result<Journal, JournalError> {
+        let id = latest_id()?;
+        Journal::load_sealed(&id, sealer)
+    }
+
+    fn write_bytes(&self, bytes: &[u8]) -> Result<(), JournalError> {
         let dir = state_dir();
         fs::create_dir_all(&dir).map_err(JournalError::Io)?;
         // 0700, not 0600: a directory needs the execute bit to be entered, so
@@ -198,47 +231,34 @@ impl Journal {
         let tmp = p.with_extension("journal.tmp");
         let mut f = fs::File::create(&tmp).map_err(JournalError::Io)?;
         restrict(&tmp);
-        f.write_all(self.encode().as_bytes()).map_err(JournalError::Io)?;
+        f.write_all(bytes).map_err(JournalError::Io)?;
         f.sync_all().map_err(JournalError::Io)?;
         drop(f);
         fs::rename(&tmp, &p).map_err(JournalError::Io)?;
         Ok(())
     }
 
-    pub fn load(id: &str) -> Result<Journal, JournalError> {
-        let p = state_dir().join(format!("{id}.journal"));
-        let text = fs::read_to_string(&p).map_err(|_| JournalError::NotFound)?;
-        let mut j = Journal::decode(&text)?;
-        j.id = id.to_string();
-        Ok(j)
-    }
-
-    /// Most recent journal by modification time.
-    pub fn latest() -> Result<Journal, JournalError> {
-        let dir = state_dir();
-        let mut best: Option<(SystemTime, String)> = None;
-        for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
-            let e = match e {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let name = e.file_name().to_string_lossy().into_owned();
-            let Some(id) = name.strip_suffix(".journal") else { continue };
-            let Ok(md) = e.metadata() else { continue };
-            let Ok(t) = md.modified() else { continue };
-            if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
-                best = Some((t, id.to_string()));
-            }
-        }
-        match best {
-            Some((_, id)) => Journal::load(&id),
-            None => Err(JournalError::NotFound),
-        }
-    }
-
     pub fn forget(&self) -> Result<(), JournalError> {
         fs::remove_file(self.path()).map_err(JournalError::Io)
     }
+}
+
+
+/// Newest journal id in the state directory, by modification time.
+pub fn latest_id() -> Result<String, JournalError> {
+    let dir = state_dir();
+    let mut best: Option<(SystemTime, String)> = None;
+    for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
+        let Ok(e) = e else { continue };
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".journal") else { continue };
+        let Ok(md) = e.metadata() else { continue };
+        let Ok(t) = md.modified() else { continue };
+        if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
+            best = Some((t, id.to_string()));
+        }
+    }
+    best.map(|(_, id)| id).ok_or(JournalError::NotFound)
 }
 
 #[cfg(unix)]
@@ -336,10 +356,4 @@ mod tests {
         assert_eq!(back.entries[0].done, true);
     }
 
-    #[test]
-    fn header_states_plainly_that_it_is_not_encrypted() {
-        // If this ever passes silently after encryption lands, the header lied.
-        let j = Journal::default();
-        assert!(j.encode().contains("PLAINTEXT-NOT-ENCRYPTED"));
-    }
 }

@@ -1,8 +1,8 @@
 //! sweep — organise the obvious, leave the private alone.
 //!
-//! v0.1 is analysis only: `sweep PATH` produces a plan and prints it. `apply`
-//! and `undo` are specified in docs/SPEC.md and land in M5/M6; they refuse
-//! rather than pretend.
+//! `sweep PATH` plans and changes nothing. `apply` executes, `undo` reverses.
+//! The undo journal is sealed with a key held in the login keychain; if sealing
+//! is unavailable sweep refuses rather than writing plaintext.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,17 +14,22 @@ const USAGE: &str = "\
 sweep — organise the obvious, leave the private alone
 
 USAGE
-    sweep [PATH] [FLAGS]      analyse and build a plan; changes nothing
-    sweep verify              print sweep's own privacy posture
-    sweep help
+    sweep [PATH] [FLAGS]         analyse and build a plan; changes nothing
+    sweep apply PATH --yes       move every proposed group
+    sweep apply PATH --only NAME move one group
+    sweep undo                   reverse the most recent apply
+    sweep forget                 destroy all journals and the key
+    sweep verify                 print sweep's own privacy posture
 
 FLAGS
     --depth N       recursion depth (default 1, max 8)
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
+    --no-journal    apply without recording undo
 
-Nothing is moved by any of these. apply/undo are not in v0.1.";
+Only `apply` moves anything. Files that look like personal records are
+never moved, in any mode.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -170,7 +175,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool) {
     if !quiet {
         println!("Note: this listing is in your terminal scrollback.");
     }
-    println!("Review: sweep review     Apply: sweep apply   (not in v0.1)");
+    println!("Apply: sweep apply <path> --yes");
 }
 
 /// `sweep apply PATH --yes | --only NAME`
@@ -178,6 +183,39 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool) {
 /// Re-scans rather than trusting a stored plan. The filesystem may have changed
 /// since the plan was printed, and a stale plan is the write-freshness failure:
 /// the record says one thing and the tree says another.
+
+/// Binds the keychain-held key to the journal's `Sealer` interface.
+struct KeychainSeal {
+    key: [u8; 32],
+}
+
+impl sweep_core::journal::Sealer for KeychainSeal {
+    fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+        sweep_keep::seal(&self.key, plaintext).map_err(|_| "could not seal the journal")
+    }
+    fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+        sweep_keep::open(&self.key, sealed).map_err(|_| "wrong key or the journal was altered")
+    }
+}
+
+/// Fetch the key, creating it on first use.
+///
+/// On failure sweep refuses rather than falling back to a plaintext journal.
+/// Silently degrading is the failure mode a privacy tool must not have.
+fn sealer() -> Option<KeychainSeal> {
+    match sweep_keep::key() {
+        Ok(key) => Some(KeychainSeal { key }),
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            eprintln!(
+                "Refusing to write an unencrypted journal.\n\
+                 Re-run with --no-journal to proceed without undo."
+            );
+            None
+        }
+    }
+}
+
 fn cmd_apply(args: &[String]) -> ExitCode {
     let path = args
         .iter()
@@ -228,17 +266,22 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         );
     }
 
-    match sweep_core::apply::apply(&p, use_journal, None) {
+    let sl = if use_journal {
+        match sealer() {
+            Some(s) => Some(s),
+            None => return ExitCode::from(2),
+        }
+    } else {
+        None
+    };
+
+    match sweep_core::apply::apply(&p, sl.as_ref().map(|s| s as &dyn sweep_core::journal::Sealer), None) {
         Ok(r) => {
             println!("\nMoved {} files.", r.moved);
             match r.journal_path {
                 Some(jp) => {
                     println!("Undo with: sweep undo");
-                    println!(
-                        "\n  The journal at {} records your filenames in PLAINTEXT.\n  \
-                         Encryption is not implemented yet. Use --no-journal to avoid it.",
-                        jp.display()
-                    );
+                    println!("Encrypted journal: {}", jp.display());
                 }
                 None => println!("No journal was written. This cannot be undone."),
             }
@@ -254,7 +297,8 @@ fn cmd_apply(args: &[String]) -> ExitCode {
 }
 
 fn cmd_undo() -> ExitCode {
-    let mut j = match sweep_core::Journal::latest() {
+    let Some(sl) = sealer() else { return ExitCode::from(2) };
+    let mut j = match sweep_core::Journal::latest_sealed(&sl) {
         Ok(j) => j,
         Err(e) => {
             eprintln!("sweep: {e}");
@@ -276,7 +320,7 @@ fn cmd_undo() -> ExitCode {
             if !r.skipped_missing.is_empty() {
                 println!("  {} were already gone.", r.skipped_missing.len());
             }
-            let _ = j.save();
+            let _ = j.save_sealed(&sl);
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -298,7 +342,9 @@ fn cmd_forget() -> ExitCode {
             }
         }
     }
+    sweep_keep::destroy_key();
     println!("Removed {n} journal(s) from {}.", dir.display());
+    println!("Destroyed the journal key in the keychain.");
     println!("Undo is no longer possible for any past run.");
     ExitCode::SUCCESS
 }
@@ -319,7 +365,7 @@ fn verify() -> ExitCode {
          sweep-core dependencies: 0\n  \
          network-capable crates:  0\n  \
          journals held:           {count} in {}\n  \
-         journal encryption:      NOT IMPLEMENTED — journals are plaintext\n  \
+         journal encryption:      XChaCha20-Poly1305, key in the login keychain\n  \
          journal path synced:     {}\n  \
          interactive review:      not implemented\n\n\
          Destroy all journals with: sweep forget\n",

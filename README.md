@@ -28,23 +28,28 @@ tax and medical records and declined to organise them.
 Working: `sweep PATH`, `sweep apply --yes | --only NAME`, `sweep undo`,
 `sweep forget`, `sweep verify`.
 
+The undo journal is encrypted with XChaCha20-Poly1305 under a key held in your
+login keychain. There is **no plaintext fallback**: if sealing is unavailable
+sweep refuses rather than degrading.
+
 Not implemented, and they say so rather than pretending:
 
-- **Journal encryption (M7).** The undo journal is **plaintext**, `0600`, with a
-  header that admits it. It is an index of your filenames. Use `--no-journal` to
-  avoid writing one, at the cost of undo.
 - **Interactive `review`.** Use `--yes` or `--only NAME` instead.
 - **Content inspection.** Not compiled in. See `docs/SPEC.md` for why it is
   deferred to v0.3 rather than shipped weakly.
+- **Journal TTL.** `sweep forget` destroys journals and the key; nothing expires
+  on its own yet.
 
 ## The privacy claims, and how to check them
 
 | Claim | How you check it |
 |---|---|
-| Nothing leaves the machine | `sweep-core` has **zero dependencies**. There is no third-party code in the classification path. |
-| No contents are read | v0.1 never opens a file. Only `symlink_metadata` and `read_dir` are used. |
-| Private files are not moved | `cargo test` — `no_sensitive_fixture_is_ever_grouped` |
-| No filenames on screen when asked | `cargo test` — and `sweep --quiet` |
+| Nothing leaves the machine | `cargo deny check bans` + `cargo test --test no_network` — the latter scans the shipped binary for `_socket`, `_connect`, `_getaddrinfo`. Verified against a control binary that *does* open a socket: those symbols appear. |
+| The engine is auditable | `sweep-core` has **zero dependencies**, asserted by a test. No third-party code in the classification path. |
+| No contents are read | v0.1 never opens a file for reading. Only `symlink_metadata` and `read_dir`. |
+| Private files are not moved | `cargo test` — `sensitive_files_survive_a_full_apply_untouched` checks the filesystem, not the plan |
+| The journal reveals nothing | `cargo test` — `no_filename_is_readable_in_the_written_journal` greps the bytes on disk |
+| No filenames on screen when asked | `sweep --quiet` |
 
 ## Two design rules worth knowing
 
