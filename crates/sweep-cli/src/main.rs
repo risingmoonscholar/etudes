@@ -466,20 +466,38 @@ fn verify() -> ExitCode {
         .unwrap_or(0);
 
     println!(
-        "\nsweep {}\n  \
-         content inspection:      not compiled in\n  \
-         sweep-core dependencies: 0\n  \
-         network-capable crates:  0\n  \
-         journals held:           {count} in {}\n  \
-         journal encryption:      XChaCha20-Poly1305, key in the login keychain\n  \
-         journal path synced:     {}\n  \
-         journal expiry:          {} days\n  \
-         interactive review:      available\n\n\
-         Destroy all journals with: sweep forget\n",
-        env!("CARGO_PKG_VERSION"),
-        dir.display(),
-        if scan::is_synced(&dir) { "YES — move it" } else { "no" },
-        sweep_core::journal::TTL_DAYS,
+"
+sweep {v}
+
+  What is compiled in
+    content inspection     yes, but OFF unless --inspect-content AND you
+                           consent at a separate prompt. --yes does not cover it.
+    network code           none. sweep-core has 0 dependencies; the binary
+                           links no socket symbols.
+
+  What is on this machine
+    journals held          {count} in {dir}
+    journal encryption     XChaCha20-Poly1305, key in the login keychain
+    journal path synced    {synced}
+    journal expiry         {ttl} days
+
+  What is NOT implemented — do not expect it to work
+    x                      extracting files out of a group during review
+    PDF / Office / archive parsing   --inspect-content reads plain text only
+    content grouping       what sweep reads can only make it refuse MORE
+                           files; it never affects where anything moves
+
+  Verify these claims yourself
+    cargo test                     the full suite
+    scripts/no-network-test.sh     the suite with sockets denied by the OS
+
+  Destroy all journals and the key:  sweep forget
+",
+        v = env!("CARGO_PKG_VERSION"),
+        count = count,
+        dir = dir.display(),
+        synced = if scan::is_synced(&dir) { "YES — move it" } else { "no" },
+        ttl = sweep_core::journal::TTL_DAYS,
     );
     ExitCode::SUCCESS
 }

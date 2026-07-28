@@ -13,8 +13,8 @@ path = "src/main.rs"
 # is four verbs.
 [dependencies]
 sweep-core = { path = "../sweep-core" }
-sweep-keep = { version = "0.1.0", path = "../sweep-keep" }
-sweep-read = { version = "0.1.0", path = "../sweep-read" }
+sweep-keep = { path = "../sweep-keep" }
+sweep-read = { path = "../sweep-read" }
 
 [dev-dependencies]
 fixtures = { path = "../fixtures" }
