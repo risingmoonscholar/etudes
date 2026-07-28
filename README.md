@@ -44,7 +44,7 @@ Not implemented, and they say so rather than pretending:
 
 | Claim | How you check it |
 |---|---|
-| Nothing leaves the machine | `cargo deny check bans` + `cargo test --test no_network` — the latter scans the shipped binary for `_socket`, `_connect`, `_getaddrinfo`. Verified against a control binary that *does* open a socket: those symbols appear. |
+| Nothing leaves the machine | **`scripts/no-network-test.sh`** — runs the whole suite with `socket(2)` denied by the OS, after proving the sandbox actually denies. Plus `cargo deny check bans` and a symbol scan of the shipped binary. |
 | The engine is auditable | `sweep-core` has **zero dependencies**, asserted by a test. No third-party code in the classification path. |
 | No contents are read | v0.1 never opens a file for reading. Only `symlink_metadata` and `read_dir`. |
 | Private files are not moved | `cargo test` — `sensitive_files_survive_a_full_apply_untouched` checks the filesystem, not the plan |

@@ -1,0 +1,9 @@
+;; Seatbelt profile for M8. Everything is permitted except the network.
+;;
+;; The suite needs the filesystem (it builds fixture trees in TMPDIR) and needs
+;; to spawn `security` for the keychain, so this denies exactly one thing and
+;; leaves the rest alone. A narrower profile would fail for reasons unrelated to
+;; the claim being tested, which would make the witness useless.
+(version 1)
+(allow default)
+(deny network*)
