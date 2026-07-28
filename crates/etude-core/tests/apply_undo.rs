@@ -8,12 +8,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use sweep_core::apply::{self, ApplyError};
-use sweep_core::journal::Journal;
-use sweep_core::plan::{self, Plan};
-use sweep_core::scan::{self, ScanConfig};
+use etude_core::apply::{self, ApplyError};
+use etude_core::journal::Journal;
+use etude_core::plan::{self, Plan};
+use etude_core::scan::{self, ScanConfig};
 
-/// `SWEEP_STATE_DIR` is process-global, so these tests cannot run concurrently
+/// `ETUDE_STATE_DIR` is process-global, so these tests cannot run concurrently
 /// without clobbering each other's journals. Serialise here rather than relying
 /// on `--test-threads=1`: a suite that only passes with a special flag is a
 /// suite that will be run wrongly.
@@ -26,10 +26,10 @@ fn lock() -> MutexGuard<'static, ()> {
 
 
 /// Test sealer. Not a cipher — it proves the *plumbing* is sealed-only. The
-/// real cipher is tested in sweep-keep, and the end-to-end pairing is tested in
+/// real cipher is tested in etude-keep, and the end-to-end pairing is tested in
 /// the CLI integration test.
 struct TestSeal;
-impl sweep_core::journal::Sealer for TestSeal {
+impl etude_core::journal::Sealer for TestSeal {
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
         let mut v = b"TESTSEAL".to_vec();
         v.extend(plaintext.iter().map(|b| b ^ 0x5a));
@@ -49,7 +49,7 @@ fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, Plan) {
     // Per-test state dir so journals cannot collide between tests.
     let state = std::env::temp_dir().join(format!("sweep_state_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&state);
-    unsafe { std::env::set_var("SWEEP_STATE_DIR", &state) };
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
     let mut p = plan::build(&out);
@@ -81,7 +81,7 @@ fn sensitive_files_survive_a_full_apply_untouched() {
         })
         .collect();
 
-    apply::apply(&p, Some(&TestSeal), None).expect("apply");
+    apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
 
     for (path, len) in before {
         assert!(path.exists(), "a sensitive file was moved away from {}", path.display());
@@ -99,13 +99,13 @@ fn apply_then_undo_restores_every_path() {
         p.groups.iter().flat_map(|g| g.members.iter().cloned()).collect();
     assert!(!expected.is_empty(), "fixture produced no moves to test");
 
-    let rep = apply::apply(&p, Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
     assert_eq!(rep.moved, expected.len());
     for src in &expected {
         assert!(!src.exists(), "source still present after apply: {}", src.display());
     }
 
-    let mut j = Journal::load_sealed(&rep.journal_id, &TestSeal).expect("journal loads");
+    let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal loads");
     let ur = apply::undo(&mut j).expect("undo");
 
     assert_eq!(ur.restored, expected.len(), "undo did not restore every file");
@@ -119,14 +119,14 @@ fn apply_then_undo_restores_every_path() {
 #[test]
 fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
     let _g = lock();
-    // Fault injection, not hope. docs/CRITIQUE.md § 9.
+    // Fault injection, not hope. docs/sweep/CRITIQUE.md § 9.
     let (root, _fx, p) = setup("resumable");
     const FAIL: usize = 7;
 
-    let err = apply::apply(&p, Some(&TestSeal), Some(FAIL)).expect_err("injected failure should propagate");
+    let err = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL)).expect_err("injected failure should propagate");
     assert!(matches!(err, ApplyError::Injected(FAIL)));
 
-    let j = Journal::latest_sealed(&TestSeal).expect("journal exists after a crash");
+    let j = Journal::latest_sealed("test", &TestSeal).expect("journal exists after a crash");
     let done: Vec<_> = j.entries.iter().filter(|e| e.done).collect();
     assert_eq!(done.len(), FAIL, "journal claims a different number of moves than happened");
 
@@ -146,8 +146,8 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
     let (root, _fx, p) = setup("partialundo");
     const FAIL: usize = 5;
 
-    let _ = apply::apply(&p, Some(&TestSeal), Some(FAIL));
-    let mut j = Journal::latest_sealed(&TestSeal).expect("journal");
+    let _ = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL));
+    let mut j = Journal::latest_sealed("test", &TestSeal).expect("journal");
     let r = apply::undo(&mut j).expect("undo");
 
     assert_eq!(r.restored, FAIL, "undo restored a different count than was applied");
@@ -162,8 +162,8 @@ fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     let _g = lock();
     // Blind restoration would destroy newer work.
     let (root, _fx, p) = setup("mutated");
-    let rep = apply::apply(&p, Some(&TestSeal), None).expect("apply");
-    let mut j = Journal::load_sealed(&rep.journal_id, &TestSeal).expect("journal");
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal");
 
     let victim = j.entries[0].to.clone();
     fs::write(&victim, b"the user edited this after applying\n").expect("mutate");
@@ -186,11 +186,11 @@ fn no_journal_mode_writes_nothing_and_still_moves() {
     let (root, _fx, p) = setup("nojournal");
     let expected: usize = p.groups.iter().map(|g| g.members.len()).sum();
 
-    let rep = apply::apply(&p, None, None).expect("apply");
+    let rep = apply::apply(&p, "test", None, None).expect("apply");
 
     assert_eq!(rep.moved, expected);
     assert!(rep.journal_path.is_none(), "no-journal mode reported a journal path");
-    assert!(Journal::latest_sealed(&TestSeal).is_err(), "no-journal mode still wrote a journal");
+    assert!(Journal::latest_sealed("test", &TestSeal).is_err(), "no-journal mode still wrote a journal");
     cleanup(&root);
 }
 
@@ -205,7 +205,7 @@ fn apply_refuses_when_a_destination_already_exists() {
     let name = g.members[0].file_name().unwrap();
     fs::write(dir.join(name), b"pre-existing\n").expect("write");
 
-    let err = apply::apply(&p, Some(&TestSeal), None).expect_err("should refuse");
+    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
     assert!(matches!(err, ApplyError::DestinationExists(_)));
 
     // And nothing moved.
@@ -220,7 +220,7 @@ fn no_filename_is_readable_in_the_written_journal() {
     // The M7 claim, checked against the bytes on disk rather than the API.
     let _g = lock();
     let (root, _fx, p) = setup("sealed");
-    let rep = apply::apply(&p, Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
     let raw = fs::read(rep.journal_path.expect("path")).expect("read");
     let hay = String::from_utf8_lossy(&raw);
 

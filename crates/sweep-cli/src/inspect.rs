@@ -1,7 +1,7 @@
 //! The `--inspect-content` gate and adapter.
 //!
-//! Two things live here: the consent flow, and the bridge from `sweep-read`'s
-//! `Found` to `sweep-core`'s `Category`.
+//! Two things live here: the consent flow, and the bridge from `etude-read`'s
+//! `Found` to `etude-core`'s `Category`.
 //!
 //! Consent is separate from `--yes` on purpose. Agreeing to move files is not
 //! agreeing to have them read; the brief calls for informed confirmation and a
@@ -9,9 +9,9 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use sweep_core::plan::Inspector;
-use sweep_core::Category;
-use sweep_read::{Found, Stats};
+use etude_core::plan::Inspector;
+use etude_core::Category;
+use etude_read::{Found, Stats};
 
 pub struct ContentInspector {
     pub stats: Stats,
@@ -25,7 +25,7 @@ impl ContentInspector {
 
 impl Inspector for ContentInspector {
     fn inspect(&mut self, path: &std::path::Path, ext: &str) -> Option<Category> {
-        sweep_read::inspect(path, ext, &mut self.stats).map(|f| match f {
+        etude_read::inspect(path, ext, &mut self.stats).map(|f| match f {
             Found::Identity => Category::Identity,
             Found::Financial => Category::Financial,
             Found::Credential => Category::Credential,

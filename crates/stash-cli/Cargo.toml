@@ -9,8 +9,8 @@ name = "stash"
 path = "src/main.rs"
 
 [dependencies]
-sweep-core = { path = "../sweep-core" }
-sweep-keep = { path = "../sweep-keep" }
+etude-core = { path = "../etude-core" }
+etude-keep = { path = "../etude-keep" }
 
 [dev-dependencies]
 fixtures = { path = "../fixtures" }

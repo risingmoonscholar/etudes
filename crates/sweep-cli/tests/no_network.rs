@@ -82,7 +82,7 @@ fn the_shipped_binary_links_no_networking_symbols() {
 fn the_engine_crate_has_no_dependencies() {
     // The cheapest audit available: there is no third-party code in the
     // classification path, so there is nothing to review for egress.
-    let manifest = include_str!("../../sweep-core/Cargo.toml");
+    let manifest = include_str!("../../etude-core/Cargo.toml");
     let deps = manifest.split("[dependencies]").nth(1).unwrap_or("");
     let body = deps.split("[dev-dependencies]").next().unwrap_or("");
     let real: Vec<&str> = body
@@ -93,7 +93,7 @@ fn the_engine_crate_has_no_dependencies() {
 
     assert!(
         real.is_empty(),
-        "sweep-core gained a dependency: {real:?}\n\
+        "etude-core gained a dependency: {real:?}\n\
          The no-network claim rests on this crate having none."
     );
 }

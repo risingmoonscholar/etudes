@@ -1,6 +1,12 @@
+# etudes — small studies in local-first software.
+#
+# One repo, several binaries, one shared core. Split into per-tool repos only
+# when etude-core stops moving; today it is still learning what it needs from a
+# second caller.
+
 [workspace]
 resolver = "3"
-members = ["crates/sweep-core", "crates/sweep-cli", "crates/sweep-keep", "crates/sweep-read", "crates/stash-cli", "crates/fixtures"]
+members = ["crates/etude-core", "crates/sweep-cli", "crates/etude-keep", "crates/etude-read", "crates/stash-cli", "crates/fixtures"]
 
 [workspace.package]
 version = "0.3.0"
@@ -11,5 +17,5 @@ repository = "local"
 # Dependency policy, enforced mechanically by deny.toml:
 #   - nothing that can open a socket, resolve a name, or spawn a runtime
 #   - no build.rs code execution in the tree
-# The engine crate (sweep-core) has NO dependencies at all in v0.1. That is the
+# The engine crate (etude-core) has NO dependencies at all in v0.1. That is the
 # cheapest possible audit: there is nothing to audit.

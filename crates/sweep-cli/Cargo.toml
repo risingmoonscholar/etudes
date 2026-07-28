@@ -12,9 +12,9 @@ path = "src/main.rs"
 # a tool whose selling point is a readable dependency tree, and sweep's grammar
 # is four verbs.
 [dependencies]
-sweep-core = { path = "../sweep-core" }
-sweep-keep = { path = "../sweep-keep" }
-sweep-read = { path = "../sweep-read" }
+etude-core = { path = "../etude-core" }
+etude-keep = { path = "../etude-keep" }
+etude-read = { path = "../etude-read" }
 
 [dev-dependencies]
 fixtures = { path = "../fixtures" }

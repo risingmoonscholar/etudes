@@ -1,5 +1,5 @@
 [package]
-name = "sweep-core"
+name = "etude-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

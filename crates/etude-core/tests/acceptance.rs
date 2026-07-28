@@ -1,4 +1,4 @@
-//! Acceptance tests from docs/PLAN.md.
+//! Acceptance tests from docs/sweep/PLAN.md.
 //!
 //! These are not unit tests. Each one makes a privacy claim falsifiable. They
 //! run against the synthetic fixture tree only — no real user file is read.
@@ -6,9 +6,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use sweep_core::plan;
-use sweep_core::scan::{self, ScanConfig};
-use sweep_core::Untouched;
+use etude_core::plan;
+use etude_core::scan::{self, ScanConfig};
+use etude_core::Untouched;
 
 /// Isolated fixture root per test, so tests cannot interfere with each other.
 fn fixture(tag: &str) -> (PathBuf, fixtures::Fixture) {

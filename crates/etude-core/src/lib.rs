@@ -1,4 +1,4 @@
-//! sweep-core — the classification engine.
+//! etude-core — the classification engine.
 //!
 //! Zero dependencies. Nothing in this crate can open a socket, because there is
 //! no third-party code here at all.
@@ -30,7 +30,7 @@ pub enum Untouched {
 /// Categories of personal record sweep recognises well enough to refuse.
 ///
 /// These names are used in **counts only** — never to name a destination
-/// directory. See docs/SPEC.md, "Group naming rule".
+/// directory. See docs/sweep/SPEC.md, "Group naming rule".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Tax,

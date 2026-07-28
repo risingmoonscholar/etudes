@@ -1,13 +1,13 @@
 //! Interactive review.
 //!
-//! # Deviation from docs/SPEC.md, on purpose
+//! # Deviation from docs/sweep/SPEC.md, on purpose
 //!
 //! The spec described `sweep review` and `sweep apply` as separate commands
 //! operating on a **persisted plan**. This implements review as a single
 //! scan → decide → apply pass in one process instead, and never writes a plan
 //! file.
 //!
-//! The reason is asset A7 in docs/THREAT-MODEL.md. A persisted plan is a second
+//! The reason is asset A7 in docs/sweep/THREAT-MODEL.md. A persisted plan is a second
 //! plaintext index of the user's filenames sitting on disk between two commands
 //! — the same problem the journal has, without the journal's justification.
 //! Eliminating it removes an asset rather than protecting one.
@@ -24,7 +24,7 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use sweep_core::plan::Plan;
+use etude_core::plan::Plan;
 
 pub enum Outcome {
     /// Apply the plan as now marked.
@@ -159,7 +159,7 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         }
     }
 
-    let accepted: Vec<&sweep_core::plan::Group> =
+    let accepted: Vec<&etude_core::plan::Group> =
         plan.groups.iter().filter(|g| g.accepted).collect();
     if accepted.is_empty() {
         println!("  Nothing accepted. Nothing has been moved.");
@@ -189,7 +189,7 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::path::PathBuf;
-    use sweep_core::plan::{Group, Signal};
+    use etude_core::plan::{Group, Signal};
 
     fn plan_of(names: &[&str]) -> Plan {
         Plan {

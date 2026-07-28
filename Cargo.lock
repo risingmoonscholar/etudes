@@ -74,6 +74,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "etude-core"
+version = "0.3.0"
+dependencies = [
+ "fixtures",
+]
+
+[[package]]
+name = "etude-keep"
+version = "0.3.0"
+dependencies = [
+ "chacha20poly1305",
+]
+
+[[package]]
+name = "etude-read"
+version = "0.3.0"
+
+[[package]]
 name = "fixtures"
 version = "0.3.0"
 
@@ -143,9 +161,9 @@ dependencies = [
 name = "stash-cli"
 version = "0.3.0"
 dependencies = [
+ "etude-core",
+ "etude-keep",
  "fixtures",
- "sweep-core",
- "sweep-keep",
 ]
 
 [[package]]
@@ -158,29 +176,11 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "sweep-cli"
 version = "0.3.0"
 dependencies = [
- "fixtures",
- "sweep-core",
- "sweep-keep",
- "sweep-read",
-]
-
-[[package]]
-name = "sweep-core"
-version = "0.3.0"
-dependencies = [
+ "etude-core",
+ "etude-keep",
+ "etude-read",
  "fixtures",
 ]
-
-[[package]]
-name = "sweep-keep"
-version = "0.3.0"
-dependencies = [
- "chacha20poly1305",
-]
-
-[[package]]
-name = "sweep-read"
-version = "0.3.0"
 
 [[package]]
 name = "typenum"

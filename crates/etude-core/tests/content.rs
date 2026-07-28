@@ -1,20 +1,20 @@
 //! v0.3 acceptance tests.
 //!
-//! The invariant under test, from docs/V03-CONTENT.md:
+//! The invariant under test, from docs/sweep/V03-CONTENT.md:
 //!
 //! > Content findings can only ever widen refusal. They never create or name a
 //! > group.
 //!
-//! These use a stub inspector rather than `sweep-read`, so `sweep-core` keeps
-//! zero dependencies. The real scanners are tested in `sweep-read`; what is
+//! These use a stub inspector rather than `etude-read`, so `etude-core` keeps
+//! zero dependencies. The real scanners are tested in `etude-read`; what is
 //! tested here is that the engine can only *narrow* what it will touch.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sweep_core::plan::{self, Inspector};
-use sweep_core::scan::{self, ScanConfig};
-use sweep_core::{Category, Untouched};
+use etude_core::plan::{self, Inspector};
+use etude_core::scan::{self, ScanConfig};
+use etude_core::{Category, Untouched};
 
 fn fixture(tag: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("sweep_content_{tag}_{}", std::process::id()));

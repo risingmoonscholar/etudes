@@ -2,12 +2,12 @@
 //!
 //! Every scanner is a single linear pass over bytes with no allocation
 //! proportional to input and no regex engine, so there is no catastrophic
-//! backtracking to trigger (docs/V03-CONTENT.md § Hostile input).
+//! backtracking to trigger (docs/sweep/V03-CONTENT.md § Hostile input).
 //!
 //! A hit means one thing only: the file joins the untouched set. Nothing here
 //! can influence a group name.
 
-/// What kind of sensitive material was found. Mirrors `sweep_core::Category`
+/// What kind of sensitive material was found. Mirrors `etude_core::Category`
 /// without depending on it — this crate stays standalone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Found {

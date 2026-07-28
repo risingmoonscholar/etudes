@@ -1,9 +1,9 @@
 [package]
-name = "sweep-read"
+name = "etude-read"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Content inspection lives here, not in sweep-core, so the engine keeps zero
+# Content inspection lives here, not in etude-core, so the engine keeps zero
 # dependencies and the no-network claim stays cheap to check.
 [dependencies]

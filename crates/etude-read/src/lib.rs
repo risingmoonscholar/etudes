@@ -1,6 +1,6 @@
 //! Content inspection for sweep (v0.3).
 //!
-//! Read docs/V03-CONTENT.md before changing anything here. The single invariant
+//! Read docs/sweep/V03-CONTENT.md before changing anything here. The single invariant
 //! this crate exists to uphold:
 //!
 //! > **Content findings can only ever widen refusal. They never create or name
@@ -96,7 +96,7 @@ mod tests {
     use std::io::Write;
 
     fn tmp(name: &str, body: &[u8]) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("sweep_read_{}_{name}", std::process::id()));
+        let p = std::env::temp_dir().join(format!("etude_read_{}_{name}", std::process::id()));
         let mut f = std::fs::File::create(&p).expect("create");
         f.write_all(body).expect("write");
         p

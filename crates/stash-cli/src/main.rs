@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use sweep_core::plan::{Group, Plan, Signal};
-use sweep_core::scan::{self, ScanConfig};
+use etude_core::plan::{Group, Plan, Signal};
+use etude_core::scan::{self, ScanConfig};
 
 const USAGE: &str = "\
 stash — clean now, decide later
@@ -181,7 +181,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     };
 
     let Some(sl) = sealer() else { return ExitCode::from(2) };
-    match sweep_core::apply::apply(&plan, Some(&sl), None) {
+    match etude_core::apply::apply(&plan, "stash", Some(&sl), None) {
         Ok(r) => {
             println!("\nStashed {} items.", r.moved);
             println!("{} is clear.\n", path.display());
@@ -208,20 +208,20 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
 
 fn cmd_pop() -> ExitCode {
     let Some(sl) = sealer() else { return ExitCode::from(2) };
-    let mut j = match sweep_core::Journal::latest_sealed(&sl) {
+    let mut j = match etude_core::Journal::latest_sealed("stash", &sl) {
         Ok(j) => j,
         Err(e) => {
             eprintln!("stash: {e}");
             return ExitCode::from(1);
         }
     };
-    match sweep_core::apply::undo(&mut j) {
+    match etude_core::apply::undo(&mut j) {
         Ok(r) => {
             println!("\nRestored {} items.", r.restored);
             if !r.skipped_changed.is_empty() {
                 println!("  {} changed while stashed and were left alone:", r.skipped_changed.len());
                 for p in &r.skipped_changed {
-                    println!("    {}", sweep_core::redact::path(p));
+                    println!("    {}", etude_core::redact::path(p));
                 }
             }
             if !r.skipped_missing.is_empty() {
@@ -291,18 +291,18 @@ struct KeychainSeal {
     key: [u8; 32],
 }
 
-impl sweep_core::journal::Sealer for KeychainSeal {
+impl etude_core::journal::Sealer for KeychainSeal {
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
-        sweep_keep::seal(&self.key, plaintext).map_err(|_| "could not seal the record")
+        etude_keep::seal(&self.key, plaintext).map_err(|_| "could not seal the record")
     }
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
-        sweep_keep::open(&self.key, sealed).map_err(|_| "wrong key or the record was altered")
+        etude_keep::open(&self.key, sealed).map_err(|_| "wrong key or the record was altered")
     }
 }
 
 /// Refuses rather than writing an unencrypted record of what was stashed.
 fn sealer() -> Option<KeychainSeal> {
-    match sweep_keep::key() {
+    match etude_keep::key() {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             eprintln!("stash: {e}");

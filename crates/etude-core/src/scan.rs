@@ -1,4 +1,4 @@
-//! Filesystem walk with the safety rules from docs/THREAT-MODEL.md § T6.
+//! Filesystem walk with the safety rules from docs/sweep/THREAT-MODEL.md § T6.
 //!
 //! Metadata only. `scan` never opens a file for reading.
 

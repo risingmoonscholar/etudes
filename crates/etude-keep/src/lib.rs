@@ -1,6 +1,6 @@
 //! Journal encryption (M7).
 //!
-//! Isolated in its own crate so that `sweep-core` — the classification engine —
+//! Isolated in its own crate so that `etude-core` — the classification engine —
 //! keeps **zero dependencies**. The no-network claim is about the engine, and
 //! keeping the engine dependency-free is what makes that claim cheap to check.
 //!
@@ -15,7 +15,7 @@
 //!   that random generation is safe without a counter.
 //! - The plaintext is padded to a 4 KiB boundary before sealing, so ciphertext
 //!   length does not reveal how many files were organised
-//!   (docs/THREAT-MODEL.md § T2).
+//!   (docs/sweep/THREAT-MODEL.md § T2).
 
 use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};

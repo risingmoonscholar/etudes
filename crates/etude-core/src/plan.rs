@@ -81,7 +81,7 @@ impl Plan {
 
 /// Optional content inspection, injected by the caller.
 ///
-/// `sweep-core` deliberately cannot read file contents itself — the engine has
+/// `etude-core` deliberately cannot read file contents itself — the engine has
 /// zero dependencies and never opens a file. When the user passes
 /// `--inspect-content` the CLI supplies an implementation.
 ///

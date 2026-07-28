@@ -10,8 +10,8 @@ mod review;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sweep_core::plan;
-use sweep_core::scan::{self, ScanConfig};
+use etude_core::plan;
+use etude_core::scan::{self, ScanConfig};
 
 const USAGE: &str = "\
 sweep — organise the obvious, leave the private alone
@@ -46,7 +46,7 @@ fn main() -> ExitCode {
 
     // Journals past their TTL are dropped before anything else. Keeping an
     // index of the user's filenames forever keeps the exposure forever.
-    let expired = sweep_core::journal::prune_expired();
+    let expired = etude_core::journal::prune_expired();
     if expired > 0 {
         eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
     }
@@ -91,7 +91,7 @@ fn expand_tilde(p: &str) -> String {
 fn scan_and_plan(
     path: &PathBuf,
     args: &[String],
-) -> Result<(plan::Plan, Option<sweep_read::Stats>), ExitCode> {
+) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
     let cfg = ScanConfig {
         depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
         allow_sync: has(args, "--allow-sync"),
@@ -233,12 +233,12 @@ struct KeychainSeal {
     key: [u8; 32],
 }
 
-impl sweep_core::journal::Sealer for KeychainSeal {
+impl etude_core::journal::Sealer for KeychainSeal {
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
-        sweep_keep::seal(&self.key, plaintext).map_err(|_| "could not seal the journal")
+        etude_keep::seal(&self.key, plaintext).map_err(|_| "could not seal the journal")
     }
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
-        sweep_keep::open(&self.key, sealed).map_err(|_| "wrong key or the journal was altered")
+        etude_keep::open(&self.key, sealed).map_err(|_| "wrong key or the journal was altered")
     }
 }
 
@@ -247,7 +247,7 @@ impl sweep_core::journal::Sealer for KeychainSeal {
 /// On failure sweep refuses rather than falling back to a plaintext journal.
 /// Silently degrading is the failure mode a privacy tool must not have.
 fn sealer() -> Option<KeychainSeal> {
-    match sweep_keep::key() {
+    match etude_keep::key() {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             eprintln!("sweep: {e}");
@@ -315,9 +315,10 @@ fn cmd_review(args: &[String]) -> ExitCode {
 
 /// Shared tail of `apply` and `review`.
 fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
-    match sweep_core::apply::apply(
+    match etude_core::apply::apply(
         p,
-        sl.as_ref().map(|s| s as &dyn sweep_core::journal::Sealer),
+        "sweep",
+        sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
     ) {
         Ok(r) => {
@@ -404,14 +405,14 @@ fn cmd_apply(args: &[String]) -> ExitCode {
 
 fn cmd_undo() -> ExitCode {
     let Some(sl) = sealer() else { return ExitCode::from(2) };
-    let mut j = match sweep_core::Journal::latest_sealed(&sl) {
+    let mut j = match etude_core::Journal::latest_sealed("sweep", &sl) {
         Ok(j) => j,
         Err(e) => {
             eprintln!("sweep: {e}");
             return ExitCode::from(1);
         }
     };
-    match sweep_core::apply::undo(&mut j) {
+    match etude_core::apply::undo(&mut j) {
         Ok(r) => {
             println!("\nRestored {} files.", r.restored);
             if !r.skipped_changed.is_empty() {
@@ -420,7 +421,7 @@ fn cmd_undo() -> ExitCode {
                     r.skipped_changed.len()
                 );
                 for p in &r.skipped_changed {
-                    println!("    {}", sweep_core::redact::path(p));
+                    println!("    {}", etude_core::redact::path(p));
                 }
             }
             if !r.skipped_missing.is_empty() {
@@ -437,7 +438,7 @@ fn cmd_undo() -> ExitCode {
 }
 
 fn cmd_forget() -> ExitCode {
-    let dir = sweep_core::journal::state_dir();
+    let dir = etude_core::journal::state_dir();
     let mut n = 0;
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
@@ -448,7 +449,7 @@ fn cmd_forget() -> ExitCode {
             }
         }
     }
-    sweep_keep::destroy_key();
+    etude_keep::destroy_key();
     println!("Removed {n} journal(s) from {}.", dir.display());
     println!("Destroyed the journal key in the keychain.");
     println!("Undo is no longer possible for any past run.");
@@ -456,7 +457,7 @@ fn cmd_forget() -> ExitCode {
 }
 
 fn verify() -> ExitCode {
-    let dir = sweep_core::journal::state_dir();
+    let dir = etude_core::journal::state_dir();
     let count = std::fs::read_dir(&dir)
         .map(|rd| {
             rd.flatten()
@@ -472,7 +473,7 @@ sweep {v}
   What is compiled in
     content inspection     yes, but OFF unless --inspect-content AND you
                            consent at a separate prompt. --yes does not cover it.
-    network code           none. sweep-core has 0 dependencies; the binary
+    network code           none. etude-core has 0 dependencies; the binary
                            links no socket symbols.
 
   What is on this machine
@@ -497,7 +498,7 @@ sweep {v}
         count = count,
         dir = dir.display(),
         synced = if scan::is_synced(&dir) { "YES — move it" } else { "no" },
-        ttl = sweep_core::journal::TTL_DAYS,
+        ttl = etude_core::journal::TTL_DAYS,
     );
     ExitCode::SUCCESS
 }

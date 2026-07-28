@@ -7,12 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use sweep_core::apply;
-use sweep_core::journal::{Journal, Sealer};
-use sweep_core::plan::{Group, Plan, Signal};
-use sweep_core::scan::{self, ScanConfig};
+use etude_core::apply;
+use etude_core::journal::{Journal, Sealer};
+use etude_core::plan::{Group, Plan, Signal};
+use etude_core::scan::{self, ScanConfig};
 
-/// `SWEEP_STATE_DIR` is process-global; serialise rather than rely on a flag.
+/// `ETUDE_STATE_DIR` is process-global; serialise rather than rely on a flag.
 fn lock() -> MutexGuard<'static, ()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
     L.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
@@ -34,7 +34,7 @@ fn setup(tag: &str) -> PathBuf {
     fixtures::build(&root).expect("fixture");
     let state = std::env::temp_dir().join(format!("stash_state_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&state);
-    unsafe { std::env::set_var("SWEEP_STATE_DIR", &state) };
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
     root
 }
 
@@ -89,7 +89,7 @@ fn the_folder_is_actually_empty_afterwards() {
     assert!(visible(&root) > 0, "fixture produced nothing to stash");
 
     let (plan, count) = stash_plan(&root);
-    let r = apply::apply(&plan, Some(&TestSeal), None).expect("apply");
+    let r = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
 
     assert_eq!(r.moved, count);
     assert_eq!(visible(&root), 0, "items remained visible after stashing");
@@ -103,8 +103,8 @@ fn everything_comes_back_including_directories_and_symlinks() {
     let (plan, count) = stash_plan(&root);
     let before: Vec<PathBuf> = plan.groups[0].members.clone();
 
-    let rep = apply::apply(&plan, Some(&TestSeal), None).expect("apply");
-    let mut j = Journal::load_sealed(&rep.journal_id, &TestSeal).expect("journal");
+    let rep = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    let mut j = Journal::load_sealed("stash", &rep.journal_id, &TestSeal).expect("journal");
     let ur = apply::undo(&mut j).expect("undo");
 
     assert_eq!(ur.restored, count, "not everything was restored");
@@ -128,8 +128,8 @@ fn a_symlink_is_fingerprinted_by_the_link_not_its_target() {
     let root = setup("symlink");
     let (plan, _) = stash_plan(&root);
 
-    let rep = apply::apply(&plan, Some(&TestSeal), None).expect("apply");
-    let mut j = Journal::load_sealed(&rep.journal_id, &TestSeal).expect("journal");
+    let rep = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    let mut j = Journal::load_sealed("stash", &rep.journal_id, &TestSeal).expect("journal");
     let ur = apply::undo(&mut j).expect("undo");
 
     let self_link = root.canonicalize().unwrap().join("self_link");
@@ -157,7 +157,7 @@ fn stash_moves_the_files_sweep_refuses() {
         );
     }
 
-    apply::apply(&plan, Some(&TestSeal), None).expect("apply");
+    apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
     for name in fixtures::SENSITIVE_NAMES {
         assert!(
             !root.canonicalize().unwrap().join(name).exists(),
@@ -173,7 +173,7 @@ fn hidden_items_are_left_where_they_are() {
     let _g = lock();
     let root = setup("hidden");
     let (plan, _) = stash_plan(&root);
-    apply::apply(&plan, Some(&TestSeal), None).expect("apply");
+    apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
 
     assert!(root.join(".ssh").exists(), "stash moved a hidden credential directory");
     cleanup(&root);

@@ -1,6 +1,6 @@
 //! Apply and undo.
 //!
-//! Ordering rule (docs/CRITIQUE.md § 9): the journal is written before the first
+//! Ordering rule (docs/sweep/CRITIQUE.md § 9): the journal is written before the first
 //! move, and each entry is marked done only after its move succeeds. A crash at
 //! any point leaves a journal that describes exactly what happened.
 
@@ -57,11 +57,17 @@ pub type FailAt = Option<usize>;
 /// There is no plaintext journal path. Either it is sealed or it is absent.
 pub fn apply(
     plan: &Plan,
+    tool: &str,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
 ) -> Result<ApplyReport, ApplyError> {
     let id = journal_id(plan);
-    let mut j = Journal { id: id.clone(), root: plan.root.clone(), entries: Vec::new() };
+    let mut j = Journal {
+        id: id.clone(),
+        tool: tool.to_string(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+    };
 
     // Build the full entry list first, so the journal describes the whole
     // intended operation before any of it happens.
@@ -160,7 +166,7 @@ pub struct UndoReport {
 /// Reverse a journal, verifying each file before touching it.
 ///
 /// A file that changed since apply is **reported and skipped**, never
-/// overwritten (docs/CRITIQUE.md § 8).
+/// overwritten (docs/sweep/CRITIQUE.md § 8).
 pub fn undo(j: &mut Journal) -> Result<UndoReport, ApplyError> {
     let mut r = UndoReport::default();
 

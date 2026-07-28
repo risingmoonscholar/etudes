@@ -1,82 +1,79 @@
-# sweep
+# etudes
 
-Organises the obvious and leaves the private alone.
+Small studies in local-first software.
+
+An étude is a short piece written to master one technique, and in the right
+hands also worth performing. These are tools built the same way: each removes
+one recurring friction, each is small enough to read in an afternoon, and each
+can prove its own claims rather than asking you to trust them.
+
+| Tool | Does | Status |
+|---|---|---|
+| **`sweep`** | Organises the obvious and leaves the private alone | v0.3 |
+| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.3 |
+| `unpack` | One command for every archive format | planned |
+
+## The claims, and how to check them in a minute
+
+Every étude ships the same two witnesses. Neither is a promise; both are
+commands you can run.
+
+```sh
+cargo test                     # 74 tests
+scripts/no-network-test.sh     # the same suite, with socket(2) denied by the OS
+```
+
+The second one is the load-bearing claim. It proves the sandbox works *before*
+trusting it — a control program that opens a TCP connection must succeed
+unsandboxed and be denied under the profile — so a network call anywhere in
+these tools is a test failure rather than a code-review finding.
+
+Beyond that, `etude-core` has **zero dependencies**, asserted by a test so it
+cannot drift. There is no third-party code in the path that decides what happens
+to your files.
+
+## Two rules the tools share
+
+**Never coin a label the filesystem did not already contain.** A folder named
+`Tax return 2024` is itself a disclosure — visible in Finder, indexed by
+Spotlight, captured by every backup. Group names come only from words your own
+filenames already carry. If *you* want a revealing name, `sweep review` will let
+you choose one after telling you what it costs.
+
+**Reading more must mean acting less.** `sweep --inspect-content` is off by
+default and needs consent separate from `--yes`. What it reads can only ever
+move a file into "left alone" — it never influences a destination.
+
+## Layout
 
 ```
-$ sweep ~/Desktop
-
-Scanned 95 items  ·  names, sizes and dates only  ·  no contents read
-
-  Screenshots      34 files   named "Screenshot ..."
-  Photos, Jul 28   27 files   camera names, taken within 3 days
-  Installers        3 files   .dmg and .pkg
-  acme              5 files   5 filenames contain "acme"
-
-  Left alone       26 files
-    14 look like personal records — sweep does not touch these
-    12 no clear group
-
-Nothing has been moved.  Nothing left this machine.
+crates/
+  etude-core/    scan, plan, apply, journal-first undo — zero dependencies
+  etude-keep/    journal encryption (XChaCha20-Poly1305, key in the keychain)
+  etude-read/    content inspection — mlock'd, zeroed, never persisted
+  sweep-cli/     bin: sweep
+  stash-cli/     bin: stash
+  fixtures/      synthetic adversarial trees; no real file is read in testing
+docs/sweep/      sweep's spec, threat model, critique and plan
 ```
 
-Every group states the signal that produced it, so you can check the reasoning
-by eye. The "left alone" line is the point: sweep found documents that look like
-tax and medical records and declined to organise them.
+Journals are namespaced per tool and share `~/.local/state/etudes`, so
+`sweep undo` and `stash pop` cannot reverse each other's work.
 
-## Status: v0.1
+## Per-tool documentation
 
-Working: `sweep PATH`, `sweep apply --yes | --only NAME`, `sweep undo`,
-`sweep forget`, `sweep verify`.
-
-The undo journal is encrypted with XChaCha20-Poly1305 under a key held in your
-login keychain. There is **no plaintext fallback**: if sealing is unavailable
-sweep refuses rather than degrading.
-
-Not implemented, and they say so rather than pretending:
-
-- **`x` (extract files from a group)** during review.
-- **Parsing PDFs, Office documents or archives.** `--inspect-content` reads
-  plain text only, on purpose. See `docs/V03-CONTENT.md`.
-
-## The privacy claims, and how to check them
-
-| Claim | How you check it |
-|---|---|
-| Nothing leaves the machine | **`scripts/no-network-test.sh`** — runs the whole suite with `socket(2)` denied by the OS, after proving the sandbox actually denies. Plus `cargo deny check bans` and a symbol scan of the shipped binary. |
-| The engine is auditable | `sweep-core` has **zero dependencies**, asserted by a test. No third-party code in the classification path. |
-| No contents are read by default | sweep opens no file unless `--inspect-content` is passed **and** you answer `y` to a separate prompt. `--yes` does not cover it. |
-| Reading can only make sweep act less | `cargo test --test content` — `inspection_never_creates_or_renames_a_group`. Content can move a file into "left alone" and nothing else. |
-| Private files are not moved | `cargo test` — `sensitive_files_survive_a_full_apply_untouched` checks the filesystem, not the plan |
-| The journal reveals nothing | `cargo test` — `no_filename_is_readable_in_the_written_journal` greps the bytes on disk |
-| No filenames on screen when asked | `sweep --quiet` |
-
-## Two design rules worth knowing
-
-**sweep never coins a label the filesystem did not already contain.** A folder
-named `Tax return 2024` is itself a disclosure — visible in Finder, indexed by
-Spotlight, captured by every backup. Group names come only from tokens your own
-filenames already carry. Files that look sensitive are never grouped at all.
-
-**No general clustering.** Each detector is individually explainable and high
-precision. A large "no clear group" count is a correct answer, not a failure.
-
-## Documents
-
-| File | Contents |
-|---|---|
-| `docs/CRITIQUE.md` | Risks in the concept, written before any code |
-| `docs/SPEC.md` | v0.1 scope and the full CLI specification |
-| `docs/THREAT-MODEL.md` | Assets, adversaries, controls, residual risks |
-| `docs/PLAN.md` | Milestones and the acceptance tests that define done |
+- [`sweep`](docs/sweep/README.md) — with its [threat model](docs/sweep/THREAT-MODEL.md)
+  and a [critique](docs/sweep/CRITIQUE.md) of its own concept, written before the code
 
 ## Development
 
-No real file is read during development. Everything is tested against a
-synthetic adversarial fixture tree.
+No real file of yours is read during development or testing. Everything runs
+against a generated adversarial tree.
 
 ```sh
-cargo test                        # 66 tests
-scripts/no-network-test.sh        # the suite, with sockets denied by the OS
-cargo run -p fixtures --bin mkfx -- /tmp/sweep-demo   # build a fake messy folder
-cargo run -p sweep-cli --bin sweep -- /tmp/sweep-demo
+cargo run -p fixtures --bin mkfx -- /tmp/demo    # build a fake messy folder
+cargo run -p sweep-cli --bin sweep -- /tmp/demo
+cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 ```
+
+Apache-2.0.

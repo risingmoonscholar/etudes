@@ -2,10 +2,10 @@
 //!
 //! # Encryption
 //!
-//! The journal is sealed by a [`Sealer`] supplied by the caller. `sweep-core`
+//! The journal is sealed by a [`Sealer`] supplied by the caller. `etude-core`
 //! deliberately does not know how — keeping the engine dependency-free is what
 //! makes the no-network claim cheap to check, so the cipher lives in
-//! `sweep-keep` and is injected here.
+//! `etude-keep` and is injected here.
 //!
 //! There is no plaintext fallback. If sealing is unavailable the journal is not
 //! written and the caller is told, because silently degrading to plaintext is
@@ -15,7 +15,7 @@
 //!
 //! The journal is written *before* the first move and each entry is marked
 //! complete only after its move succeeds. A crash therefore leaves a journal
-//! describing exactly what happened, never more (docs/CRITIQUE.md § 9).
+//! describing exactly what happened, never more (docs/sweep/CRITIQUE.md § 9).
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -67,11 +67,15 @@ pub struct Entry {
 #[derive(Debug, Default)]
 pub struct Journal {
     pub id: String,
+    /// Which tool wrote this. Journals are namespaced by tool because the
+    /// etudes share one state directory: without it, `sweep undo` after a
+    /// `stash` reverses the stash. Found the moment stash became real.
+    pub tool: String,
     pub root: PathBuf,
     pub entries: Vec<Entry>,
 }
 
-/// Supplied by the caller so `sweep-core` need not depend on a cipher.
+/// Supplied by the caller so `etude-core` need not depend on a cipher.
 pub trait Sealer {
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str>;
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str>;
@@ -97,16 +101,16 @@ impl std::fmt::Display for JournalError {
 }
 
 /// Where journals live. Chosen to sit outside the default sync roots of iCloud
-/// Drive, Dropbox and OneDrive (docs/THREAT-MODEL.md § T4).
+/// Drive, Dropbox and OneDrive (docs/sweep/THREAT-MODEL.md § T4).
 pub fn state_dir() -> PathBuf {
-    if let Ok(x) = std::env::var("SWEEP_STATE_DIR") {
+    if let Ok(x) = std::env::var("ETUDE_STATE_DIR") {
         return PathBuf::from(x);
     }
     if let Ok(x) = std::env::var("XDG_STATE_HOME") {
-        return PathBuf::from(x).join("sweep");
+        return PathBuf::from(x).join("etudes");
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".local/state/sweep")
+    PathBuf::from(home).join(".local/state/etudes")
 }
 
 fn esc(p: &Path) -> String {
@@ -139,7 +143,7 @@ fn unesc(s: &str) -> String {
 
 impl Journal {
     pub fn path(&self) -> PathBuf {
-        state_dir().join(format!("{}.journal", self.id))
+        state_dir().join(format!("{}-{}.journal", self.tool, self.id))
     }
 
     /// Serialise. Line-oriented so a truncated write loses at most one entry.
@@ -202,21 +206,22 @@ impl Journal {
         self.write_bytes(&bytes)
     }
 
-    /// Load and unseal.
-    pub fn load_sealed(id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
-        let p = state_dir().join(format!("{id}.journal"));
+    /// Load and unseal. `id` is the bare id; `tool` selects the namespace.
+    pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
+        let p = state_dir().join(format!("{tool}-{id}.journal"));
         let raw = fs::read(&p).map_err(|_| JournalError::NotFound)?;
         let plain = sealer.open(&raw).map_err(|m| JournalError::Seal(m))?;
         let text = String::from_utf8(plain).map_err(|_| JournalError::Malformed("not utf-8"))?;
         let mut j = Journal::decode(&text)?;
         j.id = id.to_string();
+        j.tool = tool.to_string();
         Ok(j)
     }
 
-    /// Most recent sealed journal by modification time.
-    pub fn latest_sealed(sealer: &dyn Sealer) -> Result<Journal, JournalError> {
-        let id = latest_id()?;
-        Journal::load_sealed(&id, sealer)
+    /// Most recent sealed journal **written by `tool`**, by modification time.
+    pub fn latest_sealed(tool: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
+        let id = latest_id(tool)?;
+        Journal::load_sealed(tool, &id, sealer)
     }
 
     fn write_bytes(&self, bytes: &[u8]) -> Result<(), JournalError> {
@@ -248,7 +253,7 @@ impl Journal {
 ///
 /// A journal is an index of the user's filenames. Even sealed, keeping it
 /// forever means keeping the exposure forever, and undo is only useful for as
-/// long as the user remembers what they ran (docs/THREAT-MODEL.md § A4).
+/// long as the user remembers what they ran (docs/sweep/THREAT-MODEL.md § A4).
 pub const TTL_DAYS: u64 = 30;
 
 /// Delete journals older than [`TTL_DAYS`]. Returns how many were removed.
@@ -276,14 +281,16 @@ pub fn prune_expired() -> usize {
     removed
 }
 
-/// Newest journal id in the state directory, by modification time.
-pub fn latest_id() -> Result<String, JournalError> {
+/// Newest journal id written by `tool`, by modification time.
+pub fn latest_id(tool: &str) -> Result<String, JournalError> {
+    let prefix = format!("{tool}-");
     let dir = state_dir();
     let mut best: Option<(SystemTime, String)> = None;
     for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
         let Ok(e) = e else { continue };
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(id) = name.strip_suffix(".journal") else { continue };
+        let Some(stem) = name.strip_suffix(".journal") else { continue };
+        let Some(id) = stem.strip_prefix(&prefix) else { continue };
         let Ok(md) = e.metadata() else { continue };
         let Ok(t) = md.modified() else { continue };
         if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
@@ -384,7 +391,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sweep_ttl_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
-        unsafe { std::env::set_var("SWEEP_STATE_DIR", &dir) };
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
 
         let old = dir.join("old.journal");
         let new = dir.join("new.journal");
@@ -403,7 +410,7 @@ mod tests {
         assert!(new.exists(), "a fresh journal was destroyed");
 
         let _ = fs::remove_dir_all(&dir);
-        unsafe { std::env::remove_var("SWEEP_STATE_DIR") };
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 
     fn set_mtime_secs_ago(p: &Path, secs: u64) {
@@ -432,6 +439,7 @@ mod tests {
         // The fixture tree contains a tab in a filename on purpose.
         let j = Journal {
             id: "t".into(),
+            tool: "test".into(),
             root: PathBuf::from("/tmp/root"),
             entries: vec![Entry {
                 from: PathBuf::from("/tmp/root/weird\tname.txt"),
