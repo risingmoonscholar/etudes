@@ -1,0 +1,9 @@
+[package]
+name = "fixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Dev-only. Builds a synthetic adversarial tree so no real user file is ever
+# read during development or testing.
+[dependencies]

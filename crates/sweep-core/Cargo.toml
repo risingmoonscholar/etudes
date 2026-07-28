@@ -1,0 +1,13 @@
+[package]
+name = "sweep-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deliberately empty. The engine has zero dependencies, which makes the
+# no-network claim trivially checkable: there is no third-party code in the
+# classification path at all.
+[dependencies]
+
+[dev-dependencies]
+fixtures = { path = "../fixtures" }

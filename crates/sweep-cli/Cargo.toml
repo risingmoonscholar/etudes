@@ -1,0 +1,18 @@
+[package]
+name = "sweep-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sweep"
+path = "src/main.rs"
+
+# Argument parsing is hand-rolled. A CLI parser is a large dependency surface for
+# a tool whose selling point is a readable dependency tree, and sweep's grammar
+# is four verbs.
+[dependencies]
+sweep-core = { path = "../sweep-core" }
+
+[dev-dependencies]
+fixtures = { path = "../fixtures" }
