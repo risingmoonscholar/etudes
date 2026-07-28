@@ -40,11 +40,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("verify") => verify(),
-        Some("review" | "apply" | "undo" | "forget") => {
+        Some("apply") => cmd_apply(&args),
+        Some("undo") => cmd_undo(),
+        Some("forget") => cmd_forget(),
+        Some("review") => {
             eprintln!(
-                "sweep: `{}` is specified in docs/SPEC.md but not implemented in v0.1.\n\
-                 v0.1 analyses only. Nothing has been moved, so nothing needs undoing.",
-                args[0]
+                "sweep: interactive review is not implemented yet.\n\
+                 Use `sweep PATH` to see the plan, then `sweep apply PATH --yes`\n\
+                 to accept every group, or --only NAME to accept one."
             );
             ExitCode::from(3)
         }
@@ -170,15 +173,159 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool) {
     println!("Review: sweep review     Apply: sweep apply   (not in v0.1)");
 }
 
+/// `sweep apply PATH --yes | --only NAME`
+///
+/// Re-scans rather than trusting a stored plan. The filesystem may have changed
+/// since the plan was printed, and a stale plan is the write-freshness failure:
+/// the record says one thing and the tree says another.
+fn cmd_apply(args: &[String]) -> ExitCode {
+    let path = args
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-'))
+        .map(|p| PathBuf::from(expand_tilde(p)))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let accept_all = has(args, "--yes");
+    let only = value(args, "--only");
+    let use_journal = !has(args, "--no-journal");
+
+    if !accept_all && only.is_none() {
+        eprintln!(
+            "sweep: refusing to apply without an explicit choice.\n\
+             Pass --yes to accept every group, or --only NAME for one."
+        );
+        return ExitCode::from(2);
+    }
+
+    let cfg = ScanConfig {
+        depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
+        allow_sync: has(args, "--allow-sync"),
+        ..Default::default()
+    };
+    let outcome = match scan::scan(&path, &cfg) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut p = plan::build(&outcome);
+    for g in &mut p.groups {
+        g.accepted = match &only {
+            Some(n) => &g.name == n,
+            None => true,
+        };
+    }
+    if p.moves() == 0 {
+        eprintln!("sweep: nothing to apply.");
+        return ExitCode::from(1);
+    }
+
+    if !use_journal {
+        println!(
+            "\n  --no-journal: nothing will be recorded, so `sweep undo` will not work.\n"
+        );
+    }
+
+    match sweep_core::apply::apply(&p, use_journal, None) {
+        Ok(r) => {
+            println!("\nMoved {} files.", r.moved);
+            match r.journal_path {
+                Some(jp) => {
+                    println!("Undo with: sweep undo");
+                    println!(
+                        "\n  The journal at {} records your filenames in PLAINTEXT.\n  \
+                         Encryption is not implemented yet. Use --no-journal to avoid it.",
+                        jp.display()
+                    );
+                }
+                None => println!("No journal was written. This cannot be undone."),
+            }
+            println!("\nNothing left this machine.");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
+            ExitCode::from(3)
+        }
+    }
+}
+
+fn cmd_undo() -> ExitCode {
+    let mut j = match sweep_core::Journal::latest() {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match sweep_core::apply::undo(&mut j) {
+        Ok(r) => {
+            println!("\nRestored {} files.", r.restored);
+            if !r.skipped_changed.is_empty() {
+                println!(
+                    "  {} changed since apply and were left alone:",
+                    r.skipped_changed.len()
+                );
+                for p in &r.skipped_changed {
+                    println!("    {}", sweep_core::redact::path(p));
+                }
+            }
+            if !r.skipped_missing.is_empty() {
+                println!("  {} were already gone.", r.skipped_missing.len());
+            }
+            let _ = j.save();
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("sweep: {e}");
+            ExitCode::from(3)
+        }
+    }
+}
+
+fn cmd_forget() -> ExitCode {
+    let dir = sweep_core::journal::state_dir();
+    let mut n = 0;
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().ends_with(".journal")
+                && std::fs::remove_file(e.path()).is_ok()
+            {
+                n += 1;
+            }
+        }
+    }
+    println!("Removed {n} journal(s) from {}.", dir.display());
+    println!("Undo is no longer possible for any past run.");
+    ExitCode::SUCCESS
+}
+
 fn verify() -> ExitCode {
+    let dir = sweep_core::journal::state_dir();
+    let count = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".journal"))
+                .count()
+        })
+        .unwrap_or(0);
+
     println!(
         "\nsweep {}\n  \
          content inspection:      not compiled in\n  \
          sweep-core dependencies: 0\n  \
          network-capable crates:  0\n  \
-         journal:                 none written by v0.1\n  \
-         apply/undo:              not implemented — nothing can be moved\n",
-        env!("CARGO_PKG_VERSION")
+         journals held:           {count} in {}\n  \
+         journal encryption:      NOT IMPLEMENTED — journals are plaintext\n  \
+         journal path synced:     {}\n  \
+         interactive review:      not implemented\n\n\
+         Destroy all journals with: sweep forget\n",
+        env!("CARGO_PKG_VERSION"),
+        dir.display(),
+        if scan::is_synced(&dir) { "YES — move it" } else { "no" },
     );
     ExitCode::SUCCESS
 }

@@ -6,11 +6,15 @@
 //! The engine reads **filesystem metadata only** in v0.1: names, sizes,
 //! timestamps, and file type. It never opens a file for reading.
 
+pub mod apply;
 pub mod classify;
+pub mod journal;
 pub mod plan;
 pub mod redact;
 pub mod scan;
 
+pub use apply::{ApplyReport, UndoReport};
+pub use journal::Journal;
 pub use plan::{Group, Plan, Signal};
 pub use scan::{Entry, ScanConfig, ScanError, ScanOutcome};
 

@@ -23,13 +23,19 @@ Every group states the signal that produced it, so you can check the reasoning
 by eye. The "left alone" line is the point: sweep found documents that look like
 tax and medical records and declined to organise them.
 
-## Status: v0.1, analysis only
+## Status: v0.1
 
-`sweep PATH` and `sweep verify` work. **`apply` and `undo` are not implemented**
-and refuse rather than pretend. Nothing sweep does today can move a file.
+Working: `sweep PATH`, `sweep apply --yes | --only NAME`, `sweep undo`,
+`sweep forget`, `sweep verify`.
 
-Content inspection is not compiled in. See `docs/SPEC.md` for why it is deferred
-to v0.3 rather than shipped weakly.
+Not implemented, and they say so rather than pretending:
+
+- **Journal encryption (M7).** The undo journal is **plaintext**, `0600`, with a
+  header that admits it. It is an index of your filenames. Use `--no-journal` to
+  avoid writing one, at the cost of undo.
+- **Interactive `review`.** Use `--yes` or `--only NAME` instead.
+- **Content inspection.** Not compiled in. See `docs/SPEC.md` for why it is
+  deferred to v0.3 rather than shipped weakly.
 
 ## The privacy claims, and how to check them
 
