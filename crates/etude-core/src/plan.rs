@@ -92,6 +92,69 @@ pub trait Inspector {
     fn inspect(&mut self, path: &std::path::Path, ext: &str) -> Option<Category>;
 }
 
+/// The machine-readable form of a plan.
+///
+/// The agent contract: this is what `--json` emits, and it is the same data the
+/// human rendering is drawn from. Both must agree, because a tool that tells a
+/// person one thing and an agent another is the worst kind of interface.
+///
+/// `untouched` carries the REASON but never the category for a personal record
+/// — an agent gets the count by category, not a list of which files look like
+/// tax documents. That would hand it exactly the index the naming rule exists
+/// to prevent.
+impl Plan {
+    pub fn to_json(&self) -> String {
+        use crate::json as j;
+
+        let groups = j::arr(self.groups.iter().map(|g| {
+            j::obj(&[
+                ("name", j::str(&g.name)),
+                ("signal", j::str(&g.signal.describe())),
+                ("accepted", j::bool(g.accepted)),
+                ("count", j::num(g.members.len())),
+                ("members", j::arr(g.members.iter().map(|m| j::path(m)))),
+            ])
+        }));
+
+        let personal: usize = self.sensitive_counts().values().sum();
+        let by_category = j::arr(self.sensitive_counts().iter().map(|(c, n)| {
+            j::obj(&[("kind", j::str(c.describe())), ("count", j::num(n))])
+        }));
+
+        // Only the paths sweep declined for lack of a group. Personal-looking
+        // files are counted, never listed.
+        let no_group = j::arr(
+            self.untouched
+                .iter()
+                .filter(|(_, u)| *u == Untouched::NoClearGroup)
+                .map(|(p, _)| j::path(p)),
+        );
+
+        j::obj(&[
+            ("root", j::path(&self.root)),
+            ("scanned", j::num(self.scanned)),
+            ("groups", groups),
+            (
+                "left_alone",
+                j::obj(&[
+                    ("looks_personal", j::num(personal)),
+                    ("by_category", by_category),
+                    ("no_clear_group", j::num(self.no_clear_group())),
+                    ("no_clear_group_paths", no_group),
+                ]),
+            ),
+            (
+                "skipped",
+                j::obj(&[
+                    ("hidden", j::num(self.skipped_hidden)),
+                    ("symlinks", j::num(self.skipped_symlink)),
+                ]),
+            ),
+            ("root_is_synced", j::bool(self.root_is_synced)),
+        ])
+    }
+}
+
 /// Minimum members before a shared token justifies a group. Below this, the
 /// grouping is noise and the honest answer is "no clear group".
 const MIN_TOKEN_GROUP: usize = 5;

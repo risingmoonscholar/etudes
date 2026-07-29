@@ -27,6 +27,7 @@ USAGE
 
 FLAGS
     --depth N       recursion depth (default 1, max 8)
+    --json          machine-readable plan on stdout (for agents)
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
@@ -137,6 +138,10 @@ fn run_scan(path: &PathBuf, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
+    if plan.groups.is_empty() && has(args, "--json") {
+        println!("{}", plan.to_json());
+        return ExitCode::from(1);
+    }
     if plan.groups.is_empty() {
         println!(
             "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read\n\n\
@@ -145,6 +150,13 @@ fn run_scan(path: &PathBuf, args: &[String]) -> ExitCode {
             plan.scanned
         );
         return ExitCode::from(1);
+    }
+
+    if has(args, "--json") {
+        // The agent contract: same data the human rendering draws from, so the
+        // tool cannot tell a person one thing and an agent another.
+        println!("{}", plan.to_json());
+        return ExitCode::SUCCESS;
     }
 
     render(&plan, quiet, explain, stats.is_some());

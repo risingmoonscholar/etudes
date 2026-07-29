@@ -19,7 +19,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test                     # 84 tests
+cargo test                     # 88 tests
 scripts/no-network-test.sh     # the same suite, with socket(2) denied by the OS
 ```
 
@@ -31,6 +31,42 @@ these tools is a test failure rather than a code-review finding.
 Beyond that, `etude-core` has **zero dependencies**, asserted by a test so it
 cannot drift. There is no third-party code in the path that decides what happens
 to your files.
+
+## For agents as well as people
+
+These are built to be driven by both. The agent-facing surface is deliberate,
+not incidental.
+
+**Structured output.** `--json` on every tool, emitting the same data the human
+rendering is drawn from — a tool that tells a person one thing and an agent
+another is the worst kind of interface.
+
+```sh
+sweep ~/Desktop --json          # the plan
+stash ~/Desktop --for 3d --json # what moved, and when it is due
+stash status --json             # what is held, and whether it is overdue
+unpack a.zip --list --json      # inspect an archive without extracting
+unpack a.zip --json             # what happened, or why it was refused
+```
+
+**Meaningful exit codes**, uniform across the tools: `0` done · `1` nothing to
+do · `2` refused · `3` error. "Refused" is distinct from "error" on purpose —
+an agent must be able to tell a safety stop from a crash.
+
+**The refusals are the guardrail, not the operator's judgment.** Every safety
+property holds no matter who is driving:
+
+| Gate | Effect on an agent |
+|---|---|
+| `--inspect-content` needs a TTY | an agent **cannot** make sweep read file contents |
+| `review` needs a TTY | an agent cannot rename a group into a revealing name |
+| sensitive-name refusal | an agent cannot move a tax document, even with `--yes` |
+| per-tool journals | an agent cannot undo the other tool's work by accident |
+
+**`--json` discloses less, not more.** For files that look like personal
+records, the JSON carries counts by category and **never the paths**. An agent
+gets "3 tax documents were left alone", not a list of which files those are —
+handing over that index is exactly what the naming rule exists to prevent.
 
 ## Two rules the tools share
 

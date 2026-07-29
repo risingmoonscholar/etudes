@@ -36,6 +36,7 @@ USAGE
     stash [PATH] [--for DURATION]   move everything into a hidden holding folder
     stash pop                       bring it all back now
     stash status                    what is stashed, and when it is due back
+    --json                          machine-readable output (for agents)
     stash help
 
 DURATION
@@ -67,6 +68,10 @@ fn expand_tilde(p: &str) -> String {
         Some(rest) => std::env::var("HOME").map(|h| format!("{h}/{rest}")).unwrap_or(p.into()),
         None => p.to_string(),
     }
+}
+
+fn flag(args: &[String], f: &str) -> bool {
+    args.iter().any(|a| a == f)
 }
 
 fn value(args: &[String], flag: &str) -> Option<String> {
@@ -180,9 +185,25 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         root_is_synced: outcome.root_is_synced,
     };
 
+    let json = flag(args, "--json");
     let Some(sl) = sealer() else { return ExitCode::from(2) };
     match etude_core::apply::apply(&plan, "stash", Some(&sl), None) {
         Ok(r) => {
+            if json {
+                use etude_core::json as j;
+                println!(
+                    "{}",
+                    j::obj(&[
+                        ("action", j::str("stash")),
+                        ("root", j::path(&outcome.root)),
+                        ("moved", j::num(r.moved)),
+                        ("holding", j::str(&holding_name(deadline))),
+                        ("due", deadline.map(j::num).unwrap_or_else(|| "null".into())),
+                        ("skipped_hidden", j::num(outcome.skipped_hidden)),
+                    ])
+                );
+                return ExitCode::SUCCESS;
+            }
             println!("\nStashed {} items.", r.moved);
             println!("{} is clear.\n", path.display());
             match deadline {
@@ -258,6 +279,20 @@ fn cmd_status(args: &[String]) -> ExitCode {
         Some(dir) => {
             let n = std::fs::read_dir(&dir).map(|r| r.flatten().count()).unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if flag(args, "--json") {
+                use etude_core::json as j;
+                let due = deadline_of(name);
+                println!(
+                    "{}",
+                    j::obj(&[
+                        ("root", j::path(&root)),
+                        ("stashed", j::num(n)),
+                        ("due", due.map(j::num).unwrap_or_else(|| "null".into())),
+                        ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
+                    ])
+                );
+                return ExitCode::SUCCESS;
+            }
             println!("\n{n} items stashed from {}.", root.display());
             match deadline_of(name) {
                 Some(t) if t <= now_secs() => {

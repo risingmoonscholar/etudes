@@ -30,6 +30,7 @@ unpack — stop thinking about archive formats
 USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
     unpack ARCHIVE --list          show what is inside, extract nothing
+    --json                         machine-readable output (for agents)
     unpack help
 
 Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg using the tools
@@ -161,6 +162,25 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     let blocked: Vec<Unsafe> = entries.iter().filter_map(|p| safety::judge(p)).collect();
     let junk = entries.iter().filter(|p| safety::is_junk(p)).count();
 
+    if flag(args, "--list") && flag(args, "--json") {
+        // Lets an agent inspect an archive and decide, without extracting.
+        use etude_core::json as j;
+        println!(
+            "{}",
+            j::obj(&[
+                ("archive", j::path(archive)),
+                ("entries", j::num(entries.len())),
+                ("junk", j::num(junk)),
+                ("safe", j::bool(blocked.is_empty())),
+                ("blocked", j::arr(blocked.iter().map(|b| j::str(&b.to_string())))),
+                ("wrapper", safety::wrapper_dir(&entries)
+                    .map(|w| j::str(&w)).unwrap_or_else(|| "null".into())),
+                ("paths", j::arr(entries.iter().map(|p| j::str(p)))),
+            ])
+        );
+        return ExitCode::SUCCESS;
+    }
+
     if flag(args, "--list") {
         println!("\n{} entries in {}", entries.len(), stem(archive));
         for p in entries.iter().take(40) {
@@ -176,6 +196,21 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             }
         }
         return ExitCode::SUCCESS;
+    }
+
+    if !blocked.is_empty() && flag(args, "--json") {
+        use etude_core::json as j;
+        println!(
+            "{}",
+            j::obj(&[
+                ("archive", j::path(archive)),
+                ("refused", j::bool(true)),
+                ("reason", j::str("unsafe paths")),
+                ("blocked", j::arr(blocked.iter().map(|b| j::str(&b.to_string())))),
+                ("extracted", j::num(0)),
+            ])
+        );
+        return ExitCode::from(2);
     }
 
     if !blocked.is_empty() {
@@ -223,6 +258,23 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Some(w) => flatten(&dest, &w),
         None => false,
     };
+
+    if flag(args, "--json") {
+        use etude_core::json as j;
+        println!(
+            "{}",
+            j::obj(&[
+                ("archive", j::path(archive)),
+                ("refused", j::bool(false)),
+                ("dest", j::path(&dest)),
+                ("entries", j::num(entries.len() - junk)),
+                ("flattened", j::bool(flattened)),
+                ("junk_removed", j::num(removed)),
+                ("paths_checked", j::num(entries.len())),
+            ])
+        );
+        return ExitCode::SUCCESS;
+    }
 
     println!("\n  Extracted to {}/", dest.display());
     println!("  {} entries", entries.len() - junk);
