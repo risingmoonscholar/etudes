@@ -6,7 +6,7 @@
 #
 #     cargo deny check bans
 #
-# See docs/THREAT-MODEL.md § T1 and § T7.
+# See § T1 and § T7 of the threat model.
 
 [bans]
 multiple-versions = "warn"
@@ -39,7 +39,7 @@ deny = [
     { name = "tungstenite" },
     { name = "quinn" },
     # Telemetry and crash reporting are banned for the same reason: they are
-    # egress. docs/THREAT-MODEL.md forbids both.
+    # egress. The threat model forbids both.
     { name = "sentry" },
     { name = "opentelemetry" },
     { name = "tracing-opentelemetry" },

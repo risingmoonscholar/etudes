@@ -1,6 +1,6 @@
 //! Content inspection for sweep (v0.3).
 //!
-//! Read docs/sweep/V03-CONTENT.md before changing anything here. The single invariant
+//! The single invariant
 //! this crate exists to uphold:
 //!
 //! > **Content findings can only ever widen refusal. They never create or name

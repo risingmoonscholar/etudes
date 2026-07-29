@@ -1,4 +1,4 @@
-//! Filesystem walk with the safety rules from docs/sweep/THREAT-MODEL.md § T6.
+//! Filesystem walk with the safety rules for untrusted trees.
 //!
 //! Metadata only. `scan` never opens a file for reading.
 

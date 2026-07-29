@@ -1,4 +1,4 @@
-//! Acceptance tests from docs/sweep/PLAN.md.
+//! Acceptance tests.
 //!
 //! These are not unit tests. Each one makes a privacy claim falsifiable. They
 //! run against the synthetic fixture tree only — no real user file is read.

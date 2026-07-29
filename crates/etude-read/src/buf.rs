@@ -1,14 +1,14 @@
 //! A buffer for file contents that is locked against swap where possible and
 //! always erased when dropped.
 //!
-//! See docs/sweep/V03-CONTENT.md § Memory handling, including the honest limits: the
+//! Memory handling has honest limits: the
 //! `mlock` guarantee is best-effort and usually fails above ~64 KiB on macOS.
 //! [`LockedBuf::locked`] reports which case applies so nothing overclaims.
 
 use std::io::{self, Read};
 use std::sync::atomic::{compiler_fence, Ordering};
 
-/// Hard ceiling on how much of any file is read. docs/sweep/V03-CONTENT.md.
+/// Hard ceiling on how much of any file is read.
 pub const MAX_READ: usize = 1024 * 1024;
 
 /// Bytes examined when deciding whether a file is really text.

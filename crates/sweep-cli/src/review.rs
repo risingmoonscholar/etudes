@@ -1,13 +1,13 @@
 //! Interactive review.
 //!
-//! # Deviation from docs/sweep/SPEC.md, on purpose
+//! # Deviation from the spec, on purpose
 //!
 //! The spec described `sweep review` and `sweep apply` as separate commands
 //! operating on a **persisted plan**. This implements review as a single
 //! scan → decide → apply pass in one process instead, and never writes a plan
 //! file.
 //!
-//! The reason is asset A7 in docs/sweep/THREAT-MODEL.md. A persisted plan is a second
+//! The reason is asset A7 in the threat model. A persisted plan is a second
 //! plaintext index of the user's filenames sitting on disk between two commands
 //! — the same problem the journal has, without the journal's justification.
 //! Eliminating it removes an asset rather than protecting one.

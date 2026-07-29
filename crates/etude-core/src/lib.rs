@@ -31,7 +31,7 @@ pub enum Untouched {
 /// Categories of personal record sweep recognises well enough to refuse.
 ///
 /// These names are used in **counts only** — never to name a destination
-/// directory. See docs/sweep/SPEC.md, "Group naming rule".
+/// directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Category {
     Tax,

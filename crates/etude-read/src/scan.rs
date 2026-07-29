@@ -2,7 +2,7 @@
 //!
 //! Every scanner is a single linear pass over bytes with no allocation
 //! proportional to input and no regex engine, so there is no catastrophic
-//! backtracking to trigger (docs/sweep/V03-CONTENT.md § Hostile input).
+//! backtracking to trigger.
 //!
 //! A hit means one thing only: the file joins the untouched set. Nothing here
 //! can influence a group name.

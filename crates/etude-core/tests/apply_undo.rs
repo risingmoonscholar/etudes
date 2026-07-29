@@ -119,7 +119,7 @@ fn apply_then_undo_restores_every_path() {
 #[test]
 fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
     let _g = lock();
-    // Fault injection, not hope. docs/sweep/CRITIQUE.md § 9.
+    // Fault injection, not hope.
     let (root, _fx, p) = setup("resumable");
     const FAIL: usize = 7;
 

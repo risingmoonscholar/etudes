@@ -1,6 +1,6 @@
 //! Apply and undo.
 //!
-//! Ordering rule (docs/sweep/CRITIQUE.md § 9): the journal is written before the first
+//! Ordering rule: the journal is written before the first
 //! move, and each entry is marked done only after its move succeeds. A crash at
 //! any point leaves a journal that describes exactly what happened.
 
@@ -166,7 +166,7 @@ pub struct UndoReport {
 /// Reverse a journal, verifying each file before touching it.
 ///
 /// A file that changed since apply is **reported and skipped**, never
-/// overwritten (docs/sweep/CRITIQUE.md § 8).
+/// overwritten.
 pub fn undo(j: &mut Journal) -> Result<UndoReport, ApplyError> {
     let mut r = UndoReport::default();
 

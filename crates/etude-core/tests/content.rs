@@ -1,6 +1,6 @@
 //! v0.3 acceptance tests.
 //!
-//! The invariant under test, from docs/sweep/V03-CONTENT.md:
+//! The invariant under test:
 //!
 //! > Content findings can only ever widen refusal. They never create or name a
 //! > group.

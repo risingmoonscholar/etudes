@@ -15,7 +15,7 @@
 //!
 //! The journal is written *before* the first move and each entry is marked
 //! complete only after its move succeeds. A crash therefore leaves a journal
-//! describing exactly what happened, never more (docs/sweep/CRITIQUE.md § 9).
+//! describing exactly what happened, never more.
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -101,7 +101,7 @@ impl std::fmt::Display for JournalError {
 }
 
 /// Where journals live. Chosen to sit outside the default sync roots of iCloud
-/// Drive, Dropbox and OneDrive (docs/sweep/THREAT-MODEL.md § T4).
+/// Drive, Dropbox and OneDrive.
 pub fn state_dir() -> PathBuf {
     if let Ok(x) = std::env::var("ETUDE_STATE_DIR") {
         return PathBuf::from(x);
@@ -253,7 +253,7 @@ impl Journal {
 ///
 /// A journal is an index of the user's filenames. Even sealed, keeping it
 /// forever means keeping the exposure forever, and undo is only useful for as
-/// long as the user remembers what they ran (docs/sweep/THREAT-MODEL.md § A4).
+/// long as the user remembers what they ran.
 pub const TTL_DAYS: u64 = 30;
 
 /// Delete journals older than [`TTL_DAYS`]. Returns how many were removed.

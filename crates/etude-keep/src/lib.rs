@@ -14,8 +14,7 @@
 //! - A fresh random 192-bit nonce per write. XChaCha's nonce is large enough
 //!   that random generation is safe without a counter.
 //! - The plaintext is padded to a 4 KiB boundary before sealing, so ciphertext
-//!   length does not reveal how many files were organised
-//!   (docs/sweep/THREAT-MODEL.md § T2).
+//!   length does not reveal how many files were organised.
 
 use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
