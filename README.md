@@ -91,16 +91,10 @@ crates/
   stash-cli/     bin: stash
   unpack-cli/    bin: unpack — dispatches to system tools, parses nothing
   fixtures/      synthetic adversarial trees; no real file is read in testing
-docs/sweep/      sweep's spec, threat model, critique and plan
 ```
 
 Journals are namespaced per tool and share `~/.local/state/etudes`, so
 `sweep undo` and `stash pop` cannot reverse each other's work.
-
-## Per-tool documentation
-
-- [`sweep`](docs/sweep/README.md) — with its [threat model](docs/sweep/THREAT-MODEL.md)
-  and a [critique](docs/sweep/CRITIQUE.md) of its own concept, written before the code
 
 ## Development
 
