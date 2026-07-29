@@ -11,7 +11,7 @@ can prove its own claims rather than asking you to trust them.
 |---|---|---|
 | **`sweep`** | Organises the obvious and leaves the private alone | v0.3 |
 | **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.3 |
-| `unpack` | One command for every archive format | planned |
+| **`unpack`** | One command for every archive format, safely | v0.3 |
 
 ## The claims, and how to check them in a minute
 
@@ -19,7 +19,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test                     # 74 tests
+cargo test                     # 84 tests
 scripts/no-network-test.sh     # the same suite, with socket(2) denied by the OS
 ```
 
@@ -53,6 +53,7 @@ crates/
   etude-read/    content inspection — mlock'd, zeroed, never persisted
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
+  unpack-cli/    bin: unpack — dispatches to system tools, parses nothing
   fixtures/      synthetic adversarial trees; no real file is read in testing
 docs/sweep/      sweep's spec, threat model, critique and plan
 ```

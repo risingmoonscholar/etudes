@@ -199,6 +199,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "unpack-cli"
+version = "0.3.0"
+dependencies = [
+ "etude-core",
+]
+
+[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

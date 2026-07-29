@@ -1,0 +1,14 @@
+[package]
+name = "unpack-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "unpack"
+path = "src/main.rs"
+
+# No archive-parsing crates. The system tools are better tested than anything
+# this would add, and the value here is the safe uniform wrapper, not a parser.
+[dependencies]
+etude-core = { path = "../etude-core" }
