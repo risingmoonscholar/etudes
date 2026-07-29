@@ -12,7 +12,7 @@ members = ["crates/etude-core", "crates/sweep-cli", "crates/etude-keep", "crates
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "local"
+repository = "https://github.com/risingmoonscholar/etudes"
 
 # Dependency policy, enforced mechanically by deny.toml:
 #   - nothing that can open a socket, resolve a name, or spawn a runtime
