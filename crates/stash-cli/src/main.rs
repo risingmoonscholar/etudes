@@ -34,7 +34,7 @@ stash — clean now, decide later
 
 USAGE
     stash [PATH] [--for DURATION]   move everything into a hidden holding folder
-    stash pop                       bring it all back now
+    stash pop [PATH]                bring back the stash for PATH (or here)
     stash status [PATH]             what is stashed, and when it is due back
     --json                          machine-readable output (for agents)
     --version                       print the version and exit
@@ -58,7 +58,7 @@ fn main() -> ExitCode {
             println!("stash {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Some("pop" | "restore") => cmd_pop(),
+        Some("pop" | "restore") => cmd_pop(&args),
         Some("status" | "list") => cmd_status(&args),
         None => cmd_stash(&std::env::current_dir().unwrap_or_default(), &args),
         // A leading flag means "stash the current directory", which is the most
@@ -67,7 +67,10 @@ fn main() -> ExitCode {
         // the folder the user was standing in.
         Some(p) if p.starts_with('-') => {
             if STASH_FLAGS.contains(&p) {
-                cmd_stash(&std::env::current_dir().unwrap_or_default(), &args)
+                let path = positional_path(&args)
+                    .map(|s| PathBuf::from(expand_tilde(s)))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                cmd_stash(&path, &args)
             } else {
                 eprintln!("stash: unknown option {p}. Run `stash help`.");
                 ExitCode::from(2)
@@ -97,6 +100,22 @@ fn flag(args: &[String], f: &str) -> bool {
 fn value(args: &[String], flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
     args.get(i + 1).cloned()
+}
+
+/// The positional PATH in `args`, skipping known leading/interspersed flags
+/// and their values. `--for`'s value is the token right after it; `--json`
+/// takes no value.
+fn positional_path(args: &[String]) -> Option<&str> {
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--for" => i += 2,
+            "--json" => i += 1,
+            a if a.starts_with('-') => i += 1,
+            a => return Some(a),
+        }
+    }
+    None
 }
 
 /// `30m`, `2h`, `3d`, `1w` → seconds.
@@ -263,14 +282,65 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     }
 }
 
-fn cmd_pop() -> ExitCode {
+fn journal_for_root(
+    tool: &str,
+    sealer: &dyn etude_core::journal::Sealer,
+    target: &Path,
+) -> Option<etude_core::Journal> {
+    etude_core::journal::ids_by_recency(tool)
+        .ok()?
+        .into_iter()
+        .filter_map(|id| etude_core::Journal::load_sealed(tool, &id, sealer).ok())
+        .find(|j| {
+            j.root
+                .canonicalize()
+                .is_ok_and(|root| root == target && find_holding(&root).is_some())
+        })
+}
+
+fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<PathBuf> {
+    etude_core::journal::ids_by_recency(tool)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|id| etude_core::Journal::load_sealed(tool, &id, sealer).ok())
+        .filter_map(|j| j.root.canonicalize().ok())
+        .filter(|root| find_holding(root).is_some())
+        .collect()
+}
+
+fn cmd_pop(args: &[String]) -> ExitCode {
     let Some(sl) = sealer() else {
         return ExitCode::from(2);
     };
-    let mut j = match etude_core::Journal::latest_sealed("stash", &sl) {
-        Ok(j) => j,
-        Err(e) => {
-            eprintln!("stash: {e}");
+    if let Err(e) = etude_core::journal::ids_by_recency("stash") {
+        eprintln!("stash: {e}");
+        return ExitCode::from(1);
+    }
+    let named = args.iter().skip(1).find(|a| !a.starts_with('-'));
+    let path = named
+        .map(|p| PathBuf::from(expand_tilde(p)))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let Ok(target) = path.canonicalize() else {
+        eprintln!("stash: no stash found for {}", path.display());
+        return ExitCode::from(1);
+    };
+    let mut j = match journal_for_root("stash", &sl, &target) {
+        Some(j) => j,
+        None if named.is_some() => {
+            eprintln!("stash: no stash found for {}", target.display());
+            return ExitCode::from(1);
+        }
+        None => {
+            eprintln!("stash: nothing is stashed here: {}", target.display());
+            let mut others = Vec::new();
+            for root in journal_roots("stash", &sl) {
+                if root != target && !others.contains(&root) {
+                    others.push(root);
+                }
+            }
+            for root in others {
+                eprintln!("stash: a live stash exists in {}", root.display());
+            }
             return ExitCode::from(1);
         }
     };
@@ -369,32 +439,34 @@ fn cmd_status(args: &[String]) -> ExitCode {
             println!("\n{n} items stashed from {}.", root.display());
             match deadline_of(name) {
                 Some(t) if t <= now_secs() => {
-                    println!("  OVERDUE since {} — run `stash pop`", human_time(t));
+                    println!(
+                        "  OVERDUE since {} — run `stash pop {}`",
+                        human_time(t),
+                        root.display()
+                    );
                 }
                 Some(t) => println!("  Due back {}", human_time(t)),
                 None => println!("  No deadline set."),
             }
-            println!("\nRestore with: stash pop");
+            println!("\nRestore with: stash pop {}", root.display());
             ExitCode::SUCCESS
         }
     }
 }
 
-/// The stash that `stash pop` would restore, when it is not in `here`.
+/// A live stash in another folder, for `status` to point at.
 ///
-/// `pop` is not scoped to the current directory but `status` is, so a user who
-/// stashes one folder and asks for status in another was told "nothing
-/// stashed" — a flat denial of something that had just happened. This reads
-/// the same journal `pop` does, so the two commands can no longer disagree.
+/// A user who stashes one folder and asks for status in another should not get
+/// a flat denial of something that just happened.
 fn stash_elsewhere(here: &Path) -> Option<PathBuf> {
     // Quietly: a missing key means status cannot look, which is not worth an
     // error on a read-only command.
     let sl = KeychainSeal {
         key: etude_keep::key().ok()?,
     };
-    let j = etude_core::Journal::latest_sealed("stash", &sl).ok()?;
-    let there = j.root.canonicalize().ok()?;
-    (there != here && find_holding(&there).is_some()).then_some(there)
+    journal_roots("stash", &sl)
+        .into_iter()
+        .find(|there| there != here && find_holding(there).is_some())
 }
 
 /// What `status` says when this folder is clear. Split out so both wordings are
@@ -403,8 +475,9 @@ fn nothing_here(here: &Path, elsewhere: Option<&Path>) -> String {
     match elsewhere {
         None => format!("Nothing stashed in {}.", here.display()),
         Some(there) => format!(
-            "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: stash pop",
+            "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: stash pop {}",
             here.display(),
+            there.display(),
             there.display(),
             there.display()
         ),
@@ -464,6 +537,48 @@ fn sealer() -> Option<KeychainSeal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// `ETUDE_STATE_DIR` is process-global; serialise tests that replace it.
+    fn lock() -> MutexGuard<'static, ()> {
+        static L: OnceLock<Mutex<()>> = OnceLock::new();
+        L.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    struct TestSeal;
+    impl etude_core::journal::Sealer for TestSeal {
+        fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(plaintext.iter().map(|b| b ^ 0x5a).collect())
+        }
+
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(sealed.iter().map(|b| b ^ 0x5a).collect())
+        }
+    }
+
+    fn stash_plan(root: &Path) -> Plan {
+        let root = root.canonicalize().expect("root");
+        let members = vec![root.join("one.txt"), root.join("two.txt")];
+        Plan {
+            root,
+            groups: vec![Group {
+                name: ".stash-0".into(),
+                signal: Signal::SharedToken {
+                    token: "stash".into(),
+                    count: members.len(),
+                },
+                members,
+                accepted: true,
+            }],
+            untouched: Vec::new(),
+            scanned: 2,
+            skipped_hidden: 0,
+            skipped_symlink: 0,
+            root_is_synced: false,
+        }
+    }
 
     #[test]
     fn durations_parse_the_forms_a_person_actually_types() {
@@ -493,6 +608,105 @@ mod tests {
                 "{typo} would stash the current directory"
             );
         }
+    }
+
+    #[test]
+    fn a_path_after_leading_flags_is_not_silently_discarded() {
+        let args = |parts: &[&str]| parts.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            positional_path(&args(&["--for", "3d", "/tmp/there"])),
+            Some("/tmp/there")
+        );
+        assert_eq!(
+            positional_path(&args(&["--json", "/tmp/there"])),
+            Some("/tmp/there")
+        );
+        assert_eq!(
+            positional_path(&args(&["--for", "3d", "--json", "/tmp/there"])),
+            Some("/tmp/there")
+        );
+        assert_eq!(
+            positional_path(&args(&["--json", "--for", "3d", "/tmp/there"])),
+            Some("/tmp/there")
+        );
+        assert_eq!(positional_path(&args(&["--json"])), None);
+        assert_eq!(positional_path(&args(&["--for", "3d"])), None);
+    }
+
+    #[test]
+    fn status_and_pop_agree_when_this_folders_stash_is_not_newest() {
+        let _g = lock();
+        let base = std::env::temp_dir().join(format!(
+            "stash_select_{}_{}",
+            std::process::id(),
+            now_secs()
+        ));
+        let first = base.join("first");
+        let second = base.join("second");
+        let state = base.join("state");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&first).expect("first folder");
+        std::fs::create_dir_all(&second).expect("second folder");
+        for root in [&first, &second] {
+            std::fs::write(root.join("one.txt"), b"one").expect("first file");
+            std::fs::write(root.join("two.txt"), b"two").expect("second file");
+        }
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+        etude_core::apply::apply(&stash_plan(&first), "stash", Some(&TestSeal), None)
+            .expect("first stash");
+        etude_core::apply::apply(&stash_plan(&second), "stash", Some(&TestSeal), None)
+            .expect("second stash");
+
+        let target = first.canonicalize().expect("first canonical path");
+        let selected = journal_for_root("stash", &TestSeal, &target)
+            .expect("the older journal remains selectable");
+        assert_eq!(selected.root.canonicalize().unwrap(), target);
+        assert!(
+            find_holding(&first).is_some(),
+            "status could not see the stash pop selected"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    #[test]
+    fn an_already_restored_stash_is_not_selected_or_reported_as_live() {
+        let _g = lock();
+        let base = std::env::temp_dir().join(format!(
+            "stash_restored_{}_{}",
+            std::process::id(),
+            now_secs()
+        ));
+        let root = base.join("folder");
+        let state = base.join("state");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&root).expect("folder");
+        std::fs::write(root.join("one.txt"), b"one").expect("first file");
+        std::fs::write(root.join("two.txt"), b"two").expect("second file");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+        etude_core::apply::apply(&stash_plan(&root), "stash", Some(&TestSeal), None)
+            .expect("stash");
+        let target = root.canonicalize().expect("canonical path");
+        let mut journal = journal_for_root("stash", &TestSeal, &target).expect("live journal");
+        etude_core::apply::undo(&mut journal).expect("restore");
+        journal.save_sealed(&TestSeal).expect("resave journal");
+
+        assert!(journal.path().is_file(), "restore removed the journal");
+        assert_eq!(find_holding(&root), None, "holding directory survived pop");
+        assert!(
+            journal_for_root("stash", &TestSeal, &target).is_none(),
+            "restored journal remained selectable"
+        );
+        assert!(
+            !journal_roots("stash", &TestSeal).contains(&target),
+            "restored root was still reported as live"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 
     #[test]
