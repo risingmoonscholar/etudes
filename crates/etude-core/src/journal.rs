@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// How a file got to its destination. Undo reverses each differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
-    /// `rename(2)` within one device. Reversed by renaming back.
+    /// link → unlink within one device. Reversed the same way.
     Rename,
     /// copy → verify → unlink across devices. Reversed the same way.
     CopyUnlink,

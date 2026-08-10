@@ -4,6 +4,7 @@
 //! is marked done only after its move succeeds. A crash at any point leaves a
 //! journal that describes exactly what happened.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ pub enum ApplyError {
     Io(io::Error),
     Journal(crate::journal::JournalError),
     DestinationExists(PathBuf),
+    DestinationCollision(PathBuf),
     DestinationIsSynced(PathBuf),
     /// Injected by tests to prove the journal stays resumable.
     Injected(usize),
@@ -29,6 +31,11 @@ impl std::fmt::Display for ApplyError {
             ApplyError::DestinationExists(p) => {
                 write!(f, "destination already exists: {}", crate::redact::path(p))
             }
+            ApplyError::DestinationCollision(p) => write!(
+                f,
+                "two files in this plan would move to the same destination: {}",
+                crate::redact::path(p)
+            ),
             ApplyError::DestinationIsSynced(p) => write!(
                 f,
                 "refused: destination {} is inside a cloud-synced folder",
@@ -71,6 +78,7 @@ pub fn apply(
 
     // Build the full entry list first, so the journal describes the whole
     // intended operation before any of it happens.
+    let mut planned_destinations = HashSet::new();
     for g in plan.groups.iter().filter(|g| g.accepted) {
         let dest_dir = plan.root.join(&g.name);
         if crate::scan::is_synced(&dest_dir) {
@@ -83,6 +91,9 @@ pub fn apply(
             let dst = dest_dir.join(name);
             if dst.exists() {
                 return Err(ApplyError::DestinationExists(dst));
+            }
+            if !planned_destinations.insert(dst.to_string_lossy().to_lowercase()) {
+                return Err(ApplyError::DestinationCollision(dst));
             }
             let (size, mtime_secs, inode, edge_hash) = fingerprint(src).map_err(ApplyError::Io)?;
             j.entries.push(Entry {
@@ -138,8 +149,23 @@ pub fn apply(
     })
 }
 
-/// `rename(2)` when possible; copy → verify → unlink across devices.
+/// link → unlink within one device; copy → verify → unlink across devices.
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
+    // link(2) follows symlinks to their targets and refuses directories, so
+    // only regular files can safely use link → unlink in place of rename.
+    if fs::symlink_metadata(from)?.file_type().is_file() {
+        match fs::hard_link(from, to) {
+            Ok(()) => {
+                // A crash before unlink leaves two readable names for one inode,
+                // trading atomicity for durability without clobbering either file.
+                fs::remove_file(from)?;
+                return Ok(Method::Rename);
+            }
+            Err(e) if e.raw_os_error() == Some(18) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
     match fs::rename(from, to) {
         Ok(()) => Ok(Method::Rename),
         Err(e) if e.raw_os_error() == Some(18) => {
