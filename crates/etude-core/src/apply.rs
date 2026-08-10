@@ -1,8 +1,8 @@
 //! Apply and undo.
 //!
-//! Ordering rule: the journal is written before the first
-//! move, and each entry is marked done only after its move succeeds. A crash at
-//! any point leaves a journal that describes exactly what happened.
+//! Ordering rule: the journal is written before the first move, and each entry
+//! is marked done only after its move succeeds. A crash at any point leaves a
+//! journal that describes exactly what happened.
 
 use std::fs;
 use std::io;

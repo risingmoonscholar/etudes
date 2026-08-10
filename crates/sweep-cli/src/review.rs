@@ -7,9 +7,9 @@
 //! scan → decide → apply pass in one process instead, and never writes a plan
 //! file.
 //!
-//! The reason is asset A7 in the threat model. A persisted plan is a second
-//! plaintext index of the user's filenames sitting on disk between two commands
-//! — the same problem the journal has, without the journal's justification.
+//! The reason is the threat model. A persisted plan is a second plaintext
+//! index of the user's filenames sitting on disk between two commands — the
+//! same problem the journal has, without the journal's justification.
 //! Eliminating it removes an asset rather than protecting one.
 //!
 //! The cost is that review cannot be resumed after quitting. That is the right

@@ -17,5 +17,5 @@ repository = "https://github.com/risingmoonscholar/etudes"
 # Dependency policy, enforced mechanically by deny.toml:
 #   - nothing that can open a socket, resolve a name, or spawn a runtime
 #   - no build.rs code execution in the tree
-# The engine crate (etude-core) has NO dependencies at all in v0.1. That is the
+# The engine crate (etude-core) has NO dependencies at all. That is the
 # cheapest possible audit: there is nothing to audit.

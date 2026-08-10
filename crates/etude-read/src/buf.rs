@@ -1,9 +1,9 @@
 //! A buffer for file contents that is locked against swap where possible and
 //! always erased when dropped.
 //!
-//! Memory handling has honest limits: the
-//! `mlock` guarantee is best-effort and usually fails above ~64 KiB on macOS.
-//! [`LockedBuf::locked`] reports which case applies so nothing overclaims.
+//! Memory handling has honest limits: the `mlock` guarantee is best-effort and
+//! usually fails above ~64 KiB on macOS. [`LockedBuf::locked`] reports which
+//! case applies so nothing overclaims.
 
 use std::io::{self, Read};
 use std::sync::atomic::{Ordering, compiler_fence};

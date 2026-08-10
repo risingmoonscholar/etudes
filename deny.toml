@@ -5,8 +5,6 @@
 # network" from an assurance into something a reviewer can check in one command:
 #
 #     cargo deny check bans
-#
-# See § T1 and § T7 of the threat model.
 
 [bans]
 multiple-versions = "warn"

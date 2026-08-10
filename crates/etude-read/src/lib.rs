@@ -1,7 +1,6 @@
 //! Content inspection for sweep (v0.3).
 //!
-//! The single invariant
-//! this crate exists to uphold:
+//! The single invariant this crate exists to uphold:
 //!
 //! > **Content findings can only ever widen refusal. They never create or name
 //! > a group.**

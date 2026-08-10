@@ -1,8 +1,8 @@
 //! Detectors.
 //!
-//! Design rule: no general clustering. Each detector
-//! is individually explainable, high precision, low recall. A user must be able
-//! to check the tool's reasoning by eye.
+//! Design rule: no general clustering. Each detector is individually
+//! explainable, high precision, low recall. A user must be able to check the
+//! tool's reasoning by eye.
 //!
 //! Order matters. `sensitive` runs first and removes files from consideration by
 //! every other detector — a tax document is not a shared-token candidate even
@@ -127,9 +127,9 @@ pub fn is_installer(e: &Entry) -> bool {
 
 /// Split a filename into lowercase tokens usable as group names.
 ///
-/// Tokens are what the *user* already wrote. The naming rule
-/// depends on this: sweep may only name a group with a string that already
-/// exists in the filenames it contains.
+/// Tokens are what the *user* already wrote. The naming rule depends on this:
+/// sweep may only name a group with a string that already exists in the
+/// filenames it contains.
 pub fn tokens(name: &str) -> Vec<String> {
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
     stem.split(|c: char| !c.is_alphanumeric())
