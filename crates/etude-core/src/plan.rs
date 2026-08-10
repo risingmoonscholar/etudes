@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::classify;
 use crate::scan::{Entry, ScanOutcome};
@@ -219,11 +219,33 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         });
     }
 
-    let cams: Vec<&Entry> = remaining
+    let mut camera_candidates: Vec<&Entry> = remaining
         .iter()
         .copied()
-        .filter(|e| classify::is_camera(e) && !claimed.contains(&e.path))
+        .filter(|e| classify::is_camera(e) && !claimed.contains(&e.path) && e.modified.is_some())
         .collect();
+    camera_candidates.sort_by_key(|e| e.modified);
+    let burst_window = Duration::from_secs(u64::from(BURST_DAYS) * 86_400);
+    let mut window_start = 0;
+    let mut best_start = 0;
+    let mut best_len = 0;
+    for window_end in 0..camera_candidates.len() {
+        while camera_candidates[window_end]
+            .modified
+            .unwrap()
+            .duration_since(camera_candidates[window_start].modified.unwrap())
+            .unwrap()
+            > burst_window
+        {
+            window_start += 1;
+        }
+        let window_len = window_end - window_start + 1;
+        if window_len > best_len {
+            best_start = window_start;
+            best_len = window_len;
+        }
+    }
+    let cams: Vec<&Entry> = camera_candidates[best_start..best_start + best_len].to_vec();
     if cams.len() >= MIN_STRUCTURAL_GROUP {
         claimed.extend(cams.iter().map(|e| e.path.clone()));
         let name = match date_range(&cams) {
@@ -319,13 +341,19 @@ fn date_range(entries: &[&Entry]) -> Option<String> {
         .last()
         .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?
         .as_secs();
-    let (a, b) = (civil_date(lo as i64), civil_date(hi as i64));
-    Some(if a == b { a } else { format!("{a}–{b}") })
+    let ((lo_year, a), (hi_year, b)) = (civil_date(lo as i64), civil_date(hi as i64));
+    Some(if lo_year == hi_year && a == b {
+        a
+    } else if lo_year == hi_year {
+        format!("{a}–{b}, {lo_year}")
+    } else {
+        format!("{a}, {lo_year}–{b}, {hi_year}")
+    })
 }
 
 /// Days-from-epoch to `Mon D`, without pulling in a date crate.
 /// Howard Hinnant's civil_from_days.
-fn civil_date(secs: i64) -> String {
+fn civil_date(secs: i64) -> (i64, String) {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -333,9 +361,97 @@ fn civil_date(secs: i64) -> String {
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    format!("{} {}", MONTHS[(m - 1) as usize], d)
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, format!("{} {}", MONTHS[(m - 1) as usize], d))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cam_entry(name: &str, modified_secs: u64) -> Entry {
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        Entry {
+            path: PathBuf::from(name),
+            name: name.to_string(),
+            ext,
+            size: 1,
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(modified_secs)),
+            is_dir: false,
+            is_package: false,
+        }
+    }
+
+    fn scan_outcome(entries: Vec<Entry>) -> ScanOutcome {
+        ScanOutcome {
+            root: PathBuf::from("/fixture"),
+            entries,
+            skipped_hidden: 0,
+            skipped_symlink: 0,
+            skipped_system: 0,
+            root_is_synced: false,
+        }
+    }
+
+    #[test]
+    fn camera_files_spanning_years_are_not_called_a_burst() {
+        // Same filename shape, mtimes years apart. No 3-day window holds
+        // enough of them, so no group — and definitely no "taken within
+        // 3 days" claim — should be produced.
+        let entries = vec![
+            cam_entry("IMG_0001.jpg", 1_577_836_800), // 2020-01-01
+            cam_entry("IMG_0002.jpg", 1_655_251_200), // 2022-06-15
+            cam_entry("IMG_0003.jpg", 1_710_028_800), // 2024-03-10
+            cam_entry("IMG_0004.jpg", 1_767_225_600), // 2026-01-01
+        ];
+        let out = scan_outcome(entries);
+        let p = build(&out);
+        assert!(
+            !p.groups
+                .iter()
+                .any(|g| matches!(g.signal, Signal::CameraBurst { .. })),
+            "camera files years apart were grouped as a burst: {:?}",
+            p.groups
+        );
+    }
+
+    #[test]
+    fn real_burst_across_a_year_boundary_names_both_years() {
+        // Three camera files two days apart, straddling New Year's — a
+        // genuine burst that also exercises the multi-year label.
+        let entries = vec![
+            cam_entry("IMG_0001.jpg", 1_767_139_200), // 2025-12-31
+            cam_entry("IMG_0002.jpg", 1_767_225_600), // 2026-01-01
+            cam_entry("IMG_0003.jpg", 1_767_312_000), // 2026-01-02
+        ];
+        let out = scan_outcome(entries);
+        let p = build(&out);
+        let burst = p
+            .groups
+            .iter()
+            .find(|g| matches!(g.signal, Signal::CameraBurst { .. }))
+            .expect("three camera files within 3 days should form a burst group");
+        assert_eq!(burst.members.len(), 3);
+        assert_eq!(burst.name, "Photos, Dec 31, 2025–Jan 2, 2026");
+    }
+
+    #[test]
+    fn date_range_does_not_collapse_a_multi_year_span_to_one_date() {
+        let a = cam_entry("a.jpg", 1_577_836_800); // 2020-01-01
+        let b = cam_entry("b.jpg", 1_767_225_600); // 2026-01-01
+        let range = date_range(&[&a, &b]).expect("both entries have modified times");
+        assert_ne!(
+            range, "Jan 1",
+            "multi-year range collapsed to a single date"
+        );
+        assert_eq!(range, "Jan 1, 2020–Jan 1, 2026");
+    }
 }
