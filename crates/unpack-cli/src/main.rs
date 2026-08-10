@@ -389,9 +389,12 @@ fn remove_junk(dest: &Path) -> usize {
         };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
+            let p = e.path();
+            let is_dir = std::fs::symlink_metadata(&p)
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
             if safety::is_junk(&name) {
-                let p = e.path();
-                let ok = if p.is_dir() {
+                let ok = if is_dir {
                     std::fs::remove_dir_all(&p).is_ok()
                 } else {
                     std::fs::remove_file(&p).is_ok()
@@ -401,8 +404,8 @@ fn remove_junk(dest: &Path) -> usize {
                 }
                 continue;
             }
-            if e.path().is_dir() {
-                walk(&e.path(), n);
+            if is_dir {
+                walk(&p, n);
             }
         }
     }
