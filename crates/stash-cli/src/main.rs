@@ -294,9 +294,38 @@ fn cmd_status(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
 
+    // Was a folder named on the command line? If so the user asked about that
+    // one folder and an answer about a different one would be noise.
+    let asked_for_a_folder = args.iter().skip(1).any(|a| !a.starts_with('-'));
+
     match find_holding(&root) {
         None => {
-            println!("Nothing stashed in {}.", root.display());
+            let other = if asked_for_a_folder {
+                None
+            } else {
+                stash_elsewhere(&root)
+            };
+            if flag(args, "--json") {
+                use etude_core::json as j;
+                println!(
+                    "{}",
+                    j::obj(&[
+                        ("root", j::path(&root)),
+                        ("stashed", j::num(0)),
+                        ("due", "null".into()),
+                        ("overdue", j::bool(false)),
+                        (
+                            "elsewhere",
+                            other
+                                .as_deref()
+                                .map(j::path)
+                                .unwrap_or_else(|| "null".into())
+                        ),
+                    ])
+                );
+                return ExitCode::from(1);
+            }
+            println!("{}", nothing_here(&root, other.as_deref()));
             ExitCode::from(1)
         }
         Some(dir) => {
@@ -314,6 +343,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         ("stashed", j::num(n)),
                         ("due", due.map(j::num).unwrap_or_else(|| "null".into())),
                         ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
+                        ("elsewhere", "null".into()),
                     ])
                 );
                 return ExitCode::SUCCESS;
@@ -329,6 +359,37 @@ fn cmd_status(args: &[String]) -> ExitCode {
             println!("\nRestore with: stash pop");
             ExitCode::SUCCESS
         }
+    }
+}
+
+/// The stash that `stash pop` would restore, when it is not in `here`.
+///
+/// `pop` is not scoped to the current directory but `status` is, so a user who
+/// stashes one folder and asks for status in another was told "nothing
+/// stashed" — a flat denial of something that had just happened. This reads
+/// the same journal `pop` does, so the two commands can no longer disagree.
+fn stash_elsewhere(here: &Path) -> Option<PathBuf> {
+    // Quietly: a missing key means status cannot look, which is not worth an
+    // error on a read-only command.
+    let sl = KeychainSeal {
+        key: etude_keep::key().ok()?,
+    };
+    let j = etude_core::Journal::latest_sealed("stash", &sl).ok()?;
+    let there = j.root.canonicalize().ok()?;
+    (there != here && find_holding(&there).is_some()).then_some(there)
+}
+
+/// What `status` says when this folder is clear. Split out so both wordings are
+/// covered by a test without reaching for the keychain.
+fn nothing_here(here: &Path, elsewhere: Option<&Path>) -> String {
+    match elsewhere {
+        None => format!("Nothing stashed in {}.", here.display()),
+        Some(there) => format!(
+            "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: stash pop",
+            here.display(),
+            there.display(),
+            there.display()
+        ),
     }
 }
 
@@ -401,6 +462,50 @@ mod tests {
     fn a_huge_duration_does_not_overflow_into_the_past() {
         // A deadline that wrapped would read as permanently overdue.
         assert_eq!(parse_duration("99999999999999999999w"), None);
+    }
+
+    #[test]
+    fn status_points_at_a_stash_in_another_folder_instead_of_denying_it() {
+        // The bug: stash a folder, ask for status somewhere else, and status
+        // said "Nothing stashed" — a denial of something `stash pop` would
+        // happily restore.
+        let here = Path::new("/tmp/here");
+        let plain = nothing_here(here, None);
+        assert_eq!(plain, "Nothing stashed in /tmp/here.");
+        assert!(
+            !plain.contains("stash pop"),
+            "offered pop with nothing to pop"
+        );
+
+        let told = nothing_here(here, Some(Path::new("/tmp/there")));
+        assert!(told.starts_with("Nothing stashed in /tmp/here."));
+        assert!(
+            told.contains("/tmp/there"),
+            "did not say where the stash is"
+        );
+        assert!(told.contains("stash pop"), "did not say how to get it back");
+    }
+
+    #[test]
+    fn a_holding_directory_is_recognised_and_an_ordinary_one_is_not() {
+        // find_holding is what decides whether a folder counts as stashed, in
+        // the current directory and in the one status now points at.
+        let root = std::env::temp_dir().join(format!("stash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Screenshots")).unwrap();
+        assert_eq!(
+            find_holding(&root),
+            None,
+            "an ordinary folder read as a stash"
+        );
+
+        std::fs::create_dir_all(root.join(holding_name(Some(1_800_000_000)))).unwrap();
+        assert_eq!(
+            find_holding(&root)
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())),
+            Some(".stash-1800000000".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
