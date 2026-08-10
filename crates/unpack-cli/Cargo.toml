@@ -3,6 +3,11 @@ name = "unpack-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Extracts any common archive into its own directory, refusing member paths that escape it."
+readme = "../../README.md"
+keywords = ["cli", "archive", "zip", "tar", "extract"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
 name = "unpack"

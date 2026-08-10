@@ -3,6 +3,11 @@ name = "sweep-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Groups a folder's obvious files by name signal, and refuses to move anything that looks like a personal record."
+readme = "../../README.md"
+keywords = ["cli", "files", "organise", "privacy", "macos"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
 name = "sweep"

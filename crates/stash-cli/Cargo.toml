@@ -3,6 +3,11 @@ name = "stash-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Moves everything in a folder into one hidden holding directory and brings it all back on demand."
+readme = "../../README.md"
+keywords = ["cli", "files", "cleanup", "undo", "macos"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
 name = "stash"
