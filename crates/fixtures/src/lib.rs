@@ -56,7 +56,9 @@ pub struct Fixture {
 
 /// Build the full adversarial tree under `root`.
 ///
-/// `root` must not exist or must be empty. This never writes outside `root`.
+/// `root` must not exist or must be empty. The generator writes inside `root`
+/// except for `sweep_fixture_outside/secret_outside.txt` beside it, the target
+/// required by the escaping-symlink fixture.
 pub fn build(root: &Path) -> io::Result<Fixture> {
     fs::create_dir_all(root)?;
 

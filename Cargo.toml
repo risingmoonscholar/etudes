@@ -14,7 +14,8 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/risingmoonscholar/etudes"
 
-# Dependency policy, enforced mechanically by deny.toml:
+# Dependency policy in deny.toml (reviewers run `cargo deny check bans` manually;
+# CI does not currently run it):
 #   - nothing that can open a socket, resolve a name, or spawn a runtime
 #   - no build.rs code execution in the tree
 # The engine crate (etude-core) has NO dependencies at all. That is the

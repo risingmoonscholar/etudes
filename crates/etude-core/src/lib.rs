@@ -3,8 +3,10 @@
 //! Zero dependencies. Nothing in this crate can open a socket, because there is
 //! no third-party code here at all.
 //!
-//! The engine reads **filesystem metadata only** in v0.1: names, sizes,
-//! timestamps, and file type. It never opens a file for reading.
+//! Scanning and classification read **filesystem metadata only** in v0.1:
+//! names, sizes, timestamps, and file type. They never open files for reading.
+//! The journal's edge-hash step does: it reads file bytes to detect changes
+//! before undo.
 
 pub mod apply;
 pub mod classify;
