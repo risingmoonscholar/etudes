@@ -226,8 +226,13 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             }
             if outcome.skipped_hidden > 0 {
                 println!(
-                    "\n  {} hidden items were left in place.",
-                    outcome.skipped_hidden
+                    "\n  {} hidden {} left in place.",
+                    outcome.skipped_hidden,
+                    if outcome.skipped_hidden == 1 {
+                        "item was"
+                    } else {
+                        "items were"
+                    }
                 );
             }
             ExitCode::SUCCESS
@@ -332,17 +337,23 @@ fn human_time(epoch: u64) -> String {
     let now = now_secs();
     let delta = epoch as i64 - now as i64;
     let abs = delta.unsigned_abs();
-    let unit = if abs < 3600 {
-        format!("{} minutes", abs / 60)
-    } else if abs < 86_400 {
-        format!("{} hours", abs / 3600)
+    // Round to the nearest unit rather than truncating. A stash made `--for 3d`
+    // is already a second old by the time this prints, and "in 2 days" for a
+    // three-day hold is the kind of small lie that costs trust in the rest.
+    // The boundaries round too, so a one-day hold reads "in 1 day" and never
+    // "in 24 hours".
+    let (n, unit) = if abs < 3600 - 30 {
+        ((abs + 30) / 60, "minute")
+    } else if abs < 86_400 - 1800 {
+        ((abs + 1800) / 3600, "hour")
     } else {
-        format!("{} days", abs / 86_400)
+        ((abs + 43_200) / 86_400, "day")
     };
+    let s = if n == 1 { "" } else { "s" };
     if delta >= 0 {
-        format!("in {unit}")
+        format!("in {n} {unit}{s}")
     } else {
-        format!("{unit} ago")
+        format!("{n} {unit}{s} ago")
     }
 }
 

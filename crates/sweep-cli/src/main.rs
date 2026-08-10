@@ -224,8 +224,19 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
 
     if p.skipped_hidden + p.skipped_symlink > 0 {
         println!(
-            "\n  skipped {} hidden items and {} symlinks",
-            p.skipped_hidden, p.skipped_symlink
+            "\n  skipped {} hidden {} and {} {}",
+            p.skipped_hidden,
+            if p.skipped_hidden == 1 {
+                "item"
+            } else {
+                "items"
+            },
+            p.skipped_symlink,
+            if p.skipped_symlink == 1 {
+                "symlink"
+            } else {
+                "symlinks"
+            }
         );
     }
     if p.root_is_synced {
