@@ -68,6 +68,10 @@ fn main() -> ExitCode {
         Some("undo") => cmd_undo(),
         Some("forget") => cmd_forget(),
         Some("review") => cmd_review(&args),
+        Some("--") => match args.get(1) {
+            Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
+            None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
+        },
         Some(p) if p.starts_with('-') => {
             run_scan(&std::env::current_dir().unwrap_or_default(), &args)
         }
@@ -82,6 +86,42 @@ fn has(args: &[String], flag: &str) -> bool {
 fn value(args: &[String], flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
     args.get(i + 1).cloned()
+}
+
+// apply rejects everything not listed here; a silent typo can authorize moves.
+const APPLY_FLAGS: &[(&str, bool)] = &[
+    ("--yes", false),
+    ("--only", true),
+    ("--no-journal", false),
+    ("--depth", true),
+    ("--allow-sync", false),
+];
+
+fn apply_path(args: &[String]) -> Result<PathBuf, String> {
+    let mut path = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--" {
+            if path.is_none() {
+                path = args.get(i + 1).map(|p| PathBuf::from(expand_tilde(p)));
+            }
+            break;
+        }
+        if let Some((_, takes_value)) = APPLY_FLAGS.iter().find(|(name, _)| *name == a) {
+            i += if *takes_value { 2 } else { 1 };
+            continue;
+        }
+        if a.starts_with('-') {
+            return Err(format!("unknown option {a}. Run `sweep help`."));
+        }
+        if path.is_none() {
+            path = Some(PathBuf::from(expand_tilde(a)));
+        }
+        i += 1;
+    }
+
+    path.ok_or_else(|| "apply requires an explicit PATH. Run `sweep help`.".to_string())
 }
 
 fn expand_tilde(p: &str) -> String {
@@ -385,12 +425,13 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
 /// since the plan was printed, and a stale plan is the write-freshness failure:
 /// the record says one thing and the tree says another.
 fn cmd_apply(args: &[String]) -> ExitCode {
-    let path = args
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with('-'))
-        .map(|p| PathBuf::from(expand_tilde(p)))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let path = match apply_path(&args[1..]) {
+        Ok(path) => path,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
 
     let accept_all = has(args, "--yes");
     let only = value(args, "--only");
@@ -574,4 +615,68 @@ const RLIMIT_CORE: i32 = 4;
 #[cfg(unix)]
 unsafe extern "C" {
     fn setrlimit(resource: i32, rlim: *const RLimit) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // unknown flags must fail even after a valid path, or consent can move files.
+    #[test]
+    fn an_unrecognised_flag_to_apply_is_rejected_not_dropped() {
+        for typo in ["--dry-run", "-n", "--force", "--all"] {
+            assert!(
+                !APPLY_FLAGS.iter().any(|(name, _)| *name == typo),
+                "{typo} would be accepted by apply"
+            );
+        }
+        let args = [
+            "some/path".to_string(),
+            "--dry-run".to_string(),
+            "--yes".to_string(),
+        ];
+        assert!(apply_path(&args).is_err());
+    }
+
+    // apply must never infer consent to operate on the process's directory.
+    #[test]
+    fn apply_without_a_path_is_an_error_not_the_current_directory() {
+        assert!(apply_path(&["--yes".to_string()]).is_err());
+    }
+
+    // a value consumed by a flag is not a positional path.
+    #[test]
+    fn apply_depth_value_is_not_mistaken_for_the_path() {
+        let args = [
+            "--depth".to_string(),
+            "3".to_string(),
+            "--yes".to_string(),
+            "/tmp/somewhere".to_string(),
+        ];
+        assert_eq!(apply_path(&args), Ok(PathBuf::from("/tmp/somewhere")));
+    }
+
+    // the command-level guard must return before scanning or moving the cwd.
+    #[test]
+    fn apply_with_no_path_never_touches_the_current_directory() {
+        let root =
+            std::env::temp_dir().join(format!("sweep-apply-cwd-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        fixtures::build(&root).unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        let _ = cmd_apply(&[
+            "apply".to_string(),
+            "--yes".to_string(),
+            "--no-journal".to_string(),
+        ]);
+        std::env::set_current_dir(original).unwrap();
+
+        assert!(
+            root.join("IMG_4400.HEIC").exists(),
+            "a camera-burst file moved: apply operated on the cwd with no PATH given"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
