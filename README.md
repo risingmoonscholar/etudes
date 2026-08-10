@@ -1,6 +1,30 @@
 # etudes
 
-Small studies in local-first software.
+Three small command-line tools that tidy a folder without reading your private files.
+
+```console
+$ sweep ~/Desktop
+
+Scanned 100 items  ·  names, sizes and dates only  ·  no contents read
+
+  Screenshots      34 files   named "Screenshot ..."
+  Photos, Aug 10   27 files   camera names, taken within 3 days
+  Installers        3 files   .dmg and .pkg
+  notes             7 files   7 filenames contain "notes"
+  acme              5 files   5 filenames contain "acme"
+
+  Left alone       24 files
+    14 look like personal records — sweep does not touch these
+    10 no clear group
+
+  skipped 1 hidden item and 3 symlinks
+
+Nothing has been moved.  Nothing left this machine.
+```
+
+Nothing moved, because nothing has been confirmed yet. The tax documents, the
+medical records and the driver's licence are in that "left alone" count, and no
+flag moves them.
 
 An étude is a short piece written to master one technique, and in the right
 hands also worth performing. These are tools built the same way: each removes
@@ -13,24 +37,65 @@ can prove its own claims rather than asking you to trust them.
 | **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.3 |
 | **`unpack`** | One command for every archive format, safely | v0.3 |
 
-## The claims, and how to check them in a minute
+## Install
+
+```sh
+cargo install --git https://github.com/risingmoonscholar/etudes sweep-cli
+cargo install --git https://github.com/risingmoonscholar/etudes stash-cli
+cargo install --git https://github.com/risingmoonscholar/etudes unpack-cli
+```
+
+The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
+`unpack`, in `~/.cargo/bin`.
+
+## Check the claims in a minute
 
 Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test                     # 88 tests
-scripts/no-network-test.sh     # the same suite, with socket(2) denied by the OS
+cargo test --all                # 91 tests
+scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
-The second one is the load-bearing claim. It proves the sandbox works *before*
-trusting it — a control program that opens a TCP connection must succeed
-unsandboxed and be denied under the profile — so a network call anywhere in
-these tools is a test failure rather than a code-review finding.
+The second one is load-bearing. It proves the sandbox works *before* trusting
+it — a control program that opens a TCP connection must succeed unsandboxed and
+be denied under the profile — so a network call anywhere in these tools is a
+test failure rather than a code-review finding.
+
+It is macOS-only. It uses `sandbox-exec`, and on any other platform it exits `2`
+and says the claim cannot be made on this host. That is deliberate: a witness
+that quietly passes where it cannot actually observe anything is worse than no
+witness.
 
 Beyond that, `etude-core` has **zero dependencies**, asserted by a test so it
 cannot drift. There is no third-party code in the path that decides what happens
 to your files.
+
+## Try it without risking a real folder
+
+The fixture generator builds a deliberately adversarial tree — tax forms,
+medical records, an identity document, a filename containing a tab, a 200-character
+filename, symlinks that point outside the directory. No real file of yours is
+read during development or testing.
+
+```sh
+cargo run -p fixtures --bin mkfx -- /tmp/demo
+cargo run -p sweep-cli --bin sweep -- /tmp/demo
+cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
+```
+
+## Two rules the tools share
+
+**Never coin a label the filesystem did not already contain.** A folder named
+`Tax return 2024` is itself a disclosure — visible in Finder, indexed by
+Spotlight, captured by every backup. Group names come only from words your own
+filenames already carry. If *you* want a revealing name, `sweep review` will let
+you choose one after telling you what it costs.
+
+**Reading more must mean acting less.** `sweep --inspect-content` is off by
+default and needs consent separate from `--yes`. What it reads can only ever
+move a file into "left alone" — it never influences a destination.
 
 ## For agents as well as people
 
@@ -68,18 +133,6 @@ records, the JSON carries counts by category and **never the paths**. An agent
 gets "3 tax documents were left alone", not a list of which files those are —
 handing over that index is exactly what the naming rule exists to prevent.
 
-## Two rules the tools share
-
-**Never coin a label the filesystem did not already contain.** A folder named
-`Tax return 2024` is itself a disclosure — visible in Finder, indexed by
-Spotlight, captured by every backup. Group names come only from words your own
-filenames already carry. If *you* want a revealing name, `sweep review` will let
-you choose one after telling you what it costs.
-
-**Reading more must mean acting less.** `sweep --inspect-content` is off by
-default and needs consent separate from `--yes`. What it reads can only ever
-move a file into "left alone" — it never influences a destination.
-
 ## Layout
 
 ```
@@ -96,15 +149,12 @@ crates/
 Journals are namespaced per tool and share `~/.local/state/etudes`, so
 `sweep undo` and `stash pop` cannot reverse each other's work.
 
-## Development
+## What these do not do
 
-No real file of yours is read during development or testing. Everything runs
-against a generated adversarial tree.
+No daemon, no menu-bar app, no watching a folder in the background. `stash` does
+not bring your files back on a timer; it tells you when they are due and waits
+to be asked. Nothing here starts at login.
 
-```sh
-cargo run -p fixtures --bin mkfx -- /tmp/demo    # build a fake messy folder
-cargo run -p sweep-cli --bin sweep -- /tmp/demo
-cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
-```
+Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 Apache-2.0.
