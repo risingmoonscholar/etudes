@@ -36,3 +36,6 @@ jobs:
       # The suite again with sockets denied by the OS. sandbox-exec is macOS
       # only; the script exits 2 elsewhere, so the linux job does not run it.
       - run: bash scripts/no-network-test.sh
+      - name: Check the claims the docs make
+        run: bash scripts/check-claims.sh
+

@@ -54,7 +54,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 91 tests
+cargo test --all                # 103 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -69,8 +69,7 @@ and says the claim cannot be made on this host. That is deliberate: a witness
 that quietly passes where it cannot actually observe anything is worse than no
 witness.
 
-Beyond that, `etude-core` has **zero dependencies**, asserted by a test so it
-cannot drift. There is no third-party code in the path that decides what happens
+Beyond that, `etude-core` has **zero dependencies**, asserted by a test. There is no third-party code in the path that decides what happens
 to your files.
 
 ## Try it without risking a real folder
