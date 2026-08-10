@@ -58,10 +58,11 @@ cargo test --all                # 91 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
-The second one is load-bearing. It proves the sandbox works *before* trusting
-it — a control program that opens a TCP connection must succeed unsandboxed and
-be denied under the profile — so a network call anywhere in these tools is a
-test failure rather than a code-review finding.
+The second one proves the sandbox works *before* running the suite: a control
+program that opens a TCP connection must succeed unsandboxed and be denied
+under the profile. The suite witnesses that its exercised code paths open no
+sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
+subprocess call sites.
 
 It is macOS-only. It uses `sandbox-exec`, and on any other platform it exits `2`
 and says the claim cannot be made on this host. That is deliberate: a witness
@@ -123,9 +124,9 @@ property holds no matter who is driving:
 
 | Gate | Effect on an agent |
 |---|---|
-| `--inspect-content` needs a TTY | an agent **cannot** make sweep read file contents |
-| `review` needs a TTY | an agent cannot rename a group into a revealing name |
-| sensitive-name refusal | an agent cannot move a tax document, even with `--yes` |
+| `--inspect-content` needs a TTY | convenience gate against accidental non-interactive use, not a security boundary against a process driving a pty |
+| `review` needs a TTY | convenience gate against accidental non-interactive use, not a security boundary against a process driving a pty |
+| sweep sensitive-name refusal | sweep leaves a tax document alone even with `--yes`; stash still moves everything |
 | per-tool journals | an agent cannot undo the other tool's work by accident |
 
 **`--json` discloses less, not more.** For files that look like personal

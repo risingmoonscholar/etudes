@@ -54,7 +54,7 @@ capture unpack-help   'unpack help'                    "$bin/unpack" help
 
 # stash mutates the tree, so it runs last against its own copy.
 cp -R "$home/Desktop" "$home/Stashable"
-capture stash-put     'stash ~/Desktop --for 3d --yes' "$bin/stash" "$home/Stashable" --for 3d --yes
+capture stash-put     'stash ~/Desktop --for 3d'       "$bin/stash" "$home/Stashable" --for 3d
 
 mkdir -p demo
 python3 - "$caps" "$home" "$work" demo/transcripts.json <<'PY'
