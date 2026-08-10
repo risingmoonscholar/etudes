@@ -306,6 +306,34 @@ pub fn latest_id(tool: &str) -> Result<String, JournalError> {
     best.map(|(_, id)| id).ok_or(JournalError::NotFound)
 }
 
+/// Every id for journals written by `tool`, newest-first by modification time.
+/// `latest_id` only ever returns the single most recent one; pop needs to search
+/// across all of them to find the journal for a specific folder, not just the
+/// newest.
+pub fn ids_by_recency(tool: &str) -> Result<Vec<String>, JournalError> {
+    let prefix = format!("{tool}-");
+    let dir = state_dir();
+    let mut journals = Vec::new();
+    for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
+        let Ok(e) = e else { continue };
+        let name = e.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".journal") else {
+            continue;
+        };
+        let Some(id) = stem.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Ok(md) = e.metadata() else { continue };
+        let Ok(t) = md.modified() else { continue };
+        journals.push((t, id.to_string()));
+    }
+    if journals.is_empty() {
+        return Err(JournalError::NotFound);
+    }
+    journals.sort_by(|(a, _), (b, _)| b.cmp(a));
+    Ok(journals.into_iter().map(|(_, id)| id).collect())
+}
+
 #[cfg(unix)]
 fn restrict(p: &Path) {
     use std::os::unix::fs::PermissionsExt;
