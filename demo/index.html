@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>etudes — small studies in local-first software</title>
+<meta name="description" content="Three command-line tools that tidy a folder without reading your private files. Every demo below is real recorded output.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#16150f; --dim:#6b6a63; --line:#e2e0d8;
+  --term-bg:#1c1b17; --term-fg:#d8d5c8; --accent:#8a6a3b;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#121210; --fg:#e6e3d9; --dim:#8f8d84; --line:#2b2a25;
+    --term-bg:#0d0d0b; --term-fg:#d8d5c8; --accent:#c9a86a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121210; --fg:#e6e3d9; --dim:#8f8d84; --line:#2b2a25;
+  --term-bg:#0d0d0b; --term-fg:#d8d5c8; --accent:#c9a86a;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:var(--sans); font-size:17px; line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:46rem; margin:0 auto; padding:5rem 1.5rem 8rem}
+h1{font-size:1.4rem; font-weight:600; letter-spacing:-.01em; margin:0 0 .3rem}
+h2{font-size:1.15rem; font-weight:600; margin:0 0 .4rem}
+h3{font-size:.8rem; font-weight:600; text-transform:uppercase; letter-spacing:.09em;
+   color:var(--dim); margin:2.4rem 0 .8rem}
+p{margin:0 0 1.1rem; max-width:38rem}
+a{color:inherit; text-underline-offset:3px; text-decoration-color:var(--line)}
+a:hover{text-decoration-color:var(--accent)}
+code{font-family:var(--mono); font-size:.88em}
+hr{border:0; border-top:1px solid var(--line); margin:4rem 0}
+.lede{color:var(--dim); margin-bottom:2.5rem}
+.tool{margin:0 0 1rem}
+.tool-head{display:flex; align-items:baseline; gap:.7rem; margin-bottom:.2rem}
+.tool-head code{font-size:1.05rem; font-weight:600; font-family:var(--mono)}
+.ver{font-size:.72rem; color:var(--dim); font-family:var(--mono)}
+.tabs{display:flex; gap:.3rem; margin:1.4rem 0 0; border-bottom:1px solid var(--line)}
+.tab{
+  background:none; border:0; border-bottom:2px solid transparent; margin-bottom:-1px;
+  font:inherit; font-size:.82rem; color:var(--dim); padding:.4rem .7rem; cursor:pointer;
+}
+.tab[aria-selected="true"]{color:var(--fg); border-bottom-color:var(--accent)}
+.panel[hidden]{display:none}
+.term{
+  background:var(--term-bg); color:var(--term-fg); font-family:var(--mono);
+  font-size:12.5px; line-height:1.55; padding:1rem 1.1rem; margin:1.1rem 0 .5rem;
+  border-radius:5px; overflow-x:auto; white-space:pre; tab-size:4;
+}
+.term .cmd{color:var(--accent)}
+.term .cmd::before{content:"$ "; opacity:.6}
+.runline{display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; margin:.4rem 0 0}
+.runline button{
+  font:inherit; font-size:.78rem; font-family:var(--mono); cursor:pointer;
+  background:none; color:var(--dim); border:1px solid var(--line);
+  border-radius:4px; padding:.22rem .6rem;
+}
+.runline button:hover{color:var(--fg); border-color:var(--accent)}
+.note{font-size:.78rem; color:var(--dim); margin:.5rem 0 0}
+table{border-collapse:collapse; width:100%; font-size:.86rem; margin:.4rem 0 1.2rem}
+th,td{text-align:left; padding:.42rem .7rem .42rem 0; border-bottom:1px solid var(--line);
+      vertical-align:top}
+th{font-weight:600; font-size:.74rem; text-transform:uppercase; letter-spacing:.07em; color:var(--dim)}
+td code{white-space:nowrap}
+.foot{font-size:.82rem; color:var(--dim); margin-top:4rem}
+.foot a{text-decoration-color:var(--line)}
+@media (max-width:600px){ .wrap{padding:3rem 1.1rem 5rem} body{font-size:16px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>etudes</h1>
+<p class="lede">Three command-line tools that tidy a folder without reading your private files.</p>
+
+<p>An étude is a short piece written to master one technique, and in the right hands
+also worth performing. These are built the same way: each removes one recurring
+friction, each is small enough to read in an afternoon, and each can prove its own
+claims rather than asking you to trust them.</p>
+
+<p>Every terminal block below is <strong>recorded output from the real binaries</strong>,
+run against a synthetic fixture. Nothing is executing in your browser, and nothing is
+hand-written. <a href="#provenance">How that is guaranteed.</a></p>
+
+<hr>
+
+<section id="sweep" class="tool" data-tool="sweep"></section>
+<hr>
+<section id="stash" class="tool" data-tool="stash"></section>
+<hr>
+<section id="unpack" class="tool" data-tool="unpack"></section>
+
+<hr>
+
+<h2 id="provenance">Provenance</h2>
+<p>The demos are captured, never authored. <code>scripts/capture-demos.sh</code> builds the
+binaries out of the tree, generates a synthetic fixture with <code>mkfx</code>, runs each
+command, and writes the raw stdout to <code>demo/transcripts.json</code> together with the
+commit it was built from. Regenerate it and diff: a transcript that no longer matches the
+tool is a build failure, not a stale document.</p>
+
+<p>The fixture is generated, not collected. Files with alarming names like
+<code>SSN_card_scan.jpg</code> are decoys whose contents read
+<code>SYNTHETIC TEST FIXTURE - NOT REAL DATA</code>. The tree is built in a temporary
+directory and deleted when the script exits. No real file is read during development,
+testing, or capture.</p>
+
+<p>One edit is made to the captured text: the temporary directory is rendered as
+<code>~/Desktop</code>, because its real name is machine-specific noise. That rule is
+declared in the artifact, and nothing else is touched.</p>
+
+<h3>Check the claims yourself</h3>
+<div class="term"><span class="cmd">cargo test --all</span>
+88 tests
+
+<span class="cmd">scripts/no-network-test.sh</span>
+the same suite, with socket(2) denied by the OS</div>
+<p class="note">The second is macOS-only. It uses <code>sandbox-exec</code>, and elsewhere
+exits 2 saying the claim cannot be made on this host — a witness that quietly passes where
+it cannot observe anything is worse than no witness.</p>
+
+<p class="foot">
+Apache-2.0 · <a href="https://github.com/risingmoonscholar/etudes">source</a>
+</p>
+
+</div>
+
+<script>
+const API = {
+  sweep: {
+    title: "organise the obvious, leave the private alone",
+    usage: [
+      ["sweep [PATH]", "analyse and build a plan; changes nothing"],
+      ["sweep review PATH", "walk each group, rename or skip, then apply"],
+      ["sweep apply PATH --yes", "move every proposed group"],
+      ["sweep apply PATH --only NAME", "move one group"],
+      ["sweep undo", "reverse the most recent apply"],
+      ["sweep forget", "destroy all journals and the key"],
+      ["sweep verify", "print sweep's own privacy posture"],
+    ],
+    flags: [
+      ["--depth N", "recursion depth (default 1, max 8)"],
+      ["--json", "machine-readable plan on stdout"],
+      ["--quiet", "counts and signals only; never prints a filename"],
+      ["--explain", "print the signal trace for every file"],
+      ["--allow-sync", "proceed even inside a cloud-synced folder"],
+      ["--no-journal", "apply without recording undo"],
+      ["--inspect-content", "read text contents to refuse MORE files; asks first, and never affects where anything moves"],
+      ["--version", "print the version and exit"],
+    ],
+    demos: ["sweep-plan", "sweep-explain", "sweep-json"],
+    note: "Only <code>apply</code> moves anything. Files that look like personal records are never moved, in any mode."
+  },
+  stash: {
+    title: "clean now, decide later",
+    usage: [
+      ["stash [PATH] [--for DURATION]", "move everything into a hidden holding folder"],
+      ["stash pop", "bring it all back now"],
+      ["stash status", "what is stashed, and when it is due back"],
+    ],
+    flags: [
+      ["--for DURATION", "30m · 2h · 3d · 1w — default: no deadline"],
+      ["--json", "machine-readable output"],
+      ["--version", "print the version and exit"],
+    ],
+    demos: ["stash-put"],
+    note: "stash moves EVERYTHING, including files sweep would refuse to organise. That is deliberate: clearing a folder for a screen share means clearing it. Everything is reversible, and stash prints what it took."
+  },
+  unpack: {
+    title: "stop thinking about archive formats",
+    usage: [
+      ["unpack ARCHIVE [--into DIR]", "extract safely into its own directory"],
+      ["unpack ARCHIVE --list", "show what is inside, extract nothing"],
+    ],
+    flags: [
+      ["--into DIR", "destination (default: a new directory beside the archive)"],
+      ["--list", "inspect without extracting"],
+      ["--json", "machine-readable output"],
+      ["--version", "print the version and exit"],
+    ],
+    demos: ["unpack-help"],
+    note: "Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg using the tools already on the machine. Nothing is parsed here. Every archive is listed and judged BEFORE anything is written; paths that escape the target, absolute paths and drive paths are refused outright."
+  },
+};
+
+const EXITS = [["0","done"],["1","nothing to do"],["2","refused"],["3","error"]];
+const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+fetch("transcripts.json")
+  .then(r => r.ok ? r.json() : Promise.reject(r.status))
+  .then(data => {
+    const byLabel = Object.fromEntries(data.transcripts.map(t => [t.label, t]));
+    for (const [name, spec] of Object.entries(API)) {
+      render(document.querySelector(`[data-tool="${name}"]`), name, spec, byLabel, data.commit);
+    }
+  })
+  .catch(() => {
+    document.querySelectorAll(".tool").forEach(el => {
+      el.innerHTML = '<p class="note">Transcripts not loaded. Run <code>scripts/capture-demos.sh</code>.</p>';
+    });
+  });
+
+function render(root, name, spec, byLabel, commit) {
+  const id = n => `${name}-${n}`;
+  const demos = spec.demos.map(l => byLabel[l]).filter(Boolean);
+
+  const demoHTML = demos.length ? demos.map(t => `
+    <div class="term"><span class="cmd">${esc(t.command)}</span>
+${esc(t.stdout.replace(/\s+$/, ""))}</div>
+    <p class="note">exit ${t.exit}</p>`).join("")
+    : '<p class="note">No transcript captured for this tool yet.</p>';
+
+  const rows = a => a.map(([k, v]) => `<tr><td><code>${esc(k)}</code></td><td>${v}</td></tr>`).join("");
+
+  root.innerHTML = `
+    <div class="tool-head"><code>${name}</code><span class="ver">v0.3 · ${esc(commit || "")}</span></div>
+    <p>${spec.title}.</p>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true"  aria-controls="${id("demo")}">Demo</button>
+      <button class="tab" role="tab" aria-selected="false" aria-controls="${id("api")}">API</button>
+    </div>
+    <div class="panel" id="${id("demo")}" role="tabpanel">${demoHTML}</div>
+    <div class="panel" id="${id("api")}" role="tabpanel" hidden>
+      <h3>Usage</h3><table><tbody>${rows(spec.usage)}</tbody></table>
+      <h3>Flags</h3><table><tbody>${rows(spec.flags)}</tbody></table>
+      <h3>Exit codes</h3><table><tbody>${rows(EXITS)}</tbody></table>
+      <p class="note">${spec.note}</p>
+    </div>`;
+
+  const tabs = [...root.querySelectorAll(".tab")];
+  tabs.forEach(tab => tab.addEventListener("click", () => {
+    tabs.forEach(t => {
+      const on = t === tab;
+      t.setAttribute("aria-selected", String(on));
+      root.querySelector("#" + t.getAttribute("aria-controls")).hidden = !on;
+    });
+  }));
+}
+</script>
+</body>
+</html>
