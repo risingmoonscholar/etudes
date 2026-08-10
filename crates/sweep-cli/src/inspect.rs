@@ -9,8 +9,8 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use etude_core::plan::Inspector;
 use etude_core::Category;
+use etude_core::plan::Inspector;
 use etude_read::{Found, Stats};
 
 pub struct ContentInspector {
@@ -19,7 +19,9 @@ pub struct ContentInspector {
 
 impl ContentInspector {
     pub fn new() -> Self {
-        Self { stats: Stats::default() }
+        Self {
+            stats: Stats::default(),
+        }
     }
 }
 
@@ -39,7 +41,7 @@ impl Inspector for ContentInspector {
 /// Returns false when the user declines or when there is no terminal to ask.
 pub fn consent(input: &mut dyn BufRead, is_tty: bool) -> io::Result<bool> {
     println!(
-"
+        "
   --inspect-content will read the contents of some files.
 
   What is read:   .txt .md .csv .log .json .xml .yml and similar,
@@ -86,7 +88,10 @@ pub fn report(stats: &Stats) {
         "\n  Contents read:  {} files  ({} skipped as non-text, {} as binary, {} too slow)",
         stats.inspected, stats.skipped_not_text, stats.skipped_binary, stats.skipped_slow
     );
-    println!("  Newly left alone because of what was read: {}", stats.newly_refused);
+    println!(
+        "  Newly left alone because of what was read: {}",
+        stats.newly_refused
+    );
     println!("  Retained from those reads: nothing. No text, no thumbnails, no index.");
 
     if stats.had_unlocked_reads() {

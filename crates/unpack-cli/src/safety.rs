@@ -77,9 +77,8 @@ pub fn judge(path: &str) -> Option<Unsafe> {
 ///
 /// Archive cruft that is never wanted and clutters every extraction.
 pub fn is_junk(path: &str) -> bool {
-    path.split('/').any(|c| {
-        c == "__MACOSX" || c == ".DS_Store" || c == "Thumbs.db" || c.starts_with("._")
-    })
+    path.split('/')
+        .any(|c| c == "__MACOSX" || c == ".DS_Store" || c == "Thumbs.db" || c.starts_with("._"))
 }
 
 /// Given every member path, find the single wrapper directory to strip.
@@ -129,12 +128,27 @@ mod tests {
     #[test]
     fn zip_slip_is_refused() {
         // The canonical CVE class. Every variant must be caught lexically.
-        assert!(matches!(judge("../../../etc/passwd"), Some(Unsafe::Escapes(_))));
+        assert!(matches!(
+            judge("../../../etc/passwd"),
+            Some(Unsafe::Escapes(_))
+        ));
         assert!(matches!(judge("a/../../b"), Some(Unsafe::Escapes(_))));
-        assert!(matches!(judge("..\\..\\windows\\system32"), Some(Unsafe::Escapes(_))));
-        assert!(matches!(judge("/etc/passwd"), Some(Unsafe::AbsolutePath(_))));
-        assert!(matches!(judge("C:\\Windows\\evil.dll"), Some(Unsafe::DriveOrUnc(_))));
-        assert!(matches!(judge("\\\\server\\share\\x"), Some(Unsafe::DriveOrUnc(_))));
+        assert!(matches!(
+            judge("..\\..\\windows\\system32"),
+            Some(Unsafe::Escapes(_))
+        ));
+        assert!(matches!(
+            judge("/etc/passwd"),
+            Some(Unsafe::AbsolutePath(_))
+        ));
+        assert!(matches!(
+            judge("C:\\Windows\\evil.dll"),
+            Some(Unsafe::DriveOrUnc(_))
+        ));
+        assert!(matches!(
+            judge("\\\\server\\share\\x"),
+            Some(Unsafe::DriveOrUnc(_))
+        ));
     }
 
     #[test]
@@ -190,8 +204,10 @@ mod tests {
 
     #[test]
     fn two_top_level_entries_are_not_a_wrapper() {
-        let paths: Vec<String> =
-            ["a/x.txt", "b/y.txt"].iter().map(|s| s.to_string()).collect();
+        let paths: Vec<String> = ["a/x.txt", "b/y.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(wrapper_dir(&paths), None, "flattening here would collide");
     }
 
@@ -199,8 +215,10 @@ mod tests {
     fn a_loose_file_at_top_level_means_no_wrapper() {
         // Stripping here would drop README.md into the parent directory —
         // exactly the "exploding into the current directory" this prevents.
-        let paths: Vec<String> =
-            ["proj/a.txt", "README.md"].iter().map(|s| s.to_string()).collect();
+        let paths: Vec<String> = ["proj/a.txt", "README.md"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(wrapper_dir(&paths), None);
     }
 }

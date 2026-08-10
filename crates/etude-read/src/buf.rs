@@ -6,7 +6,7 @@
 //! [`LockedBuf::locked`] reports which case applies so nothing overclaims.
 
 use std::io::{self, Read};
-use std::sync::atomic::{compiler_fence, Ordering};
+use std::sync::atomic::{Ordering, compiler_fence};
 
 /// Hard ceiling on how much of any file is read.
 pub const MAX_READ: usize = 1024 * 1024;
@@ -27,7 +27,10 @@ impl LockedBuf {
     /// allocation and leave the old one un-zeroed and unlocked.
     pub fn read_capped(r: &mut dyn Read) -> io::Result<Self> {
         let mut data = Vec::with_capacity(MAX_READ);
-        let mut buf = Self { data, locked: false };
+        let mut buf = Self {
+            data,
+            locked: false,
+        };
         buf.lock_pages();
 
         // Re-borrow after locking so the pointer we locked is the one we fill.
@@ -127,7 +130,10 @@ mod tests {
         // the allocation is not reused between the drop and this read in a
         // single-threaded test, and the assertion is the entire purpose.
         let after = unsafe { std::slice::from_raw_parts(ptr, len) };
-        assert!(after.iter().all(|b| *b == 0), "buffer was not erased on drop");
+        assert!(
+            after.iter().all(|b| *b == 0),
+            "buffer was not erased on drop"
+        );
     }
 
     #[test]

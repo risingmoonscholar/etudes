@@ -6,9 +6,9 @@
 use std::fs;
 use std::path::PathBuf;
 
+use etude_core::Untouched;
 use etude_core::plan;
 use etude_core::scan::{self, ScanConfig};
-use etude_core::Untouched;
 
 /// Isolated fixture root per test, so tests cannot interfere with each other.
 fn fixture(tag: &str) -> (PathBuf, fixtures::Fixture) {
@@ -37,13 +37,21 @@ fn no_sensitive_fixture_is_ever_grouped() {
         let s = s.canonicalize().expect("fixture path canonicalizes");
 
         let in_a_group = p.groups.iter().any(|g| g.members.contains(&s));
-        assert!(!in_a_group, "sensitive file was placed in a group: {}", s.display());
+        assert!(
+            !in_a_group,
+            "sensitive file was placed in a group: {}",
+            s.display()
+        );
 
         let refused = p
             .untouched
             .iter()
             .any(|(path, u)| *path == s && matches!(u, Untouched::LooksPersonal(_)));
-        assert!(refused, "sensitive file was not recognised as personal: {}", s.display());
+        assert!(
+            refused,
+            "sensitive file was not recognised as personal: {}",
+            s.display()
+        );
     }
     cleanup(&root);
 }
@@ -52,7 +60,14 @@ fn no_sensitive_fixture_is_ever_grouped() {
 fn package_directory_interior_never_appears_in_a_plan() {
     // Walking into a .photoslibrary or .app is a privacy catastrophe.
     let (root, _fx) = fixture("package");
-    let out = scan::scan(&root, &ScanConfig { depth: 8, ..Default::default() }).expect("scan");
+    let out = scan::scan(
+        &root,
+        &ScanConfig {
+            depth: 8,
+            ..Default::default()
+        },
+    )
+    .expect("scan");
     let p = plan::build(&out);
 
     let leaked: Vec<_> = p
@@ -63,28 +78,54 @@ fn package_directory_interior_never_appears_in_a_plan() {
         .filter(|path| path.to_string_lossy().contains(".app/Contents"))
         .collect();
 
-    assert!(leaked.is_empty(), "package interior leaked into the plan: {leaked:?}");
+    assert!(
+        leaked.is_empty(),
+        "package interior leaked into the plan: {leaked:?}"
+    );
     cleanup(&root);
 }
 
 #[test]
 fn escaping_symlinks_are_never_followed() {
     let (root, _fx) = fixture("symlink");
-    let out = scan::scan(&root, &ScanConfig { depth: 8, ..Default::default() }).expect("scan");
+    let out = scan::scan(
+        &root,
+        &ScanConfig {
+            depth: 8,
+            ..Default::default()
+        },
+    )
+    .expect("scan");
 
     for e in &out.entries {
         let s = e.path.to_string_lossy();
-        assert!(!s.contains("sweep_fixture_outside"), "followed an escaping symlink: {s}");
-        assert!(!s.contains("/etc/passwd"), "followed a symlink to a system file: {s}");
+        assert!(
+            !s.contains("sweep_fixture_outside"),
+            "followed an escaping symlink: {s}"
+        );
+        assert!(
+            !s.contains("/etc/passwd"),
+            "followed a symlink to a system file: {s}"
+        );
     }
-    assert!(out.skipped_symlink > 0, "fixture symlinks were not seen at all");
+    assert!(
+        out.skipped_symlink > 0,
+        "fixture symlinks were not seen at all"
+    );
     cleanup(&root);
 }
 
 #[test]
 fn hidden_and_credential_directories_are_not_entered() {
     let (root, _fx) = fixture("hidden");
-    let out = scan::scan(&root, &ScanConfig { depth: 8, ..Default::default() }).expect("scan");
+    let out = scan::scan(
+        &root,
+        &ScanConfig {
+            depth: 8,
+            ..Default::default()
+        },
+    )
+    .expect("scan");
 
     for e in &out.entries {
         let s = e.path.to_string_lossy();
@@ -103,12 +144,23 @@ fn plan_is_deterministic_across_runs() {
     let a = plan::build(&scan::scan(&root, &cfg).expect("scan a"));
     let b = plan::build(&scan::scan(&root, &cfg).expect("scan b"));
 
-    let names_a: Vec<_> = a.groups.iter().map(|g| (&g.name, g.members.len())).collect();
-    let names_b: Vec<_> = b.groups.iter().map(|g| (&g.name, g.members.len())).collect();
+    let names_a: Vec<_> = a
+        .groups
+        .iter()
+        .map(|g| (&g.name, g.members.len()))
+        .collect();
+    let names_b: Vec<_> = b
+        .groups
+        .iter()
+        .map(|g| (&g.name, g.members.len()))
+        .collect();
     assert_eq!(names_a, names_b, "plan is not deterministic");
 
     for (ga, gb) in a.groups.iter().zip(b.groups.iter()) {
-        assert_eq!(ga.members, gb.members, "group membership reordered between runs");
+        assert_eq!(
+            ga.members, gb.members,
+            "group membership reordered between runs"
+        );
     }
     cleanup(&root);
 }
@@ -120,7 +172,15 @@ fn no_group_is_named_after_a_sensitive_category() {
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
     let p = plan::build(&out);
 
-    let forbidden = ["tax", "medical", "identity", "financial", "legal", "credential", "personal"];
+    let forbidden = [
+        "tax",
+        "medical",
+        "identity",
+        "financial",
+        "legal",
+        "credential",
+        "personal",
+    ];
     for g in &p.groups {
         let lower = g.name.to_ascii_lowercase();
         for f in forbidden {
@@ -176,7 +236,11 @@ fn the_screenshot_group_is_found_and_correctly_sized() {
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
     let p = plan::build(&out);
 
-    let shots = p.groups.iter().find(|g| g.name == "Screenshots").expect("no Screenshots group");
+    let shots = p
+        .groups
+        .iter()
+        .find(|g| g.name == "Screenshots")
+        .expect("no Screenshots group");
     assert_eq!(shots.members.len(), 34, "screenshot count wrong");
     cleanup(&root);
 }

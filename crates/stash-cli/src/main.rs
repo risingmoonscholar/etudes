@@ -65,7 +65,9 @@ fn main() -> ExitCode {
 
 fn expand_tilde(p: &str) -> String {
     match p.strip_prefix("~/") {
-        Some(rest) => std::env::var("HOME").map(|h| format!("{h}/{rest}")).unwrap_or(p.into()),
+        Some(rest) => std::env::var("HOME")
+            .map(|h| format!("{h}/{rest}"))
+            .unwrap_or(p.into()),
         None => p.to_string(),
     }
 }
@@ -95,7 +97,10 @@ pub fn parse_duration(s: &str) -> Option<u64> {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Holding directory name. The deadline is *in the name*, so there is no second
@@ -174,7 +179,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         root: outcome.root.clone(),
         groups: vec![Group {
             name: holding_name(deadline),
-            signal: Signal::SharedToken { token: "stash".into(), count },
+            signal: Signal::SharedToken {
+                token: "stash".into(),
+                count,
+            },
             members,
             accepted: true,
         }],
@@ -186,7 +194,9 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     };
 
     let json = flag(args, "--json");
-    let Some(sl) = sealer() else { return ExitCode::from(2) };
+    let Some(sl) = sealer() else {
+        return ExitCode::from(2);
+    };
     match etude_core::apply::apply(&plan, "stash", Some(&sl), None) {
         Ok(r) => {
             if json {
@@ -215,7 +225,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                 None => println!("  No deadline. Restore with: stash pop"),
             }
             if outcome.skipped_hidden > 0 {
-                println!("\n  {} hidden items were left in place.", outcome.skipped_hidden);
+                println!(
+                    "\n  {} hidden items were left in place.",
+                    outcome.skipped_hidden
+                );
             }
             ExitCode::SUCCESS
         }
@@ -228,7 +241,9 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
 }
 
 fn cmd_pop() -> ExitCode {
-    let Some(sl) = sealer() else { return ExitCode::from(2) };
+    let Some(sl) = sealer() else {
+        return ExitCode::from(2);
+    };
     let mut j = match etude_core::Journal::latest_sealed("stash", &sl) {
         Ok(j) => j,
         Err(e) => {
@@ -240,7 +255,10 @@ fn cmd_pop() -> ExitCode {
         Ok(r) => {
             println!("\nRestored {} items.", r.restored);
             if !r.skipped_changed.is_empty() {
-                println!("  {} changed while stashed and were left alone:", r.skipped_changed.len());
+                println!(
+                    "  {} changed while stashed and were left alone:",
+                    r.skipped_changed.len()
+                );
                 for p in &r.skipped_changed {
                     println!("    {}", etude_core::redact::path(p));
                 }
@@ -277,7 +295,9 @@ fn cmd_status(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
         Some(dir) => {
-            let n = std::fs::read_dir(&dir).map(|r| r.flatten().count()).unwrap_or(0);
+            let n = std::fs::read_dir(&dir)
+                .map(|r| r.flatten().count())
+                .unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             if flag(args, "--json") {
                 use etude_core::json as j;
@@ -319,7 +339,11 @@ fn human_time(epoch: u64) -> String {
     } else {
         format!("{} days", abs / 86_400)
     };
-    if delta >= 0 { format!("in {unit}") } else { format!("{unit} ago") }
+    if delta >= 0 {
+        format!("in {unit}")
+    } else {
+        format!("{unit} ago")
+    }
 }
 
 struct KeychainSeal {
@@ -373,7 +397,15 @@ mod tests {
         // The deadline lives in the name, so this IS the storage layer.
         let name = holding_name(Some(1_800_000_000));
         assert_eq!(deadline_of(&name), Some(1_800_000_000));
-        assert_eq!(deadline_of(&holding_name(None)), None, "0 should read as no deadline");
-        assert_eq!(deadline_of("Screenshots"), None, "an ordinary folder read as a stash");
+        assert_eq!(
+            deadline_of(&holding_name(None)),
+            None,
+            "0 should read as no deadline"
+        );
+        assert_eq!(
+            deadline_of("Screenshots"),
+            None,
+            "an ordinary folder read as a stash"
+        );
     }
 }

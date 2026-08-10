@@ -75,10 +75,13 @@ fn detect(path: &Path) -> Option<Format> {
 
 /// Strip every archive suffix to get the destination directory name.
 fn stem(path: &Path) -> String {
-    let mut n = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut n = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     for suffix in [
-        ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz", ".txz", ".tar", ".zip", ".jar",
-        ".dmg", ".gz",
+        ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz", ".txz", ".tar", ".zip", ".jar", ".dmg",
+        ".gz",
     ] {
         if n.to_ascii_lowercase().ends_with(suffix) {
             n.truncate(n.len() - suffix.len());
@@ -101,7 +104,9 @@ fn main() -> ExitCode {
 
 fn expand_tilde(p: &str) -> String {
     match p.strip_prefix("~/") {
-        Some(rest) => std::env::var("HOME").map(|h| format!("{h}/{rest}")).unwrap_or(p.into()),
+        Some(rest) => std::env::var("HOME")
+            .map(|h| format!("{h}/{rest}"))
+            .unwrap_or(p.into()),
         None => p.to_string(),
     }
 }
@@ -172,9 +177,16 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 ("entries", j::num(entries.len())),
                 ("junk", j::num(junk)),
                 ("safe", j::bool(blocked.is_empty())),
-                ("blocked", j::arr(blocked.iter().map(|b| j::str(&b.to_string())))),
-                ("wrapper", safety::wrapper_dir(&entries)
-                    .map(|w| j::str(&w)).unwrap_or_else(|| "null".into())),
+                (
+                    "blocked",
+                    j::arr(blocked.iter().map(|b| j::str(&b.to_string())))
+                ),
+                (
+                    "wrapper",
+                    safety::wrapper_dir(&entries)
+                        .map(|w| j::str(&w))
+                        .unwrap_or_else(|| "null".into())
+                ),
                 ("paths", j::arr(entries.iter().map(|p| j::str(p)))),
             ])
         );
@@ -206,7 +218,10 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 ("archive", j::path(archive)),
                 ("refused", j::bool(true)),
                 ("reason", j::str("unsafe paths")),
-                ("blocked", j::arr(blocked.iter().map(|b| j::str(&b.to_string())))),
+                (
+                    "blocked",
+                    j::arr(blocked.iter().map(|b| j::str(&b.to_string())))
+                ),
                 ("extracted", j::num(0)),
             ])
         );
@@ -223,7 +238,10 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         if blocked.len() > 10 {
             eprintln!("  … and {} more", blocked.len() - 10);
         }
-        eprintln!("\nNothing was extracted. Inspect it with: unpack {} --list", archive.display());
+        eprintln!(
+            "\nNothing was extracted. Inspect it with: unpack {} --list",
+            archive.display()
+        );
         return ExitCode::from(2);
     }
 
@@ -328,7 +346,11 @@ fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<(), String> {
         Format::Gz => {
             let out_path = dest.join(stem(archive));
             let f = std::fs::File::create(&out_path).map_err(|e| e.kind().to_string())?;
-            Command::new("gunzip").arg("-c").arg(archive).stdout(f).status()
+            Command::new("gunzip")
+                .arg("-c")
+                .arg(archive)
+                .stdout(f)
+                .status()
         }
         _ => {
             let flag = match fmt {
@@ -338,17 +360,28 @@ fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<(), String> {
                 Format::TarXz => "-xJf",
                 _ => unreachable!("dmg and zip handled above"),
             };
-            Command::new("tar").arg(flag).arg(archive).arg("-C").arg(dest).status()
+            Command::new("tar")
+                .arg(flag)
+                .arg(archive)
+                .arg("-C")
+                .arg(dest)
+                .status()
         }
     }
     .map_err(|e| e.kind().to_string())?;
 
-    if status.success() { Ok(()) } else { Err("extractor reported failure".into()) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err("extractor reported failure".into())
+    }
 }
 
 fn remove_junk(dest: &Path) -> usize {
     fn walk(dir: &Path, n: &mut usize) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if safety::is_junk(&name) {
@@ -379,7 +412,9 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
     if !inner.is_dir() {
         return false;
     }
-    let Ok(rd) = std::fs::read_dir(&inner) else { return false };
+    let Ok(rd) = std::fs::read_dir(&inner) else {
+        return false;
+    };
     for e in rd.flatten() {
         let to = dest.join(e.file_name());
         if to.exists() {
@@ -402,13 +437,20 @@ mod tests {
         assert_eq!(detect(Path::new("a.tgz")), Some(Format::TarGz));
         assert_eq!(detect(Path::new("a.gz")), Some(Format::Gz));
         assert_eq!(detect(Path::new("a.zip")), Some(Format::Zip));
-        assert_eq!(detect(Path::new("a.TAR.GZ")), Some(Format::TarGz), "case ignored");
+        assert_eq!(
+            detect(Path::new("a.TAR.GZ")),
+            Some(Format::TarGz),
+            "case ignored"
+        );
         assert_eq!(detect(Path::new("notes.txt")), None);
     }
 
     #[test]
     fn the_stem_drops_every_archive_suffix() {
-        assert_eq!(stem(Path::new("conference-assets.zip")), "conference-assets");
+        assert_eq!(
+            stem(Path::new("conference-assets.zip")),
+            "conference-assets"
+        );
         assert_eq!(stem(Path::new("release.tar.gz")), "release");
         assert_eq!(stem(Path::new("data.tgz")), "data");
         assert_eq!(stem(Path::new("dump.sql.gz")), "dump.sql");

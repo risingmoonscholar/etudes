@@ -8,7 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::journal::{fingerprint, Entry, Journal, Method, Sealer};
+use crate::journal::{Entry, Journal, Method, Sealer, fingerprint};
 use crate::plan::Plan;
 
 #[derive(Debug)]
@@ -77,13 +77,14 @@ pub fn apply(
             return Err(ApplyError::DestinationIsSynced(dest_dir));
         }
         for src in &g.members {
-            let Some(name) = src.file_name() else { continue };
+            let Some(name) = src.file_name() else {
+                continue;
+            };
             let dst = dest_dir.join(name);
             if dst.exists() {
                 return Err(ApplyError::DestinationExists(dst));
             }
-            let (size, mtime_secs, inode, edge_hash) =
-                fingerprint(src).map_err(ApplyError::Io)?;
+            let (size, mtime_secs, inode, edge_hash) = fingerprint(src).map_err(ApplyError::Io)?;
             j.entries.push(Entry {
                 from: src.clone(),
                 to: dst,
@@ -98,7 +99,11 @@ pub fn apply(
     }
 
     if j.entries.is_empty() {
-        return Ok(ApplyReport { moved: 0, journal_id: id, journal_path: None });
+        return Ok(ApplyReport {
+            moved: 0,
+            journal_id: id,
+            journal_path: None,
+        });
     }
 
     // Journal first. Nothing has moved yet.

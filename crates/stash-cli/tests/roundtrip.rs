@@ -15,7 +15,9 @@ use etude_core::scan::{self, ScanConfig};
 /// `ETUDE_STATE_DIR` is process-global; serialise rather than rely on a flag.
 fn lock() -> MutexGuard<'static, ()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
-    L.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    L.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 struct TestSeal;
@@ -45,7 +47,12 @@ fn cleanup(root: &Path) {
 
 /// Mirrors what the binary builds: one group, everything in it.
 fn stash_plan(root: &Path) -> (Plan, usize) {
-    let cfg = ScanConfig { depth: 1, allow_sync: true, whole_units: true, ..Default::default() };
+    let cfg = ScanConfig {
+        depth: 1,
+        allow_sync: true,
+        whole_units: true,
+        ..Default::default()
+    };
     let out = scan::scan(root, &cfg).expect("scan");
     let members: Vec<PathBuf> = out.entries.iter().map(|e| e.path.clone()).collect();
     let count = members.len();
@@ -54,7 +61,10 @@ fn stash_plan(root: &Path) -> (Plan, usize) {
             root: out.root.clone(),
             groups: vec![Group {
                 name: ".stash-0".into(),
-                signal: Signal::SharedToken { token: "stash".into(), count },
+                signal: Signal::SharedToken {
+                    token: "stash".into(),
+                    count,
+                },
                 members,
                 accepted: true,
             }],
@@ -114,7 +124,11 @@ fn everything_comes_back_including_directories_and_symlinks() {
         ur.skipped_changed
     );
     for p in &before {
-        assert!(p.symlink_metadata().is_ok(), "missing after restore: {}", p.display());
+        assert!(
+            p.symlink_metadata().is_ok(),
+            "missing after restore: {}",
+            p.display()
+        );
     }
     cleanup(&root);
 }
@@ -137,7 +151,10 @@ fn a_symlink_is_fingerprinted_by_the_link_not_its_target() {
         !ur.skipped_changed.iter().any(|p| p.ends_with("self_link")),
         "a symlink was judged changed because its target moved"
     );
-    assert!(self_link.symlink_metadata().is_ok(), "the symlink was not restored");
+    assert!(
+        self_link.symlink_metadata().is_ok(),
+        "the symlink was not restored"
+    );
     cleanup(&root);
 }
 
@@ -175,6 +192,9 @@ fn hidden_items_are_left_where_they_are() {
     let (plan, _) = stash_plan(&root);
     apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
 
-    assert!(root.join(".ssh").exists(), "stash moved a hidden credential directory");
+    assert!(
+        root.join(".ssh").exists(),
+        "stash moved a hidden credential directory"
+    );
     cleanup(&root);
 }

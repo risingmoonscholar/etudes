@@ -74,7 +74,12 @@ pub struct ScanConfig {
 
 impl Default for ScanConfig {
     fn default() -> Self {
-        Self { depth: 1, allow_sync: false, max_entries: 20_000, whole_units: false }
+        Self {
+            depth: 1,
+            allow_sync: false,
+            max_entries: 20_000,
+            whole_units: false,
+        }
     }
 }
 
@@ -113,7 +118,11 @@ impl std::fmt::Display for ScanError {
                 write!(f, "not a directory: {}", crate::redact::path(p))
             }
             ScanError::RefusedSystemLocation(p) => {
-                write!(f, "refused: system or credential location {}", crate::redact::path(p))
+                write!(
+                    f,
+                    "refused: system or credential location {}",
+                    crate::redact::path(p)
+                )
             }
             ScanError::RefusedSyncRoot(p) => write!(
                 f,
@@ -214,7 +223,10 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
     walk(&root, &root, 0, cfg, &mut out, &mut visited)?;
 
     if out.entries.len() > cfg.max_entries {
-        return Err(ScanError::TooManyEntries { found: out.entries.len(), cap: cfg.max_entries });
+        return Err(ScanError::TooManyEntries {
+            found: out.entries.len(),
+            cap: cfg.max_entries,
+        });
     }
     // Deterministic order — a plan must be byte-identical across runs.
     out.entries.sort_by(|a, b| a.path.cmp(&b.path));

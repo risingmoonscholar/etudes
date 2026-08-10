@@ -202,7 +202,7 @@ impl Journal {
     pub fn save_sealed(&self, sealer: &dyn Sealer) -> Result<(), JournalError> {
         let bytes = sealer
             .seal(self.encode().as_bytes())
-            .map_err(|m| JournalError::Seal(m))?;
+            .map_err(JournalError::Seal)?;
         self.write_bytes(&bytes)
     }
 
@@ -210,7 +210,7 @@ impl Journal {
     pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
         let p = state_dir().join(format!("{tool}-{id}.journal"));
         let raw = fs::read(&p).map_err(|_| JournalError::NotFound)?;
-        let plain = sealer.open(&raw).map_err(|m| JournalError::Seal(m))?;
+        let plain = sealer.open(&raw).map_err(JournalError::Seal)?;
         let text = String::from_utf8(plain).map_err(|_| JournalError::Malformed("not utf-8"))?;
         let mut j = Journal::decode(&text)?;
         j.id = id.to_string();
@@ -248,7 +248,6 @@ impl Journal {
     }
 }
 
-
 /// Journals older than this are dropped on the next run.
 ///
 /// A journal is an index of the user's filenames. Even sealed, keeping it
@@ -262,11 +261,14 @@ pub const TTL_DAYS: u64 = 30;
 /// is not fatal: a journal that cannot be removed is a housekeeping problem,
 /// not a reason to refuse the user's actual request.
 pub fn prune_expired() -> usize {
-    let cutoff = match SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400)) {
-        Some(c) => c,
-        None => return 0,
+    let cutoff =
+        match SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400)) {
+            Some(c) => c,
+            None => return 0,
+        };
+    let Ok(rd) = fs::read_dir(state_dir()) else {
+        return 0;
     };
-    let Ok(rd) = fs::read_dir(state_dir()) else { return 0 };
     let mut removed = 0;
     for e in rd.flatten() {
         if !e.file_name().to_string_lossy().ends_with(".journal") {
@@ -289,8 +291,12 @@ pub fn latest_id(tool: &str) -> Result<String, JournalError> {
     for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
         let Ok(e) = e else { continue };
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(stem) = name.strip_suffix(".journal") else { continue };
-        let Some(id) = stem.strip_prefix(&prefix) else { continue };
+        let Some(stem) = name.strip_suffix(".journal") else {
+            continue;
+        };
+        let Some(id) = stem.strip_prefix(&prefix) else {
+            continue;
+        };
         let Ok(md) = e.metadata() else { continue };
         let Ok(t) = md.modified() else { continue };
         if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
@@ -455,7 +461,6 @@ mod tests {
         let back = Journal::decode(&j.encode()).expect("decode");
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
-        assert_eq!(back.entries[0].done, true);
+        assert!(back.entries[0].done);
     }
-
 }

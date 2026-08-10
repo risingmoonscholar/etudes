@@ -72,8 +72,17 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 fn has_ssn(b: &[u8]) -> bool {
     let d = |c: u8| c.is_ascii_digit();
     for w in b.windows(11) {
-        if !(d(w[0]) && d(w[1]) && d(w[2]) && w[3] == b'-' && d(w[4]) && d(w[5]) && w[6] == b'-'
-            && d(w[7]) && d(w[8]) && d(w[9]) && d(w[10]))
+        if !(d(w[0])
+            && d(w[1])
+            && d(w[2])
+            && w[3] == b'-'
+            && d(w[4])
+            && d(w[5])
+            && w[6] == b'-'
+            && d(w[7])
+            && d(w[8])
+            && d(w[9])
+            && d(w[10]))
         {
             continue;
         }
@@ -137,7 +146,7 @@ fn luhn(d: &[u8]) -> bool {
         sum += v;
         double = !double;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 const MEDICAL_TERMS: &[&[u8]] = &[
@@ -192,7 +201,10 @@ mod tests {
 
     #[test]
     fn finds_a_social_security_number() {
-        assert_eq!(scan(b"Employee SSN: 123-45-6789 on file"), Some(Found::Identity));
+        assert_eq!(
+            scan(b"Employee SSN: 123-45-6789 on file"),
+            Some(Found::Identity)
+        );
     }
 
     #[test]
@@ -209,9 +221,16 @@ mod tests {
     #[test]
     fn finds_a_payment_card_and_ignores_a_random_digit_run() {
         // 4111 1111 1111 1111 is the canonical Visa test number.
-        assert_eq!(scan(b"card 4111 1111 1111 1111 exp"), Some(Found::Financial));
+        assert_eq!(
+            scan(b"card 4111 1111 1111 1111 exp"),
+            Some(Found::Financial)
+        );
         // Same length, fails Luhn.
-        assert_eq!(scan(b"ref 4111111111111112 end"), None, "non-Luhn digits read as a card");
+        assert_eq!(
+            scan(b"ref 4111111111111112 end"),
+            None,
+            "non-Luhn digits read as a card"
+        );
     }
 
     #[test]
@@ -224,7 +243,11 @@ mod tests {
 
     #[test]
     fn one_medical_word_is_not_a_medical_record() {
-        assert_eq!(scan(b"the patient waited in the rain"), None, "single term triggered");
+        assert_eq!(
+            scan(b"the patient waited in the rain"),
+            None,
+            "single term triggered"
+        );
         assert_eq!(
             scan(b"patient: J Doe. diagnosis: flu. prescription: rest."),
             Some(Found::Medical)

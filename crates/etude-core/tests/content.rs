@@ -130,8 +130,7 @@ fn inspection_never_creates_or_renames_a_group() {
     // And prove the narrowing actually happened, so this test cannot pass by
     // the inspector doing nothing at all.
     assert!(
-        names_with.len() < names_without.len()
-            || with.untouched.len() > without.untouched.len(),
+        names_with.len() < names_without.len() || with.untouched.len() > without.untouched.len(),
         "inspection changed nothing; the test proves nothing"
     );
     cleanup(&root);
@@ -146,7 +145,10 @@ fn a_harmless_file_with_the_same_name_shape_is_not_refused() {
     let mut insp = StubInspector { reads: Vec::new() };
     let p = plan::build_with(&out, Some(&mut insp));
 
-    let control = root.canonicalize().unwrap().join(fixtures::INNOCENT_CONTROL);
+    let control = root
+        .canonicalize()
+        .unwrap()
+        .join(fixtures::INNOCENT_CONTROL);
     let refused = p
         .untouched
         .iter()

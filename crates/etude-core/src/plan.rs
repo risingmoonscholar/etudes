@@ -70,14 +70,20 @@ impl Plan {
     }
 
     pub fn no_clear_group(&self) -> usize {
-        self.untouched.iter().filter(|(_, u)| *u == Untouched::NoClearGroup).count()
+        self.untouched
+            .iter()
+            .filter(|(_, u)| *u == Untouched::NoClearGroup)
+            .count()
     }
 
     pub fn moves(&self) -> usize {
-        self.groups.iter().filter(|g| g.accepted).map(|g| g.members.len()).sum()
+        self.groups
+            .iter()
+            .filter(|g| g.accepted)
+            .map(|g| g.members.len())
+            .sum()
     }
 }
-
 
 /// Optional content inspection, injected by the caller.
 ///
@@ -117,9 +123,11 @@ impl Plan {
         }));
 
         let personal: usize = self.sensitive_counts().values().sum();
-        let by_category = j::arr(self.sensitive_counts().iter().map(|(c, n)| {
-            j::obj(&[("kind", j::str(c.describe())), ("count", j::num(n))])
-        }));
+        let by_category = j::arr(
+            self.sensitive_counts()
+                .iter()
+                .map(|(c, n)| j::obj(&[("kind", j::str(c.describe())), ("count", j::num(n))])),
+        );
 
         // Only the paths sweep declined for lack of a group. Personal-looking
         // files are counted, never listed.
@@ -183,11 +191,11 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
             untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
             continue;
         }
-        if let Some(insp) = inspector.as_deref_mut() {
-            if let Some(cat) = insp.inspect(&e.path, &e.ext) {
-                untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
-                continue;
-            }
+        if let Some(insp) = inspector.as_deref_mut()
+            && let Some(cat) = insp.inspect(&e.path, &e.ext)
+        {
+            untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
+            continue;
         }
         remaining.push(e);
     }
@@ -196,7 +204,11 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
     let mut claimed: Vec<PathBuf> = Vec::new();
 
     // Pass 2 — structural detectors, highest precision first.
-    let shots: Vec<&Entry> = remaining.iter().copied().filter(|e| classify::is_screenshot(e)).collect();
+    let shots: Vec<&Entry> = remaining
+        .iter()
+        .copied()
+        .filter(|e| classify::is_screenshot(e))
+        .collect();
     if shots.len() >= MIN_STRUCTURAL_GROUP {
         claimed.extend(shots.iter().map(|e| e.path.clone()));
         groups.push(Group {
@@ -257,8 +269,10 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
     candidates.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
 
     for (token, members) in candidates {
-        let fresh: Vec<PathBuf> =
-            members.into_iter().filter(|p| !claimed.contains(p)).collect();
+        let fresh: Vec<PathBuf> = members
+            .into_iter()
+            .filter(|p| !claimed.contains(p))
+            .collect();
         if fresh.len() < MIN_TOKEN_GROUP {
             continue;
         }
@@ -297,8 +311,14 @@ fn date_range(entries: &[&Entry]) -> Option<String> {
         return None;
     }
     times.sort();
-    let lo = times.first().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?.as_secs();
-    let hi = times.last().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?.as_secs();
+    let lo = times
+        .first()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?
+        .as_secs();
+    let hi = times
+        .last()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?
+        .as_secs();
     let (a, b) = (civil_date(lo as i64), civil_date(hi as i64));
     Some(if a == b { a } else { format!("{a}–{b}") })
 }
@@ -306,8 +326,9 @@ fn date_range(entries: &[&Entry]) -> Option<String> {
 /// Days-from-epoch to `Mon D`, without pulling in a date crate.
 /// Howard Hinnant's civil_from_days.
 fn civil_date(secs: i64) -> String {
-    const MONTHS: [&str; 12] =
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let z = secs.div_euclid(86_400) + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;

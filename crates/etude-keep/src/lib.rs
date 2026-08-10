@@ -52,10 +52,13 @@ fn hex(bytes: &[u8]) -> String {
 
 fn unhex(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
 }
 
 /// Read the key from the keychain, creating one on first use.
@@ -70,14 +73,18 @@ pub fn key() -> Result<[u8; 32], KeepError> {
     // produce a journal nobody can ever decrypt, including the owner.
     match read_key()? {
         Some(k) if k == fresh => Ok(k),
-        _ => Err(KeepError::Keychain("key did not survive a write/read round trip".into())),
+        _ => Err(KeepError::Keychain(
+            "key did not survive a write/read round trip".into(),
+        )),
     }
 }
 
 fn getrandom_fill(buf: &mut [u8]) -> Result<(), KeepError> {
     // OsRng draws from the OS CSPRNG. `try_fill_bytes` rather than
     // `fill_bytes` so an entropy failure surfaces instead of panicking.
-    OsRng.try_fill_bytes(buf).map_err(|_| KeepError::Crypto("no secure randomness available"))
+    OsRng
+        .try_fill_bytes(buf)
+        .map_err(|_| KeepError::Crypto("no secure randomness available"))
 }
 
 fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
@@ -101,7 +108,15 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
     // a confirmation, so it is written twice. It must never be an argument:
     // arguments are visible to `ps`.
     let mut child = Command::new("security")
-        .args(["add-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-U", "-w"])
+        .args([
+            "add-generic-password",
+            "-a",
+            ACCOUNT,
+            "-s",
+            SERVICE,
+            "-U",
+            "-w",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -110,11 +125,16 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
 
     let encoded = hex(k);
     {
-        let stdin = child.stdin.as_mut().ok_or(KeepError::Keychain("no stdin".into()))?;
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or(KeepError::Keychain("no stdin".into()))?;
         writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
         writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
     }
-    let status = child.wait().map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
+    let status = child
+        .wait()
+        .map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
     if !status.success() {
         return Err(KeepError::Keychain("could not store the key".into()));
     }
@@ -143,8 +163,9 @@ pub fn seal(key_bytes: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, KeepError
     let target = padded.len().div_ceil(PAD_TO) * PAD_TO;
     padded.resize(target, 0);
 
-    let ct =
-        cipher.encrypt(&nonce, padded.as_ref()).map_err(|_| KeepError::Crypto("seal failed"))?;
+    let ct = cipher
+        .encrypt(&nonce, padded.as_ref())
+        .map_err(|_| KeepError::Crypto("seal failed"))?;
 
     let mut out = Vec::with_capacity(MAGIC.len() + nonce.len() + ct.len());
     out.extend_from_slice(MAGIC);
@@ -193,14 +214,21 @@ mod tests {
         let msg = b"/Users/x/Desktop/SSN_card_scan.jpg";
         let sealed = seal(&K, msg).expect("seal");
         let hay = String::from_utf8_lossy(&sealed);
-        assert!(!hay.contains("SSN_card_scan"), "filename survived into the ciphertext");
+        assert!(
+            !hay.contains("SSN_card_scan"),
+            "filename survived into the ciphertext"
+        );
     }
 
     #[test]
     fn length_is_padded_so_size_does_not_leak_volume() {
         let small = seal(&K, b"x").expect("seal");
         let bigger = seal(&K, &vec![b'x'; 2000]).expect("seal");
-        assert_eq!(small.len(), bigger.len(), "ciphertext size leaks payload size");
+        assert_eq!(
+            small.len(),
+            bigger.len(),
+            "ciphertext size leaks payload size"
+        );
     }
 
     #[test]
@@ -208,19 +236,28 @@ mod tests {
         let mut sealed = seal(&K, b"hello").expect("seal");
         let last = sealed.len() - 1;
         sealed[last] ^= 0xff;
-        assert!(open(&K, &sealed).is_err(), "tampered ciphertext was accepted");
+        assert!(
+            open(&K, &sealed).is_err(),
+            "tampered ciphertext was accepted"
+        );
     }
 
     #[test]
     fn a_wrong_key_cannot_open_it() {
         let sealed = seal(&K, b"hello").expect("seal");
-        assert!(open(&[9u8; 32], &sealed).is_err(), "wrong key opened the journal");
+        assert!(
+            open(&[9u8; 32], &sealed).is_err(),
+            "wrong key opened the journal"
+        );
     }
 
     #[test]
     fn nonces_differ_between_writes() {
         let a = seal(&K, b"same").expect("seal");
         let b = seal(&K, b"same").expect("seal");
-        assert_ne!(a, b, "identical ciphertext for identical input — nonce reuse");
+        assert_ne!(
+            a, b,
+            "identical ciphertext for identical input — nonce reuse"
+        );
     }
 }

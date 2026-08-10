@@ -10,7 +10,10 @@ use std::path::Path;
 ///
 /// `~/Desktop/W2_2024_acme_corp.pdf` becomes `~/Desktop/<name.pdf>`.
 pub fn path(p: &Path) -> String {
-    let parent = p.parent().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = p
+        .parent()
+        .map(|x| x.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let ext = p
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))

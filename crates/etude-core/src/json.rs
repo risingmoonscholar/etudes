@@ -50,7 +50,10 @@ pub fn arr(items: impl IntoIterator<Item = String>) -> String {
 /// `{"k": v}` from already-encoded values. Key order is preserved, so output is
 /// byte-stable across runs — a plan that reorders cannot be diffed.
 pub fn obj(fields: &[(&str, String)]) -> String {
-    let inner: Vec<String> = fields.iter().map(|(k, v)| format!("{}:{}", str(k), v)).collect();
+    let inner: Vec<String> = fields
+        .iter()
+        .map(|(k, v)| format!("{}:{}", str(k), v))
+        .collect();
     format!("{{{}}}", inner.join(","))
 }
 

@@ -8,8 +8,8 @@
 //! every other detector — a tax document is not a shared-token candidate even
 //! when forty files share its token.
 
-use crate::scan::Entry;
 use crate::Category;
+use crate::scan::Entry;
 
 /// Filename markers that make sweep refuse to organise a file.
 ///
@@ -67,8 +67,15 @@ const SENSITIVE_MARKERS: &[(&str, Category)] = &[
 
 /// Extensions and exact names that are credentials regardless of context.
 const CREDENTIAL_EXTS: &[&str] = &["pem", "key", "p12", "pfx", "keychain", "kdbx", "jks", "asc"];
-const CREDENTIAL_NAMES: &[&str] =
-    &["id_rsa", "id_ed25519", "id_dsa", "id.rsa", "credentials", "recovery_codes", ".env"];
+const CREDENTIAL_NAMES: &[&str] = &[
+    "id_rsa",
+    "id_ed25519",
+    "id_dsa",
+    "id.rsa",
+    "credentials",
+    "recovery_codes",
+    ".env",
+];
 
 /// Does this file look like a personal record? Returns the category if so.
 pub fn sensitive(e: &Entry) -> Option<Category> {
@@ -104,11 +111,18 @@ pub fn is_camera(e: &Entry) -> bool {
         || l.starts_with("pxl_")
         || l.starts_with("dji_")
         || l.starts_with("gopro");
-    camera_stem && matches!(e.ext.as_str(), "jpg" | "jpeg" | "heic" | "png" | "raw" | "dng" | "mov")
+    camera_stem
+        && matches!(
+            e.ext.as_str(),
+            "jpg" | "jpeg" | "heic" | "png" | "raw" | "dng" | "mov"
+        )
 }
 
 pub fn is_installer(e: &Entry) -> bool {
-    matches!(e.ext.as_str(), "dmg" | "pkg" | "msi" | "deb" | "rpm" | "appimage")
+    matches!(
+        e.ext.as_str(),
+        "dmg" | "pkg" | "msi" | "deb" | "rpm" | "appimage"
+    )
 }
 
 /// Split a filename into lowercase tokens usable as group names.
@@ -128,9 +142,36 @@ pub fn tokens(name: &str) -> Vec<String> {
 
 /// Tokens too generic to name a group after.
 const STOP_TOKENS: &[&str] = &[
-    "final", "draft", "copy", "new", "old", "untitled", "document", "file", "version", "temp",
-    "tmp", "backup", "export", "download", "downloads", "desktop", "screen", "shot", "image",
-    "photo", "scan", "pdf", "doc", "docx", "png", "jpg", "the", "and", "for", "with",
+    "final",
+    "draft",
+    "copy",
+    "new",
+    "old",
+    "untitled",
+    "document",
+    "file",
+    "version",
+    "temp",
+    "tmp",
+    "backup",
+    "export",
+    "download",
+    "downloads",
+    "desktop",
+    "screen",
+    "shot",
+    "image",
+    "photo",
+    "scan",
+    "pdf",
+    "doc",
+    "docx",
+    "png",
+    "jpg",
+    "the",
+    "and",
+    "for",
+    "with",
 ];
 
 #[cfg(test)]
@@ -139,7 +180,10 @@ mod tests {
     use std::path::PathBuf;
 
     fn entry(name: &str) -> Entry {
-        let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
         Entry {
             path: PathBuf::from(name),
             name: name.to_string(),
@@ -176,22 +220,35 @@ mod tests {
     fn credentials_are_caught_by_extension_and_by_name() {
         assert_eq!(sensitive(&entry("server.pem")), Some(Category::Credential));
         assert_eq!(sensitive(&entry("id_rsa")), Some(Category::Credential));
-        assert_eq!(sensitive(&entry("recovery_codes.txt")), Some(Category::Credential));
+        assert_eq!(
+            sensitive(&entry("recovery_codes.txt")),
+            Some(Category::Credential)
+        );
     }
 
     #[test]
     fn screenshots_and_cameras_are_distinguished() {
-        assert!(is_screenshot(&entry("Screenshot 2026-07-12 at 9.14.22 AM.png")));
+        assert!(is_screenshot(&entry(
+            "Screenshot 2026-07-12 at 9.14.22 AM.png"
+        )));
         assert!(!is_screenshot(&entry("IMG_4471.HEIC")));
         assert!(is_camera(&entry("IMG_4471.HEIC")));
-        assert!(!is_camera(&entry("Screenshot 2026-07-12 at 9.14.22 AM.png")));
+        assert!(!is_camera(&entry(
+            "Screenshot 2026-07-12 at 9.14.22 AM.png"
+        )));
     }
 
     #[test]
     fn tokens_drop_generic_words_so_groups_are_never_named_untitled() {
         let t = tokens("final_FINAL_v2.docx");
-        assert!(!t.contains(&"final".to_string()), "generic token survived: {t:?}");
+        assert!(
+            !t.contains(&"final".to_string()),
+            "generic token survived: {t:?}"
+        );
         let t = tokens("acme_logo_v3.psd");
-        assert!(t.contains(&"acme".to_string()), "distinctive token lost: {t:?}");
+        assert!(
+            t.contains(&"acme".to_string()),
+            "distinctive token lost: {t:?}"
+        );
     }
 }

@@ -77,7 +77,11 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
 
     // --- Screenshots: the highest-precision detector ------------------------
     for i in 1..=34 {
-        let name = format!("Screenshot 2026-07-{:02} at 9.{:02}.11 AM.png", (i % 28) + 1, i);
+        let name = format!(
+            "Screenshot 2026-07-{:02} at 9.{:02}.11 AM.png",
+            (i % 28) + 1,
+            i
+        );
         fs::write(root.join(name), b"synthetic\n")?;
     }
 
@@ -94,8 +98,14 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
     // --- Innocent names, sensitive contents ---------------------------------
     // These are the v0.3 case: metadata alone cannot refuse them, so only
     // content inspection can. Names are deliberately boring.
-    fs::write(root.join("notes-a.txt"), b"call mom\nSSN 123-45-6789\npick up milk\n")?;
-    fs::write(root.join("notes-b.txt"), b"card 4111 1111 1111 1111 exp 03/29\n")?;
+    fs::write(
+        root.join("notes-a.txt"),
+        b"call mom\nSSN 123-45-6789\npick up milk\n",
+    )?;
+    fs::write(
+        root.join("notes-b.txt"),
+        b"card 4111 1111 1111 1111 exp 03/29\n",
+    )?;
     fs::write(
         root.join("notes-c.md"),
         b"patient: J Doe\ndiagnosis: flu\nprescription: rest\n",
@@ -105,7 +115,10 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
         b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
     )?;
     // A control: same shape of name, nothing sensitive inside.
-    fs::write(root.join("notes-e.txt"), b"Ship the redesign in March. Budget fine.\n")?;
+    fs::write(
+        root.join("notes-e.txt"),
+        b"Ship the redesign in March. Budget fine.\n",
+    )?;
 
     // --- Adversarial filesystem cases --------------------------------------
 
@@ -121,7 +134,10 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
     let _ = fs::write(root.join("weird\tname.txt"), b"synthetic\n");
 
     // A very long name, near NAME_MAX.
-    let _ = fs::write(root.join(format!("{}.txt", "a".repeat(200))), b"synthetic\n");
+    let _ = fs::write(
+        root.join(format!("{}.txt", "a".repeat(200))),
+        b"synthetic\n",
+    );
 
     // Package directory: must move as one unit, interior never walked.
     let pkg = root.join("Some App.app");

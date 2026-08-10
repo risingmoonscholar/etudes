@@ -8,8 +8,8 @@
 
 pub mod apply;
 pub mod classify;
-pub mod json;
 pub mod journal;
+pub mod json;
 pub mod plan;
 pub mod redact;
 pub mod scan;

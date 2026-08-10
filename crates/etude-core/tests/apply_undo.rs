@@ -21,9 +21,10 @@ fn lock() -> MutexGuard<'static, ()> {
     static L: OnceLock<Mutex<()>> = OnceLock::new();
     // A panicking test poisons the mutex; the state is per-test anyway, so
     // recovering keeps one failure from cascading into false failures.
-    L.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    L.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
-
 
 /// Test sealer. Not a cipher — it proves the *plumbing* is sealed-only. The
 /// real cipher is tested in etude-keep, and the end-to-end pairing is tested in
@@ -36,7 +37,9 @@ impl etude_core::journal::Sealer for TestSeal {
         Ok(v)
     }
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
-        let body = sealed.strip_prefix(b"TESTSEAL".as_slice()).ok_or("bad header")?;
+        let body = sealed
+            .strip_prefix(b"TESTSEAL".as_slice())
+            .ok_or("bad header")?;
         Ok(body.iter().map(|b| b ^ 0x5a).collect())
     }
 }
@@ -84,8 +87,16 @@ fn sensitive_files_survive_a_full_apply_untouched() {
     apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
 
     for (path, len) in before {
-        assert!(path.exists(), "a sensitive file was moved away from {}", path.display());
-        assert_eq!(fs::metadata(&path).expect("meta").len(), len, "sensitive file was modified");
+        assert!(
+            path.exists(),
+            "a sensitive file was moved away from {}",
+            path.display()
+        );
+        assert_eq!(
+            fs::metadata(&path).expect("meta").len(),
+            len,
+            "sensitive file was modified"
+        );
     }
     cleanup(&root);
 }
@@ -95,21 +106,35 @@ fn apply_then_undo_restores_every_path() {
     let _g = lock();
     let (root, _fx, p) = setup("roundtrip");
 
-    let expected: Vec<PathBuf> =
-        p.groups.iter().flat_map(|g| g.members.iter().cloned()).collect();
+    let expected: Vec<PathBuf> = p
+        .groups
+        .iter()
+        .flat_map(|g| g.members.iter().cloned())
+        .collect();
     assert!(!expected.is_empty(), "fixture produced no moves to test");
 
     let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
     assert_eq!(rep.moved, expected.len());
     for src in &expected {
-        assert!(!src.exists(), "source still present after apply: {}", src.display());
+        assert!(
+            !src.exists(),
+            "source still present after apply: {}",
+            src.display()
+        );
     }
 
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal loads");
     let ur = apply::undo(&mut j).expect("undo");
 
-    assert_eq!(ur.restored, expected.len(), "undo did not restore every file");
-    assert!(ur.skipped_changed.is_empty(), "undo skipped unchanged files");
+    assert_eq!(
+        ur.restored,
+        expected.len(),
+        "undo did not restore every file"
+    );
+    assert!(
+        ur.skipped_changed.is_empty(),
+        "undo skipped unchanged files"
+    );
     for src in &expected {
         assert!(src.exists(), "file not restored: {}", src.display());
     }
@@ -123,16 +148,24 @@ fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
     let (root, _fx, p) = setup("resumable");
     const FAIL: usize = 7;
 
-    let err = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL)).expect_err("injected failure should propagate");
+    let err = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL))
+        .expect_err("injected failure should propagate");
     assert!(matches!(err, ApplyError::Injected(FAIL)));
 
     let j = Journal::latest_sealed("test", &TestSeal).expect("journal exists after a crash");
     let done: Vec<_> = j.entries.iter().filter(|e| e.done).collect();
-    assert_eq!(done.len(), FAIL, "journal claims a different number of moves than happened");
+    assert_eq!(
+        done.len(),
+        FAIL,
+        "journal claims a different number of moves than happened"
+    );
 
     for e in &done {
         assert!(e.to.exists(), "journal says done but destination is absent");
-        assert!(!e.from.exists(), "journal says done but source is still there");
+        assert!(
+            !e.from.exists(),
+            "journal says done but source is still there"
+        );
     }
     for e in j.entries.iter().filter(|e| !e.done) {
         assert!(e.from.exists(), "journal says not-done but source is gone");
@@ -150,9 +183,16 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
     let mut j = Journal::latest_sealed("test", &TestSeal).expect("journal");
     let r = apply::undo(&mut j).expect("undo");
 
-    assert_eq!(r.restored, FAIL, "undo restored a different count than was applied");
+    assert_eq!(
+        r.restored, FAIL,
+        "undo restored a different count than was applied"
+    );
     for e in &j.entries {
-        assert!(e.from.exists(), "file missing after partial undo: {}", e.from.display());
+        assert!(
+            e.from.exists(),
+            "file missing after partial undo: {}",
+            e.from.display()
+        );
     }
     cleanup(&root);
 }
@@ -176,7 +216,10 @@ fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     );
     assert!(victim.exists(), "undo moved a file it should have skipped");
     let text = fs::read_to_string(&victim).expect("read");
-    assert!(text.contains("the user edited"), "undo overwrote newer content");
+    assert!(
+        text.contains("the user edited"),
+        "undo overwrote newer content"
+    );
     cleanup(&root);
 }
 
@@ -189,8 +232,14 @@ fn no_journal_mode_writes_nothing_and_still_moves() {
     let rep = apply::apply(&p, "test", None, None).expect("apply");
 
     assert_eq!(rep.moved, expected);
-    assert!(rep.journal_path.is_none(), "no-journal mode reported a journal path");
-    assert!(Journal::latest_sealed("test", &TestSeal).is_err(), "no-journal mode still wrote a journal");
+    assert!(
+        rep.journal_path.is_none(),
+        "no-journal mode reported a journal path"
+    );
+    assert!(
+        Journal::latest_sealed("test", &TestSeal).is_err(),
+        "no-journal mode still wrote a journal"
+    );
     cleanup(&root);
 }
 
@@ -210,7 +259,11 @@ fn apply_refuses_when_a_destination_already_exists() {
 
     // And nothing moved.
     for m in &g.members {
-        assert!(m.exists(), "a file moved despite the refusal: {}", m.display());
+        assert!(
+            m.exists(),
+            "a file moved despite the refusal: {}",
+            m.display()
+        );
     }
     cleanup(&root);
 }
@@ -225,8 +278,14 @@ fn no_filename_is_readable_in_the_written_journal() {
     let hay = String::from_utf8_lossy(&raw);
 
     for name in fixtures::all_names() {
-        assert!(!hay.contains(&name), "journal leaked a filename in the clear: {name}");
+        assert!(
+            !hay.contains(&name),
+            "journal leaked a filename in the clear: {name}"
+        );
     }
-    assert!(!hay.contains("/Users"), "journal leaked a path prefix in the clear");
+    assert!(
+        !hay.contains("/Users"),
+        "journal leaked a path prefix in the clear"
+    );
     cleanup(&root);
 }

@@ -45,7 +45,9 @@ fn the_shipped_binary_links_no_networking_symbols() {
         return;
     };
 
-    let out = Command::new("nm").args(["-u", bin.to_str().unwrap()]).output();
+    let out = Command::new("nm")
+        .args(["-u", bin.to_str().unwrap()])
+        .output();
     let Ok(out) = out else {
         eprintln!("SKIPPED: `nm` unavailable on this platform");
         return;
@@ -59,13 +61,18 @@ fn the_shipped_binary_links_no_networking_symbols() {
     // against a control binary that does open a socket — it reports _socket,
     // _connect and _getaddrinfo here.
     let symbol_count = text.lines().filter(|l| !l.trim().is_empty()).count();
-    assert!(symbol_count > 20, "nm returned {symbol_count} symbols; the scan is not working");
+    assert!(
+        symbol_count > 20,
+        "nm returned {symbol_count} symbols; the scan is not working"
+    );
 
     let mut found: Vec<&str> = Vec::new();
     for line in text.lines() {
         // Undefined-symbol lines look like "    U _open". Take the last field
         // and compare exactly, so substrings cannot produce false positives.
-        let Some(sym) = line.split_whitespace().last() else { continue };
+        let Some(sym) = line.split_whitespace().last() else {
+            continue;
+        };
         if FORBIDDEN.contains(&sym) {
             found.push(sym);
         }

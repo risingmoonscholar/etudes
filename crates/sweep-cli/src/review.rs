@@ -88,8 +88,10 @@ pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
 /// The reviewable loop, with input injected so the interactive flow — including
 /// the rename escape hatch — can be tested rather than demonstrated by hand.
 pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome> {
-
-    println!("\nReviewing {} group(s). Nothing moves until the end.\n", plan.groups.len());
+    println!(
+        "\nReviewing {} group(s). Nothing moves until the end.\n",
+        plan.groups.len()
+    );
     let mut warned_scrollback = false;
 
     for i in 0..plan.groups.len() {
@@ -122,7 +124,10 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
                         warned_scrollback = true;
                     }
                     for m in &plan.groups[i].members {
-                        println!("      {}", m.file_name().unwrap_or_default().to_string_lossy());
+                        println!(
+                            "      {}",
+                            m.file_name().unwrap_or_default().to_string_lossy()
+                        );
                     }
                     println!();
                 }
@@ -187,9 +192,9 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use etude_core::plan::{Group, Signal};
     use std::io::Cursor;
     use std::path::PathBuf;
-    use etude_core::plan::{Group, Signal};
 
     fn plan_of(names: &[&str]) -> Plan {
         Plan {
@@ -234,7 +239,10 @@ mod tests {
         // the rename, because the user was told the folder will be visible.
         let mut p = plan_of(&["shots"]);
         drive(&mut p, "r\nTax 2024\nn\na\ny\n");
-        assert_eq!(p.groups[0].name, "shots", "rename applied despite declining");
+        assert_eq!(
+            p.groups[0].name, "shots",
+            "rename applied despite declining"
+        );
     }
 
     #[test]
@@ -263,7 +271,10 @@ mod tests {
     fn declining_the_final_confirmation_cancels() {
         let mut p = plan_of(&["a"]);
         let outcome = drive(&mut p, "a\nn\n");
-        assert!(matches!(outcome, Outcome::Cancelled), "proceeded without confirmation");
+        assert!(
+            matches!(outcome, Outcome::Cancelled),
+            "proceeded without confirmation"
+        );
     }
 
     #[test]
@@ -271,7 +282,10 @@ mod tests {
         // A closed pipe must never be read as "yes, move my files".
         let mut p = plan_of(&["a"]);
         let outcome = drive(&mut p, "");
-        assert!(matches!(outcome, Outcome::Cancelled), "EOF was treated as consent");
+        assert!(
+            matches!(outcome, Outcome::Cancelled),
+            "EOF was treated as consent"
+        );
     }
 
     #[test]
@@ -289,8 +303,14 @@ mod tests {
         assert!(validate("   ").is_err(), "blank name accepted");
         assert!(validate(".hidden").is_err(), "hidden name accepted");
         assert!(validate("..").is_err(), "parent reference accepted");
-        assert!(validate(&"x".repeat(200)).is_err(), "overlong name accepted");
-        assert!(validate("bad\u{7}name").is_err(), "control character accepted");
+        assert!(
+            validate(&"x".repeat(200)).is_err(),
+            "overlong name accepted"
+        );
+        assert!(
+            validate("bad\u{7}name").is_err(),
+            "control character accepted"
+        );
     }
 
     #[test]

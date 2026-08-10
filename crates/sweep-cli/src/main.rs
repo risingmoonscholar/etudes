@@ -7,7 +7,7 @@
 mod inspect;
 mod review;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use etude_core::plan;
@@ -63,7 +63,9 @@ fn main() -> ExitCode {
         Some("undo") => cmd_undo(),
         Some("forget") => cmd_forget(),
         Some("review") => cmd_review(&args),
-        Some(p) if p.starts_with('-') => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
+        Some(p) if p.starts_with('-') => {
+            run_scan(&std::env::current_dir().unwrap_or_default(), &args)
+        }
         Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
     }
 }
@@ -90,11 +92,13 @@ fn expand_tilde(p: &str) -> String {
 /// Scan and build a plan, running content inspection when the user asked for
 /// it AND consented. Returns the plan plus any inspection stats to disclose.
 fn scan_and_plan(
-    path: &PathBuf,
+    path: &Path,
     args: &[String],
 ) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
     let cfg = ScanConfig {
-        depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
+        depth: value(args, "--depth")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1),
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
@@ -129,7 +133,7 @@ fn scan_and_plan(
     Ok((p, Some(insp.stats)))
 }
 
-fn run_scan(path: &PathBuf, args: &[String]) -> ExitCode {
+fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     let quiet = has(args, "--quiet");
     let explain = has(args, "--explain");
 
@@ -175,7 +179,13 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     };
     println!("\nScanned {} items  ·  {basis}\n", p.scanned);
 
-    let width = p.groups.iter().map(|g| g.name.chars().count()).max().unwrap_or(10).max(12);
+    let width = p
+        .groups
+        .iter()
+        .map(|g| g.name.chars().count())
+        .max()
+        .unwrap_or(10)
+        .max(12);
     for g in &p.groups {
         println!(
             "  {:<width$}  {:>3} files   {}",
@@ -190,7 +200,12 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     let personal: usize = counts.values().sum();
     let unclear = p.no_clear_group();
     if personal + unclear > 0 {
-        println!("\n  {:<width$}  {:>3} files", "Left alone", personal + unclear, width = width);
+        println!(
+            "\n  {:<width$}  {:>3} files",
+            "Left alone",
+            personal + unclear,
+            width = width
+        );
         if personal > 0 {
             // One short line. The per-category breakdown is available under
             // --explain; the summary must stay glanceable and must not read
@@ -234,12 +249,6 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     println!("Review: sweep review <path>     Apply: sweep apply <path> --yes");
 }
 
-/// `sweep apply PATH --yes | --only NAME`
-///
-/// Re-scans rather than trusting a stored plan. The filesystem may have changed
-/// since the plan was printed, and a stale plan is the write-freshness failure:
-/// the record says one thing and the tree says another.
-
 /// Binds the keychain-held key to the journal's `Sealer` interface.
 struct KeychainSeal {
     key: [u8; 32],
@@ -272,7 +281,6 @@ fn sealer() -> Option<KeychainSeal> {
     }
 }
 
-
 /// `sweep review PATH` — scan, decide interactively, apply in one pass.
 ///
 /// No plan is persisted between commands. See the module docs in review.rs:
@@ -287,7 +295,9 @@ fn cmd_review(args: &[String]) -> ExitCode {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     let cfg = ScanConfig {
-        depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
+        depth: value(args, "--depth")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1),
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
@@ -353,6 +363,11 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
     }
 }
 
+/// `sweep apply PATH --yes | --only NAME`
+///
+/// Re-scans rather than trusting a stored plan. The filesystem may have changed
+/// since the plan was printed, and a stale plan is the write-freshness failure:
+/// the record says one thing and the tree says another.
 fn cmd_apply(args: &[String]) -> ExitCode {
     let path = args
         .iter()
@@ -374,7 +389,9 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     }
 
     let cfg = ScanConfig {
-        depth: value(args, "--depth").and_then(|v| v.parse().ok()).unwrap_or(1),
+        depth: value(args, "--depth")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1),
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
@@ -398,9 +415,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     }
 
     if !use_journal {
-        println!(
-            "\n  --no-journal: nothing will be recorded, so `sweep undo` will not work.\n"
-        );
+        println!("\n  --no-journal: nothing will be recorded, so `sweep undo` will not work.\n");
     }
 
     let sl = if use_journal {
@@ -416,7 +431,9 @@ fn cmd_apply(args: &[String]) -> ExitCode {
 }
 
 fn cmd_undo() -> ExitCode {
-    let Some(sl) = sealer() else { return ExitCode::from(2) };
+    let Some(sl) = sealer() else {
+        return ExitCode::from(2);
+    };
     let mut j = match etude_core::Journal::latest_sealed("sweep", &sl) {
         Ok(j) => j,
         Err(e) => {
@@ -479,7 +496,7 @@ fn verify() -> ExitCode {
         .unwrap_or(0);
 
     println!(
-"
+        "
 sweep {v}
 
   What is compiled in
@@ -509,7 +526,11 @@ sweep {v}
         v = env!("CARGO_PKG_VERSION"),
         count = count,
         dir = dir.display(),
-        synced = if scan::is_synced(&dir) { "YES — move it" } else { "no" },
+        synced = if scan::is_synced(&dir) {
+            "YES — move it"
+        } else {
+            "no"
+        },
         ttl = etude_core::journal::TTL_DAYS,
     );
     ExitCode::SUCCESS
