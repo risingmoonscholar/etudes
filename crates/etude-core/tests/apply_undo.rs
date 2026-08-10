@@ -269,6 +269,47 @@ fn apply_refuses_when_a_destination_already_exists() {
 }
 
 #[test]
+fn apply_refuses_when_two_planned_destinations_collide() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_au_plan_collision_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let sub1 = root.join("sub1");
+    let sub2 = root.join("sub2");
+    fs::create_dir_all(&sub1).expect("mkdir sub1");
+    fs::create_dir_all(&sub2).expect("mkdir sub2");
+    let src1 = sub1.join("Screenshot 1.png");
+    let src2 = sub2.join("Screenshot 1.png");
+    fs::write(&src1, b"first\n").expect("write first");
+    fs::write(&src2, b"second\n").expect("write second");
+
+    let state =
+        std::env::temp_dir().join(format!("sweep_state_plan_collision_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let p = Plan {
+        root: root.clone(),
+        groups: vec![plan::Group {
+            name: "Screenshots".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![src1.clone(), src2.clone()],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 2,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: false,
+    };
+
+    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    assert!(matches!(err, ApplyError::DestinationCollision(_)));
+    assert!(src1.exists(), "first source moved despite the refusal");
+    assert!(src2.exists(), "second source moved despite the refusal");
+    cleanup(&root);
+}
+
+#[test]
 fn no_filename_is_readable_in_the_written_journal() {
     // The M7 claim, checked against the bytes on disk rather than the API.
     let _g = lock();
