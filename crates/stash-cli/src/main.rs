@@ -37,6 +37,7 @@ USAGE
     stash pop                       bring it all back now
     stash status                    what is stashed, and when it is due back
     --json                          machine-readable output (for agents)
+    --version                       print the version and exit
     stash help
 
 DURATION
@@ -53,15 +54,32 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
+        Some("version" | "--version" | "-V") => {
+            println!("stash {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         Some("pop" | "restore") => cmd_pop(),
         Some("status" | "list") => cmd_status(&args),
         None => cmd_stash(&std::env::current_dir().unwrap_or_default(), &args),
+        // A leading flag means "stash the current directory", which is the most
+        // destructive thing this tool does. An unrecognised one must therefore
+        // be refused, not treated as consent: `stash --dry-run` used to empty
+        // the folder the user was standing in.
         Some(p) if p.starts_with('-') => {
-            cmd_stash(&std::env::current_dir().unwrap_or_default(), &args)
+            if STASH_FLAGS.contains(&p) {
+                cmd_stash(&std::env::current_dir().unwrap_or_default(), &args)
+            } else {
+                eprintln!("stash: unknown option {p}. Run `stash help`.");
+                ExitCode::from(2)
+            }
         }
         Some(p) => cmd_stash(&PathBuf::from(expand_tilde(p)), &args),
     }
 }
+
+/// Flags that may lead the argument list. Anything else there is a typo, and a
+/// typo must not stash the current directory.
+const STASH_FLAGS: &[&str] = &["--for", "--json"];
 
 fn expand_tilde(p: &str) -> String {
     match p.strip_prefix("~/") {
@@ -462,6 +480,19 @@ mod tests {
     fn a_huge_duration_does_not_overflow_into_the_past() {
         // A deadline that wrapped would read as permanently overdue.
         assert_eq!(parse_duration("99999999999999999999w"), None);
+    }
+
+    #[test]
+    fn a_mistyped_leading_flag_is_not_treated_as_consent_to_stash() {
+        // `stash --version` used to empty the current directory, because any
+        // leading flag meant "stash here". Only these two may lead.
+        assert_eq!(STASH_FLAGS, &["--for", "--json"]);
+        for typo in ["--dry-run", "--yes", "-n", "--all", "--force"] {
+            assert!(
+                !STASH_FLAGS.contains(&typo),
+                "{typo} would stash the current directory"
+            );
+        }
     }
 
     #[test]

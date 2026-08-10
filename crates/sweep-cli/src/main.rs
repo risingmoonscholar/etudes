@@ -32,6 +32,7 @@ FLAGS
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
     --no-journal    apply without recording undo
+    --version       print the version and exit
     --inspect-content  read text file contents to refuse MORE files
                        (asks first; never affects where anything moves)
 
@@ -56,6 +57,10 @@ fn main() -> ExitCode {
         None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        Some("version" | "--version" | "-V") => {
+            println!("sweep {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some("verify") => verify(),

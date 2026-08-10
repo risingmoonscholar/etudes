@@ -31,6 +31,7 @@ USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
     unpack ARCHIVE --list          show what is inside, extract nothing
     --json                         machine-readable output (for agents)
+    --version                      print the version and exit
     unpack help
 
 Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg using the tools
@@ -96,6 +97,10 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        Some("version" | "--version" | "-V") => {
+            println!("unpack {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         Some(p) => run(&PathBuf::from(expand_tilde(p)), &args),
