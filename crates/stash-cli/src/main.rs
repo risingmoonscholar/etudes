@@ -35,7 +35,7 @@ stash — clean now, decide later
 USAGE
     stash [PATH] [--for DURATION]   move everything into a hidden holding folder
     stash pop                       bring it all back now
-    stash status                    what is stashed, and when it is due back
+    stash status [PATH]             what is stashed, and when it is due back
     --json                          machine-readable output (for agents)
     --version                       print the version and exit
     stash help
