@@ -9,8 +9,8 @@
 
 use std::io::{self, BufRead, IsTerminal, Write};
 
-use etude_core::Category;
 use etude_core::plan::Inspector;
+use etude_core::Category;
 use etude_read::{Found, Stats};
 
 pub struct ContentInspector {
