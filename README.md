@@ -133,22 +133,6 @@ records, the JSON carries counts by category and **never the paths**. An agent
 gets "3 tax documents were left alone", not a list of which files those are —
 handing over that index is exactly what the naming rule exists to prevent.
 
-## Layout
-
-```
-crates/
-  etude-core/    scan, plan, apply, journal-first undo — zero dependencies
-  etude-keep/    journal encryption (XChaCha20-Poly1305, key in the keychain)
-  etude-read/    content inspection — mlock'd, zeroed, never persisted
-  sweep-cli/     bin: sweep
-  stash-cli/     bin: stash
-  unpack-cli/    bin: unpack — dispatches to system tools, parses nothing
-  fixtures/      synthetic adversarial trees; no real file is read in testing
-```
-
-Journals are namespaced per tool and share `~/.local/state/etudes`, so
-`sweep undo` and `stash pop` cannot reverse each other's work.
-
 ## What is broken
 
 I wrote an adversarial harness and pointed it at my own tools: 33 scenarios
@@ -176,6 +160,22 @@ than one.
 
 There is also an `unproven` count, kept separate from the passes on purpose. A
 hazard that could not be exercised on this machine is not a hazard that passed.
+
+## Layout
+
+```
+crates/
+  etude-core/    scan, plan, apply, journal-first undo — zero dependencies
+  etude-keep/    journal encryption (XChaCha20-Poly1305, key in the keychain)
+  etude-read/    content inspection — mlock'd, zeroed, never persisted
+  sweep-cli/     bin: sweep
+  stash-cli/     bin: stash
+  unpack-cli/    bin: unpack — dispatches to system tools, parses nothing
+  fixtures/      synthetic adversarial trees; no real file is read in testing
+```
+
+Journals are namespaced per tool and share `~/.local/state/etudes`, so
+`sweep undo` and `stash pop` cannot reverse each other's work.
 
 ## What these do not do
 
