@@ -58,6 +58,7 @@ fn build_bench_plan(root: &std::path::Path, n: usize) -> Plan {
         skipped_hidden: 0,
         skipped_symlink: 0,
         root_is_synced: false,
+        allow_sync: false,
     }
 }
 

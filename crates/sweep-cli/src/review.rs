@@ -213,6 +213,7 @@ mod tests {
             skipped_hidden: 0,
             skipped_symlink: 0,
             root_is_synced: false,
+            allow_sync: false,
         }
     }
 

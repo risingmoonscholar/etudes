@@ -232,6 +232,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         skipped_hidden: outcome.skipped_hidden,
         skipped_symlink: outcome.skipped_symlink,
         root_is_synced: outcome.root_is_synced,
+        allow_sync: outcome.allow_sync,
     };
 
     let json = flag(args, "--json");
@@ -601,6 +602,7 @@ mod tests {
             skipped_hidden: 0,
             skipped_symlink: 0,
             root_is_synced: false,
+            allow_sync: false,
         }
     }
 

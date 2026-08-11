@@ -1,9 +1,12 @@
-# Known stress failures, recorded 2026-08-10.
+# Known stress failures.
 #
-# The stress suite is adversarial: these 19 are real defects, filed as issues
-# #1 to #12, and they fail on purpose so the reproductions stay alive.
+# 19 when the suite was written on 2026-08-10. 15 after issues #1 and #2 were
+# fixed, which turned four scenarios green.
+#
+# The stress suite is adversarial: these 15 are real defects, filed as issues
+# #3 to #12, and they fail on purpose so the reproductions stay alive.
 #
 # CI fails only when this number gets WORSE. A new failure is a regression and
 # must be looked at. Fixing one of these means lowering the number here, in the
 # same commit, so the ratchet only ever tightens.
-19
+15

@@ -51,6 +51,7 @@ fn main() {
         skipped_hidden: 0,
         skipped_symlink: 0,
         root_is_synced: false,
+        allow_sync: false,
     };
     println!(
         "sigkill_apply: starting apply of {n} files, pid={}",

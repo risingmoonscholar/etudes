@@ -54,6 +54,16 @@ pub struct Plan {
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
     pub root_is_synced: bool,
+    /// The `--allow-sync` this plan's scan was actually run with. Copied
+    /// straight from `ScanOutcome::allow_sync` — NOT derived from
+    /// `root_is_synced`, on purpose: a caller can pass `--allow-sync` on a
+    /// root that isn't itself synced (`root_is_synced` false) and later
+    /// have a destination collide with a sync marker anyway (e.g. a `sweep
+    /// review` rename to "Dropbox"). Deriving this from `root_is_synced`
+    /// would silently drop that consent. This is what `apply` consults
+    /// instead of re-deciding: the decision was already made when the plan
+    /// was built, and apply never received the original flag on its own.
+    pub allow_sync: bool,
 }
 
 impl Plan {
@@ -323,6 +333,7 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
         root_is_synced: scan.root_is_synced,
+        allow_sync: scan.allow_sync,
     }
 }
 
@@ -398,6 +409,7 @@ mod tests {
             skipped_symlink: 0,
             skipped_system: 0,
             root_is_synced: false,
+            allow_sync: false,
         }
     }
 

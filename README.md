@@ -54,7 +54,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 126 tests
+cargo test --all                # 137 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -157,16 +157,16 @@ apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 230 pass, 19 fail, 1 unproven
+bash stress/run.sh        # 233 pass, 15 fail, 1 unproven
 ```
 
-The 19 failures are real and they are [filed](../../issues), each with a
+The 15 failures are real and they are [filed](../../issues), each with a
 reproduction. They fail on purpose so the reproductions do not rot, and CI
 fails only when the number gets worse. The ones you are most likely to meet:
 
 | | |
 |---|---|
-| [#1](../../issues/1) | If iCloud Desktop sync is on, `sweep ~/Desktop` refuses. The path lives under `Library`, which is never entered. |
+| [#8](../../issues/8) | Apply to two folders in a row and only the newest journal is reachable — `sweep undo` has no per-directory selector. |
 | [#4](../../issues/4) | A folder that cannot be read is skipped without saying so, and the scanned count implies it was complete. |
 | [#5](../../issues/5) | Killing an apply between two syscalls can leave one file in two places, and undo will not clean it up. |
 

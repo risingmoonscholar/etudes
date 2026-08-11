@@ -73,6 +73,7 @@ fn stash_plan(root: &Path) -> (Plan, usize) {
             skipped_hidden: out.skipped_hidden,
             skipped_symlink: out.skipped_symlink,
             root_is_synced: out.root_is_synced,
+            allow_sync: out.allow_sync,
         },
         count,
     )

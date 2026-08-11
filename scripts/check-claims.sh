@@ -24,4 +24,18 @@ for f in README.md demo/index.html; do
   fi
 done
 
+# The readme also states how many stress scenarios fail. That number drifted the
+# first time a fix landed, which is exactly the failure this script exists to
+# catch, so it is checked against the recorded baseline rather than trusted.
+baseline=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' stress/baseline.txt | head -1 | tr -d ' ')
+claimed_fail=$(grep -oE '[0-9]+ fail' README.md | head -1 | grep -oE '[0-9]+' || true)
+if [ -n "$claimed_fail" ]; then
+  if [ "$claimed_fail" != "$baseline" ]; then
+    echo "FAIL README.md claims $claimed_fail stress failures; the baseline is $baseline"
+    status=1
+  else
+    echo "ok   README.md claims $claimed_fail stress failures, matching the baseline"
+  fi
+fi
+
 exit $status

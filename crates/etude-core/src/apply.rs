@@ -81,7 +81,7 @@ pub fn apply(
     let mut planned_destinations = HashSet::new();
     for g in plan.groups.iter().filter(|g| g.accepted) {
         let dest_dir = plan.root.join(&g.name);
-        if crate::scan::is_synced(&dest_dir) {
+        if crate::scan::is_synced(&dest_dir) && !plan.allow_sync {
             return Err(ApplyError::DestinationIsSynced(dest_dir));
         }
         for src in &g.members {
@@ -288,6 +288,7 @@ mod tests {
             skipped_hidden: 0,
             skipped_symlink: 0,
             root_is_synced: false,
+            allow_sync: false,
         };
         const N: usize = 200;
         let mut ids = HashSet::with_capacity(N);

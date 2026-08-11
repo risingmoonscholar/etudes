@@ -8,7 +8,11 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-/// Directory names that are never entered, regardless of depth.
+/// Directory names that are never entered, regardless of depth or location.
+/// A credential/noise directory is dangerous by NAME, wherever it appears —
+/// `.ssh` under a project checkout is still `.ssh`. This list must not carry
+/// anything that is only dangerous because of WHERE it sits; that's what
+/// `is_refused_system_location` is for. See the split's rationale below.
 const NEVER_ENTER: &[&str] = &[
     ".ssh",
     ".gnupg",
@@ -19,9 +23,6 @@ const NEVER_ENTER: &[&str] = &[
     ".mozilla",
     ".config",
     "Keychains",
-    "Library",
-    "System",
-    "Applications",
     ".Trash",
     "node_modules",
     ".git",
@@ -166,6 +167,13 @@ pub struct ScanOutcome {
     pub skipped_system: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
+    /// The `allow_sync` this scan was actually run with. NOT derived from
+    /// `root_is_synced` — a caller can pass `--allow-sync` on a root that
+    /// turns out not to be synced at all, and that consent must still be
+    /// honoured later if a destination happens to look synced (e.g. a
+    /// `sweep review` rename to a name that collides with a sync marker).
+    /// `Plan::allow_sync` is copied from this field for exactly that reason.
+    pub allow_sync: bool,
 }
 
 /// True when any component of `path` looks like a cloud-sync root.
@@ -185,6 +193,80 @@ fn is_hidden(name: &str) -> bool {
 
 fn never_enter(name: &str) -> bool {
     NEVER_ENTER.iter().any(|d| d.eq_ignore_ascii_case(name))
+}
+
+/// The user's home directory, if known and trustworthy. `Library` is only a
+/// system location there — a folder named `Library` anywhere else is just a
+/// folder named `Library`, and the check below must know the difference.
+///
+/// Returns `None` for anything that isn't a usable absolute path (`HOME`
+/// unset, empty, or relative) rather than pretending an unusable value is
+/// real. `is_refused_system_location` treats `None` as "cannot scope the
+/// carve-out" and fails closed — this function must not paper over that by
+/// handing back a home that can never match anything.
+fn home_dir() -> Option<PathBuf> {
+    let raw = std::env::var_os("HOME").map(PathBuf::from)?;
+    if raw.as_os_str().is_empty() || !raw.is_absolute() {
+        return None;
+    }
+    Some(raw.canonicalize().unwrap_or(raw))
+}
+
+/// Absolute system roots refused outright, regardless of `$HOME`. `/Library`
+/// is the system-wide counterpart to `$HOME/Library` (LaunchDaemons, root-
+/// owned Application Support, etc.) — a different directory from any user's
+/// home Library, but no less sensitive.
+const SYSTEM_ROOTS: &[&str] = &["/System", "/Applications", "/Library"];
+
+/// True when `path` is a system location refused by absolute position
+/// rather than by name: `/System`, `/Applications`, `/Library`, and
+/// `$HOME/Library`.
+///
+/// `$HOME/Library/Mobile Documents` is carved back out: it is iCloud Drive,
+/// which is user documents that Apple happens to park under `Library`. A
+/// Mac with "Desktop & Documents" sync on has its real Desktop there, and
+/// refusing it unconditionally means `--allow-sync` never gets a chance to
+/// run for the one sync provider built into every Mac. The carve-out only
+/// removes the system-location refusal — the path is still inside
+/// `SYNC_MARKERS` territory and still needs `--allow-sync` to proceed.
+///
+/// The `$HOME/Library` check runs BEFORE the blunt `SYSTEM_ROOTS` prefixes on
+/// purpose: `$HOME` is canonicalized once by `home_dir()`, but nothing
+/// guarantees a future platform quirk (e.g. a filesystem view that presents
+/// user directories under an OS-managed prefix) couldn't make a real home
+/// path also start with one of `SYSTEM_ROOTS`. Checking the carve-out first
+/// means that hypothetical can only ever widen what's reachable under a
+/// user's own iCloud Drive, never accidentally narrow it.
+///
+/// Deliberately NOT name-based: `never_enter` already handles "dangerous by
+/// name, anywhere" for credential directories. This handles "dangerous
+/// because of where it sits", which is a different property. Conflating the
+/// two is exactly what made iCloud Drive unreachable.
+///
+/// `home: None` (no trustworthy `$HOME` — unset, empty, or relative) fails
+/// closed: refuse any `Library` component anywhere, exactly like before this
+/// defect was split apart. Losing the iCloud carve-out in that case is the
+/// safe trade — without a real home there is no way to tell iCloud Drive
+/// apart from anywhere else, so the old blanket refusal is what's honest.
+fn is_refused_system_location(path: &Path, home: Option<&Path>) -> bool {
+    match home {
+        Some(home) => {
+            let library = home.join("Library");
+            if path.starts_with(&library) {
+                let icloud = library.join("Mobile Documents");
+                return !path.starts_with(&icloud);
+            }
+        }
+        None => {
+            let has_library_component = path
+                .components()
+                .any(|c| matches!(c, Component::Normal(n) if n.eq_ignore_ascii_case("Library")));
+            if has_library_component {
+                return true;
+            }
+        }
+    }
+    SYSTEM_ROOTS.iter().any(|r| path.starts_with(r))
 }
 
 /// Walk `root` and return the entries eligible for organisation.
@@ -210,7 +292,8 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         return Err(ScanError::NotADirectory(root));
     }
 
-    // Refuse system and credential locations outright.
+    // Refuse credential/noise directories outright, by name, anywhere in
+    // the path.
     for comp in root.components() {
         if let Component::Normal(c) = comp {
             let s = c.to_string_lossy();
@@ -218,6 +301,13 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
                 return Err(ScanError::RefusedSystemLocation(root.clone()));
             }
         }
+    }
+
+    // Refuse system locations outright, by absolute position — see
+    // `is_refused_system_location`.
+    let home = home_dir();
+    if is_refused_system_location(&root, home.as_deref()) {
+        return Err(ScanError::RefusedSystemLocation(root.clone()));
     }
 
     let root_is_synced = is_synced(&root);
@@ -232,11 +322,20 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_symlink: 0,
         skipped_system: 0,
         root_is_synced,
+        allow_sync: cfg.allow_sync,
     };
 
     // Visited device+inode pairs close the symlink-cycle case.
     let mut visited: HashSet<(u64, u64)> = HashSet::new();
-    walk(&root, &root, 0, cfg, &mut out, &mut visited)?;
+    walk(
+        &root,
+        &root,
+        0,
+        cfg,
+        home.as_deref(),
+        &mut out,
+        &mut visited,
+    )?;
 
     if out.entries.len() > cfg.max_entries {
         return Err(ScanError::TooManyEntries {
@@ -254,6 +353,7 @@ fn walk(
     dir: &Path,
     depth: u8,
     cfg: &ScanConfig,
+    home: Option<&Path>,
     out: &mut ScanOutcome,
     visited: &mut HashSet<(u64, u64)>,
 ) -> Result<(), ScanError> {
@@ -319,6 +419,10 @@ fn walk(
             out.skipped_system += 1;
             continue;
         }
+        if is_refused_system_location(&path, home) {
+            out.skipped_system += 1;
+            continue;
+        }
 
         let is_dir = meta.is_dir();
         let pkg = is_dir && (is_package(&name) || cfg.whole_units);
@@ -331,7 +435,7 @@ fn walk(
                     continue; // already seen — cycle
                 }
             }
-            walk(root, &path, depth + 1, cfg, out, visited)?;
+            walk(root, &path, depth + 1, cfg, home, out, visited)?;
             continue;
         }
 
@@ -367,5 +471,80 @@ mod tests {
     fn is_refusal_separates_policy_from_io() {
         assert!(ScanError::RefusedRunningAsRoot.is_refusal());
         assert!(!ScanError::NotADirectory(PathBuf::from("/tmp/x")).is_refusal());
+    }
+
+    // is_refused_system_location is a pure function, tested directly against
+    // synthetic absolute paths — no real /System, /Applications, or /Library
+    // is ever touched, and no real $HOME is ever used as the `home` argument.
+
+    #[test]
+    fn system_and_applications_and_library_stay_refused() {
+        let home = Path::new("/Users/fixture");
+        assert!(is_refused_system_location(
+            Path::new("/System/Library/CoreServices"),
+            Some(home)
+        ));
+        assert!(is_refused_system_location(
+            Path::new("/Applications/Xcode.app"),
+            Some(home)
+        ));
+        // The system-wide /Library, distinct from $HOME/Library — this is
+        // the gap an adversarial review caught: narrowing Library's refusal
+        // to $HOME/Library alone silently reopened the system-wide one.
+        assert!(is_refused_system_location(
+            Path::new("/Library/LaunchDaemons"),
+            Some(home)
+        ));
+    }
+
+    #[test]
+    fn home_library_is_refused_except_the_icloud_carve_out() {
+        let home = Path::new("/Users/fixture");
+        assert!(is_refused_system_location(
+            &home.join("Library/Preferences"),
+            Some(home)
+        ));
+        assert!(!is_refused_system_location(
+            &home.join("Library/Mobile Documents/com~apple~CloudDocs/Desktop"),
+            Some(home)
+        ));
+    }
+
+    #[test]
+    fn a_folder_merely_named_library_elsewhere_is_not_refused() {
+        let home = Path::new("/Users/fixture");
+        assert!(!is_refused_system_location(
+            Path::new("/Users/fixture/Projects/Library"),
+            Some(home)
+        ));
+    }
+
+    #[test]
+    fn without_a_trustworthy_home_library_is_refused_anywhere_fail_closed() {
+        // No known $HOME (unset, empty, or relative — home_dir() returns
+        // None for all three): there is no way to scope the iCloud
+        // carve-out, so this falls back to the pre-fix behaviour of
+        // refusing any `Library` component, anywhere. This is what an
+        // adversarial review caught: `env -u HOME sweep ~/Library/Preferences`
+        // must not silently drop the Library guard.
+        assert!(is_refused_system_location(
+            Path::new("/Volumes/External/Library"),
+            None
+        ));
+        assert!(is_refused_system_location(
+            Path::new("/Users/fixture/Library/Preferences"),
+            None
+        ));
+        // Case-insensitive, matching never_enter's own matching.
+        assert!(is_refused_system_location(
+            Path::new("/Users/fixture/library/Preferences"),
+            None
+        ));
+        // A folder that merely CONTAINS "Library" as a substring, not as a
+        // whole path component, is not a false positive.
+        assert!(!is_refused_system_location(
+            Path::new("/Users/fixture/LibraryOfBabel"),
+            None
+        ));
     }
 }

@@ -300,6 +300,7 @@ fn apply_refuses_when_two_planned_destinations_collide() {
         skipped_hidden: 0,
         skipped_symlink: 0,
         root_is_synced: false,
+        allow_sync: false,
     };
 
     let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
@@ -342,6 +343,7 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         skipped_hidden: 0,
         skipped_symlink: 0,
         root_is_synced: false,
+        allow_sync: false,
     };
     let plan_b = Plan {
         root: root.clone(),
@@ -356,6 +358,7 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         skipped_hidden: 0,
         skipped_symlink: 0,
         root_is_synced: false,
+        allow_sync: false,
     };
 
     let rep_a = apply::apply(&plan_a, "test", Some(&TestSeal), None).expect("apply a");
@@ -401,5 +404,175 @@ fn no_filename_is_readable_in_the_written_journal() {
         !hay.contains("/Users"),
         "journal leaked a path prefix in the clear"
     );
+    cleanup(&root);
+}
+
+// --- Defect #2: --allow-sync must reach apply, not just plan ---------------
+//
+// `apply()`'s destination-sync guard used to check `is_synced(&dest_dir)`
+// unconditionally, never consulting whether the flag that let `scan()`
+// proceed into a synced root was ever granted. Since a group's destination
+// is always `plan.root.join(&g.name)`, that meant: the moment a root needed
+// `--allow-sync` to be scanned, applying to it could never succeed, with or
+// without the flag. `Plan::allow_sync` (set at plan-build time, derived from
+// `scan.root_is_synced`, which is itself only true when the scan was granted
+// the flag) is what closes that gap.
+
+#[test]
+fn apply_refuses_synced_destination_when_allow_sync_was_never_granted() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_au_sync_denied_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir root");
+    let src = root.join("deck_notes.pdf");
+    fs::write(&src, b"x\n").expect("write src");
+
+    let state =
+        std::env::temp_dir().join(format!("sweep_state_sync_denied_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    // The destination directory NAME is itself a sync marker ("Dropbox"), so
+    // is_synced(dest) is true even though this plan was never granted
+    // allow_sync. This is today's default-refusal behaviour and it must not
+    // change: no flag, no unlock.
+    let p = Plan {
+        root: root.clone(),
+        groups: vec![plan::Group {
+            name: "Dropbox".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![src.clone()],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 1,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: false,
+        allow_sync: false,
+    };
+
+    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    assert!(matches!(err, ApplyError::DestinationIsSynced(_)));
+    assert!(src.exists(), "source moved despite the refusal");
+    cleanup(&root);
+}
+
+#[test]
+fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
+    let _g = lock();
+    // Real repro shape: the root itself lives inside a synced tree
+    // (.../Dropbox/Projects), scanned with --allow-sync — exactly what
+    // stress/scenarios/20-allow-sync-apply-illusion.sh does against the CLI.
+    let base = std::env::temp_dir().join(format!("sweep_au_sync_ok_{}", std::process::id()));
+    let root = base.join("Dropbox").join("Projects");
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(&root).expect("mkdir root");
+    let src = root.join("deck_notes.pdf");
+    fs::write(&src, b"x\n").expect("write src");
+
+    let state = std::env::temp_dir().join(format!("sweep_state_sync_ok_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let out = scan::scan(
+        &root,
+        &ScanConfig {
+            allow_sync: true,
+            ..Default::default()
+        },
+    )
+    .expect("scan with allow_sync");
+    assert!(out.root_is_synced, "fixture root should be flagged synced");
+
+    let entry_path = out.entries[0].path.clone();
+    let entry_name = out.entries[0].name.clone();
+    let p = Plan {
+        root: out.root.clone(),
+        groups: vec![plan::Group {
+            name: "Docs".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![entry_path],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 1,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: out.root_is_synced,
+        allow_sync: out.allow_sync,
+    };
+
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None)
+        .expect("allow_sync granted at scan time should let apply proceed");
+    assert_eq!(rep.moved, 1);
+    assert!(out.root.join("Docs").join(&entry_name).exists());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_synced() {
+    let _g = lock();
+    // `Plan::allow_sync` must carry the FLAG that was passed to scan(), not
+    // something derived from whether the root itself turned out to be
+    // synced. If it were derived from root_is_synced, this scenario would
+    // wrongly refuse: the root here is an ordinary, non-synced folder, but
+    // `sweep review` lets a user rename a group to any name they choose
+    // (see review.rs's "rename escape hatch"), and nothing stops that name
+    // from colliding with a sync marker like "Dropbox". A user who already
+    // passed --allow-sync should not be refused later over a coincidence in
+    // a destination folder NAME.
+    let root = std::env::temp_dir().join(format!(
+        "sweep_au_sync_flag_survives_rename_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir root");
+    let src = root.join("deck_notes.pdf");
+    fs::write(&src, b"x\n").expect("write src");
+
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_sync_flag_survives_rename_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    // --allow-sync passed even though this root is not actually synced.
+    let out = scan::scan(
+        &root,
+        &ScanConfig {
+            allow_sync: true,
+            ..Default::default()
+        },
+    )
+    .expect("scan");
+    assert!(!out.root_is_synced, "fixture root is not synced");
+    assert!(out.allow_sync, "the flag itself must still be recorded");
+
+    // The user renamed this group to "Dropbox" — coincidence, not intent to
+    // touch real Dropbox. The destination now matches a sync marker.
+    let p = Plan {
+        root: out.root.clone(),
+        groups: vec![plan::Group {
+            name: "Dropbox".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![src.clone()],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 1,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: out.root_is_synced,
+        allow_sync: out.allow_sync,
+    };
+
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None)
+        .expect("the --allow-sync flag granted at scan time must still cover this");
+    assert_eq!(rep.moved, 1);
+    assert!(root.join("Dropbox").join("deck_notes.pdf").exists());
+
     cleanup(&root);
 }
