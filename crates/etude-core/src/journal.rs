@@ -240,6 +240,12 @@ impl Journal {
         f.sync_all().map_err(JournalError::Io)?;
         drop(f);
         fs::rename(&tmp, &p).map_err(JournalError::Io)?;
+        // fsyncing the file's data does not make the rename durable: the
+        // directory entry that makes the new name visible is separate on-disk
+        // state. Without syncing the parent, a crash right after rename can
+        // leave the entry pointing at the old file (or nothing) even though
+        // the new bytes are safely on disk.
+        sync_dir(p.parent().unwrap_or(&dir))?;
         Ok(())
     }
 
@@ -334,6 +340,9 @@ pub fn ids_by_recency(tool: &str) -> Result<Vec<String>, JournalError> {
     Ok(journals.into_iter().map(|(_, id)| id).collect())
 }
 
+#[cfg(test)]
+static SYNC_DIR_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[cfg(unix)]
 fn restrict(p: &Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -344,10 +353,21 @@ fn restrict_dir(p: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o700));
 }
+#[cfg(unix)]
+fn sync_dir(dir: &Path) -> Result<(), JournalError> {
+    #[cfg(test)]
+    SYNC_DIR_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let d = fs::File::open(dir).map_err(JournalError::Io)?;
+    d.sync_all().map_err(JournalError::Io)
+}
 #[cfg(not(unix))]
 fn restrict(_p: &Path) {}
 #[cfg(not(unix))]
 fn restrict_dir(_p: &Path) {}
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> Result<(), JournalError> {
+    Ok(())
+}
 
 /// Facts about a file, captured at apply time and re-checked at undo time.
 ///
@@ -419,9 +439,14 @@ pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
+    static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn expired_journals_are_pruned_and_fresh_ones_are_kept() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("sweep_ttl_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
@@ -466,6 +491,50 @@ mod tests {
     }
     unsafe extern "C" {
         fn utimes(path: *const std::ffi::c_char, times: *const TimeVal) -> i32;
+    }
+
+    /// Smoke test: proves write_bytes actually calls sync_dir after rename —
+    /// not a full crash-consistency proof.
+    #[test]
+    fn a_saved_journal_leaves_its_directory_fsyncable() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_dirsync_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+
+        let j = Journal {
+            id: "dirsync".into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![],
+        };
+        #[cfg(unix)]
+        let before = SYNC_DIR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+        j.save_sealed(&Identity).expect("save_sealed");
+        assert!(j.path().exists(), "journal file missing after save");
+        #[cfg(unix)]
+        {
+            let after = SYNC_DIR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                after - before,
+                1,
+                "write_bytes must call sync_dir exactly once"
+            );
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 
     #[test]
