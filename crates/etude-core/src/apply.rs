@@ -182,11 +182,11 @@ pub fn apply(
 /// NFC implementation covers, all go through the same call.
 ///
 /// What this does NOT cover, stated plainly:
-/// - **Non-UTF-8 paths.** Note this branch is unreachable in practice:
-/// `dedupe_key` passes `to_string_lossy()`, which has already replaced bad
-/// bytes with U+FFFD, so CoreFoundation never sees invalid UTF-8. Kept
-/// because the function is callable with other input.
-/// `CFStringCreateWithBytes` requires valid UTF-8
+/// - **Non-UTF-8 paths.** Unreachable in practice, and the earlier version of
+///   this note claimed otherwise. `dedupe_key` passes `to_string_lossy()`,
+///   which has already replaced bad bytes with U+FFFD, so CoreFoundation never
+///   sees invalid UTF-8. The branch stays because the function is callable
+///   with other input. `CFStringCreateWithBytes` requires valid UTF-8
 ///   input; a path with invalid UTF-8 bytes falls back to plain
 ///   lowercasing of the lossy string, same as before this fix. Such a path
 ///   was already not resolvable to a clean human-readable name, so this
@@ -211,12 +211,14 @@ fn dedupe_key(path: &Path) -> Result<String, ApplyError> {
         // less likely rather than loud. If the OS cannot tell us the
         // normalized form, we do not know whether two destinations collide,
         // and guessing "they don't" is the answer that moves files.
-        return macos_unicode::normalize_nfc(&lossy)
+        macos_unicode::normalize_nfc(&lossy)
             .map(|nfc| nfc.to_lowercase())
-            .ok_or_else(|| ApplyError::CannotCompareNames(path.to_path_buf()));
+            .ok_or_else(|| ApplyError::CannotCompareNames(path.to_path_buf()))
     }
     #[cfg(not(target_os = "macos"))]
-    Ok(lossy.to_lowercase())
+    {
+        Ok(lossy.to_lowercase())
+    }
 }
 
 /// link → unlink within one device; copy → verify → unlink across devices.
