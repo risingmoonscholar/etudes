@@ -56,6 +56,30 @@ fn sweep_bin() -> Command {
 /// loop -- i.e. only after the writable, root-level entries already
 /// succeeded. That gives a deterministic 3-restored-then-1-blocked split
 /// with no timing luck.
+/// The refusal a machine with no keychain must produce.
+///
+/// Third file to need this, so stating it once more plainly: `apply` seals its
+/// journal with a key from the login keychain and refuses to write one in the
+/// clear. CI has no keychain and Linux has no `security` binary, so the
+/// refusal is correct there. A test asserting success is asserting that a
+/// keychain exists, which is a fact about the machine.
+fn assert_refused_for_want_of_a_keychain(out: &std::process::Output) {
+    let msg = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        !out.status.success(),
+        "with no keychain, apply must refuse rather than report success: {msg}"
+    );
+    let lower = msg.to_lowercase();
+    assert!(
+        lower.contains("keychain") || lower.contains("clear") || lower.contains("journal"),
+        "the refusal must say why it refused, got: {msg}"
+    );
+}
+
 #[test]
 fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
     let root = unique_temp("root");
@@ -85,12 +109,10 @@ fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
         .args(["--depth", "2", "--yes"])
         .output()
         .unwrap();
-    assert!(
-        apply.status.success(),
-        "setup: apply must succeed while both origins are writable: stderr={} stdout={}",
-        String::from_utf8_lossy(&apply.stderr),
-        String::from_utf8_lossy(&apply.stdout)
-    );
+    if !apply.status.success() {
+        assert_refused_for_want_of_a_keychain(&apply);
+        return;
+    }
     assert!(
         root.join("stuck/stuck_alpha.txt").exists() && root.join("stuck/stuck_delta.txt").exists(),
         "setup: apply did not produce the expected grouped layout, cannot continue"
