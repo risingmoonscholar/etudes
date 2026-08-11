@@ -25,14 +25,6 @@ pub fn path(p: &Path) -> String {
     }
 }
 
-/// Render just the shape of a file name, with no directory at all.
-pub fn name(n: &str) -> String {
-    match n.rsplit_once('.') {
-        Some((_, ext)) => format!("<name.{ext}>"),
-        None => "<name>".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,11 +37,5 @@ mod tests {
         assert!(!r.contains("W2"), "redaction leaked the stem: {r}");
         assert!(r.contains("Desktop"), "redaction lost useful context: {r}");
         assert!(r.contains(".pdf"), "redaction lost the extension: {r}");
-    }
-
-    #[test]
-    fn redacts_a_bare_name() {
-        assert_eq!(name("SSN_card_scan.jpg"), "<name.jpg>");
-        assert_eq!(name("id_rsa"), "<name>");
     }
 }
