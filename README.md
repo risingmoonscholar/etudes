@@ -149,6 +149,34 @@ crates/
 Journals are namespaced per tool and share `~/.local/state/etudes`, so
 `sweep undo` and `stash pop` cannot reverse each other's work.
 
+## What is broken
+
+I wrote an adversarial harness and pointed it at my own tools: 33 scenarios
+covering macOS filesystem hazards, crashes mid-apply, races between plan and
+apply, 50,000-file trees, and real disk images for full, read-only and
+case-sensitive volumes.
+
+```sh
+bash stress/run.sh        # 230 pass, 19 fail, 1 unproven
+```
+
+The 19 failures are real and they are [filed](../../issues), each with a
+reproduction. They fail on purpose so the reproductions do not rot, and CI
+fails only when the number gets worse. The ones you are most likely to meet:
+
+| | |
+|---|---|
+| [#1](../../issues/1) | If iCloud Desktop sync is on, `sweep ~/Desktop` refuses. The path lives under `Library`, which is never entered. |
+| [#4](../../issues/4) | A folder that cannot be read is skipped without saying so, and the scanned count implies it was complete. |
+| [#5](../../issues/5) | Killing an apply between two syscalls can leave one file in two places, and undo will not clean it up. |
+
+The third one is a bug my own fix caused: closing a silent-overwrite hole meant
+replacing `rename` with `link` plus `unlink`, which is two operations rather
+than one.
+
+There is also an `unproven` count, kept separate from the passes on purpose. A
+hazard that could not be exercised on this machine is not a hazard that passed.
+
 ## What these do not do
 
 No daemon, no menu-bar app, no watching a folder in the background. `stash` does
