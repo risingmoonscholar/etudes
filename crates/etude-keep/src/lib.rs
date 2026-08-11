@@ -14,18 +14,24 @@
 //! - A fresh random 192-bit nonce per write. XChaCha's nonce is large enough
 //!   that random generation is safe without a counter.
 //! - The plaintext is padded to a 4 KiB boundary before sealing, so ciphertext
-//!   length does not reveal how many files were organised.
+//!   length reveals only which 4 KiB bucket the plaintext falls in, not its
+//!   exact size.
 
 use chacha20poly1305::aead::rand_core::RngCore;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
 use chacha20poly1305::{AeadCore, Key, XChaCha20Poly1305, XNonce};
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 const SERVICE: &str = "sweep-journal-key";
 const ACCOUNT: &str = "sweep";
 const MAGIC: &[u8] = b"SWEEPJ1\0";
 const PAD_TO: usize = 4096;
+// Absolute path on purpose. A bare `security` resolves via PATH; an
+// attacker-controlled binary earlier on PATH would then receive the 256-bit
+// journal key on stdin from store_key. Do not tidy this back to a PATH lookup.
+const SECURITY_BIN: &str = "/usr/bin/security";
 
 #[derive(Debug)]
 pub enum KeepError {
@@ -87,8 +93,16 @@ fn getrandom_fill(buf: &mut [u8]) -> Result<(), KeepError> {
         .map_err(|_| KeepError::Crypto("no secure randomness available"))
 }
 
+fn security() -> Result<Command, KeepError> {
+    // exists() rather than is_file(): /usr/bin/security may be a symlink.
+    if !Path::new(SECURITY_BIN).exists() {
+        return Err(KeepError::Keychain("/usr/bin/security not found".into()));
+    }
+    Ok(Command::new(SECURITY_BIN))
+}
+
 fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
-    let out = Command::new("security")
+    let out = security()?
         .args(["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"])
         .output()
         .map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
@@ -107,7 +121,7 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
     // The secret goes over stdin. `security` prompts for the value and then for
     // a confirmation, so it is written twice. It must never be an argument:
     // arguments are visible to `ps`.
-    let mut child = Command::new("security")
+    let mut child = security()?
         .args([
             "add-generic-password",
             "-a",
@@ -143,7 +157,10 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
 
 /// Remove the key. After this, existing journals are unreadable by anyone.
 pub fn destroy_key() {
-    let _ = Command::new("security")
+    let Ok(mut cmd) = security() else {
+        return;
+    };
+    let _ = cmd
         .args(["delete-generic-password", "-a", ACCOUNT, "-s", SERVICE])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -155,8 +172,8 @@ pub fn seal(key_bytes: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, KeepError
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key_bytes));
     let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
 
-    // Pad before sealing so ciphertext length reveals nothing about how much
-    // work was done. Length is stored in the first 4 bytes of the plaintext.
+    // Pad to a 4 KiB bucket before sealing so length reveals only the bucket,
+    // not the exact size. Length is stored in the first 4 bytes of the plaintext.
     let mut padded = Vec::with_capacity(plaintext.len() + 4 + PAD_TO);
     padded.extend_from_slice(&(plaintext.len() as u32).to_le_bytes());
     padded.extend_from_slice(plaintext);
@@ -221,14 +238,64 @@ mod tests {
     }
 
     #[test]
-    fn length_is_padded_so_size_does_not_leak_volume() {
+    fn padding_hides_size_within_bucket_not_across() {
+        // same 4 KiB bucket: 4+1 and 4+2000 both pad to 4096
         let small = seal(&K, b"x").expect("seal");
-        let bigger = seal(&K, &vec![b'x'; 2000]).expect("seal");
+        let same_bucket = seal(&K, &vec![b'x'; 2000]).expect("seal");
         assert_eq!(
             small.len(),
-            bigger.len(),
-            "ciphertext size leaks payload size"
+            same_bucket.len(),
+            "same-bucket payloads should seal to equal length"
         );
+        // cross the boundary: 4+4092 == 4096; 4+4093 == 4097 → pads to 8192
+        let at_boundary = seal(&K, &vec![b'x'; 4092]).expect("seal");
+        let over_boundary = seal(&K, &vec![b'x'; 4093]).expect("seal");
+        assert_ne!(
+            at_boundary.len(),
+            over_boundary.len(),
+            "cross-bucket payloads should seal to different lengths"
+        );
+        // Pin the bucket size to PAD_TO itself, not just to "differs from
+        // the other case" -- a shrunk bucket would still pass the two
+        // checks above without this. overhead = MAGIC + nonce(24) + tag(16).
+        let overhead = MAGIC.len() + 24 + 16;
+        assert_eq!(at_boundary.len(), overhead + PAD_TO, "wrong bucket size");
+        assert_eq!(
+            over_boundary.len(),
+            overhead + 2 * PAD_TO,
+            "wrong bucket size after crossing the boundary"
+        );
+    }
+
+    #[test]
+    fn keychain_calls_use_absolute_path() {
+        assert_eq!(SECURITY_BIN, "/usr/bin/security");
+        assert!(SECURITY_BIN.starts_with('/'));
+
+        // Build the needle from pieces so this test's own source does not
+        // contain the contiguous bare PATH lookup the regression is guarding.
+        let needle = format!("{}::{}(\"{}\")", "Command", "new", "security");
+        let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut stack = vec![src_root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read src dir") {
+                let entry = entry.expect("dir entry");
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&path).expect("read .rs");
+                assert!(
+                    !src.contains(&needle),
+                    "{} must not call Command::new with a bare security name",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
