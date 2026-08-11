@@ -89,6 +89,14 @@ fn json_reports_a_nonzero_unreadable_count_when_a_subdirectory_is_locked() {
         stdout.contains("\"scanned\":5") || stdout.contains("\"scanned\": 5"),
         "expected exactly the 5 visible files scanned: {stdout}"
     );
+    // discloses_unreadable() alone is not enough here: to_json() always emits
+    // the "unreadable" key, including at zero, so a substring match would
+    // false-pass a regression that dropped the count back to 0 while leaving
+    // the key in place. Pin the actual value.
+    assert!(
+        stdout.contains("\"unreadable\":1") || stdout.contains("\"unreadable\": 1"),
+        "--json's unreadable count is not 1 (or the key is missing): {stdout}"
+    );
     assert!(
         discloses_unreadable(&stdout),
         "--json gave no indication that `locked/` could not be read: {stdout}"

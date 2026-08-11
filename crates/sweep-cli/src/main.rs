@@ -216,6 +216,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read",
             plan.scanned
         );
+        print_refused_by_policy_note(&plan);
         print_unreadable_warning(&plan);
         println!(
             "\nNothing here needs organising.\n\n\
@@ -242,19 +243,41 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
 /// `render()` say the same thing. Distinct from `skipped_system`: sweep did
 /// not choose to leave this out, it tried to read it and could not — the
 /// scan is incomplete, and "Scanned N items" above must not be read as a
-/// total. `permission denied` in the wording is deliberate: it is the
-/// common real-world cause, and unlike the other skip counts this one is
-/// worth naming as a WARNING, not a footnote.
+/// total. Names both real-world causes from the filed issue (a permission
+/// bit, or a path too long for the OS) rather than assuming EACCES — the
+/// same `read_dir` failure covers either, and unlike the other skip counts
+/// this one is worth naming as a WARNING, not a footnote.
 fn print_unreadable_warning(p: &plan::Plan) {
     if p.skipped_unreadable > 0 {
         println!(
-            "\n  WARNING: {} {} could not be read (permission denied or similar) — \
-             contents unknown, NOT included in the count above",
+            "\n  WARNING: {} {} could not be read (permission denied, a path too long, \
+             or another read failure) — contents unknown, NOT included in the count above",
             p.skipped_unreadable,
             if p.skipped_unreadable == 1 {
                 "directory"
             } else {
                 "directories"
+            }
+        );
+    }
+}
+
+/// A deliberate policy refusal — sweep could have entered these and chose
+/// not to (a credential/noise directory by name, or an absolute system
+/// location). Printed from both human-output sites for the same reason as
+/// `print_unreadable_warning`: an agent or a person reading either output
+/// mode should get the same disclosure. Worded without "system" alone,
+/// since `NEVER_ENTER` also covers plain noise directories like
+/// `node_modules`, not just credential or OS locations.
+fn print_refused_by_policy_note(p: &plan::Plan) {
+    if p.skipped_system > 0 {
+        println!(
+            "\n  refused {} {}, by policy (a protected, credential, or noise directory)",
+            p.skipped_system,
+            if p.skipped_system == 1 {
+                "location"
+            } else {
+                "locations"
             }
         );
     }
@@ -329,17 +352,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
             }
         );
     }
-    if p.skipped_system > 0 {
-        println!(
-            "\n  refused {} system or credential {}, by policy",
-            p.skipped_system,
-            if p.skipped_system == 1 {
-                "location"
-            } else {
-                "locations"
-            }
-        );
-    }
+    print_refused_by_policy_note(p);
     print_unreadable_warning(p);
     if p.root_is_synced {
         println!("\n  warning: this folder is inside a cloud-synced tree");
