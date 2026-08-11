@@ -303,6 +303,27 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
     !j.entries.iter().any(|e| e.done)
 }
 
+/// Load a journal by id, warning to stderr rather than silently vanishing it
+/// when the failure is a damaged journal (not simply absent). Without this,
+/// a truncated journal reads as "no stash here" instead of "a stash exists
+/// and can't be trusted" — the same half-load-as-silence shape as issue #3,
+/// just one layer up: `load_sealed` now refuses damaged journals loudly, but
+/// `.ok()` at this call site was throwing that refusal away.
+fn load_or_warn(
+    tool: &str,
+    id: &str,
+    sealer: &dyn etude_core::journal::Sealer,
+) -> Option<etude_core::Journal> {
+    match etude_core::Journal::load_sealed(tool, id, sealer) {
+        Ok(j) => Some(j),
+        Err(etude_core::journal::JournalError::NotFound) => None,
+        Err(e) => {
+            eprintln!("{tool}: journal {id} is damaged and was skipped: {e}");
+            None
+        }
+    }
+}
+
 fn journal_for_root(
     tool: &str,
     sealer: &dyn etude_core::journal::Sealer,
@@ -311,7 +332,7 @@ fn journal_for_root(
     etude_core::journal::ids_by_recency(tool)
         .ok()?
         .into_iter()
-        .filter_map(|id| etude_core::Journal::load_sealed(tool, &id, sealer).ok())
+        .filter_map(|id| load_or_warn(tool, &id, sealer))
         .find(|j| {
             j.root
                 .canonicalize()
@@ -323,7 +344,7 @@ fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<Pa
     etude_core::journal::ids_by_recency(tool)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|id| etude_core::Journal::load_sealed(tool, &id, sealer).ok())
+        .filter_map(|id| load_or_warn(tool, &id, sealer))
         .filter_map(|j| j.root.canonicalize().ok())
         .filter(|root| find_holding(root).is_some())
         .collect()
