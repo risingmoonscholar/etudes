@@ -197,8 +197,10 @@ impl Journal {
         Ok(j)
     }
 
-    /// Persist, sealed. Written before the first move and rewritten after each
-    /// one, so the on-disk state never claims more than actually happened.
+    /// Persist, sealed. Written once before the first move (and whenever the
+    /// caller wants a full rewrite). On disk the sealed blob is length-framed
+    /// so [`Self::record_done`] can append progress frames to the same file.
+    /// Rewriting the whole journal after every move was O(n²).
     pub fn save_sealed(&self, sealer: &dyn Sealer) -> Result<(), JournalError> {
         let bytes = sealer
             .seal(self.encode().as_bytes())
@@ -206,16 +208,112 @@ impl Journal {
         self.write_bytes(&bytes)
     }
 
+    /// Append one sealed "entry i finished via method" frame to the journal
+    /// file. Apply walks entries in index order, so an in-order prefix of
+    /// these frames is exactly the done-prefix of the entry list.
+    pub fn record_done(
+        &self,
+        index: usize,
+        method: Method,
+        sealer: &dyn Sealer,
+    ) -> Result<(), JournalError> {
+        let payload = format!("done\t{index}\t{}\n", method.tag());
+        let sealed = sealer
+            .seal(payload.as_bytes())
+            .map_err(JournalError::Seal)?;
+        let len = u32::try_from(sealed.len())
+            .map_err(|_| JournalError::Malformed("progress record too large"))?;
+        // No create(true): the base frame must already exist from save_sealed.
+        // Opening a missing journal here would paper over a real caller bug.
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(self.path())
+            .map_err(JournalError::Io)?;
+        f.write_all(&len.to_le_bytes()).map_err(JournalError::Io)?;
+        f.write_all(&sealed).map_err(JournalError::Io)?;
+        // Append to an existing file creates no new directory entry, so the
+        // directory fsync from write_bytes already covers the name. sync_all
+        // on the file is enough — that's why this is O(1).
+        f.sync_all().map_err(JournalError::Io)?;
+        Ok(())
+    }
+
     /// Load and unseal. `id` is the bare id; `tool` selects the namespace.
+    ///
+    /// On-disk layout is length-framed: a required base frame (sealed encode
+    /// of all entries), then zero or more sealed progress frames appended by
+    /// [`Self::record_done`]. Trailing progress is best-effort.
+    ///
+    /// Journals written before length-framing — a single unframed sealed blob —
+    /// are still accepted. Framed parse is tried first; any failure falls back
+    /// to opening the whole file as one sealed blob (the pre-framing format).
     pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
         let p = state_dir().join(format!("{tool}-{id}.journal"));
         let raw = fs::read(&p).map_err(|_| JournalError::NotFound)?;
+
+        // Current format: 4-byte LE length + sealed base (+ optional progress).
+        if raw.len() >= 4 {
+            let base_len = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
+            if 4 + base_len <= raw.len()
+                && let Ok(plain) = sealer.open(&raw[4..4 + base_len])
+                && let Ok(text) = String::from_utf8(plain)
+                && let Ok(mut j) = Journal::decode(&text)
+            {
+                j.id = id.to_string();
+                j.tool = tool.to_string();
+                j.apply_progress(&raw[4 + base_len..], sealer);
+                return Ok(j);
+            }
+        }
+
+        // Legacy: whole file is one unframed sealed blob (no progress frames).
         let plain = sealer.open(&raw).map_err(JournalError::Seal)?;
         let text = String::from_utf8(plain).map_err(|_| JournalError::Malformed("not utf-8"))?;
         let mut j = Journal::decode(&text)?;
         j.id = id.to_string();
         j.tool = tool.to_string();
         Ok(j)
+    }
+
+    /// Replay length-framed progress records that follow the base frame.
+    /// Truncated, unsealable, or out-of-order frames stop replay rather than
+    /// failing the load — we keep only the longest verified in-order
+    /// done-prefix.
+    fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) {
+        let mut offset = 0usize;
+        let mut expected = 0usize;
+        while offset + 4 <= raw.len() {
+            let len = u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + len > raw.len() {
+                break; // truncated trailing record — don't trust it
+            }
+            let sealed = &raw[offset..offset + len];
+            offset += len;
+            let Ok(plain) = sealer.open(sealed) else {
+                break;
+            };
+            let Ok(text) = std::str::from_utf8(&plain) else {
+                break;
+            };
+            let text = text.trim_end_matches('\n');
+            let f: Vec<&str> = text.split('\t').collect();
+            if f.len() != 3 || f[0] != "done" {
+                break;
+            }
+            let Ok(index) = f[1].parse::<usize>() else {
+                break;
+            };
+            let Some(method) = Method::parse(f[2]) else {
+                break;
+            };
+            if index != expected || index >= self.entries.len() {
+                break;
+            }
+            self.entries[index].done = true;
+            self.entries[index].method = method;
+            expected += 1;
+        }
     }
 
     /// Most recent sealed journal **written by `tool`**, by modification time.
@@ -232,10 +330,16 @@ impl Journal {
         restrict_dir(&dir);
         let p = self.path();
         // Write to a temp file in the same directory, then rename: a crash
-        // mid-write cannot leave a half-parsed journal.
+        // mid-write cannot leave a half-parsed journal. The rename also
+        // atomically discards any previously-appended progress frames — there
+        // is no separate truncate step, so a crash cannot pair a new base with
+        // stale progress that would over-claim on the next load.
         let tmp = p.with_extension("journal.tmp");
         let mut f = fs::File::create(&tmp).map_err(JournalError::Io)?;
         restrict(&tmp);
+        let len =
+            u32::try_from(bytes.len()).map_err(|_| JournalError::Malformed("journal too large"))?;
+        f.write_all(&len.to_le_bytes()).map_err(JournalError::Io)?;
         f.write_all(bytes).map_err(JournalError::Io)?;
         f.sync_all().map_err(JournalError::Io)?;
         drop(f);
@@ -559,5 +663,179 @@ mod tests {
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
         assert!(back.entries[0].done);
+    }
+
+    /// Appended progress frames must carry the corrected method, not just the
+    /// done bit — otherwise undo's inode check picks the Rename path for a
+    /// CopyUnlink entry after reload.
+    #[test]
+    fn record_done_preserves_copy_unlink_method_across_reload() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("sweep_progress_method_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+
+        let j = Journal {
+            id: "method".into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![Entry {
+                from: PathBuf::from("/tmp/root/a"),
+                to: PathBuf::from("/tmp/root/b"),
+                method: Method::Rename, // as apply seeds it before move_one corrects
+                size: 1,
+                mtime_secs: 0,
+                inode: 1,
+                edge_hash: 0,
+                done: false,
+            }],
+        };
+        j.save_sealed(&Identity).expect("base journal");
+        j.record_done(0, Method::CopyUnlink, &Identity)
+            .expect("record_done");
+
+        let back = Journal::load_sealed("test", "method", &Identity).expect("reload");
+        assert!(back.entries[0].done, "done bit lost on progress reload");
+        assert_eq!(
+            back.entries[0].method,
+            Method::CopyUnlink,
+            "method correction lost on progress reload"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// A full `save_sealed` replaces the whole file (base + any appended
+    /// progress). Stale progress must not resurrect a done bit the base
+    /// explicitly cleared — e.g. after undo flips an entry back to not-done.
+    #[test]
+    fn save_sealed_discards_prior_progress_frames() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("sweep_progress_discard_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+
+        let mut j = Journal {
+            id: "discard".into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![Entry {
+                from: PathBuf::from("/tmp/root/a"),
+                to: PathBuf::from("/tmp/root/b"),
+                method: Method::Rename,
+                size: 1,
+                mtime_secs: 0,
+                inode: 1,
+                edge_hash: 0,
+                done: false,
+            }],
+        };
+        j.save_sealed(&Identity).expect("base");
+        j.record_done(0, Method::Rename, &Identity)
+            .expect("progress");
+
+        // Simulate undo: entry is no longer done; caller persists via save_sealed.
+        j.entries[0].done = false;
+        j.save_sealed(&Identity).expect("re-save after undo");
+
+        let back = Journal::load_sealed("test", "discard", &Identity).expect("reload");
+        assert!(
+            !back.entries[0].done,
+            "stale progress resurrected a cleared done bit"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// Journals written before length-framing must still load after upgrade —
+    /// otherwise in-flight undo breaks until TTL prunes them.
+    #[test]
+    fn load_sealed_reads_legacy_unframed_journals() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_legacy_journal_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+
+        let j = Journal {
+            id: "legacy".into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![
+                Entry {
+                    from: PathBuf::from("/tmp/root/a"),
+                    to: PathBuf::from("/tmp/root/b"),
+                    method: Method::Rename,
+                    size: 12,
+                    mtime_secs: 99,
+                    inode: 7,
+                    edge_hash: 1234,
+                    done: true,
+                },
+                Entry {
+                    from: PathBuf::from("/tmp/root/c"),
+                    to: PathBuf::from("/tmp/root/d"),
+                    method: Method::CopyUnlink,
+                    size: 3,
+                    mtime_secs: 1,
+                    inode: 2,
+                    edge_hash: 5,
+                    done: false,
+                },
+            ],
+        };
+        // Pre-framing write_bytes: sealed blob only, no length prefix.
+        let sealed = Identity.seal(j.encode().as_bytes()).expect("seal legacy");
+        fs::write(j.path(), sealed).expect("write legacy journal");
+
+        let back = Journal::load_sealed("test", "legacy", &Identity).expect("load legacy");
+        assert_eq!(back.entries.len(), 2);
+        assert_eq!(back.entries[0].from, j.entries[0].from);
+        assert_eq!(back.entries[0].to, j.entries[0].to);
+        assert!(back.entries[0].done, "done entry lost on legacy load");
+        assert_eq!(back.entries[1].method, Method::CopyUnlink);
+        assert!(
+            !back.entries[1].done,
+            "not-done entry flipped on legacy load"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 }

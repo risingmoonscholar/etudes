@@ -135,10 +135,10 @@ pub fn apply(
         j.entries[i].method = method;
         j.entries[i].done = true;
         moved += 1;
-        // Rewrite after each success. The journal never claims more than the
-        // filesystem actually shows.
+        // Append a sealed done-record (index + corrected method). The base
+        // journal was written before the loop; rewriting it here was O(n²).
         if let Some(sl) = sealer {
-            j.save_sealed(sl).map_err(ApplyError::Journal)?;
+            j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
         }
     }
 
