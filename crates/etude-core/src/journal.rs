@@ -242,7 +242,19 @@ impl Journal {
     ///
     /// On-disk layout is length-framed: a required base frame (sealed encode
     /// of all entries), then zero or more sealed progress frames appended by
-    /// [`Self::record_done`]. Trailing progress is best-effort.
+    /// [`Self::record_done`].
+    ///
+    /// A progress frame is only ever appended *after* the move it describes
+    /// has already succeeded (see `apply`'s ordering rule), so a partially
+    /// written trailing frame is not "work that never happened" — it is
+    /// proof the write was interrupted after the real move, not evidence the
+    /// move didn't occur. Silently discarding it would misreport a completed
+    /// move as pending, which is exactly the half-loaded state that strands
+    /// files: `undo` would see `done: false` and skip a file that is in fact
+    /// sitting at its destination. So a damaged tail refuses the whole load
+    /// loudly instead of guessing. A *clean* end of file — the boundary
+    /// between two intact frames, including "no progress written yet" — is
+    /// not damage and loads normally.
     ///
     /// Journals written before length-framing — a single unframed sealed blob —
     /// are still accepted. Framed parse is tried first; any failure falls back
@@ -261,7 +273,7 @@ impl Journal {
             {
                 j.id = id.to_string();
                 j.tool = tool.to_string();
-                j.apply_progress(&raw[4 + base_len..], sealer);
+                j.apply_progress(&raw[4 + base_len..], sealer)?;
                 return Ok(j);
             }
         }
@@ -276,44 +288,60 @@ impl Journal {
     }
 
     /// Replay length-framed progress records that follow the base frame.
-    /// Truncated, unsealable, or out-of-order frames stop replay rather than
-    /// failing the load — we keep only the longest verified in-order
-    /// done-prefix.
-    fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) {
+    ///
+    /// Every record here was written by a completed move (ordering rule in
+    /// `apply`), so any frame that fails to read back whole and authentic is
+    /// refused rather than dropped: dropping it would silently downgrade a
+    /// finished move to "not done" and strand the file. Only a clean
+    /// boundary — `raw` fully consumed with no leftover bytes — is treated as
+    /// "nothing more was recorded"; anything else is reported as damage.
+    fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) -> Result<(), JournalError> {
         let mut offset = 0usize;
         let mut expected = 0usize;
-        while offset + 4 <= raw.len() {
+        while offset < raw.len() {
+            if offset + 4 > raw.len() {
+                return Err(JournalError::Malformed(
+                    "journal truncated: progress record length prefix cut short",
+                ));
+            }
             let len = u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + len > raw.len() {
-                break; // truncated trailing record — don't trust it
+                return Err(JournalError::Malformed(
+                    "journal truncated: progress record body cut short",
+                ));
             }
             let sealed = &raw[offset..offset + len];
             offset += len;
-            let Ok(plain) = sealer.open(sealed) else {
-                break;
-            };
-            let Ok(text) = std::str::from_utf8(&plain) else {
-                break;
-            };
+            let plain = sealer.open(sealed).map_err(|_| {
+                JournalError::Malformed("journal damaged: progress record failed to authenticate")
+            })?;
+            let text = std::str::from_utf8(&plain).map_err(|_| {
+                JournalError::Malformed("journal damaged: progress record not utf-8")
+            })?;
             let text = text.trim_end_matches('\n');
             let f: Vec<&str> = text.split('\t').collect();
             if f.len() != 3 || f[0] != "done" {
-                break;
+                return Err(JournalError::Malformed(
+                    "journal damaged: progress record has the wrong shape",
+                ));
             }
-            let Ok(index) = f[1].parse::<usize>() else {
-                break;
-            };
-            let Some(method) = Method::parse(f[2]) else {
-                break;
-            };
+            let index: usize = f[1]
+                .parse()
+                .map_err(|_| JournalError::Malformed("journal damaged: progress record index"))?;
+            let method = Method::parse(f[2]).ok_or(JournalError::Malformed(
+                "journal damaged: progress record method",
+            ))?;
             if index != expected || index >= self.entries.len() {
-                break;
+                return Err(JournalError::Malformed(
+                    "journal damaged: progress record out of order",
+                ));
             }
             self.entries[index].done = true;
             self.entries[index].method = method;
             expected += 1;
         }
+        Ok(())
     }
 
     /// Most recent sealed journal **written by `tool`**, by modification time.
@@ -767,6 +795,178 @@ mod tests {
         assert!(
             !back.entries[0].done,
             "stale progress resurrected a cleared done bit"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// The defect in issue #3: a journal cut off mid-way through its last
+    /// progress frame — exactly what a crash leaves behind, since the move
+    /// for that entry already succeeded before the frame write started —
+    /// must be refused outright, not half-loaded with the interrupted
+    /// entry silently downgraded to "not done". A silent downgrade is worse
+    /// than a refusal: `undo` would see `done: false`, skip the file, and
+    /// leave it stranded at its destination without a word.
+    #[test]
+    fn truncated_trailing_progress_frame_is_refused_not_silently_dropped() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_progress_trunc_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+
+        let j = Journal {
+            id: "trunc".into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![
+                Entry {
+                    from: PathBuf::from("/tmp/root/a"),
+                    to: PathBuf::from("/tmp/root/g/a"),
+                    method: Method::Rename,
+                    size: 1,
+                    mtime_secs: 0,
+                    inode: 1,
+                    edge_hash: 0,
+                    done: false,
+                },
+                Entry {
+                    from: PathBuf::from("/tmp/root/b"),
+                    to: PathBuf::from("/tmp/root/g/b"),
+                    method: Method::Rename,
+                    size: 1,
+                    mtime_secs: 0,
+                    inode: 2,
+                    edge_hash: 0,
+                    done: false,
+                },
+            ],
+        };
+        j.save_sealed(&Identity).expect("base journal");
+        // Both moves genuinely completed on disk — record_done is only ever
+        // called after move_one returns Ok (see apply's ordering rule) — and
+        // both progress frames were fully appended and fsynced here.
+        j.record_done(0, Method::Rename, &Identity)
+            .expect("record entry 0 done");
+        j.record_done(1, Method::Rename, &Identity)
+            .expect("record entry 1 done");
+
+        // Simulate a crash that cut the file mid-write of the *last* frame:
+        // chop a few trailing bytes off, landing inside entry 1's frame
+        // rather than on a frame boundary. Entry 0's frame is untouched and
+        // fully intact.
+        let full = fs::read(j.path()).expect("read journal");
+        assert!(
+            full.len() > 4,
+            "test setup: journal too short to truncate meaningfully"
+        );
+        let truncated = &full[..full.len() - 3];
+        fs::write(j.path(), truncated).expect("write truncated journal");
+
+        // Assert the property, not one specific implementation of it: what
+        // strands a file is an entry reading back as `done: false` when its
+        // move already happened, not the particular error type a refusal
+        // uses. So two outcomes are acceptable here — refuse the load
+        // outright, or load it with entry 1 correctly marked done — and only
+        // the third (loaded, but silently downgraded to not-done) is the bug.
+        // A test that only checked `result.is_err()` would keep passing even
+        // if a future change swapped in some other error, or accidentally
+        // returned `Ok` with the entry correctly marked done; neither of
+        // those is the defect, so neither should be able to fail this test.
+        match Journal::load_sealed("test", "trunc", &Identity) {
+            Err(e) => {
+                assert!(
+                    matches!(e, JournalError::Malformed(_)),
+                    "expected a Malformed refusal, got {e:?}"
+                );
+            }
+            Ok(loaded) => {
+                assert!(
+                    loaded.entries[1].done,
+                    "loaded a torn journal with entry 1 marked not-done: its move \
+                     already happened on disk, so undo would skip it and strand it \
+                     without a word — exactly the defect this test exists to catch"
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// A clean end of file — the file ends exactly on a frame boundary, as it
+    /// does after a normal save with no progress yet, or after a crash that
+    /// landed cleanly on a frame boundary before a later move ever started —
+    /// is not damage and must still load normally. Only a torn frame is
+    /// refused.
+    #[test]
+    fn clean_end_of_progress_frames_is_not_treated_as_damage() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_progress_clean_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+
+        let j = Journal {
+            id: "clean".into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![
+                Entry {
+                    from: PathBuf::from("/tmp/root/a"),
+                    to: PathBuf::from("/tmp/root/g/a"),
+                    method: Method::Rename,
+                    size: 1,
+                    mtime_secs: 0,
+                    inode: 1,
+                    edge_hash: 0,
+                    done: false,
+                },
+                Entry {
+                    from: PathBuf::from("/tmp/root/b"),
+                    to: PathBuf::from("/tmp/root/g/b"),
+                    method: Method::Rename,
+                    size: 1,
+                    mtime_secs: 0,
+                    inode: 2,
+                    edge_hash: 0,
+                    done: false,
+                },
+            ],
+        };
+        j.save_sealed(&Identity).expect("base journal");
+        j.record_done(0, Method::Rename, &Identity)
+            .expect("record entry 0 done");
+        // Entry 1 was never even attempted — a crash landed cleanly between
+        // the two moves. No bytes for it exist at all, so this is not a
+        // torn frame.
+
+        let back = Journal::load_sealed("test", "clean", &Identity).expect("clean load");
+        assert!(back.entries[0].done, "entry 0's completed move was lost");
+        assert!(
+            !back.entries[1].done,
+            "entry 1 was reported done despite never being recorded"
         );
 
         let _ = fs::remove_dir_all(&dir);
