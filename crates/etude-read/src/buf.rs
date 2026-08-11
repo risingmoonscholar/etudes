@@ -76,8 +76,20 @@ impl LockedBuf {
     }
 }
 
-impl Drop for LockedBuf {
-    fn drop(&mut self) {
+impl LockedBuf {
+    /// Zero the contents and release the lock.
+    ///
+    /// This is a method rather than the body of `drop` so a test can call it on
+    /// a buffer that is still alive. The test it replaced proved the erase by
+    /// reading the allocation *after* the drop, which is undefined behaviour
+    /// and segfaulted on Linux: `read_capped` reserves `MAX_READ` (1 MiB),
+    /// glibc serves anything past its 128 KiB mmap threshold with `mmap`, and
+    /// freeing an `mmap`ed block `munmap`s it — so the pages were gone. macOS
+    /// keeps the region mapped, so the same read quietly succeeded there and
+    /// the suite was green on the machine it was written on.
+    ///
+    /// Idempotent: calling it and then letting `drop` run again is harmless.
+    fn erase_and_unlock(&mut self) {
         // Overwrite through a volatile write so the compiler cannot elide it as
         // a dead store to memory that is about to be freed.
         let len = self.data.len();
@@ -93,7 +105,15 @@ impl Drop for LockedBuf {
             let cap = self.data.capacity();
             // SAFETY: same region that was locked in lock_pages.
             unsafe { munlock(self.data.as_ptr() as *const core::ffi::c_void, cap) };
+            // Do not unlock twice if this runs again from `drop`.
+            self.locked = false;
         }
+    }
+}
+
+impl Drop for LockedBuf {
+    fn drop(&mut self) {
+        self.erase_and_unlock();
     }
 }
 
@@ -115,24 +135,25 @@ mod tests {
     }
 
     #[test]
-    fn contents_are_zeroed_when_the_buffer_is_dropped() {
-        // Inspect the allocation after drop. This is deliberately reaching into
-        // freed memory, which is why it is a test and not production code: the
-        // point is to prove the erase happens, and there is no other way to
-        // observe it.
+    fn contents_are_erased_before_the_buffer_is_released() {
+        // The previous version of this test read the allocation after the drop
+        // to prove the erase. That is undefined behaviour, and on Linux it is
+        // fatal: the 1 MiB reservation is mmap'd, freeing it munmaps it, and
+        // the read segfaults. It passed on macOS for three months because that
+        // allocator keeps the region mapped.
+        //
+        // The property is the same and the observation is legal: run the erase
+        // the way `drop` runs it, on a buffer that is still alive, then look.
         let secret = b"123-45-6789 SOCIAL SECURITY";
-        let (ptr, len) = {
-            let buf = LockedBuf::read_capped(&mut secret.as_slice()).expect("read");
-            assert_eq!(buf.bytes(), secret);
-            (buf.data.as_ptr(), buf.len())
-        };
-        // SAFETY: reading freed memory is UB in general. Accepted here because
-        // the allocation is not reused between the drop and this read in a
-        // single-threaded test, and the assertion is the entire purpose.
-        let after = unsafe { std::slice::from_raw_parts(ptr, len) };
+        let mut buf = LockedBuf::read_capped(&mut secret.as_slice()).expect("read");
+        assert_eq!(buf.bytes(), secret, "test setup: contents did not land");
+
+        buf.erase_and_unlock();
+
+        assert!(buf.bytes().iter().all(|b| *b == 0), "buffer was not erased");
         assert!(
-            after.iter().all(|b| *b == 0),
-            "buffer was not erased on drop"
+            !buf.locked(),
+            "the lock was not released, so a second release could double-unlock"
         );
     }
 
