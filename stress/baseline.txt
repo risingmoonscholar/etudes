@@ -17,7 +17,6 @@
 #
 # Marked (flaky) below: known not to fire on every run.
 
-20-unicode-nfc-nfd-collision
 30-concurrent-applies
 30-graceful-signal-mid-apply
 30-journal-truncation

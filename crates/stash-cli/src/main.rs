@@ -291,9 +291,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
 fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
     use etude_core::apply::ApplyError::*;
     match e {
-        DestinationExists(_) | DestinationCollision(_) | DestinationIsSynced(_) => {
-            ExitCode::from(2)
-        }
+        DestinationExists(_)
+        | DestinationCollision(_)
+        | DestinationIsSynced(_)
+        | CannotCompareNames(_) => ExitCode::from(2),
         Io(_) | Journal(_) | Injected(_) => ExitCode::from(3),
     }
 }

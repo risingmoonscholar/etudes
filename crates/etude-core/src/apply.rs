@@ -19,6 +19,10 @@ pub enum ApplyError {
     DestinationExists(PathBuf),
     DestinationCollision(PathBuf),
     DestinationIsSynced(PathBuf),
+    /// The OS could not tell us a filename's normalized form, so whether two
+    /// destinations collide is unknown. Refusing is the only honest answer:
+    /// guessing "they don't" is the guess that moves files.
+    CannotCompareNames(PathBuf),
     /// Injected by tests to prove the journal stays resumable.
     Injected(usize),
 }
@@ -34,6 +38,12 @@ impl std::fmt::Display for ApplyError {
             ApplyError::DestinationCollision(p) => write!(
                 f,
                 "two files in this plan would move to the same destination: {}",
+                crate::redact::path(p)
+            ),
+            ApplyError::CannotCompareNames(p) => write!(
+                f,
+                "refused: cannot compare {} against the other destinations — the system \
+                 would not normalise the name, so a collision cannot be ruled out",
                 crate::redact::path(p)
             ),
             ApplyError::DestinationIsSynced(p) => write!(
@@ -92,7 +102,7 @@ pub fn apply(
             if dst.exists() {
                 return Err(ApplyError::DestinationExists(dst));
             }
-            if !planned_destinations.insert(dedupe_key(&dst)) {
+            if !planned_destinations.insert(dedupe_key(&dst)?) {
                 return Err(ApplyError::DestinationCollision(dst));
             }
             let (size, mtime_secs, inode, edge_hash) = fingerprint(src).map_err(ApplyError::Io)?;
@@ -172,7 +182,11 @@ pub fn apply(
 /// NFC implementation covers, all go through the same call.
 ///
 /// What this does NOT cover, stated plainly:
-/// - **Non-UTF-8 paths.** `CFStringCreateWithBytes` requires valid UTF-8
+/// - **Non-UTF-8 paths.** Note this branch is unreachable in practice:
+/// `dedupe_key` passes `to_string_lossy()`, which has already replaced bad
+/// bytes with U+FFFD, so CoreFoundation never sees invalid UTF-8. Kept
+/// because the function is callable with other input.
+/// `CFStringCreateWithBytes` requires valid UTF-8
 ///   input; a path with invalid UTF-8 bytes falls back to plain
 ///   lowercasing of the lossy string, same as before this fix. Such a path
 ///   was already not resolvable to a clean human-readable name, so this
@@ -187,15 +201,22 @@ pub fn apply(
 /// - **Non-macOS targets.** There is no CoreFoundation to call into off
 ///   Darwin, so this falls back to the pre-fix plain-lowercase behavior —
 ///   unchanged from before, not a regression, but also not fixed there.
-fn dedupe_key(path: &Path) -> String {
+fn dedupe_key(path: &Path) -> Result<String, ApplyError> {
     let lossy = path.to_string_lossy();
     #[cfg(target_os = "macos")]
     {
-        if let Some(nfc) = macos_unicode::normalize_nfc(&lossy) {
-            return nfc.to_lowercase();
-        }
+        // A review caught the first version falling back to plain lowercasing
+        // when normalization failed. That is the pre-fix behaviour restored
+        // silently — the exact partial apply this is meant to prevent, made
+        // less likely rather than loud. If the OS cannot tell us the
+        // normalized form, we do not know whether two destinations collide,
+        // and guessing "they don't" is the answer that moves files.
+        return macos_unicode::normalize_nfc(&lossy)
+            .map(|nfc| nfc.to_lowercase())
+            .ok_or_else(|| ApplyError::CannotCompareNames(path.to_path_buf()));
     }
-    lossy.to_lowercase()
+    #[cfg(not(target_os = "macos"))]
+    Ok(lossy.to_lowercase())
 }
 
 /// link → unlink within one device; copy → verify → unlink across devices.
@@ -403,7 +424,17 @@ mod macos_unicode {
                 CFRelease(mutable as *const c_void);
                 return None;
             }
-            let mut buf = vec![0u8; max_size as usize];
+            // Allocate before the call, but note the release below is the only
+            // one on this path: a review pointed out that allocating while
+            // still holding `mutable` leaks it if the allocation unwinds.
+            // try_reserve would be the belt-and-braces answer; keeping the
+            // window to a single Vec::new is the cheap one.
+            let mut buf: Vec<u8> = Vec::new();
+            if buf.try_reserve_exact(max_size as usize).is_err() {
+                CFRelease(mutable as *const c_void);
+                return None;
+            }
+            buf.resize(max_size as usize, 0);
             let ok = CFStringGetCString(
                 mutable as CFStringRef,
                 buf.as_mut_ptr() as *mut c_char,

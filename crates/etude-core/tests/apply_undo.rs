@@ -320,6 +320,11 @@ fn apply_refuses_when_two_planned_destinations_collide() {
 /// the same treatment — not a partial apply where the first file actually
 /// moves and the second fails against the filesystem mid-run.
 #[test]
+// APFS treats NFC and NFD spellings as one directory entry; ext4 does not,
+// so on Linux these are genuinely two files and the refusal correctly does not
+// happen. Gated rather than deleted: the property is real where the filesystem
+// is.
+#[cfg(target_os = "macos")]
 fn apply_refuses_when_two_planned_destinations_are_nfc_nfd_of_same_name() {
     let _g = lock();
     let root =
