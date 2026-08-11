@@ -357,8 +357,10 @@ mod macos_unicode {
         ) -> CFMutableStringRef;
         fn CFStringNormalize(the_string: CFMutableStringRef, the_form: CFStringNormalizationForm);
         fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
-        fn CFStringGetMaximumSizeForEncoding(length: CFIndex, encoding: CFStringEncoding)
-        -> CFIndex;
+        fn CFStringGetMaximumSizeForEncoding(
+            length: CFIndex,
+            encoding: CFStringEncoding,
+        ) -> CFIndex;
         fn CFStringGetCString(
             the_string: CFStringRef,
             buffer: *mut c_char,
