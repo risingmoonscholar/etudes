@@ -27,11 +27,12 @@ fn main() {
         j.entries.len(),
         done_before
     );
-    let r = apply::undo(&mut j).expect("undo");
+    let r = apply::undo(&mut j);
     println!(
-        "sigkill_undo: restored={} skipped_changed={} skipped_missing={}",
+        "sigkill_undo: restored={} skipped_changed={} skipped_missing={} error={:?}",
         r.restored,
         r.skipped_changed.len(),
-        r.skipped_missing.len()
+        r.skipped_missing.len(),
+        r.error
     );
 }

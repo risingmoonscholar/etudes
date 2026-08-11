@@ -192,13 +192,30 @@ pub struct UndoReport {
     pub skipped_changed: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
     pub skipped_missing: Vec<PathBuf>,
+    /// Set when a move failed and undo stopped early. `restored` and the
+    /// `skipped_*` lists above still describe everything that happened
+    /// *before* the failure — they are never discarded just because the walk
+    /// did not finish. The caller must still persist `j` (e.g. via
+    /// `save_sealed`) so the on-disk journal matches what was actually
+    /// restored; `undo` mutates the in-memory entries but does not know how
+    /// to seal them.
+    pub error: Option<ApplyError>,
 }
 
 /// Reverse a journal, verifying each file before touching it.
 ///
 /// A file that changed since apply is **reported and skipped**, never
 /// overwritten.
-pub fn undo(j: &mut Journal) -> Result<UndoReport, ApplyError> {
+///
+/// Always returns a report, even when a move fails partway through: this
+/// never discards what it already did. Contrast with `apply()`, which
+/// persists progress to disk after every move via `record_done`; `undo` has
+/// no equivalent incremental on-disk format, so it mutates `j.entries[i].done`
+/// in memory only. The caller — which holds the sealer used to load `j` in
+/// the first place — is responsible for calling `j.save_sealed(..)` after
+/// this returns, on *both* the success and the `error.is_some()` path, or
+/// the journal will drift from physical reality exactly the way it used to.
+pub fn undo(j: &mut Journal) -> UndoReport {
     let mut r = UndoReport::default();
 
     // Reverse order, so nested destinations empty before their parents.
@@ -229,15 +246,28 @@ pub fn undo(j: &mut Journal) -> Result<UndoReport, ApplyError> {
             r.skipped_changed.push(e.to.clone());
             continue;
         }
-        if let Some(parent) = e.from.parent() {
-            fs::create_dir_all(parent).map_err(ApplyError::Io)?;
+        if let Some(parent) = e.from.parent()
+            && let Err(err) = fs::create_dir_all(parent)
+        {
+            r.error = Some(ApplyError::Io(err));
+            break;
         }
-        move_one(&e.to, &e.from).map_err(ApplyError::Io)?;
-        j.entries[i].done = false;
-        r.restored += 1;
+        match move_one(&e.to, &e.from) {
+            Ok(_) => {
+                j.entries[i].done = false;
+                r.restored += 1;
+            }
+            Err(err) => {
+                r.error = Some(ApplyError::Io(err));
+                break;
+            }
+        }
     }
 
     // Remove destination directories that we created and that are now empty.
+    // Safe to run even after a partial failure: it only ever removes
+    // directories that are already empty, so it can't erase evidence of
+    // entries that did not get restored.
     let mut dirs: Vec<&Path> = j.entries.iter().filter_map(|e| e.to.parent()).collect();
     dirs.sort();
     dirs.dedup();
@@ -247,7 +277,7 @@ pub fn undo(j: &mut Journal) -> Result<UndoReport, ApplyError> {
         }
     }
 
-    Ok(r)
+    r
 }
 
 // The counter makes same-process collisions impossible (monotonic, never
