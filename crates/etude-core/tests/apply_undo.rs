@@ -310,6 +310,79 @@ fn apply_refuses_when_two_planned_destinations_collide() {
 }
 
 #[test]
+fn two_applies_same_root_same_second_get_distinct_journal_ids() {
+    let _g = lock();
+    // Wall-clock seconds alone collide; both journals must survive.
+    let root = std::env::temp_dir().join(format!("sweep_au_jid_collision_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let sub_a = root.join("a");
+    let sub_b = root.join("b");
+    fs::create_dir_all(&sub_a).expect("mkdir a");
+    fs::create_dir_all(&sub_b).expect("mkdir b");
+    let src_a = sub_a.join("alpha.txt");
+    let src_b = sub_b.join("beta.txt");
+    fs::write(&src_a, b"alpha\n").expect("write a");
+    fs::write(&src_b, b"beta\n").expect("write b");
+
+    let state =
+        std::env::temp_dir().join(format!("sweep_state_jid_collision_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let plan_a = Plan {
+        root: root.clone(),
+        groups: vec![plan::Group {
+            name: "GroupA".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![src_a.clone()],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 1,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: false,
+    };
+    let plan_b = Plan {
+        root: root.clone(),
+        groups: vec![plan::Group {
+            name: "GroupB".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![src_b.clone()],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 1,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: false,
+    };
+
+    let rep_a = apply::apply(&plan_a, "test", Some(&TestSeal), None).expect("apply a");
+    let rep_b = apply::apply(&plan_b, "test", Some(&TestSeal), None).expect("apply b");
+
+    assert_ne!(
+        rep_a.journal_id, rep_b.journal_id,
+        "same-root same-tool applies collided on journal_id"
+    );
+    assert_ne!(
+        rep_a.journal_path, rep_b.journal_path,
+        "same-root same-tool applies shared a journal path"
+    );
+
+    let j_a = Journal::load_sealed("test", &rep_a.journal_id, &TestSeal).expect("load a");
+    let j_b = Journal::load_sealed("test", &rep_b.journal_id, &TestSeal).expect("load b");
+    assert_eq!(j_a.entries.len(), 1);
+    assert_eq!(j_b.entries.len(), 1);
+    assert_eq!(j_a.entries[0].from, src_a);
+    assert_eq!(j_b.entries[0].from, src_b);
+    assert!(j_a.entries[0].done);
+    assert!(j_b.entries[0].done);
+
+    cleanup(&root);
+}
+
+#[test]
 fn no_filename_is_readable_in_the_written_journal() {
     // The M7 claim, checked against the bytes on disk rather than the API.
     let _g = lock();

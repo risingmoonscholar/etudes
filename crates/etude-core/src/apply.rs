@@ -135,10 +135,10 @@ pub fn apply(
         j.entries[i].method = method;
         j.entries[i].done = true;
         moved += 1;
-        // Rewrite after each success. The journal never claims more than the
-        // filesystem actually shows.
+        // Append a sealed done-record (index + corrected method). The base
+        // journal was written before the loop; rewriting it here was O(n²).
         if let Some(sl) = sealer {
-            j.save_sealed(sl).map_err(ApplyError::Journal)?;
+            j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
         }
     }
 
@@ -250,16 +250,50 @@ pub fn undo(j: &mut Journal) -> Result<UndoReport, ApplyError> {
     Ok(r)
 }
 
-/// Stable-ish identifier derived from the root and the current time.
+// The counter makes same-process collisions impossible (monotonic, never
+// repeats). pid + nanos only make cross-process collisions astronomically
+// unlikely — not impossible (pid reuse after wraparound with a repeated or
+// backward-stepping clock reading remains a theoretical residual risk).
 fn journal_id(plan: &Plan) -> String {
-    let secs = std::time::SystemTime::now()
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos())
         .unwrap_or(0);
+    let pid = std::process::id();
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in plan.root.to_string_lossy().as_bytes() {
         h ^= *b as u64;
         h = h.wrapping_mul(0x100_0000_01b3);
     }
-    format!("{secs}-{h:x}")
+    format!("{nanos}-{pid}-{n}-{h:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn journal_id_is_unique_across_tight_loop() {
+        // Tight loop finishes well under one second; under seconds+hash-only
+        // ids this fails every time, proving the counter (not wall-clock luck).
+        let plan = Plan {
+            root: PathBuf::from("/tmp/journal_id_test_root"),
+            groups: Vec::new(),
+            untouched: Vec::new(),
+            scanned: 0,
+            skipped_hidden: 0,
+            skipped_symlink: 0,
+            root_is_synced: false,
+        };
+        const N: usize = 200;
+        let mut ids = HashSet::with_capacity(N);
+        for _ in 0..N {
+            assert!(ids.insert(journal_id(&plan)));
+        }
+        assert_eq!(ids.len(), N);
+    }
 }
