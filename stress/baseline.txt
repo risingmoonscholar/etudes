@@ -25,6 +25,5 @@
 30-sigkill-mid-apply
 40-06-permission-change-mid-apply
 50-scale-flat-10k-apply-timing
-50-scale-path-length-and-visibility
 60-case-sensitive-collision
 60-undo-progress-lost-on-volume-hazard
