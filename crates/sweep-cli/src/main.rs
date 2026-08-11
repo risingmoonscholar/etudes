@@ -22,7 +22,8 @@ USAGE
     sweep apply PATH --yes       move every proposed group
     sweep apply PATH --only NAME move one group
     sweep undo                   reverse the most recent apply
-    sweep forget                 destroy all journals and the key
+    sweep forget                 remove sweep's journals; ask before destroying
+                                 a key stash also relies on
     sweep verify                 print sweep's own privacy posture
 
 FLAGS
@@ -66,7 +67,7 @@ fn main() -> ExitCode {
         Some("verify") => verify(),
         Some("apply") => cmd_apply(&args),
         Some("undo") => cmd_undo(),
-        Some("forget") => cmd_forget(),
+        Some("forget") => cmd_forget(&args),
         Some("review") => cmd_review(&args),
         Some("--") => match args.get(1) {
             Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
@@ -86,6 +87,20 @@ fn has(args: &[String], flag: &str) -> bool {
 fn value(args: &[String], flag: &str) -> Option<String> {
     let i = args.iter().position(|a| a == flag)?;
     args.get(i + 1).cloned()
+}
+
+/// Parses `--depth N`. Absent means the documented default of 1.
+/// Present-but-invalid (not a number, or outside 1..=8) is an explicit
+/// error, never a silent fallback -- a wrong depth changes what gets
+/// scanned and must not fail quietly.
+fn parse_depth(args: &[String]) -> Result<u8, String> {
+    match value(args, "--depth") {
+        None => Ok(1),
+        Some(v) => match v.parse::<u8>() {
+            Ok(d) if (1..=8).contains(&d) => Ok(d),
+            _ => Err(format!("--depth must be a number from 1 to 8, got {v:?}")),
+        },
+    }
 }
 
 // apply rejects everything not listed here; a silent typo can authorize moves.
@@ -140,10 +155,15 @@ fn scan_and_plan(
     path: &Path,
     args: &[String],
 ) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
+    let depth = match parse_depth(args) {
+        Ok(d) => d,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return Err(ExitCode::from(2));
+        }
+    };
     let cfg = ScanConfig {
-        depth: value(args, "--depth")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1),
+        depth,
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
@@ -151,7 +171,7 @@ fn scan_and_plan(
         Ok(o) => o,
         Err(e) => {
             eprintln!("sweep: {e}");
-            return Err(ExitCode::from(2));
+            return Err(scan_exit_code(&e));
         }
     };
 
@@ -350,10 +370,15 @@ fn cmd_review(args: &[String]) -> ExitCode {
         .map(|p| PathBuf::from(expand_tilde(p)))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
+    let depth = match parse_depth(args) {
+        Ok(d) => d,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
     let cfg = ScanConfig {
-        depth: value(args, "--depth")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1),
+        depth,
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
@@ -361,7 +386,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
         Ok(o) => o,
         Err(e) => {
             eprintln!("sweep: {e}");
-            return ExitCode::from(2);
+            return scan_exit_code(&e);
         }
     };
     let mut p = plan::build(&outcome);
@@ -391,6 +416,32 @@ fn cmd_review(args: &[String]) -> ExitCode {
     }
 }
 
+/// Refusals are policy stops (2); everything else is a genuine
+/// failure (3) -- see README's "Meaningful exit codes".
+fn scan_exit_code(e: &etude_core::scan::ScanError) -> ExitCode {
+    if e.is_refusal() {
+        ExitCode::from(2)
+    } else {
+        ExitCode::from(3)
+    }
+}
+
+/// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
+fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
+    use etude_core::apply::ApplyError::*;
+    match e {
+        DestinationExists(_) | DestinationCollision(_) | DestinationIsSynced(_) => {
+            ExitCode::from(2)
+        }
+        Io(_) | Journal(_) | Injected(_) => ExitCode::from(3),
+    }
+}
+
+/// No done entries means undo already ran — exit 1, don't call undo again.
+fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
+    !j.entries.iter().any(|e| e.done)
+}
+
 /// Shared tail of `apply` and `review`.
 fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
     match etude_core::apply::apply(
@@ -414,7 +465,7 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
         Err(e) => {
             eprintln!("sweep: {e}");
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
-            ExitCode::from(3)
+            apply_exit_code(&e)
         }
     }
 }
@@ -445,10 +496,15 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    let depth = match parse_depth(args) {
+        Ok(d) => d,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
     let cfg = ScanConfig {
-        depth: value(args, "--depth")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1),
+        depth,
         allow_sync: has(args, "--allow-sync"),
         ..Default::default()
     };
@@ -456,7 +512,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         Ok(o) => o,
         Err(e) => {
             eprintln!("sweep: {e}");
-            return ExitCode::from(2);
+            return scan_exit_code(&e);
         }
     };
     let mut p = plan::build(&outcome);
@@ -495,9 +551,18 @@ fn cmd_undo() -> ExitCode {
         Ok(j) => j,
         Err(e) => {
             eprintln!("sweep: {e}");
-            return ExitCode::from(1);
+            let code = if matches!(e, etude_core::journal::JournalError::NotFound) {
+                1
+            } else {
+                3
+            };
+            return ExitCode::from(code);
         }
     };
+    if journal_is_fully_undone(&j) {
+        println!("\nNothing to undo. This journal was already restored.");
+        return ExitCode::from(1);
+    }
     match etude_core::apply::undo(&mut j) {
         Ok(r) => {
             println!("\nRestored {} files.", r.restored);
@@ -523,23 +588,127 @@ fn cmd_undo() -> ExitCode {
     }
 }
 
-fn cmd_forget() -> ExitCode {
+/// Who owns a `{tool}-{id}.journal` filename — same `{tool}-` prefix convention
+/// as `journal::latest_id` / `ids_by_recency`. Non-journals are ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JournalOwner {
+    Sweep,
+    Stash,
+    Other,
+}
+
+fn classify_journal_filename(name: &str) -> JournalOwner {
+    let Some(stem) = name.strip_suffix(".journal") else {
+        return JournalOwner::Other;
+    };
+    if stem.starts_with("sweep-") {
+        JournalOwner::Sweep
+    } else if stem.starts_with("stash-") {
+        JournalOwner::Stash
+    } else {
+        JournalOwner::Other
+    }
+}
+
+/// Whether forget may destroy the shared keychain key, and how.
+///
+/// Stash and sweep share one key. Destroying it while a stash journal exists
+/// strands that stash permanently — so we require an informed yes, or `--yes`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForgetKeyGate {
+    /// No live stash journal, or `--yes` already authorised destruction.
+    Proceed,
+    /// Stash present, TTY available — warn and ask.
+    Ask,
+    /// Stash present, no TTY and no `--yes` — refuse.
+    Refuse,
+}
+
+fn forget_key_gate(args: &[String], stash_present: bool, is_tty: bool) -> ForgetKeyGate {
+    if !stash_present {
+        return ForgetKeyGate::Proceed;
+    }
+    if has(args, "--yes") {
+        return ForgetKeyGate::Proceed;
+    }
+    if is_tty {
+        ForgetKeyGate::Ask
+    } else {
+        ForgetKeyGate::Refuse
+    }
+}
+
+fn forget_shared_key_consent() -> bool {
+    use std::io::{self, Write};
+
+    println!(
+        "\n\
+  sweep and stash share one keychain key.\n\
+  Destroying it will make any live stash permanently unrecoverable\n\
+  — the holding directory stays, but nothing can open it.\n"
+    );
+    print!("  destroy the shared key anyway? [y/N] > ");
+    let _ = io::stdout().flush();
+    let mut line = String::new();
+    if io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+        return false; // EOF is not consent
+    }
+    line.trim().eq_ignore_ascii_case("y")
+}
+
+fn destroy_shared_key() -> ExitCode {
+    if etude_keep::destroy_key() {
+        println!("Destroyed the journal key in the keychain.");
+        println!("Undo is no longer possible for any past run.");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("sweep: could not confirm the journal key was destroyed.");
+        ExitCode::from(3)
+    }
+}
+
+fn refuse_shared_key_destroy() -> ExitCode {
+    eprintln!(
+        "sweep: refusing to destroy the shared journal key while a stash\n\
+         journal exists. Pass `sweep forget --yes` to destroy it anyway."
+    );
+    ExitCode::from(2)
+}
+
+fn cmd_forget(args: &[String]) -> ExitCode {
+    use std::io::IsTerminal;
+
     let dir = etude_core::journal::state_dir();
     let mut n = 0;
+    let mut stash_present = false;
     if let Ok(rd) = std::fs::read_dir(&dir) {
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().ends_with(".journal")
-                && std::fs::remove_file(e.path()).is_ok()
-            {
-                n += 1;
+            let name = e.file_name().to_string_lossy().into_owned();
+            match classify_journal_filename(&name) {
+                JournalOwner::Sweep => {
+                    if std::fs::remove_file(e.path()).is_ok() {
+                        n += 1;
+                    }
+                }
+                JournalOwner::Stash => stash_present = true,
+                JournalOwner::Other => {}
             }
         }
     }
-    etude_keep::destroy_key();
+    // Sweep's own journals only — always, regardless of the key decision below.
     println!("Removed {n} journal(s) from {}.", dir.display());
-    println!("Destroyed the journal key in the keychain.");
-    println!("Undo is no longer possible for any past run.");
-    ExitCode::SUCCESS
+
+    match forget_key_gate(args, stash_present, std::io::stdin().is_terminal()) {
+        ForgetKeyGate::Proceed => destroy_shared_key(),
+        ForgetKeyGate::Ask => {
+            if forget_shared_key_consent() {
+                destroy_shared_key()
+            } else {
+                refuse_shared_key_destroy()
+            }
+        }
+        ForgetKeyGate::Refuse => refuse_shared_key_destroy(),
+    }
 }
 
 fn verify() -> ExitCode {
@@ -644,6 +813,19 @@ mod tests {
         assert!(apply_path(&["--yes".to_string()]).is_err());
     }
 
+    // wrong depth must not silently become the shallowest scan.
+    #[test]
+    fn parse_depth_rejects_garbage_and_out_of_range() {
+        assert_eq!(parse_depth(&[]), Ok(1));
+        assert_eq!(
+            parse_depth(&["--depth".to_string(), "8".to_string()]),
+            Ok(8)
+        );
+        assert!(parse_depth(&["--depth".to_string(), "999".to_string()]).is_err());
+        assert!(parse_depth(&["--depth".to_string(), "0".to_string()]).is_err());
+        assert!(parse_depth(&["--depth".to_string(), "banana".to_string()]).is_err());
+    }
+
     // a value consumed by a flag is not a positional path.
     #[test]
     fn apply_depth_value_is_not_mistaken_for_the_path() {
@@ -678,5 +860,143 @@ mod tests {
             "a camera-burst file moved: apply operated on the cwd with no PATH given"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // forget must recognise sweep's own journals by the `{tool}-` prefix.
+    #[test]
+    fn a_sweep_journal_filename_is_recognised_as_sweep_owned() {
+        assert_eq!(
+            classify_journal_filename("sweep-a1b2c3.journal"),
+            JournalOwner::Sweep
+        );
+        assert_eq!(
+            classify_journal_filename("notes.txt"),
+            JournalOwner::Other,
+            "non-journal mistaken for a journal"
+        );
+        assert_eq!(
+            classify_journal_filename("sweep.journal"),
+            JournalOwner::Other,
+            "missing tool-id hyphen still counted as sweep"
+        );
+    }
+
+    // a live stash journal is what gates key destruction — must be detected.
+    #[test]
+    fn a_stash_journal_filename_signals_stash_present() {
+        assert_eq!(
+            classify_journal_filename("stash-deadbeef.journal"),
+            JournalOwner::Stash
+        );
+    }
+
+    // --yes is the only non-interactive way past the shared-key gate.
+    #[test]
+    fn forget_yes_bypasses_the_shared_key_prompt() {
+        let yes = ["forget".to_string(), "--yes".to_string()];
+        let no = ["forget".to_string()];
+
+        assert_eq!(
+            forget_key_gate(&yes, true, false),
+            ForgetKeyGate::Proceed,
+            "--yes did not authorise destruction with a stash present"
+        );
+        assert_eq!(
+            forget_key_gate(&no, true, true),
+            ForgetKeyGate::Ask,
+            "TTY + stash should ask, not proceed silently"
+        );
+        assert_eq!(
+            forget_key_gate(&no, true, false),
+            ForgetKeyGate::Refuse,
+            "no TTY and no --yes must refuse, not destroy"
+        );
+        assert_eq!(
+            forget_key_gate(&no, false, false),
+            ForgetKeyGate::Proceed,
+            "no stash still gated the key"
+        );
+    }
+
+    // classification over a real state dir must find stash without deleting it.
+    #[test]
+    fn forget_classifies_journals_in_the_state_dir() {
+        let state = std::env::temp_dir().join(format!(
+            "sweep-forget-classify-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&state);
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("sweep-aaa.journal"), b"s").unwrap();
+        std::fs::write(state.join("stash-bbb.journal"), b"t").unwrap();
+        std::fs::write(state.join("noise.txt"), b"x").unwrap();
+
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+        let dir = etude_core::journal::state_dir();
+        let mut sweep = 0;
+        let mut stash_present = false;
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            match classify_journal_filename(&e.file_name().to_string_lossy()) {
+                JournalOwner::Sweep => sweep += 1,
+                JournalOwner::Stash => stash_present = true,
+                JournalOwner::Other => {}
+            }
+        }
+
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+        let _ = std::fs::remove_dir_all(&state);
+
+        assert_eq!(sweep, 1, "sweep journal not counted");
+        assert!(stash_present, "stash journal not detected");
+        assert_eq!(
+            forget_key_gate(&["forget".to_string()], stash_present, false),
+            ForgetKeyGate::Refuse,
+            "detected stash did not require confirmation"
+        );
+    }
+
+    #[test]
+    fn apply_exit_code_maps_refusals_and_failures() {
+        let collision = etude_core::apply::ApplyError::DestinationCollision(PathBuf::from("x"));
+        let io = etude_core::apply::ApplyError::Io(std::io::Error::other("x"));
+        assert_eq!(apply_exit_code(&collision), ExitCode::from(2));
+        assert_eq!(apply_exit_code(&io), ExitCode::from(3));
+    }
+
+    fn sample_entry(done: bool) -> etude_core::journal::Entry {
+        etude_core::journal::Entry {
+            from: PathBuf::from("/tmp/a"),
+            to: PathBuf::from("/tmp/b"),
+            method: etude_core::journal::Method::Rename,
+            size: 1,
+            mtime_secs: 0,
+            inode: 0,
+            edge_hash: 0,
+            done,
+        }
+    }
+
+    #[test]
+    fn journal_is_fully_undone_when_no_entry_is_done() {
+        let undone = etude_core::Journal {
+            id: "t".into(),
+            tool: "sweep".into(),
+            root: PathBuf::from("/tmp"),
+            entries: vec![sample_entry(false), sample_entry(false)],
+        };
+        assert!(journal_is_fully_undone(&undone));
+
+        let pending = etude_core::Journal {
+            id: "t".into(),
+            tool: "sweep".into(),
+            root: PathBuf::from("/tmp"),
+            entries: vec![sample_entry(false), sample_entry(true)],
+        };
+        assert!(!journal_is_fully_undone(&pending));
     }
 }

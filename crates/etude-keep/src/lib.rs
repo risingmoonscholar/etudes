@@ -155,16 +155,23 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
     Ok(())
 }
 
-/// Remove the key. After this, existing journals are unreadable by anyone.
-pub fn destroy_key() {
+/// Remove the key. Returns true only once a subsequent read confirms it is
+/// gone — including when it was already absent. After a confirmed destroy,
+/// existing journals are unreadable by anyone.
+pub fn destroy_key() -> bool {
+    // A missing /usr/bin/security cannot have deleted anything, so report
+    // failure rather than claiming a destroy that never happened.
     let Ok(mut cmd) = security() else {
-        return;
+        return false;
     };
     let _ = cmd
         .args(["delete-generic-password", "-a", ACCOUNT, "-s", SERVICE])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    // Confirm gone rather than trusting the delete: exit status alone does not
+    // prove absence, and "already absent" is success for the caller.
+    matches!(read_key(), Ok(None))
 }
 
 /// Seal plaintext. Layout: `MAGIC | nonce(24) | ciphertext`.

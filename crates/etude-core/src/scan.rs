@@ -109,6 +109,22 @@ pub enum ScanError {
     Io(io::Error),
 }
 
+impl ScanError {
+    /// True for a deliberate safety refusal -- the scan could have
+    /// proceeded but chose not to. False for a genuine I/O or input
+    /// problem. Exit-code contract: refusals map to 2, everything else
+    /// maps to 3 (see README's "Meaningful exit codes").
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self,
+            ScanError::RefusedSystemLocation(_)
+                | ScanError::RefusedSyncRoot(_)
+                | ScanError::RefusedRunningAsRoot
+                | ScanError::TooManyEntries { .. }
+        )
+    }
+}
+
 impl std::fmt::Display for ScanError {
     /// Paths are redacted here. Full paths appear only under `--explain`,
     /// which formats them deliberately. See THREAT-MODEL § T3.
@@ -341,4 +357,15 @@ fn walk(
 unsafe extern "C" {
     #[link_name = "getuid"]
     fn libc_getuid() -> u32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_refusal_separates_policy_from_io() {
+        assert!(ScanError::RefusedRunningAsRoot.is_refusal());
+        assert!(!ScanError::NotADirectory(PathBuf::from("/tmp/x")).is_refusal());
+    }
 }
