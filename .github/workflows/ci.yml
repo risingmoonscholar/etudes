@@ -1,6 +1,10 @@
 name: ci
 
 on:
+  workflow_dispatch:
+  schedule:
+    # nightly; the stress suite takes minutes, so it does not run per-push
+    - cron: '17 9 * * *'
   push:
   pull_request:
 
@@ -55,3 +59,16 @@ jobs:
           # fails CI instead of being silently uncovered.
           command: check bans licenses sources advisories
 
+  stress:
+    name: adversarial stress suite (ratchet)
+    runs-on: macos-latest
+    # Only on a schedule or by hand: the suite builds 50k-file trees and real
+    # disk images, so it is minutes, not seconds. Gating every push on it would
+    # make people wait for something that changes rarely.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the stress suite against the recorded baseline
+        run: bash scripts/stress-ratchet.sh
