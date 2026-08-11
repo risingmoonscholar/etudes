@@ -150,21 +150,42 @@ fn without_home_a_library_folder_anywhere_is_refused_not_silently_allowed() {
 }
 
 #[test]
-fn a_folder_merely_named_library_elsewhere_is_now_reachable() {
+fn a_folder_of_your_own_named_library_is_refused_and_that_is_the_trade() {
     let _g = lock();
     let home = fresh_root("elsewhere_home");
     fs::create_dir_all(&home).expect("mkdir home");
     let _fake_home = FakeHome::set(&home);
 
-    // A folder named "Library" that has nothing to do with $HOME/Library.
+    // Telling this apart from $HOME/Library needs to trust $HOME, and a wrong
+    // $HOME then unprotects the real ~/Library. Refusing a folder you named
+    // Library is the smaller harm, so it is refused on purpose.
     let projects_library = fresh_root("projects_library").join("Projects/Library");
     write_files(&projects_library, &["notes.txt", "draft.txt"]);
 
-    let out = scan::scan(&projects_library, &ScanConfig::default())
-        .expect("a folder merely named Library should scan cleanly");
-    assert_eq!(out.entries.len(), 2);
-    assert!(!out.root_is_synced);
+    let err = scan::scan(&projects_library, &ScanConfig::default())
+        .expect_err("a Library component is refused wherever it appears");
+    assert!(matches!(err, scan::ScanError::RefusedSystemLocation(_)));
 
     fs::remove_dir_all(projects_library.parent().unwrap().parent().unwrap()).ok();
     fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn a_lied_about_home_cannot_unprotect_a_library() {
+    let _g = lock();
+    // $HOME points at one place; the Library we attack is somewhere else
+    // entirely. This is the fail-open that a review caught before this shipped.
+    let wrong_home = fresh_root("wrong_home");
+    fs::create_dir_all(&wrong_home).expect("mkdir home");
+    let _fake_home = FakeHome::set(&wrong_home);
+
+    let victim = fresh_root("real_home").join("Library/Preferences");
+    write_files(&victim, &["app.plist", "other.plist"]);
+
+    let err = scan::scan(&victim, &ScanConfig::default())
+        .expect_err("a Library must be refused even when $HOME points elsewhere");
+    assert!(matches!(err, scan::ScanError::RefusedSystemLocation(_)));
+
+    fs::remove_dir_all(victim.parent().unwrap().parent().unwrap()).ok();
+    fs::remove_dir_all(&wrong_home).ok();
 }

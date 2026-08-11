@@ -246,27 +246,45 @@ const SYSTEM_ROOTS: &[&str] = &["/System", "/Applications", "/Library"];
 /// `home: None` (no trustworthy `$HOME` — unset, empty, or relative) fails
 /// closed: refuse any `Library` component anywhere, exactly like before this
 /// defect was split apart. Losing the iCloud carve-out in that case is the
-/// safe trade — without a real home there is no way to tell iCloud Drive
-/// apart from anywhere else, so the old blanket refusal is what's honest.
-fn is_refused_system_location(path: &Path, home: Option<&Path>) -> bool {
-    match home {
-        Some(home) => {
-            let library = home.join("Library");
-            if path.starts_with(&library) {
-                let icloud = library.join("Mobile Documents");
-                return !path.starts_with(&icloud);
-            }
-        }
-        None => {
-            let has_library_component = path
-                .components()
-                .any(|c| matches!(c, Component::Normal(n) if n.eq_ignore_ascii_case("Library")));
-            if has_library_component {
+/// Whether `path` is a system location that is never organised.
+///
+/// This deliberately does NOT consult `$HOME`. An earlier version did, and it
+/// meant a wrong `HOME` silently unprotected the real `~/Library` — the
+/// environment became a safety input, and it failed open. There is no way to
+/// validate `HOME` from inside the process, so the honest fix is not to need it.
+///
+/// The rule instead: a `Library` component is refused wherever it appears,
+/// unless it is immediately followed by `Mobile Documents`. That pair is
+/// unmistakably iCloud Drive, which is user documents that Apple happens to
+/// store under Library, and it identifies itself without anyone having to say
+/// where home is.
+///
+/// The cost is that a folder of your own named `Library` is refused, which is
+/// what happened before this was ever split apart. Refusing to organise a
+/// folder is a small harm; organising `~/Library` because an environment
+/// variable lied is not.
+fn is_refused_system_location(path: &Path, _home: Option<&Path>) -> bool {
+    if SYSTEM_ROOTS.iter().any(|r| path.starts_with(r)) {
+        return true;
+    }
+    let comps: Vec<_> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(n) => Some(n.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    for (i, c) in comps.iter().enumerate() {
+        if c.eq_ignore_ascii_case("Library") {
+            let is_icloud = comps
+                .get(i + 1)
+                .is_some_and(|n| n.eq_ignore_ascii_case("Mobile Documents"));
+            if !is_icloud {
                 return true;
             }
         }
     }
-    SYSTEM_ROOTS.iter().any(|r| path.starts_with(r))
+    false
 }
 
 /// Walk `root` and return the entries eligible for organisation.
@@ -511,11 +529,41 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_merely_named_library_elsewhere_is_not_refused() {
-        let home = Path::new("/Users/fixture");
-        assert!(!is_refused_system_location(
+    fn a_folder_of_your_own_named_library_is_refused_and_that_is_the_trade() {
+        // Deliberate. Telling `~/Projects/Library` apart from `~/Library` needs
+        // to know where home is, and the only way to ask is `$HOME`, which a
+        // caller can lie about. A wrong `HOME` then unprotects the real
+        // `~/Library` — the environment becomes a safety input and it fails
+        // open. Refusing to organise a folder you named Library is the smaller
+        // harm, and it is what happened before any of this was split apart.
+        assert!(is_refused_system_location(
             Path::new("/Users/fixture/Projects/Library"),
-            Some(home)
+            None
+        ));
+    }
+
+    #[test]
+    fn icloud_drive_is_reachable_without_knowing_where_home_is() {
+        // `Library/Mobile Documents` as consecutive components identifies iCloud
+        // Drive on its own. No `$HOME` required, so no `$HOME` to be wrong.
+        assert!(!is_refused_system_location(
+            Path::new("/anywhere/at/all/Library/Mobile Documents/com~apple~CloudDocs/Desktop"),
+            None
+        ));
+        assert!(is_refused_system_location(
+            Path::new("/anywhere/at/all/Library/Preferences"),
+            None
+        ));
+    }
+
+    #[test]
+    fn a_lied_about_home_cannot_unprotect_a_library() {
+        // The regression this replaced: with a home argument that points
+        // somewhere else, a Library path used to sail straight through.
+        let wrong = Path::new("/Users/somebody-else");
+        assert!(is_refused_system_location(
+            Path::new("/Users/fixture/Library/Preferences"),
+            Some(wrong)
         ));
     }
 

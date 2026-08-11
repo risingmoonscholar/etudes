@@ -66,3 +66,42 @@ fi
 assert_intact "$ICLOUD" 5 "iCloud Desktop untouched by plan-only runs"
 assert_intact "$DROPBOX" 5 "Dropbox untouched by plan-only runs"
 assert_intact "$GDRIVE" 5 "Google Drive untouched by plan-only runs"
+
+# --- the fail-open a review caught, pinned so it cannot come back -------------
+#
+# An earlier fix for this scenario made $HOME a safety input: it refused
+# "$HOME/Library" rather than a Library component, so a wrong HOME silently
+# unprotected the real one. The checks above never set HOME and so passed
+# either way, which made them a weak witness for the thing they were named
+# after. These do set it, and they set it wrong on purpose.
+
+WRONG_HOME="$W/not-the-home"
+mkdir -p "$WRONG_HOME"
+mkdir -p "$W/Library/Preferences"
+for i in 1 2 3; do : > "$W/Library/Preferences/Screenshot 2026-01-0$i at 9.0$i.11 AM.png"; done
+
+for h in "$WRONG_HOME" "" "../.." ; do
+  label=${h:-"<empty>"}
+  out=$(HOME="$h" "$SWEEP" "$W/Library/Preferences" --quiet 2>&1); code=$?
+  if [ "$code" = "2" ]; then
+    pass "a Library is refused with HOME=$label"
+  else
+    fail "HOME=$label let $W/Library/Preferences through (exit $code): ${out%%$'\n'*}"
+  fi
+done
+
+out=$(env -u HOME "$SWEEP" "$W/Library/Preferences" --quiet 2>&1); code=$?
+if [ "$code" = "2" ]; then
+  pass "a Library is refused with HOME unset"
+else
+  fail "HOME unset let a Library through (exit $code)"
+fi
+
+# And the carve-out must not depend on HOME either, or it is the same bug wearing
+# the opposite sign.
+out=$(HOME="$WRONG_HOME" "$SWEEP" "$ICLOUD" --allow-sync --quiet 2>&1); code=$?
+if [ "$code" = "0" ]; then
+  pass "iCloud stays reachable even with HOME pointing somewhere else"
+else
+  fail "iCloud became unreachable when HOME was wrong (exit $code): ${out%%$'\n'*}"
+fi
