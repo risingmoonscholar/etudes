@@ -614,29 +614,48 @@ fn cmd_undo() -> ExitCode {
         println!("\nNothing to undo. This journal was already restored.");
         return ExitCode::from(1);
     }
-    match etude_core::apply::undo(&mut j) {
-        Ok(r) => {
-            println!("\nRestored {} files.", r.restored);
-            if !r.skipped_changed.is_empty() {
-                println!(
-                    "  {} changed since apply and were left alone:",
-                    r.skipped_changed.len()
-                );
-                for p in &r.skipped_changed {
-                    println!("    {}", etude_core::redact::path(p));
-                }
-            }
-            if !r.skipped_missing.is_empty() {
-                println!("  {} were already gone.", r.skipped_missing.len());
-            }
-            let _ = j.save_sealed(&sl);
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("sweep: {e}");
-            ExitCode::from(3)
+    let r = etude_core::apply::undo(&mut j);
+    // Report what actually happened before anything about the outcome: this
+    // count is real even when `r.error` is set below.
+    println!("\nRestored {} files.", r.restored);
+    if !r.skipped_changed.is_empty() {
+        println!(
+            "  {} changed since apply and were left alone:",
+            r.skipped_changed.len()
+        );
+        for p in &r.skipped_changed {
+            println!("    {}", etude_core::redact::path(p));
         }
     }
+    if !r.skipped_missing.is_empty() {
+        println!("  {} were already gone.", r.skipped_missing.len());
+    }
+    // Persist regardless of outcome: on error just as much as on success, so
+    // the on-disk journal matches what was actually restored rather than
+    // still claiming every entry is pending. Whether *this* save itself
+    // succeeded changes what we can honestly tell the user next -- claiming
+    // "resumable" while the save failed would repeat the exact lie this fix
+    // exists to remove, just moved one line later.
+    let saved = j.save_sealed(&sl);
+    if let Some(err) = r.error {
+        eprintln!("sweep: {err}");
+        match saved {
+            Ok(()) => {
+                eprintln!(
+                    "The journal is resumable. `sweep undo` will pick up where this left off."
+                );
+            }
+            Err(save_err) => eprintln!(
+                "sweep: additionally, the journal could not be updated ({save_err}) — it may not reflect the files just restored."
+            ),
+        }
+        return ExitCode::from(3);
+    }
+    if let Err(save_err) = saved {
+        eprintln!("sweep: undo finished, but the journal could not be saved: {save_err}");
+        return ExitCode::from(3);
+    }
+    ExitCode::SUCCESS
 }
 
 /// Who owns a `{tool}-{id}.journal` filename — same `{tool}-` prefix convention

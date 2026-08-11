@@ -416,29 +416,48 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         println!("\nNothing to restore. This stash was already popped.");
         return ExitCode::from(1);
     }
-    match etude_core::apply::undo(&mut j) {
-        Ok(r) => {
-            println!("\nRestored {} items.", r.restored);
-            if !r.skipped_changed.is_empty() {
-                println!(
-                    "  {} changed while stashed and were left alone:",
-                    r.skipped_changed.len()
-                );
-                for p in &r.skipped_changed {
-                    println!("    {}", etude_core::redact::path(p));
-                }
-            }
-            if !r.skipped_missing.is_empty() {
-                println!("  {} were already gone.", r.skipped_missing.len());
-            }
-            let _ = j.save_sealed(&sl);
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("stash: {e}");
-            ExitCode::from(3)
+    let r = etude_core::apply::undo(&mut j);
+    // Report what actually happened before anything about the outcome: this
+    // count is real even when `r.error` is set below.
+    println!("\nRestored {} items.", r.restored);
+    if !r.skipped_changed.is_empty() {
+        println!(
+            "  {} changed while stashed and were left alone:",
+            r.skipped_changed.len()
+        );
+        for p in &r.skipped_changed {
+            println!("    {}", etude_core::redact::path(p));
         }
     }
+    if !r.skipped_missing.is_empty() {
+        println!("  {} were already gone.", r.skipped_missing.len());
+    }
+    // Persist regardless of outcome: on error just as much as on success, so
+    // the on-disk journal matches what was actually restored rather than
+    // still claiming every entry is pending. Whether *this* save itself
+    // succeeded changes what we can honestly tell the user next -- claiming
+    // "resumable" while the save failed would repeat the exact lie this fix
+    // exists to remove, just moved one line later.
+    let saved = j.save_sealed(&sl);
+    if let Some(err) = r.error {
+        eprintln!("stash: {err}");
+        match saved {
+            Ok(()) => {
+                eprintln!(
+                    "The journal is resumable. `stash pop` will pick up where this left off."
+                );
+            }
+            Err(save_err) => eprintln!(
+                "stash: additionally, the journal could not be updated ({save_err}) — it may not reflect the items just restored."
+            ),
+        }
+        return ExitCode::from(3);
+    }
+    if let Err(save_err) = saved {
+        eprintln!("stash: pop finished, but the journal could not be saved: {save_err}");
+        return ExitCode::from(3);
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_status(args: &[String]) -> ExitCode {
@@ -769,7 +788,8 @@ mod tests {
         let mut journal = journal_for_root("stash", &TestSeal, &target)
             .0
             .expect("live journal");
-        etude_core::apply::undo(&mut journal).expect("restore");
+        let r = etude_core::apply::undo(&mut journal);
+        assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
         journal.save_sealed(&TestSeal).expect("resave journal");
 
         assert!(journal.path().is_file(), "restore removed the journal");

@@ -124,8 +124,9 @@ fn apply_then_undo_restores_every_path() {
     }
 
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal loads");
-    let ur = apply::undo(&mut j).expect("undo");
+    let ur = apply::undo(&mut j);
 
+    assert!(ur.error.is_none(), "unexpected undo error: {:?}", ur.error);
     assert_eq!(
         ur.restored,
         expected.len(),
@@ -181,8 +182,9 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
 
     let _ = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL));
     let mut j = Journal::latest_sealed("test", &TestSeal).expect("journal");
-    let r = apply::undo(&mut j).expect("undo");
+    let r = apply::undo(&mut j);
 
+    assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
     assert_eq!(
         r.restored, FAIL,
         "undo restored a different count than was applied"
@@ -208,8 +210,9 @@ fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     let victim = j.entries[0].to.clone();
     fs::write(&victim, b"the user edited this after applying\n").expect("mutate");
 
-    let r = apply::undo(&mut j).expect("undo");
+    let r = apply::undo(&mut j);
 
+    assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
     assert!(
         r.skipped_changed.contains(&victim),
         "undo did not report the changed file as skipped"
