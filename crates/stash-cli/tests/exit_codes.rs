@@ -171,4 +171,40 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
          there is nothing here: stderr={stderr} stdout={}",
         String::from_utf8_lossy(&pop.stdout)
     );
+    assert!(
+        stderr.contains("truncated") || stderr.contains("progress record"),
+        "the damage report should name a torn progress frame, not some other \
+         load failure, or this isn't actually witnessing issue #3's shape: stderr={stderr}"
+    );
+    // Exit class matters as much as the message: a caller that only checks
+    // the exit code (not stderr text) must not see the same code a folder
+    // that was simply never stashed would produce. sweep's parallel path
+    // (cmd_undo) already treats any non-NotFound load failure as exit 3;
+    // stash must match that severity, not silently fall back to the
+    // "nothing to do" exit 1 it uses for a genuine miss.
+    assert_eq!(
+        pop.status.code(),
+        Some(3),
+        "a damaged journal must exit 3 (a real failure), not the same exit 1 \
+         a plain 'nothing stashed here' miss produces: stderr={stderr} stdout={}",
+        String::from_utf8_lossy(&pop.stdout)
+    );
+    // Nothing was half-restored: the holding directory pop refused to touch
+    // must still exist with the file inside it, not partially unpacked.
+    let holding = std::fs::read_dir(&root)
+        .unwrap()
+        .flatten()
+        .find(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(".stash-"))
+        })
+        .expect("holding directory must survive a refused pop");
+    assert!(
+        std::fs::read_dir(holding.path())
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name() == "memo.txt"),
+        "the stashed file must still be inside the holding directory, not stranded elsewhere"
+    );
 }

@@ -313,38 +313,52 @@ fn load_or_warn(
     tool: &str,
     id: &str,
     sealer: &dyn etude_core::journal::Sealer,
+    damaged: &mut bool,
 ) -> Option<etude_core::Journal> {
     match etude_core::Journal::load_sealed(tool, id, sealer) {
         Ok(j) => Some(j),
         Err(etude_core::journal::JournalError::NotFound) => None,
         Err(e) => {
+            *damaged = true;
             eprintln!("{tool}: journal {id} is damaged and was skipped: {e}");
             None
         }
     }
 }
 
+/// A journal for `target`, or `None` alongside whether at least one journal
+/// on disk was found but refused to load (`damaged`). Distinguishing the two
+/// `None` cases matters: a caller that treats "damaged and dropped" the same
+/// as "genuinely never existed" reports the wrong exit class — the same
+/// severity distinction `sweep undo` already makes between `NotFound` (exit
+/// 1) and any other load failure (exit 3).
 fn journal_for_root(
     tool: &str,
     sealer: &dyn etude_core::journal::Sealer,
     target: &Path,
-) -> Option<etude_core::Journal> {
-    etude_core::journal::ids_by_recency(tool)
-        .ok()?
+) -> (Option<etude_core::Journal>, bool) {
+    let mut damaged = false;
+    let ids = match etude_core::journal::ids_by_recency(tool) {
+        Ok(ids) => ids,
+        Err(_) => return (None, false),
+    };
+    let found = ids
         .into_iter()
-        .filter_map(|id| load_or_warn(tool, &id, sealer))
+        .filter_map(|id| load_or_warn(tool, &id, sealer, &mut damaged))
         .find(|j| {
             j.root
                 .canonicalize()
                 .is_ok_and(|root| root == target && find_holding(&root).is_some())
-        })
+        });
+    (found, damaged)
 }
 
 fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<PathBuf> {
+    let mut damaged = false;
     etude_core::journal::ids_by_recency(tool)
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|id| load_or_warn(tool, &id, sealer))
+        .filter_map(|id| load_or_warn(tool, &id, sealer, &mut damaged))
         .filter_map(|j| j.root.canonicalize().ok())
         .filter(|root| find_holding(root).is_some())
         .collect()
@@ -366,8 +380,17 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         eprintln!("stash: no stash found for {}", path.display());
         return ExitCode::from(1);
     };
-    let mut j = match journal_for_root("stash", &sl, &target) {
+    let (found, damaged) = journal_for_root("stash", &sl, &target);
+    let mut j = match found {
         Some(j) => j,
+        // load_or_warn already printed which journal is damaged and why;
+        // exit 3 (a real failure) rather than 1 (nothing to do) so a caller
+        // that only checks the exit class doesn't read this the same as a
+        // folder that was simply never stashed.
+        None if damaged => {
+            eprintln!("stash: cannot restore {} — see above", target.display());
+            return ExitCode::from(3);
+        }
         None if named.is_some() => {
             eprintln!("stash: no stash found for {}", target.display());
             return ExitCode::from(1);
@@ -707,6 +730,7 @@ mod tests {
 
         let target = first.canonicalize().expect("first canonical path");
         let selected = journal_for_root("stash", &TestSeal, &target)
+            .0
             .expect("the older journal remains selectable");
         assert_eq!(selected.root.canonicalize().unwrap(), target);
         assert!(
@@ -737,14 +761,16 @@ mod tests {
         etude_core::apply::apply(&stash_plan(&root), "stash", Some(&TestSeal), None)
             .expect("stash");
         let target = root.canonicalize().expect("canonical path");
-        let mut journal = journal_for_root("stash", &TestSeal, &target).expect("live journal");
+        let mut journal = journal_for_root("stash", &TestSeal, &target)
+            .0
+            .expect("live journal");
         etude_core::apply::undo(&mut journal).expect("restore");
         journal.save_sealed(&TestSeal).expect("resave journal");
 
         assert!(journal.path().is_file(), "restore removed the journal");
         assert_eq!(find_holding(&root), None, "holding directory survived pop");
         assert!(
-            journal_for_root("stash", &TestSeal, &target).is_none(),
+            journal_for_root("stash", &TestSeal, &target).0.is_none(),
             "restored journal remained selectable"
         );
         assert!(
