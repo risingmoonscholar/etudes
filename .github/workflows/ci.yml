@@ -24,9 +24,14 @@ jobs:
     # where apply refused legal work on a case-sensitive filesystem — which
     # exists on macOS too, and which the mac suite structurally could not see.
     #
-    # Non-blocking on purpose. A red here is information about an unsupported
-    # platform, not a reason to stop. It still shows up, which is the point.
-    continue-on-error: true
+    # It fails loudly and it does not gate anything. Those are different
+    # things and continue-on-error confuses them: it renders a failed job as a
+    # green check with a warning nobody opens, which is the exact shape this
+    # project argues against. So the job goes red when it goes red.
+    #
+    # Non-blocking is a branch-protection decision, not a workflow one. This is
+    # deliberately NOT in the required-checks list, so a red here never stops a
+    # merge — it just sits there being true.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
