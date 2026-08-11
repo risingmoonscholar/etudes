@@ -98,6 +98,8 @@ pub fn apply(
 
     // Build the full entry list first, so the journal describes the whole
     // intended operation before any of it happens.
+    // Ask the destination filesystem once, not once per file.
+    let folds = folds_case(&plan.root);
     let mut planned_destinations = HashSet::new();
     for g in plan.groups.iter().filter(|g| g.accepted) {
         let dest_dir = plan.root.join(&g.name);
@@ -112,7 +114,7 @@ pub fn apply(
             if dst.exists() {
                 return Err(ApplyError::DestinationExists(dst));
             }
-            if !planned_destinations.insert(dedupe_key(&dst)?) {
+            if !planned_destinations.insert(dedupe_key(&dst, folds)?) {
                 return Err(ApplyError::DestinationCollision(dst));
             }
             let (size, mtime_secs, inode, edge_hash) = fingerprint(src).map_err(ApplyError::Io)?;
@@ -169,6 +171,38 @@ pub fn apply(
     })
 }
 
+/// Whether `dir` treats two names differing only in case as the same entry.
+///
+/// Asked, not assumed. The previous version lowercased every destination
+/// unconditionally, which is right on APFS and wrong on ext4 — where
+/// `Report.pdf` and `report.pdf` are two genuinely different files, and
+/// folding them made `apply` refuse a legal plan on the default filesystem of
+/// every Linux machine. The macOS suite could not see it: APFS collapses those
+/// two names into one directory entry, so the fixture only ever had one file.
+///
+/// Same mistake as trusting `$HOME` to say where home is. A property of the
+/// machine you happen to be on is not a property of the world, and the fix is
+/// to ask rather than to guess better.
+///
+/// When it cannot be determined — an unwritable directory, a probe that will
+/// not create — the answer is "folds". That refuses more than necessary rather
+/// than missing a real collision, and refusing is the direction this tool is
+/// allowed to be wrong in.
+fn folds_case(dir: &Path) -> bool {
+    use std::process;
+    let stem = format!(".etudes-case-probe-{}", process::id());
+    let lower = dir.join(&stem);
+    let upper = dir.join(stem.to_uppercase());
+
+    // A probe that cannot be created tells us nothing, so assume folding.
+    if fs::write(&lower, b"").is_err() {
+        return true;
+    }
+    let folds = upper.exists();
+    let _ = fs::remove_file(&lower);
+    folds
+}
+
 /// Case- and composition-insensitive dedupe key for a planned destination
 /// path. Issue #9.
 ///
@@ -211,8 +245,9 @@ pub fn apply(
 /// - **Non-macOS targets.** There is no CoreFoundation to call into off
 ///   Darwin, so this falls back to the pre-fix plain-lowercase behavior —
 ///   unchanged from before, not a regression, but also not fixed there.
-fn dedupe_key(path: &Path) -> Result<String, ApplyError> {
+fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
     let lossy = path.to_string_lossy();
+    let cased = |s: String| if folds_case { s.to_lowercase() } else { s };
     #[cfg(target_os = "macos")]
     {
         // A review caught the first version falling back to plain lowercasing
@@ -222,12 +257,12 @@ fn dedupe_key(path: &Path) -> Result<String, ApplyError> {
         // normalized form, we do not know whether two destinations collide,
         // and guessing "they don't" is the answer that moves files.
         macos_unicode::normalize_nfc(&lossy)
-            .map(|nfc| nfc.to_lowercase())
+            .map(cased)
             .ok_or_else(|| ApplyError::CannotCompareNames(path.to_path_buf()))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(lossy.to_lowercase())
+        Ok(cased(lossy.into_owned()))
     }
 }
 
@@ -516,6 +551,44 @@ mod macos_unicode {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn case_folding_is_asked_of_the_filesystem_not_assumed() {
+        // On this machine the default volume folds case, so the probe must say
+        // so. The interesting direction — a case-sensitive filesystem, where
+        // folding wrongly refuses legal work — needs a real volume and is
+        // covered by stress/scenarios/60-case-sensitive-collision.sh, which
+        // builds one with hdiutil.
+        let dir = std::env::temp_dir().join(format!("etudes_case_probe_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+
+        let folds = folds_case(&dir);
+        assert!(
+            folds,
+            "the default macOS volume folds case; the probe said otherwise"
+        );
+
+        // The probe must not leave anything behind.
+        let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().flatten().collect();
+        assert!(
+            leftovers.is_empty(),
+            "the probe left files behind: {:?}",
+            leftovers.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unwritable_directory_is_treated_as_folding() {
+        // Cannot ask, so assume the answer that refuses more rather than the
+        // one that might miss a real collision.
+        assert!(
+            folds_case(std::path::Path::new("/nonexistent-etudes-probe-dir")),
+            "an unaskable directory must fall back to folding"
+        );
+    }
     use super::*;
 
     #[test]
