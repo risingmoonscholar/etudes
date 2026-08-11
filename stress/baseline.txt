@@ -1,12 +1,30 @@
-# Known stress failures.
+# Scenarios known to fail. One name per line.
 #
-# 19 when the suite was written on 2026-08-10. 15 after issues #1 and #2 were
-# fixed, which turned four scenarios green.
+# These are real defects, filed as issues #3 to #13, kept failing on purpose so
+# the reproductions do not rot.
 #
-# The stress suite is adversarial: these 15 are real defects, filed as issues
-# #3 to #12, and they fail on purpose so the reproductions stay alive.
+# This is a SET, not a count. Several scenarios are probabilistic — they race a
+# signal against a two-syscall move, so "3 of 50 trials" one run and "8 of 50"
+# the next is the same defect rolling different dice. Gating on the number
+# produced false regressions and false fixes; gating on which scenarios fail
+# does not.
 #
-# CI fails only when this number gets WORSE. A new failure is a regression and
-# must be looked at. Fixing one of these means lowering the number here, in the
-# same commit, so the ratchet only ever tightens.
-15
+# CI fails when a scenario fails that is NOT on this list. That is a regression
+# and someone has to look at it.
+#
+# A scenario here that passes is reported, not failed: it might be fixed, or a
+# flaky one might have got lucky. Re-run before removing it from this list.
+#
+# Marked (flaky) below: known not to fire on every run.
+
+20-unicode-nfc-nfd-collision
+30-concurrent-applies
+30-graceful-signal-mid-apply
+30-journal-truncation
+30-kill-mid-undo
+30-sigkill-mid-apply
+40-06-permission-change-mid-apply
+50-scale-flat-10k-apply-timing
+50-scale-path-length-and-visibility
+60-case-sensitive-collision
+60-undo-progress-lost-on-volume-hazard
