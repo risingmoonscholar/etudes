@@ -25,6 +25,10 @@ pub enum ApplyError {
     DestinationExists(PathBuf),
     DestinationCollision(PathBuf),
     DestinationIsSynced(PathBuf),
+    /// The OS could not tell us a filename's normalized form, so whether two
+    /// destinations collide is unknown. Refusing is the only honest answer:
+    /// guessing "they don't" is the guess that moves files.
+    CannotCompareNames(PathBuf),
     /// Injected by tests to prove the journal stays resumable.
     Injected(usize),
 }
@@ -40,6 +44,12 @@ impl std::fmt::Display for ApplyError {
             ApplyError::DestinationCollision(p) => write!(
                 f,
                 "two files in this plan would move to the same destination: {}",
+                crate::redact::path(p)
+            ),
+            ApplyError::CannotCompareNames(p) => write!(
+                f,
+                "refused: cannot compare {} against the other destinations — the system \
+                 would not normalise the name, so a collision cannot be ruled out",
                 crate::redact::path(p)
             ),
             ApplyError::DestinationIsSynced(p) => write!(
@@ -98,7 +108,7 @@ pub fn apply(
             if dst.exists() {
                 return Err(ApplyError::DestinationExists(dst));
             }
-            if !planned_destinations.insert(dst.to_string_lossy().to_lowercase()) {
+            if !planned_destinations.insert(dedupe_key(&dst)?) {
                 return Err(ApplyError::DestinationCollision(dst));
             }
             let (size, mtime_secs, inode, edge_hash) = fingerprint(src).map_err(ApplyError::Io)?;
@@ -153,6 +163,68 @@ pub fn apply(
         journal_id: id,
         journal_path: sealer.map(|_| j.path()),
     })
+}
+
+/// Case- and composition-insensitive dedupe key for a planned destination
+/// path. Issue #9.
+///
+/// `to_lowercase` folds ASCII case correctly (`Report.pdf` == `report.PDF`),
+/// but it does not touch Unicode *normalization*. "café" typed as one
+/// precomposed code point (NFC, U+00E9) and as `e` followed by a combining
+/// acute accent (NFD, U+0065 U+0301) are different byte strings in Rust, but
+/// APFS treats them as the exact same directory entry — the guard that used
+/// plain `to_lowercase` saw two distinct destinations, let the plan through,
+/// moved the first file for real, then hit EEXIST on the second mid-run.
+///
+/// `etude-core` carries zero dependencies (see `Cargo.toml`), so this does
+/// not pull in a Unicode-normalization crate. Instead, on macOS, it asks the
+/// OS itself: `CFStringNormalize` from CoreFoundation, linked directly (the
+/// same raw-FFI pattern `scan.rs` already uses for `getuid` and
+/// `journal.rs` for `utimes` — no build.rs, no crates.io dependency, just a
+/// framework the OS already ships). This uses the actual Unicode tables
+/// macOS normalizes with, so it is not a hand-rolled table that covers "the
+/// common accented Latin cases" and quietly misses everything else —
+/// Hangul, Vietnamese multi-diacritic stacks, whatever else CoreFoundation's
+/// NFC implementation covers, all go through the same call.
+///
+/// What this does NOT cover, stated plainly:
+/// - **Non-UTF-8 paths.** Unreachable in practice, and the earlier version of
+///   this note claimed otherwise. `dedupe_key` passes `to_string_lossy()`,
+///   which has already replaced bad bytes with U+FFFD, so CoreFoundation never
+///   sees invalid UTF-8. The branch stays because the function is callable
+///   with other input. `CFStringCreateWithBytes` requires valid UTF-8
+///   input; a path with invalid UTF-8 bytes falls back to plain
+///   lowercasing of the lossy string, same as before this fix. Such a path
+///   was already not resolvable to a clean human-readable name, so this
+///   does not narrow anything that used to work.
+/// - **Any HFS+-inherited normalization quirk.** Apple's older HFS+ format
+///   documented (Tech Note TN1150) a non-standard decomposition that
+///   excludes a handful of code points from full canonical decomposition.
+///   `CFStringNormalize`'s NFC is the Unicode Consortium's standard
+///   canonical form; this fix has been verified against the NFC/NFD Latin
+///   case this issue actually reports (`café`), not against every such
+///   legacy exception, if any still apply on APFS.
+/// - **Non-macOS targets.** There is no CoreFoundation to call into off
+///   Darwin, so this falls back to the pre-fix plain-lowercase behavior —
+///   unchanged from before, not a regression, but also not fixed there.
+fn dedupe_key(path: &Path) -> Result<String, ApplyError> {
+    let lossy = path.to_string_lossy();
+    #[cfg(target_os = "macos")]
+    {
+        // A review caught the first version falling back to plain lowercasing
+        // when normalization failed. That is the pre-fix behaviour restored
+        // silently — the exact partial apply this is meant to prevent, made
+        // less likely rather than loud. If the OS cannot tell us the
+        // normalized form, we do not know whether two destinations collide,
+        // and guessing "they don't" is the answer that moves files.
+        macos_unicode::normalize_nfc(&lossy)
+            .map(|nfc| nfc.to_lowercase())
+            .ok_or_else(|| ApplyError::CannotCompareNames(path.to_path_buf()))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(lossy.to_lowercase())
+    }
 }
 
 /// link → unlink within one device; copy → verify → unlink across devices.
@@ -276,6 +348,134 @@ fn journal_id(plan: &Plan) -> String {
         h = h.wrapping_mul(0x100_0000_01b3);
     }
     format!("{nanos}-{pid}-{n}-{h:x}")
+}
+
+/// Raw FFI into CoreFoundation, linked directly with no crates.io
+/// dependency (same pattern as the `getuid`/`utimes` calls elsewhere in this
+/// crate). Used only to ask macOS to normalize a string to NFC — see the
+/// doc comment on `dedupe_key` above for why.
+#[cfg(target_os = "macos")]
+mod macos_unicode {
+    use std::ffi::{CStr, c_void};
+    use std::os::raw::{c_char, c_uchar};
+
+    type CFIndex = isize;
+    type CFStringRef = *const c_void;
+    type CFMutableStringRef = *mut c_void;
+    type CFAllocatorRef = *const c_void;
+    type CFStringEncoding = u32;
+    type CFStringNormalizationForm = i32;
+    type Boolean = c_uchar;
+
+    const K_CF_STRING_ENCODING_UTF8: CFStringEncoding = 0x0800_0100;
+    const K_CF_STRING_NORMALIZATION_FORM_C: CFStringNormalizationForm = 2;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithBytes(
+            alloc: CFAllocatorRef,
+            bytes: *const c_uchar,
+            num_bytes: CFIndex,
+            encoding: CFStringEncoding,
+            is_external_representation: Boolean,
+        ) -> CFStringRef;
+        fn CFStringCreateMutableCopy(
+            alloc: CFAllocatorRef,
+            max_length: CFIndex,
+            the_string: CFStringRef,
+        ) -> CFMutableStringRef;
+        fn CFStringNormalize(the_string: CFMutableStringRef, the_form: CFStringNormalizationForm);
+        fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
+        fn CFStringGetMaximumSizeForEncoding(
+            length: CFIndex,
+            encoding: CFStringEncoding,
+        ) -> CFIndex;
+        fn CFStringGetCString(
+            the_string: CFStringRef,
+            buffer: *mut c_char,
+            buffer_size: CFIndex,
+            encoding: CFStringEncoding,
+        ) -> Boolean;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    /// Returns `s` normalized to NFC via CoreFoundation, or `None` if any
+    /// step of the FFI round-trip fails (caller falls back to un-normalized
+    /// lowercasing — see `dedupe_key`).
+    pub fn normalize_nfc(s: &str) -> Option<String> {
+        // SAFETY: all CF calls below are given valid pointers of the type
+        // each function expects, and every non-null CFTypeRef we create is
+        // released exactly once on every path (including early returns).
+        unsafe {
+            let bytes = s.as_bytes();
+            let immutable = CFStringCreateWithBytes(
+                std::ptr::null(),
+                bytes.as_ptr(),
+                bytes.len() as CFIndex,
+                K_CF_STRING_ENCODING_UTF8,
+                0,
+            );
+            if immutable.is_null() {
+                return None;
+            }
+            let mutable = CFStringCreateMutableCopy(std::ptr::null(), 0, immutable);
+            CFRelease(immutable);
+            if mutable.is_null() {
+                return None;
+            }
+
+            CFStringNormalize(mutable, K_CF_STRING_NORMALIZATION_FORM_C);
+
+            let len = CFStringGetLength(mutable as CFStringRef);
+            let max_size = CFStringGetMaximumSizeForEncoding(len, K_CF_STRING_ENCODING_UTF8) + 1;
+            if max_size <= 0 {
+                CFRelease(mutable as *const c_void);
+                return None;
+            }
+            // Allocate before the call, but note the release below is the only
+            // one on this path: a review pointed out that allocating while
+            // still holding `mutable` leaks it if the allocation unwinds.
+            // try_reserve would be the belt-and-braces answer; keeping the
+            // window to a single Vec::new is the cheap one.
+            let mut buf: Vec<u8> = Vec::new();
+            if buf.try_reserve_exact(max_size as usize).is_err() {
+                CFRelease(mutable as *const c_void);
+                return None;
+            }
+            buf.resize(max_size as usize, 0);
+            let ok = CFStringGetCString(
+                mutable as CFStringRef,
+                buf.as_mut_ptr() as *mut c_char,
+                max_size,
+                K_CF_STRING_ENCODING_UTF8,
+            );
+            CFRelease(mutable as *const c_void);
+            if ok == 0 {
+                return None;
+            }
+            let cstr = CStr::from_ptr(buf.as_ptr() as *const c_char);
+            Some(cstr.to_string_lossy().into_owned())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::normalize_nfc;
+
+        #[test]
+        fn nfd_cafe_normalizes_to_nfc_cafe() {
+            let nfc_name = "caf\u{00e9}"; // single precomposed U+00E9
+            let nfd_name = "cafe\u{0301}"; // e + combining acute U+0301
+            assert_ne!(nfc_name.as_bytes(), nfd_name.as_bytes());
+            assert_eq!(normalize_nfc(nfd_name).as_deref(), Some(nfc_name));
+            assert_eq!(normalize_nfc(nfc_name).as_deref(), Some(nfc_name));
+        }
+
+        #[test]
+        fn plain_ascii_round_trips() {
+            assert_eq!(normalize_nfc("Report.pdf").as_deref(), Some("Report.pdf"));
+        }
+    }
 }
 
 #[cfg(test)]
