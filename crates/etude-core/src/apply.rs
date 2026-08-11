@@ -1,8 +1,11 @@
 //! Apply and undo.
 //!
-//! Ordering rule: the journal is written before the first move, and each entry
-//! is marked done only after its move succeeds. A crash at any point leaves a
-//! journal that describes exactly what happened.
+//! Ordering rule for `apply()`: the journal is written before the first move,
+//! and each entry is marked done only after its move succeeds. A crash at any
+//! point leaves a journal that describes exactly what happened.
+//!
+//! `undo()` does not (yet) have that same per-move on-disk guarantee — see its
+//! own doc comment for what it does and does not promise.
 
 use std::collections::HashSet;
 use std::fs;
@@ -186,6 +189,8 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
 }
 
 #[derive(Debug, Default)]
+#[must_use = "check `error`: undo() no longer returns a Result, so a failed \
+              partial restore is silent unless this field is inspected"]
 pub struct UndoReport {
     pub restored: usize,
     /// Entries skipped because the file changed after apply. Never forced.

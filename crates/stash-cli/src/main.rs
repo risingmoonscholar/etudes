@@ -387,11 +387,27 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     // Persist regardless of outcome: on error just as much as on success, so
     // the on-disk journal matches what was actually restored rather than
-    // still claiming every entry is pending.
-    let _ = j.save_sealed(&sl);
+    // still claiming every entry is pending. Whether *this* save itself
+    // succeeded changes what we can honestly tell the user next -- claiming
+    // "resumable" while the save failed would repeat the exact lie this fix
+    // exists to remove, just moved one line later.
+    let saved = j.save_sealed(&sl);
     if let Some(err) = r.error {
         eprintln!("stash: {err}");
-        eprintln!("The journal is resumable. `stash pop` will pick up where this left off.");
+        match saved {
+            Ok(()) => {
+                eprintln!(
+                    "The journal is resumable. `stash pop` will pick up where this left off."
+                );
+            }
+            Err(save_err) => eprintln!(
+                "stash: additionally, the journal could not be updated ({save_err}) — it may not reflect the items just restored."
+            ),
+        }
+        return ExitCode::from(3);
+    }
+    if let Err(save_err) = saved {
+        eprintln!("stash: pop finished, but the journal could not be saved: {save_err}");
         return ExitCode::from(3);
     }
     ExitCode::SUCCESS
