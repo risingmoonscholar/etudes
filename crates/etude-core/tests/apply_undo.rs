@@ -310,6 +310,80 @@ fn apply_refuses_when_two_planned_destinations_collide() {
     cleanup(&root);
 }
 
+/// Issue #9. Two sources whose visible names are the same string of
+/// characters, but encoded as two different Unicode normalization forms:
+/// "café" as NFC (single precomposed U+00E9) and as NFD (`e` followed by the
+/// combining acute accent U+0301). Byte-distinct in Rust, but the same
+/// directory entry on APFS. The ASCII-case sibling of this test
+/// (`apply_refuses_when_two_planned_destinations_collide`) gets a clean
+/// pre-flight `DestinationCollision` and zero files moved. This one must get
+/// the same treatment — not a partial apply where the first file actually
+/// moves and the second fails against the filesystem mid-run.
+#[test]
+fn apply_refuses_when_two_planned_destinations_are_nfc_nfd_of_same_name() {
+    let _g = lock();
+    let root =
+        std::env::temp_dir().join(format!("sweep_au_nfc_nfd_collision_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let sub1 = root.join("sub1");
+    let sub2 = root.join("sub2");
+    fs::create_dir_all(&sub1).expect("mkdir sub1");
+    fs::create_dir_all(&sub2).expect("mkdir sub2");
+
+    // NFC: "caf" + U+00E9 (LATIN SMALL LETTER E WITH ACUTE), one code point.
+    let nfc_name = "invoice_caf\u{00e9}.pdf";
+    // NFD: "cafe" + U+0301 (COMBINING ACUTE ACCENT), two code points.
+    let nfd_name = "invoice_cafe\u{0301}.pdf";
+    assert_ne!(
+        nfc_name.as_bytes(),
+        nfd_name.as_bytes(),
+        "fixture broken: the two forms must be byte-distinct going in"
+    );
+
+    let src1 = sub1.join(nfc_name);
+    let src2 = sub2.join(nfd_name);
+    fs::write(&src1, b"first\n").expect("write first");
+    fs::write(&src2, b"second\n").expect("write second");
+
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_nfc_nfd_collision_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let p = Plan {
+        root: root.clone(),
+        groups: vec![plan::Group {
+            name: "invoice".to_string(),
+            signal: plan::Signal::Screenshot,
+            members: vec![src1.clone(), src2.clone()],
+            accepted: true,
+        }],
+        untouched: Vec::new(),
+        scanned: 2,
+        skipped_hidden: 0,
+        skipped_symlink: 0,
+        root_is_synced: false,
+        allow_sync: false,
+    };
+
+    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    assert!(
+        matches!(err, ApplyError::DestinationCollision(_)),
+        "expected a clean pre-flight DestinationCollision, got: {err:?}"
+    );
+    assert!(
+        src1.exists(),
+        "NFC source moved despite the refusal (partial apply)"
+    );
+    assert!(
+        src2.exists(),
+        "NFD source moved despite the refusal (partial apply)"
+    );
+    cleanup(&root);
+}
+
 #[test]
 fn two_applies_same_root_same_second_get_distinct_journal_ids() {
     let _g = lock();
