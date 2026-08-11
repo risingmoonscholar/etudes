@@ -12,6 +12,27 @@
 
 set -uo pipefail
 
+# A scenario that dies before its first assertion used to be invisible: no ok,
+# no FAIL, and the runner counted it as nothing at all. Worse, without `set -e`
+# execution carried on past the error and a later assertion could report green,
+# so a broken scenario looked like a passing one.
+#
+# This is the same defect the suite exists to find, wearing the harness as a
+# costume. The trap makes a scenario say so when it dies, and run.sh treats a
+# scenario that produced no assertions as a failure rather than as silence.
+trap 'code=$?; if [ "$code" != "0" ]; then echo "    FAIL     scenario exited $code before finishing — it did not run to completion"; fi' EXIT
+#
+# The ERR trap is deliberately narrow. A first attempt fired on ANY non-zero
+# command and produced 1250 false failures in one run, because scenarios run
+# failing commands on purpose — that is how you test a refusal. A trap that
+# cannot tell "failed as designed" from "is broken" is noise, and noise is
+# how a real signal gets ignored.
+#
+# 127 is `command not found`: a typo or a missing tool, never a deliberate
+# outcome. That is the shape of a scenario that is broken rather than failing.
+set -E
+trap 'c=$?; [ "$c" = "127" ] && echo "    FAIL     command not found at line $LINENO — the scenario is broken, not the tool"' ERR
+
 PASSED=0; FAILED=0; UNPROVEN=0
 FAIL_LINES=(); UNPROVEN_LINES=()
 

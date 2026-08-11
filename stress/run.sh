@@ -28,6 +28,11 @@ for s in stress/scenarios/*.sh; do
   out=$(SCENARIO="$name" bash "$s" 2>&1)
   echo "$out"
   p=$(grep -c '^    ok ' <<<"$out"); f=$(grep -c '^    FAIL ' <<<"$out"); u=$(grep -c '^    unproven ' <<<"$out")
+  # Silence is not success. A scenario that asserted nothing did not run.
+  if [ $((p + f + u)) -eq 0 ]; then
+    echo "    FAIL     this scenario produced no assertions at all — it did not run"
+    f=1
+  fi
   TOTAL_P=$((TOTAL_P+p)); TOTAL_F=$((TOTAL_F+f)); TOTAL_U=$((TOTAL_U+u))
   while IFS= read -r l; do [ -n "$l" ] && ALL_FAIL+=("$l"); done < <(grep '^    FAIL ' <<<"$out" | sed "s/^    FAIL *//;s|^|$name: |")
   while IFS= read -r l; do [ -n "$l" ] && ALL_UNPROVEN+=("$l"); done < <(grep '^    unproven ' <<<"$out" | sed "s/^    unproven *//;s|^|$name: |")
