@@ -62,7 +62,10 @@ fn build_bench_plan(root: &std::path::Path, n: usize) -> Plan {
 }
 
 #[test]
-#[ignore]
+// Builds 4,000 files across two trees, so it is too slow for every `cargo test`
+// run. It is a measurement rather than an assertion about correctness: run it
+// with `cargo test -- --ignored` when changing anything on the journal path.
+#[ignore = "benchmark: builds 4,000 files; run with --ignored"]
 fn apply_journal_overhead_2000_files() {
     let base = std::env::temp_dir().join(format!("sweep_bench_{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
