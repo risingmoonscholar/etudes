@@ -39,3 +39,19 @@ jobs:
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
 
+  deny:
+    name: dependency policy (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Installs the cargo-deny binary rather than building it from source, so
+      # this job stays fast; it does not add anything to the workspace's own
+      # dependency graph.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # deny.toml configures all four sections and all four currently
+          # pass; run them all so a newly-introduced problem in any of them
+          # fails CI instead of being silently uncovered.
+          command: check bans licenses sources advisories
+
