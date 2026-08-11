@@ -213,10 +213,13 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() {
         println!(
-            "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read\n\n\
-             Nothing here needs organising.\n\n\
-             Nothing has been moved.  Nothing left this machine.",
+            "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read",
             plan.scanned
+        );
+        print_unreadable_warning(&plan);
+        println!(
+            "\nNothing here needs organising.\n\n\
+             Nothing has been moved.  Nothing left this machine."
         );
         return ExitCode::from(1);
     }
@@ -233,6 +236,28 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         inspect::report(&st);
     }
     ExitCode::SUCCESS
+}
+
+/// The one place this fact is worded, so both the empty-groups branch and
+/// `render()` say the same thing. Distinct from `skipped_system`: sweep did
+/// not choose to leave this out, it tried to read it and could not — the
+/// scan is incomplete, and "Scanned N items" above must not be read as a
+/// total. `permission denied` in the wording is deliberate: it is the
+/// common real-world cause, and unlike the other skip counts this one is
+/// worth naming as a WARNING, not a footnote.
+fn print_unreadable_warning(p: &plan::Plan) {
+    if p.skipped_unreadable > 0 {
+        println!(
+            "\n  WARNING: {} {} could not be read (permission denied or similar) — \
+             contents unknown, NOT included in the count above",
+            p.skipped_unreadable,
+            if p.skipped_unreadable == 1 {
+                "directory"
+            } else {
+                "directories"
+            }
+        );
+    }
 }
 
 fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
@@ -304,6 +329,18 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
             }
         );
     }
+    if p.skipped_system > 0 {
+        println!(
+            "\n  refused {} system or credential {}, by policy",
+            p.skipped_system,
+            if p.skipped_system == 1 {
+                "location"
+            } else {
+                "locations"
+            }
+        );
+    }
+    print_unreadable_warning(p);
     if p.root_is_synced {
         println!("\n  warning: this folder is inside a cloud-synced tree");
     }
