@@ -553,23 +553,33 @@ mod macos_unicode {
 mod tests {
 
     #[test]
-    fn case_folding_is_asked_of_the_filesystem_not_assumed() {
-        // On this machine the default volume folds case, so the probe must say
-        // so. The interesting direction — a case-sensitive filesystem, where
-        // folding wrongly refuses legal work — needs a real volume and is
-        // covered by stress/scenarios/60-case-sensitive-collision.sh, which
-        // builds one with hdiutil.
+    fn the_probe_agrees_with_the_filesystem_it_is_asked_about() {
+        // The first version of this test asserted the probe returns true,
+        // because "the default macOS volume folds case". That is a property of
+        // the machine it was written on, and it failed on the ubuntu job —
+        // which is precisely the bug this probe exists to fix, committed into
+        // the test for that fix. Worth leaving the note.
+        //
+        // The property is not "folds" or "does not fold". It is that the probe
+        // agrees with the filesystem in front of it, on whatever machine that
+        // is.
         let dir = std::env::temp_dir().join(format!("etudes_case_probe_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
 
-        let folds = folds_case(&dir);
-        assert!(
-            folds,
-            "the default macOS volume folds case; the probe said otherwise"
+        // Observe the truth independently, with different names than the probe
+        // uses, so this is a second opinion rather than the same call twice.
+        fs::write(dir.join("witness-lower"), b"").expect("write");
+        let actually_folds = dir.join("WITNESS-LOWER").exists();
+        fs::remove_file(dir.join("witness-lower")).expect("cleanup");
+
+        assert_eq!(
+            folds_case(&dir),
+            actually_folds,
+            "the probe disagreed with the filesystem it was asked about"
         );
 
-        // The probe must not leave anything behind.
+        // And it must not leave its probe behind.
         let leftovers: Vec<_> = fs::read_dir(&dir).unwrap().flatten().collect();
         assert!(
             leftovers.is_empty(),
