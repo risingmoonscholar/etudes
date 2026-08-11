@@ -164,7 +164,18 @@ pub struct ScanOutcome {
     /// Paths refused during the walk, for the "what was inspected" report.
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    /// Entries refused by POLICY: a credential/noise directory by name
+    /// (`.ssh`, `node_modules`, ...) or an absolute system location
+    /// (`/System`, `~/Library`, ...). sweep could have looked and chose not
+    /// to — this is restraint, not a failure.
     pub skipped_system: usize,
+    /// Directories `read_dir` could not even open — permission denied, a
+    /// path too long for the OS, or any other I/O failure. This is NOT a
+    /// policy choice: sweep tried to look and could not. Unlike
+    /// `skipped_system`, this means the directory's contents are completely
+    /// unaccounted for and MUST be disclosed, or "Scanned N items" silently
+    /// claims completeness it does not have.
+    pub skipped_unreadable: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
@@ -293,6 +304,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_hidden: 0,
         skipped_symlink: 0,
         skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
     };
@@ -327,7 +339,12 @@ fn walk(
     let rd = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(_) => {
-            out.skipped_system += 1;
+            // A genuine I/O failure, not a policy refusal — sweep tried to
+            // read this directory and could not. Counted separately from
+            // `skipped_system` so a caller can tell "sweep declined to
+            // look" apart from "sweep could not see". Its contents are
+            // completely unaccounted for.
+            out.skipped_unreadable += 1;
             return Ok(());
         }
     };

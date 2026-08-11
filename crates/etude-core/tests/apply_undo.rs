@@ -299,6 +299,8 @@ fn apply_refuses_when_two_planned_destinations_collide() {
         scanned: 2,
         skipped_hidden: 0,
         skipped_symlink: 0,
+        skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -342,6 +344,8 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         scanned: 1,
         skipped_hidden: 0,
         skipped_symlink: 0,
+        skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -357,6 +361,8 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         scanned: 1,
         skipped_hidden: 0,
         skipped_symlink: 0,
+        skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -448,6 +454,8 @@ fn apply_refuses_synced_destination_when_allow_sync_was_never_granted() {
         scanned: 1,
         skipped_hidden: 0,
         skipped_symlink: 0,
+        skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -499,6 +507,8 @@ fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
         scanned: 1,
         skipped_hidden: 0,
         skipped_symlink: 0,
+        skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced: out.root_is_synced,
         allow_sync: out.allow_sync,
     };
@@ -565,6 +575,8 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
         scanned: 1,
         skipped_hidden: 0,
         skipped_symlink: 0,
+        skipped_system: 0,
+        skipped_unreadable: 0,
         root_is_synced: out.root_is_synced,
         allow_sync: out.allow_sync,
     };

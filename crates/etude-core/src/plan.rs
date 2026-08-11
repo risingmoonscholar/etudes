@@ -53,6 +53,13 @@ pub struct Plan {
     pub scanned: usize,
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    /// Entries refused by policy — see `ScanOutcome::skipped_system`.
+    pub skipped_system: usize,
+    /// Directories that could not be read at all — see
+    /// `ScanOutcome::skipped_unreadable`. A nonzero value here means
+    /// `scanned` is a floor, not a total: some part of the tree was
+    /// completely invisible to this scan.
+    pub skipped_unreadable: usize,
     pub root_is_synced: bool,
     /// The `--allow-sync` this plan's scan was actually run with. Copied
     /// straight from `ScanOutcome::allow_sync` — NOT derived from
@@ -166,6 +173,15 @@ impl Plan {
                 j::obj(&[
                     ("hidden", j::num(self.skipped_hidden)),
                     ("symlinks", j::num(self.skipped_symlink)),
+                    // A deliberate refusal: sweep could have entered these
+                    // and chose not to (credential/noise names, or a system
+                    // location like /Library).
+                    ("refused_system_location", j::num(self.skipped_system)),
+                    // NOT a choice: read_dir() itself failed (permission
+                    // denied, path too long, ...). A nonzero count here
+                    // means `scanned` does not describe everything that was
+                    // there — an agent must not treat it as a total.
+                    ("unreadable", j::num(self.skipped_unreadable)),
                 ]),
             ),
             ("root_is_synced", j::bool(self.root_is_synced)),
@@ -332,6 +348,8 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         scanned: scan.entries.len(),
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
+        skipped_system: scan.skipped_system,
+        skipped_unreadable: scan.skipped_unreadable,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
     }
@@ -408,6 +426,7 @@ mod tests {
             skipped_hidden: 0,
             skipped_symlink: 0,
             skipped_system: 0,
+            skipped_unreadable: 0,
             root_is_synced: false,
             allow_sync: false,
         }

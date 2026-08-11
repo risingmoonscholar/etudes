@@ -231,6 +231,8 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         scanned: outcome.entries.len(),
         skipped_hidden: outcome.skipped_hidden,
         skipped_symlink: outcome.skipped_symlink,
+        skipped_system: outcome.skipped_system,
+        skipped_unreadable: outcome.skipped_unreadable,
         root_is_synced: outcome.root_is_synced,
         allow_sync: outcome.allow_sync,
     };
@@ -601,6 +603,8 @@ mod tests {
             scanned: 2,
             skipped_hidden: 0,
             skipped_symlink: 0,
+            skipped_system: 0,
+            skipped_unreadable: 0,
             root_is_synced: false,
             allow_sync: false,
         }
