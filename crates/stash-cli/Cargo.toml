@@ -14,8 +14,8 @@ name = "stash"
 path = "src/main.rs"
 
 [dependencies]
-etude-core = { path = "../etude-core" }
-etude-keep = { path = "../etude-keep" }
+etude-core = { path = "../etude-core", version = "0.3.0" }
+etude-keep = { path = "../etude-keep", version = "0.3.0" }
 
 [dev-dependencies]
-fixtures = { path = "../fixtures" }
+fixtures = { path = "../fixtures", version = "0.3.0" }

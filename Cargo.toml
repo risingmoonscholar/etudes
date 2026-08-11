@@ -14,9 +14,12 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/risingmoonscholar/etudes"
 
-# Dependency policy in deny.toml (reviewers run `cargo deny check bans` manually;
-# CI does not currently run it):
+# Dependency policy in deny.toml, enforced by the `deny` job in
+# .github/workflows/ci.yml on every push:
 #   - nothing that can open a socket, resolve a name, or spawn a runtime
 #   - no build.rs code execution in the tree
-# The engine crate (etude-core) has NO dependencies at all. That is the
-# cheapest possible audit: there is nothing to audit.
+# The engine crate (etude-core) has no dependencies on external code. That is
+# the cheapest possible audit for the classification path: there is nothing
+# to audit. (It does carry one dev-dependency, `fixtures`, a workspace-internal
+# crate used only by its own test suite — see
+# crates/sweep-cli/tests/no_network.rs for what that test actually asserts.)
