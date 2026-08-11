@@ -13,8 +13,20 @@ env:
 
 jobs:
   linux:
-    name: fmt, clippy, test (ubuntu)
+    name: second-platform check, non-blocking (ubuntu)
     runs-on: ubuntu-latest
+    # Not a support claim. This project is macOS only — see the readme.
+    #
+    # It runs because a second machine is the cheapest way to find out what the
+    # first one let you assume. In one afternoon it caught six things: a test
+    # reading munmap'd memory, three tests that assumed a keychain exists, one
+    # that asserted a property of the machine it was written on, and a real bug
+    # where apply refused legal work on a case-sensitive filesystem — which
+    # exists on macOS too, and which the mac suite structurally could not see.
+    #
+    # Non-blocking on purpose. A red here is information about an unsupported
+    # platform, not a reason to stop. It still shows up, which is the point.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

@@ -2,6 +2,13 @@
 
 Three small command-line tools that tidy a folder without reading your private files.
 
+**macOS only.** Not a stepping stone to other platforms — the design leans on
+Darwin in ways that are not incidental: the keychain holds the journal key, the
+sandbox witness is `sandbox-exec`, sync detection knows where iCloud Drive
+lives, and name comparison asks CoreFoundation. Each of those would need a
+different answer elsewhere, and a port that guessed at them would be worse than
+no port.
+
 ```console
 $ sweep ~/Desktop
 
@@ -64,10 +71,10 @@ under the profile. The suite witnesses that its exercised code paths open no
 sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
 subprocess call sites.
 
-It is macOS-only. It uses `sandbox-exec`, and on any other platform it exits `2`
-and says the claim cannot be made on this host. That is deliberate: a witness
-that quietly passes where it cannot actually observe anything is worse than no
-witness.
+It uses `sandbox-exec`, so it is macOS like everything else here. Run it
+anywhere else and it exits `2` saying the claim cannot be made on this host,
+rather than passing. A witness that quietly passes where it cannot observe
+anything is worse than no witness.
 
 Beyond that, `etude-core` has **zero dependencies**, asserted by a test. There is no third-party code in the path that decides what happens
 to your files.
