@@ -193,7 +193,11 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         Ok(o) => o,
         Err(e) => {
             eprintln!("stash: {e}");
-            return ExitCode::from(2);
+            return if e.is_refusal() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::from(3)
+            };
         }
     };
     if outcome.entries.is_empty() {
@@ -277,9 +281,25 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         Err(e) => {
             eprintln!("stash: {e}");
             eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
-            ExitCode::from(3)
+            apply_exit_code(&e)
         }
     }
+}
+
+/// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
+fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
+    use etude_core::apply::ApplyError::*;
+    match e {
+        DestinationExists(_) | DestinationCollision(_) | DestinationIsSynced(_) => {
+            ExitCode::from(2)
+        }
+        Io(_) | Journal(_) | Injected(_) => ExitCode::from(3),
+    }
+}
+
+/// No done entries means pop already ran — exit 1, don't call undo again.
+fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
+    !j.entries.iter().any(|e| e.done)
 }
 
 fn journal_for_root(
@@ -344,6 +364,10 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if journal_is_fully_undone(&j) {
+        println!("\nNothing to restore. This stash was already popped.");
+        return ExitCode::from(1);
+    }
     match etude_core::apply::undo(&mut j) {
         Ok(r) => {
             println!("\nRestored {} items.", r.restored);
@@ -768,5 +792,45 @@ mod tests {
             None,
             "an ordinary folder read as a stash"
         );
+    }
+
+    #[test]
+    fn apply_exit_code_maps_refusals_and_failures() {
+        let collision = etude_core::apply::ApplyError::DestinationCollision(PathBuf::from("x"));
+        let io = etude_core::apply::ApplyError::Io(std::io::Error::other("x"));
+        assert_eq!(apply_exit_code(&collision), ExitCode::from(2));
+        assert_eq!(apply_exit_code(&io), ExitCode::from(3));
+    }
+
+    fn sample_entry(done: bool) -> etude_core::journal::Entry {
+        etude_core::journal::Entry {
+            from: PathBuf::from("/tmp/a"),
+            to: PathBuf::from("/tmp/b"),
+            method: etude_core::journal::Method::Rename,
+            size: 1,
+            mtime_secs: 0,
+            inode: 0,
+            edge_hash: 0,
+            done,
+        }
+    }
+
+    #[test]
+    fn journal_is_fully_undone_when_no_entry_is_done() {
+        let undone = etude_core::Journal {
+            id: "t".into(),
+            tool: "stash".into(),
+            root: PathBuf::from("/tmp"),
+            entries: vec![sample_entry(false), sample_entry(false)],
+        };
+        assert!(journal_is_fully_undone(&undone));
+
+        let pending = etude_core::Journal {
+            id: "t".into(),
+            tool: "stash".into(),
+            root: PathBuf::from("/tmp"),
+            entries: vec![sample_entry(false), sample_entry(true)],
+        };
+        assert!(!journal_is_fully_undone(&pending));
     }
 }

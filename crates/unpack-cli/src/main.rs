@@ -128,14 +128,14 @@ fn value(args: &[String], f: &str) -> Option<String> {
 fn run(archive: &Path, args: &[String]) -> ExitCode {
     if !archive.is_file() {
         eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
-        return ExitCode::from(2);
+        return ExitCode::from(3);
     }
     let Some(fmt) = detect(archive) else {
         eprintln!(
             "unpack: unrecognised archive type.\n\
              Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg"
         );
-        return ExitCode::from(2);
+        return ExitCode::from(3);
     };
 
     if fmt == Format::Dmg {
