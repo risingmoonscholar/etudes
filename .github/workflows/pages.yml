@@ -31,6 +31,10 @@ concurrency:
 
 jobs:
   deploy:
+    # Pages is not available on a private repo, so this would fail on every
+    # push rather than tell anyone anything. Skipping is the honest state:
+    # not published yet, not broken.
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
