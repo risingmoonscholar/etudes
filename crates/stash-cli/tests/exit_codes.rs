@@ -29,6 +29,43 @@ fn stash_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_stash"))
 }
 
+/// Whether a stash can actually be recorded here.
+///
+/// `stash` seals its journal with a key from the login keychain and refuses to
+/// write one in the clear. A CI runner has no keychain, and a Linux runner has
+/// no `security` binary at all, so on both of those the refusal is the correct
+/// behaviour rather than a failure — and a test that assumes otherwise is
+/// asserting "a keychain exists", which is not a property of this tool.
+///
+/// Both branches assert something. The environment decides which claim is
+/// under test, never whether one is.
+fn stash_can_seal(root: &std::path::Path, state: &std::path::Path) -> (bool, std::process::Output) {
+    let out = stash_bin()
+        .env("ETUDE_STATE_DIR", state)
+        .arg(root)
+        .output()
+        .unwrap();
+    (out.status.success(), out)
+}
+
+/// The refusal a keychain-less machine must produce: non-zero, and it must say
+/// why rather than failing quietly or pretending it stashed something.
+fn assert_refused_for_want_of_a_keychain(out: &std::process::Output) {
+    let msg = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        !out.status.success(),
+        "with no keychain, stash must refuse rather than report success: {msg}"
+    );
+    assert!(
+        msg.to_lowercase().contains("keychain") || msg.to_lowercase().contains("clear"),
+        "the refusal must say why it refused, got: {msg}"
+    );
+}
+
 #[test]
 fn a_nonexistent_path_exits_3_not_2() {
     let root = unique_temp("missing");
@@ -67,17 +104,11 @@ fn an_exhausted_pop_exits_1_not_0() {
 
     std::fs::write(root.join("memo.txt"), b"stash me").unwrap();
 
-    let stash = stash_bin()
-        .env("ETUDE_STATE_DIR", &state)
-        .arg(&root)
-        .output()
-        .unwrap();
-    assert!(
-        stash.status.success(),
-        "stash must succeed before pop: stderr={} stdout={}",
-        String::from_utf8_lossy(&stash.stderr),
-        String::from_utf8_lossy(&stash.stdout)
-    );
+    let (sealed, stash) = stash_can_seal(&root, &state);
+    if !sealed {
+        assert_refused_for_want_of_a_keychain(&stash);
+        return;
+    }
 
     let first = stash_bin()
         .env("ETUDE_STATE_DIR", &state)
@@ -126,17 +157,11 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
 
     std::fs::write(root.join("memo.txt"), b"stash me").unwrap();
 
-    let stash = stash_bin()
-        .env("ETUDE_STATE_DIR", &state)
-        .arg(&root)
-        .output()
-        .unwrap();
-    assert!(
-        stash.status.success(),
-        "stash must succeed before truncating its journal: stderr={} stdout={}",
-        String::from_utf8_lossy(&stash.stderr),
-        String::from_utf8_lossy(&stash.stdout)
-    );
+    let (sealed, stash) = stash_can_seal(&root, &state);
+    if !sealed {
+        assert_refused_for_want_of_a_keychain(&stash);
+        return;
+    }
 
     let journal_path = std::fs::read_dir(&state)
         .unwrap()
