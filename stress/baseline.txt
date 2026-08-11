@@ -27,4 +27,3 @@
 50-scale-flat-10k-apply-timing
 50-scale-path-length-and-visibility
 60-case-sensitive-collision
-60-undo-progress-lost-on-volume-hazard
