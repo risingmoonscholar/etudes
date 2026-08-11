@@ -2,3 +2,4 @@ target/
 docs/
 graphify-out/
 crates/graphify-out/
+.night-watch/
