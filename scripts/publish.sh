@@ -38,7 +38,11 @@ step "nothing unpushed"
 step "no claude signature in history"
 [ "$(git log --all --format='%B%an %ae' | grep -ci 'claude\|co-authored')" = "0" ] && ok || bad
 step "no private project names"
-! git grep -qiE 'segno|trisolaris|ad astra' -- . >/dev/null 2>&1 && ok || bad
+# The needle is assembled from pieces so this line does not match itself. A
+# literal pattern here made the check fail on its own source, which is a false
+# positive that would teach you to ignore it.
+needle="$(printf 's%sgno|trisol%sris|ad ast%sa' e a r)"
+! git grep -qiE "$needle" -- . >/dev/null 2>&1 && ok || bad
 
 if [ "$fail" != "0" ]; then
   echo ""
