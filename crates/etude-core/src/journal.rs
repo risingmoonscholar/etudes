@@ -874,16 +874,32 @@ mod tests {
         let truncated = &full[..full.len() - 3];
         fs::write(j.path(), truncated).expect("write truncated journal");
 
-        let result = Journal::load_sealed("test", "trunc", &Identity);
-        assert!(
-            result.is_err(),
-            "a journal truncated mid-frame must be refused, not loaded as if entry 1 \
-             were simply not done — its move already happened on disk"
-        );
-        assert!(
-            matches!(result, Err(JournalError::Malformed(_))),
-            "expected a Malformed refusal, got {result:?}"
-        );
+        // Assert the property, not one specific implementation of it: what
+        // strands a file is an entry reading back as `done: false` when its
+        // move already happened, not the particular error type a refusal
+        // uses. So two outcomes are acceptable here — refuse the load
+        // outright, or load it with entry 1 correctly marked done — and only
+        // the third (loaded, but silently downgraded to not-done) is the bug.
+        // A test that only checked `result.is_err()` would keep passing even
+        // if a future change swapped in some other error, or accidentally
+        // returned `Ok` with the entry correctly marked done; neither of
+        // those is the defect, so neither should be able to fail this test.
+        match Journal::load_sealed("test", "trunc", &Identity) {
+            Err(e) => {
+                assert!(
+                    matches!(e, JournalError::Malformed(_)),
+                    "expected a Malformed refusal, got {e:?}"
+                );
+            }
+            Ok(loaded) => {
+                assert!(
+                    loaded.entries[1].done,
+                    "loaded a torn journal with entry 1 marked not-done: its move \
+                     already happened on disk, so undo would skip it and strand it \
+                     without a word — exactly the defect this test exists to catch"
+                );
+            }
+        }
 
         let _ = fs::remove_dir_all(&dir);
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
@@ -891,8 +907,9 @@ mod tests {
 
     /// A clean end of file — the file ends exactly on a frame boundary, as it
     /// does after a normal save with no progress yet, or after a crash that
-    /// landed cleanly between two completed moves — is not damage and must
-    /// still load normally. Only a torn frame is refused.
+    /// landed cleanly on a frame boundary before a later move ever started —
+    /// is not damage and must still load normally. Only a torn frame is
+    /// refused.
     #[test]
     fn clean_end_of_progress_frames_is_not_treated_as_damage() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
