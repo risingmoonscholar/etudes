@@ -1,8 +1,14 @@
 //! Apply and undo.
 //!
 //! Ordering rule: the journal is written before the first move, and each entry
-//! is marked done only after its move succeeds. A crash at any point leaves a
-//! journal that describes exactly what happened.
+//! is marked done only after its move succeeds. So the journal never claims a
+//! move that did not happen.
+//!
+//! It can still under-report. A crash in the window between a move succeeding
+//! and its progress frame reaching disk leaves the entry reading as not done,
+//! and `undo` then skips a file that is really at its destination without
+//! saying so. That window is narrow, it is not closed, and it is the one place
+//! this module is quieter than it should be.
 
 use std::collections::HashSet;
 use std::fs;

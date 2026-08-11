@@ -11,11 +11,14 @@
 # ever cut off whole or partial trailing frames, same as this does).
 #
 # The property under test: "the tool refuses to act on a damaged journal
-# rather than acting on a partial one." sweep's own docs for
-# `apply_progress` say the opposite is intentional — a truncated tail is
-# replayed as far as it verifies and no further, silently. This checks
-# whether that quietly produces stranded files with a reported exit-0
-# success, which is the exact failure mode the harness brief warns about.
+# rather than acting on a partial one."
+#
+# When this was written, `apply_progress` half-replayed a truncated tail on
+# purpose — as far as it verified and no further, silently — and this scenario
+# caught that producing stranded files under a reported exit-0 success. That
+# has since been fixed: a torn frame refuses the whole journal. The scenario
+# stays because the property is what matters, not the implementation that
+# happened to violate it.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 require stat "byte-exact journal truncation" || exit 0

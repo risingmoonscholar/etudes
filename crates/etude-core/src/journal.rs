@@ -809,6 +809,12 @@ mod tests {
     /// than a refusal: `undo` would see `done: false`, skip the file, and
     /// leave it stranded at its destination without a word.
     #[test]
+    // A review pointed out the first version of this test witnessed the
+    // implementation — it asserted the new error type and nothing else. What
+    // strands a file is not the error type; it is an entry reading back as
+    // `done: false` when the move it describes actually happened. The
+    // assertion below is the one that would have caught the original bug even
+    // if the fix had returned some other error, or none.
     fn truncated_trailing_progress_frame_is_refused_not_silently_dropped() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("sweep_progress_trunc_{}", std::process::id()));
@@ -874,15 +880,30 @@ mod tests {
         let truncated = &full[..full.len() - 3];
         fs::write(j.path(), truncated).expect("write truncated journal");
 
-        let result = Journal::load_sealed("test", "trunc", &Identity);
+        // The property, not the error type. Entry 1's move already happened on
+        // disk; the frame recording it was torn by the crash. Exactly two
+        // outcomes are acceptable: refuse the journal, or load it with that
+        // entry marked done. Loading it as NOT done is the bug — undo then
+        // skips a file that is sitting at its destination, and says nothing.
+        match Journal::load_sealed("test", "trunc", &Identity) {
+            Err(_) => {}
+            Ok(loaded) => {
+                assert!(
+                    loaded.entries[1].done,
+                    "loaded a torn journal with entry 1 as not-done: undo would skip \
+                     a file that is really at its destination and never mention it"
+                );
+            }
+        }
+
+        // And the refusal, when it refuses, should say what is wrong rather
+        // than surface as some unrelated error class.
         assert!(
-            result.is_err(),
-            "a journal truncated mid-frame must be refused, not loaded as if entry 1 \
-             were simply not done — its move already happened on disk"
-        );
-        assert!(
-            matches!(result, Err(JournalError::Malformed(_))),
-            "expected a Malformed refusal, got {result:?}"
+            matches!(
+                Journal::load_sealed("test", "trunc", &Identity),
+                Err(JournalError::Malformed(_))
+            ),
+            "expected a Malformed refusal"
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -891,7 +912,7 @@ mod tests {
 
     /// A clean end of file — the file ends exactly on a frame boundary, as it
     /// does after a normal save with no progress yet, or after a crash that
-    /// landed cleanly between two completed moves — is not damage and must
+    /// landed cleanly on a frame boundary — is not damage and must
     /// still load normally. Only a torn frame is refused.
     #[test]
     fn clean_end_of_progress_frames_is_not_treated_as_damage() {
