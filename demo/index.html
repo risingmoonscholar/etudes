@@ -128,6 +128,57 @@ the same suite, with socket(2) denied by the OS</div>
 exits 2 saying the claim cannot be made on this host — a witness that quietly passes where
 it cannot observe anything is worse than no witness.</p>
 
+<hr>
+
+<h2 id="witness">Witness</h2>
+<p>A test that passes is not the same as a test that checked something, and nothing in a
+green summary distinguishes them. <em>Witness</em> is the name for the checks in this repo
+that can testify: each one can demonstrate it is able to observe the failure it claims to
+rule out.</p>
+
+<p>Four rules, all cheap, none clever.</p>
+
+<p><strong>Prove the instrument before trusting a negative.</strong> The no-network run
+denies <code>socket(2)</code> at the kernel. Before believing that, it compiles a control
+program that dials <code>1.1.1.1</code> and requires it to succeed unsandboxed and fail
+under the profile. A sandbox that denies nothing produces the same green.</p>
+
+<p><strong>Unproven is a third outcome.</strong> A hazard this machine cannot exercise —
+no disk image support, a missing tool, a filesystem that is not here — is counted
+separately and printed under its own heading. A skipped check and a survived check are
+different facts, and a total that renders them the same means <em>nothing was checked</em>
+while reading exactly like <em>everything was checked</em>.</p>
+
+<p><strong>Zero assertions is a failure.</strong> A scenario that dies before asserting
+used to produce no output at all, and execution carried on, so a later assertion could
+report green. The harness built to find silent failure had one.</p>
+
+<p><strong>Break it on purpose before believing it.</strong> Every rule above was verified
+by making it fail first — a deliberately broken scenario, a missing tool, a control that
+could not reach the network. A check nobody has watched go red is decoration.</p>
+
+<p><strong>Run it somewhere else.</strong> A suite that has only ever run on one machine
+has tested that machine. A test here was right on macOS for two years and segfaulted the
+first time it ran on Linux, because it read a freed 1&nbsp;MiB buffer that glibc had already
+handed back to the kernel. It observed the correct thing, on the platform where it ran, by
+depending on allocator behaviour it never stated.</p>
+
+<h3>Night Watch</h3>
+<p>Night Watch is the agent that runs these against this repo, unattended, and files what
+it finds. The open issues are its output. Each carries its own attribution, and the wording
+in them is the agent's rather than mine.</p>
+
+<div class="term"><span class="cmd">bash stress/run.sh</span>
+33 scenarios · pass / FAIL / unproven, counted separately
+exit 0 pass · 1 fail · 2 nothing proven</div>
+<p class="note">The failures are real and left open on purpose. A repository that argues
+for honest reporting and hides its own defect list would be making the opposite argument.
+<a href="https://github.com/risingmoonscholar/etudes/issues">Read them</a> — they include a
+data-loss bug introduced by one of my own fixes.</p>
+
+<p>This is what I have an agent doing on a small project. If it is missing something
+obvious, I would rather hear it than not.</p>
+
 <p class="foot">
 Apache-2.0 · <a href="https://github.com/risingmoonscholar/etudes">source</a>
 </p>

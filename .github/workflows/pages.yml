@@ -1,0 +1,60 @@
+name: pages
+
+# Publishes demo/ to GitHub Pages.
+#
+# The demo lives next to the code that produces it on purpose: every terminal
+# block on that page is captured by scripts/capture-demos.sh from binaries built
+# out of this tree. Hosting it anywhere else would let the page drift from the
+# tool without anything noticing.
+#
+# It uploads demo/ as an artifact rather than publishing from a branch, so the
+# gitignored docs/ decision stays untouched and there is no gh-pages branch to
+# keep in sync.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'demo/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; never cancel one midway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The page reads transcripts.json at runtime. If it is missing the page
+      # renders a "not loaded" message, which would be a broken demo published
+      # quietly — so fail here instead.
+      - name: Refuse to publish a demo with no transcripts
+        run: |
+          test -f demo/transcripts.json || { echo "demo/transcripts.json missing"; exit 1; }
+          python3 -c "
+          import json,sys
+          d=json.load(open('demo/transcripts.json'))
+          n=len(d.get('transcripts',[]))
+          assert n > 0, 'transcripts.json has no transcripts'
+          print(f'{n} transcripts, captured at {d.get(\"commit\",\"?\")}')
+          "
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo
+      - id: deploy
+        uses: actions/deploy-pages@v4
