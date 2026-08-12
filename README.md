@@ -148,10 +148,10 @@ apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 33 scenarios, 7 of them failing
+bash stress/run.sh        # 33 scenarios, 6 of them failing
 ```
 
-The 7 failing scenarios are real and they are [filed](../../issues), each with a
+The 6 failing scenarios are real and they are [filed](../../issues), each with a
 reproduction. They fail on purpose so the reproductions do not rot, and CI
 fails only when the number gets worse. The ones you are most likely to meet:
 

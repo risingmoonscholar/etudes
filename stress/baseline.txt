@@ -19,7 +19,6 @@
 
 30-concurrent-applies
 30-graceful-signal-mid-apply
-30-journal-truncation
 30-kill-mid-undo
 30-sigkill-mid-apply
 40-06-permission-change-mid-apply
