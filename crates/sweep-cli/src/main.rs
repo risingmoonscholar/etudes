@@ -145,8 +145,8 @@ const LESSON: &[(&str, &str)] = &[
         "Put it back",
         "    sweep undo\n\
          \n\
-         Finder returns to before the last apply. Not before the one in step 3 --\n\
-         undo reverses the most recent apply only, so the group you moved there\n\
+         Finder returns to before the last apply, not before the one in step 3.\n\
+         Undo reverses the most recent apply only, so the group you moved there\n\
          stays where you put it.\n\
          \n\
          That worked because the apply wrote a journal. Skip the journal and you\n\
@@ -159,11 +159,16 @@ const LESSON: &[(&str, &str)] = &[
     ),
     (
         "Destroy what it remembered",
-        "    sweep forget\n\
+        "    sweep undo\n\
          \n\
-         A journal is an index of your filenames. Keeping one forever keeps the\n\
-         exposure forever, so they expire after 30 days on their own, and this\n\
-         removes them now.\n\
+         It refuses. Undo reaches one apply back, never a stack, so the group\n\
+         you moved in step 3 is now beyond it.\n\
+         \n\
+         Its journal is still on disk. It can no longer undo anything, and it is\n\
+         still an index of your filenames for the rest of its thirty days. That\n\
+         is what this removes:\n\
+         \n\
+             sweep forget\n\
          \n\
          It asks first, because a key stash can rely on the same store. Read\n\
          what it asks before answering.",

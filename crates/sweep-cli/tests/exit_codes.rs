@@ -331,3 +331,28 @@ fn every_command_the_lesson_teaches_exists() {
         }
     }
 }
+
+#[test]
+fn the_lesson_never_prints_a_bare_double_hyphen() {
+    // In a lesson about a command-line tool, `--` on its own reads as a flag
+    // or as the end-of-options separator. It was being used as a dash.
+    let list = sweep_bin().args(["lesson"]).output().unwrap();
+    let claimed: usize = String::from_utf8_lossy(&list.stdout)
+        .split_whitespace()
+        .find_map(|w| w.parse::<usize>().ok())
+        .unwrap();
+
+    for n in 1..=claimed {
+        let out = sweep_bin()
+            .args(["lesson", &n.to_string()])
+            .output()
+            .unwrap();
+        let body = String::from_utf8_lossy(&out.stdout).to_string();
+        for word in body.split_whitespace() {
+            assert_ne!(
+                word, "--",
+                "lesson {n} prints a bare `--`, which reads as a flag rather than punctuation"
+            );
+        }
+    }
+}
