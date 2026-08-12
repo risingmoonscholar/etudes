@@ -1,4 +1,4 @@
-//! sweep — organise the obvious, leave the private alone.
+//! sweep: organise the obvious, leave the private alone.
 //!
 //! `sweep PATH` plans and changes nothing. `apply` executes, `undo` reverses.
 //! The undo journal is sealed with a key held in the login keychain; if sealing
@@ -14,7 +14,7 @@ use etude_core::plan;
 use etude_core::scan::{self, ScanConfig};
 
 const USAGE: &str = "\
-sweep — organise the obvious, leave the private alone
+sweep: organise the obvious, leave the private alone
 
 USAGE
     sweep [PATH] [FLAGS]         analyse and build a plan; changes nothing
@@ -25,6 +25,7 @@ USAGE
     sweep forget                 remove sweep's journals; ask before destroying
                                  a key stash also relies on
     sweep verify                 print sweep's own privacy posture
+    sweep lesson [N]             seven exercises against a folder you throw away
 
 FLAGS
     --depth N       recursion depth (default 1, max 8)
@@ -65,6 +66,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("verify") => verify(),
+        Some("lesson") => cmd_lesson(&args),
         Some("apply") => cmd_apply(&args),
         Some("undo") => cmd_undo(),
         Some("forget") => cmd_forget(&args),
@@ -78,6 +80,138 @@ fn main() -> ExitCode {
         }
         Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
     }
+}
+
+/// Seven exercises. Each one is a command to run and one thing to look at.
+///
+/// The lesson is in the binary rather than in a README because a tool that
+/// cannot teach itself is a tool you have to be handheld through. It never
+/// runs a command for you: reading output you did not ask for teaches nothing.
+const LESSON: &[(&str, &str)] = &[
+    (
+        "Point it at a folder",
+        "    mkdir -p ~/sweep-practice && cd ~/sweep-practice\n\
+             mkfx Desktop && sweep Desktop\n\
+         \n\
+         A hundred plausible files, and a plan for them. Nothing moved.\n\
+         \n\
+         Open the folder in Finder and leave the window visible. Every step\n\
+         after this is worth watching happen.\n\
+         \n\
+         Read the `Left alone` block. Some files are refused because they look\n\
+         like personal records. Open one. That is the file this tool exists to\n\
+         not touch.\n\
+         \n\
+         `mkfx` builds throwaway fixtures and ships with the etudes source. Any\n\
+         folder of junk works as well.",
+    ),
+    (
+        "Ask why",
+        "    sweep Desktop --explain\n\
+         \n\
+         Every file, and the signals that placed it. This is how you disagree\n\
+         with a grouping instead of just distrusting it.\n\
+         \n\
+         Contents were not read. The signals are names, sizes and dates.\n\
+         \n\
+         The same plan comes in two other shapes:\n\
+         \n\
+             sweep Desktop --json     for something that will parse it\n\
+             sweep Desktop --quiet    counts only, never a filename",
+    ),
+    (
+        "Move one group instead of all of them",
+        "    sweep apply Desktop --only acme\n\
+         \n\
+         All-or-nothing is a bad default for someone else's folder. Run the\n\
+         plan, pick one name out of it, move only that.\n\
+         \n\
+             sweep review Desktop\n\
+         \n\
+         Same idea, one group at a time, with a chance to rename before it\n\
+         moves.",
+    ),
+    (
+        "Try to move a personal record",
+        "    sweep apply Desktop --yes\n\
+         \n\
+         Watch Finder. Groups move. Now look for the file you opened in step 1.\n\
+         \n\
+         It is still there. There is no flag in `sweep help` that moves it, and\n\
+         that is the claim the whole tool rests on. A refusal you can override\n\
+         is not a refusal.",
+    ),
+    (
+        "Put it back",
+        "    sweep undo\n\
+         \n\
+         Finder returns to before the last apply. Not before the one in step 3 --\n\
+         undo reverses the most recent apply only, so the group you moved there\n\
+         stays where you put it.\n\
+         \n\
+         That worked because the apply wrote a journal. Skip the journal and you\n\
+         give up the undo:\n\
+         \n\
+             sweep apply Desktop --yes --no-journal\n\
+             sweep undo\n\
+         \n\
+         It refuses. Nothing recorded where anything came from.",
+    ),
+    (
+        "Destroy what it remembered",
+        "    sweep forget\n\
+         \n\
+         A journal is an index of your filenames. Keeping one forever keeps the\n\
+         exposure forever, so they expire after 30 days on their own, and this\n\
+         removes them now.\n\
+         \n\
+         It asks first, because a key stash can rely on the same store. Read\n\
+         what it asks before answering.",
+    ),
+    (
+        "Make it state its promise",
+        "    sweep verify\n\
+         \n\
+         In step 3 you tried to break the promise and could not. This is that\n\
+         promise written down by the tool itself, and it is the thing to argue\n\
+         with if you want to argue with anything.\n\
+         \n\
+         A tool that tells you its posture can be checked against its own\n\
+         behaviour. One that does not has to be trusted.",
+    ),
+];
+
+fn cmd_lesson(args: &[String]) -> ExitCode {
+    let n = match args.get(1) {
+        None => {
+            println!("sweep lesson: {} exercises\n", LESSON.len());
+            for (i, (title, _)) in LESSON.iter().enumerate() {
+                println!("    {}  {title}", i + 1);
+            }
+            println!("\nRun `sweep lesson 1` to start. Each step names the next.");
+            return ExitCode::SUCCESS;
+        }
+        Some(v) => match v.parse::<usize>() {
+            Ok(n) if (1..=LESSON.len()).contains(&n) => n,
+            _ => {
+                eprintln!(
+                    "sweep: lesson takes a step from 1 to {}, got {v:?}",
+                    LESSON.len()
+                );
+                return ExitCode::from(2);
+            }
+        },
+    };
+
+    let (title, body) = LESSON[n - 1];
+    println!("sweep lesson {n}/{}  ·  {title}\n", LESSON.len());
+    println!("{body}");
+    if n < LESSON.len() {
+        println!("\nNext: sweep lesson {}", n + 1);
+    } else {
+        println!("\nThat is the tool. `sweep help` is the rest.");
+    }
+    ExitCode::SUCCESS
 }
 
 fn has(args: &[String], flag: &str) -> bool {
@@ -241,17 +375,17 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
 
 /// The one place this fact is worded, so both the empty-groups branch and
 /// `render()` say the same thing. Distinct from `skipped_system`: sweep did
-/// not choose to leave this out, it tried to read it and could not — the
-/// scan is incomplete, and "Scanned N items" above must not be read as a
-/// total. Names both real-world causes from the filed issue (a permission
-/// bit, or a path too long for the OS) rather than assuming EACCES — the
-/// same `read_dir` failure covers either, and unlike the other skip counts
+/// not choose to leave this out. It tried to read it and could not. The
+/// scan is incomplete. "Scanned N items" above must not be read as a
+/// total. It names both real-world causes from the filed issue (a permission
+/// bit, or a path too long for the OS) rather than assuming EACCES. The
+/// same `read_dir` failure covers either. Unlike the other skip counts,
 /// this one is worth naming as a WARNING, not a footnote.
 fn print_unreadable_warning(p: &plan::Plan) {
     if p.skipped_unreadable > 0 {
         println!(
             "\n  WARNING: {} {} could not be read (permission denied, a path too long, \
-             or another read failure) — contents unknown, NOT included in the count above",
+             or another read failure). Contents unknown. NOT included in the count above",
             p.skipped_unreadable,
             if p.skipped_unreadable == 1 {
                 "directory"
@@ -262,7 +396,7 @@ fn print_unreadable_warning(p: &plan::Plan) {
     }
 }
 
-/// A deliberate policy refusal — sweep could have entered these and chose
+/// A deliberate policy refusal: sweep could have entered these and chose
 /// not to (a credential/noise directory by name, or an absolute system
 /// location). Printed from both human-output sites for the same reason as
 /// `print_unreadable_warning`: an agent or a person reading either output
@@ -323,7 +457,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
             // One short line. The per-category breakdown is available under
             // --explain; the summary must stay glanceable and must not read
             // like an inventory of the user's private life.
-            println!("    {personal} look like personal records — sweep does not touch these");
+            println!("    {personal} look like personal records. sweep does not touch these");
             if explain {
                 for (cat, n) in &counts {
                     println!("      {n:>3}  {}", cat.describe());
@@ -361,7 +495,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     if explain && !quiet {
         println!("\n--- signal trace ---");
         for g in &p.groups {
-            println!("\n{} — {}", g.name, g.signal.describe());
+            println!("\n{}: {}", g.name, g.signal.describe());
             for m in &g.members {
                 println!("    {}", m.display());
             }
@@ -407,7 +541,7 @@ fn sealer() -> Option<KeychainSeal> {
     }
 }
 
-/// `sweep review PATH` — scan, decide interactively, apply in one pass.
+/// `sweep review PATH`: scan, decide interactively, apply in one pass.
 ///
 /// No plan is persisted between commands. See the module docs in review.rs:
 /// a stored plan is a second plaintext index of the user's filenames, and
@@ -488,7 +622,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
     }
 }
 
-/// No done entries means undo already ran — exit 1, don't call undo again.
+/// No done entries means undo already ran. Exit 1. Don't call undo again.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
     !j.entries.iter().any(|e| e.done)
 }
@@ -611,7 +745,15 @@ fn cmd_undo() -> ExitCode {
         }
     };
     if journal_is_fully_undone(&j) {
-        println!("\nNothing to undo. This journal was already restored.");
+        // Say which operation this is about. The newest journal being already
+        // restored is a fact about an earlier run, and a user who just applied
+        // something reads it as a fact about that. If they used --no-journal
+        // there is no record to reverse, and the honest thing is to say so
+        // rather than let a reassuring sentence stand in for one.
+        println!("\nNothing to undo. The most recent recorded apply was already restored.");
+        println!(
+            "If you just ran apply with --no-journal, nothing was recorded and undo cannot \nreverse it."
+        );
         return ExitCode::from(1);
     }
     let r = etude_core::apply::undo(&mut j);
@@ -646,7 +788,7 @@ fn cmd_undo() -> ExitCode {
                 );
             }
             Err(save_err) => eprintln!(
-                "sweep: additionally, the journal could not be updated ({save_err}) — it may not reflect the files just restored."
+                "sweep: additionally, the journal could not be updated ({save_err}). It may not reflect the files just restored."
             ),
         }
         return ExitCode::from(3);
@@ -658,7 +800,7 @@ fn cmd_undo() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Who owns a `{tool}-{id}.journal` filename — same `{tool}-` prefix convention
+/// Who owns a `{tool}-{id}.journal` filename, same `{tool}-` prefix convention
 /// as `journal::latest_id` / `ids_by_recency`. Non-journals are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JournalOwner {
@@ -683,14 +825,14 @@ fn classify_journal_filename(name: &str) -> JournalOwner {
 /// Whether forget may destroy the shared keychain key, and how.
 ///
 /// Stash and sweep share one key. Destroying it while a stash journal exists
-/// strands that stash permanently — so we require an informed yes, or `--yes`.
+/// strands that stash permanently. So we require an informed yes, or `--yes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ForgetKeyGate {
     /// No live stash journal, or `--yes` already authorised destruction.
     Proceed,
-    /// Stash present, TTY available — warn and ask.
+    /// Stash present, TTY available: warn and ask.
     Ask,
-    /// Stash present, no TTY and no `--yes` — refuse.
+    /// Stash present, no TTY and no `--yes`: refuse.
     Refuse,
 }
 
@@ -714,8 +856,8 @@ fn forget_shared_key_consent() -> bool {
     println!(
         "\n\
   sweep and stash share one keychain key.\n\
-  Destroying it will make any live stash permanently unrecoverable\n\
-  — the holding directory stays, but nothing can open it.\n"
+  Destroying it will make any live stash permanently unrecoverable.\n\
+  The holding directory stays. Nothing can open it.\n"
     );
     print!("  destroy the shared key anyway? [y/N] > ");
     let _ = io::stdout().flush();
@@ -765,7 +907,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
             }
         }
     }
-    // Sweep's own journals only — always, regardless of the key decision below.
+    // Sweep's own journals only, always, regardless of the key decision below.
     println!("Removed {n} journal(s) from {}.", dir.display());
 
     match forget_key_gate(args, stash_present, std::io::stdin().is_terminal()) {
@@ -807,7 +949,7 @@ sweep {v}
     journal path synced    {synced}
     journal expiry         {ttl} days
 
-  What is NOT implemented — do not expect it to work
+  What is NOT implemented. Do not expect it to work
     x                      extracting files out of a group during review
     PDF / Office / archive parsing   --inspect-content reads plain text only
     content grouping       what sweep reads can only make it refuse MORE
@@ -823,7 +965,7 @@ sweep {v}
         count = count,
         dir = dir.display(),
         synced = if scan::is_synced(&dir) {
-            "YES — move it"
+            "YES, move it"
         } else {
             "no"
         },
@@ -951,7 +1093,7 @@ mod tests {
         );
     }
 
-    // a live stash journal is what gates key destruction — must be detected.
+    // a live stash journal is what gates key destruction; must be detected.
     #[test]
     fn a_stash_journal_filename_signals_stash_present() {
         assert_eq!(
