@@ -128,7 +128,7 @@ fn an_exhausted_undo_exits_1_not_0() {
     std::fs::create_dir_all(&state).unwrap();
     let _state = TestDir(state.clone());
 
-    // Five distinct filenames sharing a token — apply succeeds, no collision.
+    // Five distinct filenames sharing a token. apply succeeds, no collision.
     for name in [
         "notes-one.txt",
         "notes-two.txt",
@@ -175,4 +175,159 @@ fn an_exhausted_undo_exits_1_not_0() {
         String::from_utf8_lossy(&second.stderr),
         String::from_utf8_lossy(&second.stdout)
     );
+}
+// appended to crates/sweep-cli/tests/exit_codes.rs
+#[test]
+fn undo_does_not_imply_it_reversed_an_unjournalled_apply() {
+    // With a stale restored journal lying around — the normal state after
+    // anyone has used undo once — an apply run with --no-journal leaves files
+    // moved and no record. `sweep undo` then finds the OLD journal, sees it is
+    // already restored, and says so.
+    //
+    // The exit code is right: nothing to undo, so 1. The sentence is not. A
+    // user who just ran apply reads "this journal was already restored" as a
+    // statement about that apply, and it is a statement about an operation
+    // they may not remember running. The reassurance is real and the subject
+    // is wrong, which is this project's least favourite shape.
+    let root = unique_temp("undo-msg-root");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let _root = TestDir(root.clone());
+    let state = unique_temp("undo-msg-state");
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let _state = TestDir(state.clone());
+
+    for i in 1..=4 {
+        std::fs::write(
+            root.join(format!("Screenshot 2026-01-0{i} at 9.0{i}.11 AM.png")),
+            b"x",
+        )
+        .unwrap();
+    }
+
+    let apply = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["apply"])
+        .arg(&root)
+        .args(["--yes"])
+        .output()
+        .unwrap();
+    if !apply.status.success() {
+        assert_refused_for_want_of_a_keychain(&apply);
+        return;
+    }
+    let _ = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["undo"])
+        .output()
+        .unwrap();
+
+    // Now an apply with no record at all.
+    let _ = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["apply"])
+        .arg(&root)
+        .args(["--yes", "--no-journal"])
+        .output()
+        .unwrap();
+
+    let undo = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["undo"])
+        .output()
+        .unwrap();
+    let msg =
+        String::from_utf8_lossy(&undo.stdout).to_string() + &String::from_utf8_lossy(&undo.stderr);
+
+    assert_eq!(
+        undo.status.code(),
+        Some(1),
+        "nothing to undo is exit 1: {msg}"
+    );
+    assert!(
+        msg.contains("--no-journal") || msg.contains("no record"),
+        "undo must say that an unrecorded apply cannot be reversed, rather than \
+         reporting on an older journal as if it were the recent one. got: {msg}"
+    );
+}
+
+#[test]
+fn lesson_lists_steps_and_refuses_ones_that_do_not_exist() {
+    let list = sweep_bin().args(["lesson"]).output().unwrap();
+    assert_eq!(list.status.code(), Some(0), "bare `lesson` lists the steps");
+    let listing = String::from_utf8_lossy(&list.stdout).to_string();
+
+    // The listing states a count. Every step it claims must actually print.
+    let claimed: usize = listing
+        .split_whitespace()
+        .find_map(|w| w.parse::<usize>().ok())
+        .expect("the listing states how many exercises there are");
+
+    for n in 1..=claimed {
+        let out = sweep_bin()
+            .args(["lesson", &n.to_string()])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "lesson {n} is listed but does not print"
+        );
+        let body = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            body.contains(&format!("{n}/{claimed}")),
+            "lesson {n} does not say where it is in the sequence"
+        );
+        assert!(
+            body.trim().lines().count() > 2,
+            "lesson {n} printed a heading and nothing else"
+        );
+    }
+
+    // And a step that does not exist is refused rather than silently empty.
+    for bad in ["0", &(claimed + 1).to_string(), "abc", "-1"] {
+        let out = sweep_bin().args(["lesson", bad]).output().unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "lesson {bad:?} must be refused with exit 2, not accepted or ignored"
+        );
+    }
+}
+
+#[test]
+fn every_command_the_lesson_teaches_exists() {
+    // The lesson is a claim about the tool. If it teaches a flag or subcommand
+    // that `sweep help` does not have, the lesson is wrong and a learner finds
+    // out by being confused rather than by anything failing.
+    let help =
+        String::from_utf8_lossy(&sweep_bin().arg("help").output().unwrap().stdout).to_string();
+
+    let list = sweep_bin().args(["lesson"]).output().unwrap();
+    let claimed: usize = String::from_utf8_lossy(&list.stdout)
+        .split_whitespace()
+        .find_map(|w| w.parse::<usize>().ok())
+        .unwrap();
+
+    for n in 1..=claimed {
+        let out = sweep_bin()
+            .args(["lesson", &n.to_string()])
+            .output()
+            .unwrap();
+        let body = String::from_utf8_lossy(&out.stdout).to_string();
+        for word in body.split_whitespace() {
+            let flag = word.trim_matches(|c: char| !c.is_ascii_graphic() || c == '`' || c == ',');
+            if let Some(f) = flag.strip_prefix("--") {
+                let f = f.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-');
+                if f.is_empty() {
+                    continue;
+                }
+                assert!(
+                    help.contains(&format!("--{f}")),
+                    "lesson {n} teaches `--{f}`, which is not in `sweep help`"
+                );
+            }
+        }
+    }
 }
