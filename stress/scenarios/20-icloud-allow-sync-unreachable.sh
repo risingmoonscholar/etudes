@@ -40,9 +40,9 @@ if [ "$icloud_code" = "0" ]; then
   pass "iCloud Desktop proceeds with --allow-sync, same as Dropbox and Google Drive"
 else
   fail "REAL DEFECT: --allow-sync cannot unlock iCloud Drive at all. \
-sweep '$ICLOUD' --allow-sync exited $icloud_code (wanted 0) with: ${icloud_out%%$'\n'*} \
-— iCloud Drive always contains a path component literally named 'Library', \
-which scan.rs's NEVER_ENTER system-location check refuses UNCONDITIONALLY, \
+sweep '$ICLOUD' --allow-sync exited $icloud_code (wanted 0) with: ${icloud_out%%$'\n'*}. \
+iCloud Drive always contains a path component literally named 'Library'. \
+scan.rs's NEVER_ENTER system-location check refuses that UNCONDITIONALLY, \
 before is_synced()/allow_sync is ever consulted. The sync-specific refusal \
 and its documented override never get a chance to run for the one sync \
 provider built into every Mac. A user with iCloud Desktop sync on \
@@ -50,19 +50,19 @@ provider built into every Mac. A user with iCloud Desktop sync on \
 fi
 
 # Confirm the failure text is specifically the system-location refusal, not
-# the sync refusal — proof the two code paths never actually meet for this
+# the sync refusal, proof the two code paths never actually meet for this
 # input, not just a wording coincidence.
 if [ "$icloud_code" != "0" ]; then
   case "$icloud_out" in
     *"system or credential location"*)
-      pass "diagnostic: confirmed as RefusedSystemLocation, not RefusedSyncRoot — allow_sync structurally cannot reach this branch" ;;
+      pass "diagnostic: confirmed as RefusedSystemLocation, not RefusedSyncRoot. allow_sync structurally cannot reach this branch" ;;
     *)
-      fail "diagnostic: refusal text changed shape ('$icloud_out') — re-check whether this is still the same root cause" ;;
+      fail "diagnostic: refusal text changed shape ('$icloud_out'). re-check whether this is still the same root cause" ;;
   esac
 fi
 
-# Whatever happened above, nothing should have actually moved anything —
-# these were all plan-only invocations.
+# Whatever happened above, nothing should have actually moved anything.
+# These were all plan-only invocations.
 assert_intact "$ICLOUD" 5 "iCloud Desktop untouched by plan-only runs"
 assert_intact "$DROPBOX" 5 "Dropbox untouched by plan-only runs"
 assert_intact "$GDRIVE" 5 "Google Drive untouched by plan-only runs"

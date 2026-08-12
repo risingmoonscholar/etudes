@@ -3,7 +3,7 @@
 #
 # A "graceful" signal should not be worse than kill -9. sweep installs no
 # signal handler anywhere in the tree (grep for ctrlc / signal_hook turns up
-# nothing), so SIGINT and SIGTERM get the OS default disposition — immediate
+# nothing), so SIGINT and SIGTERM get the OS default disposition: immediate
 # termination, no unwind, no Drop. That means whatever kill -9 can do to an
 # in-flight move, Ctrl-C and a plain `kill` can do too. This scenario checks
 # that directly, rather than assuming it from reading the source.
@@ -75,9 +75,9 @@ run_signal_suite() {
     fi
   done
   if [ "$bad" -eq 0 ]; then
-    pass "SIG$sig at $total points mid-apply: undo always returned the exact baseline name set (no worse than SIGKILL, as expected — sweep has no signal handler)"
+    pass "SIG$sig at $total points mid-apply: undo always returned the exact baseline name set (no worse than SIGKILL, as expected: sweep has no signal handler)"
   else
-    fail "SIG$sig mid-apply: $bad/$total trials left the tree wrong after undo — a 'graceful' interrupt (no handler installed) hit the same crash-window defect SIGKILL hits. First reproduction:
+    fail "SIG$sig mid-apply: $bad/$total trials left the tree wrong after undo. A 'graceful' interrupt (no handler installed) hit the same crash-window defect SIGKILL hits. First reproduction:
 $first"
   fi
 }

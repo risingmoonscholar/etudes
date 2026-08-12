@@ -53,16 +53,16 @@ pub struct Plan {
     pub scanned: usize,
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
-    /// Entries refused by policy — see `ScanOutcome::skipped_system`.
+    /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
-    /// Directories that could not be read at all — see
+    /// Directories that could not be read at all. See
     /// `ScanOutcome::skipped_unreadable`. A nonzero value here means
     /// `scanned` is a floor, not a total: some part of the tree was
     /// completely invisible to this scan.
     pub skipped_unreadable: usize,
     pub root_is_synced: bool,
     /// The `--allow-sync` this plan's scan was actually run with. Copied
-    /// straight from `ScanOutcome::allow_sync` — NOT derived from
+    /// straight from `ScanOutcome::allow_sync`. NOT derived from
     /// `root_is_synced`, on purpose: a caller can pass `--allow-sync` on a
     /// root that isn't itself synced (`root_is_synced` false) and later
     /// have a destination collide with a sync marker anyway (e.g. a `sweep
@@ -104,7 +104,7 @@ impl Plan {
 
 /// Optional content inspection, injected by the caller.
 ///
-/// `etude-core` deliberately cannot read file contents itself — the engine has
+/// `etude-core` deliberately cannot read file contents itself. The engine has
 /// zero dependencies and never opens a file. When the user passes
 /// `--inspect-content` the CLI supplies an implementation.
 ///
@@ -121,8 +121,8 @@ pub trait Inspector {
 /// human rendering is drawn from. Both must agree, because a tool that tells a
 /// person one thing and an agent another is the worst kind of interface.
 ///
-/// `untouched` carries the REASON but never the category for a personal record
-/// — an agent gets the count by category, not a list of which files look like
+/// `untouched` carries the REASON but never the category for a personal record.
+/// An agent gets the count by category, not a list of which files look like
 /// tax documents. That would hand it exactly the index the naming rule exists
 /// to prevent.
 impl Plan {
@@ -180,7 +180,7 @@ impl Plan {
                     // NOT a choice: read_dir() itself failed (permission
                     // denied, path too long, ...). A nonzero count here
                     // means `scanned` does not describe everything that was
-                    // there — an agent must not treat it as a total.
+                    // there. An agent must not treat it as a total.
                     ("unreadable", j::num(self.skipped_unreadable)),
                 ]),
             ),
@@ -209,7 +209,7 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
     let mut untouched: Vec<(PathBuf, Untouched)> = Vec::new();
     let mut remaining: Vec<&Entry> = Vec::new();
 
-    // Pass 1 — the refusal detectors. Run first, remove from all others.
+    // Pass 1: the refusal detectors. Run first, remove from all others.
     for e in &scan.entries {
         // Filename first: it is free, and a file already refused by name is
         // never opened. Reading it could only confirm what we already decided.
@@ -229,7 +229,7 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
     let mut groups: Vec<Group> = Vec::new();
     let mut claimed: Vec<PathBuf> = Vec::new();
 
-    // Pass 2 — structural detectors, highest precision first.
+    // Pass 2: structural detectors, highest precision first.
     let shots: Vec<&Entry> = remaining
         .iter()
         .copied()
@@ -301,7 +301,7 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         });
     }
 
-    // Pass 3 — shared tokens. The only detector that names a group from user
+    // Pass 3: shared tokens. The only detector that names a group from user
     // text, which is exactly why the naming rule permits it.
     let mut by_token: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
     for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
@@ -435,8 +435,8 @@ mod tests {
     #[test]
     fn camera_files_spanning_years_are_not_called_a_burst() {
         // Same filename shape, mtimes years apart. No 3-day window holds
-        // enough of them, so no group — and definitely no "taken within
-        // 3 days" claim — should be produced.
+        // enough of them, so no group should be produced. Definitely no
+        // "taken within 3 days" claim should be made either.
         let entries = vec![
             cam_entry("IMG_0001.jpg", 1_577_836_800), // 2020-01-01
             cam_entry("IMG_0002.jpg", 1_655_251_200), // 2022-06-15
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn real_burst_across_a_year_boundary_names_both_years() {
-        // Three camera files two days apart, straddling New Year's — a
+        // Three camera files two days apart, straddling New Year's. A
         // genuine burst that also exercises the multi-year label.
         let entries = vec![
             cam_entry("IMG_0001.jpg", 1_767_139_200), // 2025-12-31

@@ -3,8 +3,8 @@
 #
 # scan.rs's walk() is recursive: `if depth >= cfg.depth.min(8) { return }`
 # gates whether a directory's contents are read at all. Root itself is
-# depth 0. --depth N therefore reads directory levels 0..N-1 — N reads a
-# directory that many hops deep, but never opens the (N)th hop's contents.
+# depth 0. --depth N therefore reads directory levels 0..N-1. N reads a
+# directory that many hops deep. It never opens the (N)th hop's contents.
 # This scenario builds a chain 10 levels deep (root + L1..L10), with a
 # uniquely-tagged group of files at every level, and checks that number
 # exactly: --depth N sees levels 0..N-1 and nothing past that, for every N
@@ -15,9 +15,10 @@ W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/root"; mkdir -p "$D"
 
 # Level 0 is the root itself; levels 1..10 are L1/L2/.../L10 nested. Every
-# level gets 3 files sharing a level-specific token, so "was this level's
-# directory ever read" is directly observable in the plan's scanned count
-# and group list — not just an entry count that could hide a different bug.
+# level gets 3 files sharing a level-specific token. This makes "was this
+# level's directory ever read" directly observable in the plan's scanned
+# count and group list. It is not just an entry count that could hide a
+# different bug.
 cur="$D"
 for lvl in $(seq 0 10); do
   if [ "$lvl" -gt 0 ]; then cur="$cur/L$lvl"; mkdir -p "$cur"; fi
@@ -58,13 +59,13 @@ assert_exit 2 "an absurdly large --depth is refused, not silently saturated" -- 
 
 # --- apply at a middle depth actually moves the right files, and only ---
 # those. --depth 3 should group and move levels 0,1,2 (9 files, one group of
-# 9 sharing nothing — wait, each level's token differs, so 3 separate groups
+# 9 sharing nothing. Each level's token differs. 3 separate groups
 # of 3 members won't clear MIN_TOKEN_GROUP (5). Rebuild a depth-scoped tree
 # with one token shared across the first 3 levels to get a real apply case.
 D2="$W/apply_root"; mkdir -p "$D2/L1/L2"
 for f in a b c d e; do : > "$D2/shared_${f}_deeptok.txt"; done       # level 0, 5 files
 for f in f g; do : > "$D2/L1/shared_${f}_deeptok.txt"; done          # level 1, 2 files
-for f in h; do : > "$D2/L1/L2/shared_${f}_deeptok.txt"; done         # level 2, 1 file — 8 total across levels 0-2
+for f in h; do : > "$D2/L1/L2/shared_${f}_deeptok.txt"; done         # level 2, 1 file. 8 total across levels 0-2
 mkdir -p "$D2/L1/L2/L3"
 : > "$D2/L1/L2/L3/depthtoken_should_not_move.txt"                    # level 3: out of reach at --depth 3
 
@@ -80,7 +81,7 @@ AFTER2=$(find "$D2" -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE2" "$AFTER2" "apply --depth 3 lost no files"
 
 if [ -f "$D2/L1/L2/L3/depthtoken_should_not_move.txt" ]; then
-  pass "the level-3 file (beyond --depth 3) was never touched — still in place"
+  pass "the level-3 file (beyond --depth 3) was never touched. Still in place"
 else
   fail "the level-3 file vanished from its original location even though --depth 3 should never have read that directory"
 fi

@@ -25,7 +25,7 @@ passed=$(grep -cE '^    ok ' <<<"$out")
 unproven=$(grep -cE '^    unproven ' <<<"$out")
 scenarios=$(ls stress/scenarios/*.sh 2>/dev/null | wc -l | tr -d ' ')
 
-echo "night watch — $(date '+%Y-%m-%d')"
+echo "night watch: $(date '+%Y-%m-%d')"
 echo "  scenarios  $scenarios"
 echo "  passed     $passed"
 echo "  failed     $actual  (baseline $baseline)"
@@ -33,7 +33,7 @@ echo "  unproven   $unproven"
 
 case "$code" in
   0) echo "  verdict    nothing new broke" ;;
-  1) echo "  verdict    SOMETHING CHANGED — read the failures above" ;;
+  1) echo "  verdict    SOMETHING CHANGED. read the failures above" ;;
   2) echo "  verdict    the suite did not really run; nothing was proven" ;;
 esac
 
@@ -41,7 +41,7 @@ esac
 # a hazard that cannot be exercised here is not a hazard that passed.
 if [ "$unproven" -gt 0 ]; then
   echo ""
-  echo "  not proven on this host — these are not passes:"
+  echo "  not proven on this host: these are not passes:"
   grep -E '^    unproven ' <<<"$out" | sed 's/^    unproven /    /'
 fi
 
@@ -51,7 +51,7 @@ if [ "$DRAFT" = "1" ] && [ "$code" = "1" ]; then
   mkdir -p .night-watch
   f=".night-watch/$(date '+%Y-%m-%d').md"
   {
-    echo "draft — not posted. verify every number before this goes anywhere."
+    echo "draft, not posted. verify every number before this goes anywhere."
     echo
     echo "the stress suite moved: $actual failures against a baseline of $baseline."
     echo

@@ -3,7 +3,7 @@
 //! No real user file is read during development or testing. Everything sweep is
 //! tested against is generated here, including decoy "sensitive" documents whose
 //! contents are obviously fake but whose *names* look exactly like the real
-//! thing — because v0.1 classifies on names, names are what must be adversarial.
+//! thing. v0.1 classifies on names. Names are what must be adversarial.
 
 use std::fs;
 use std::io;

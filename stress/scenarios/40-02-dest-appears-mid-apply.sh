@@ -2,7 +2,7 @@
 # Race: something else creates a file at a destination path after sweep's
 # internal re-scan already decided that path was free, but before sweep's
 # own move lands there. This is the filesystem-level version of the
-# plan-level overwrite bug — verify the window is closed where it actually
+# plan-level overwrite bug. Verify the window is closed where it actually
 # matters: at the moment of the move, not just at plan time.
 #
 # What must hold: sweep must never clobber a file that beat it to the
@@ -56,7 +56,7 @@ T0_START=$(now_ms)
 T0_END=$(now_ms)
 T0=$((T0_END - T0_START))
 if [ "$T0" -lt 20 ]; then
-  unproven "destination appears mid-apply" "baseline apply of $N files finished in ${T0}ms on this host — too fast for a background process to land inside the window"
+  unproven "destination appears mid-apply" "baseline apply of $N files finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
   exit 0
 fi
 
@@ -94,7 +94,7 @@ for frac in "${FRACTIONS[@]}"; do
   # A hit is: the source file for this entry never made it into the
   # destination (still sitting at the original path OR gone-because-refused
   # before any move started), and the blocker at the destination still holds
-  # exactly our sentinel — i.e. sweep's move for this entry did not run, or
+  # exactly our sentinel: i.e. sweep's move for this entry did not run, or
   # ran and lost the race honestly (EEXIST), either way never overwriting us.
   if [ "$CODE" != "0" ] && [ -f "$BLOCKER" ]; then
     CONTENT="$(cat "$BLOCKER" 2>/dev/null)"
@@ -106,7 +106,7 @@ for frac in "${FRACTIONS[@]}"; do
 done
 
 if [ "$HIT" != "1" ]; then
-  unproven "destination appears mid-apply" "the intruder file never landed inside the apply window across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms) — could not exercise the race on this host"
+  unproven "destination appears mid-apply" "the intruder file never landed inside the apply window across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms). Could not exercise the race on this host"
   exit 0
 fi
 
@@ -118,14 +118,14 @@ CONTENT="$(cat "$BLOCKER" 2>/dev/null)"
 assert_eq "$SENTINEL" "$CONTENT" "the intruder's content at the destination was never overwritten"
 
 # The tool's own source copy for this entry must not have been silently
-# deleted while failing to land at the (blocked) destination — that would be
+# deleted while failing to land at the (blocked) destination. That would be
 # data loss dressed up as a refusal.
 SRC_STILL_HERE=0
 [ -f "$TARGET" ] && SRC_STILL_HERE=1
 if [ "$SRC_STILL_HERE" = "1" ]; then
   pass "the source file for the blocked entry was left in place, not deleted"
 else
-  fail "the source file is gone and the destination still holds only the intruder's content — the original file was lost: $TARGET"
+  fail "the source file is gone and the destination still holds only the intruder's content. The original file was lost: $TARGET"
 fi
 
 if [ -s "$W/apply.err" ] && grep -qi "sweep:" "$W/apply.err"; then

@@ -50,7 +50,7 @@ impl Stats {
 
 /// Inspect one file. Returns `Some(category)` only when it must not be moved.
 ///
-/// Never returns anything usable as a group name — see the module invariant.
+/// Never returns anything usable as a group name. See the module invariant.
 pub fn inspect(path: &Path, ext: &str, stats: &mut Stats) -> Option<Found> {
     if !scan::TEXT_EXTS.contains(&ext) {
         stats.skipped_not_text += 1;

@@ -1,5 +1,5 @@
 //! Manual benchmark for the apply/journal hot path. Not run by default
-//! (`#[ignore]`) — it moves 2000 real files on disk and times it, which is
+//! (`#[ignore]`). It moves 2000 real files on disk and times it. That is
 //! slow and not something CI should pay for on every push. Run explicitly:
 //!
 //!   cargo test -p etude-core --test perf_bench -- --ignored --nocapture

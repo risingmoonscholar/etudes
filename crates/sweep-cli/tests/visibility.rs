@@ -3,8 +3,8 @@
 //! Spawns the real `sweep` binary against a tree with a `chmod 000`
 //! subdirectory and checks both `--json` and the human-facing `--explain`
 //! render for a disclosure that some part of the tree could not be read.
-//! "Scanned N items" must never read as complete when it is not — that is
-//! the whole issue, so this asserts against the actual binary's stdout, not
+//! "Scanned N items" must never read as complete when it is not. That is
+//! the whole issue. This asserts against the actual binary's stdout, not
 //! against `etude-core` internals a CLI change could bypass.
 
 #![cfg(unix)]
@@ -41,8 +41,8 @@ fn sweep_bin() -> Command {
 }
 
 /// True if the text discloses, in words a person or an agent can act on,
-/// that something could not be read. Mirrors the stress harness's check —
-/// deliberately not a bare "skip" match, since the JSON always has a
+/// that something could not be read. Mirrors the stress harness's check.
+/// Deliberately not a bare "skip" match, since the JSON always has a
 /// "skipped" object (for hidden/symlink counts) even at zero.
 fn discloses_unreadable(s: &str) -> bool {
     let lower = s.to_ascii_lowercase();
@@ -137,8 +137,8 @@ fn human_explain_output_discloses_the_unreadable_directory() {
 
 #[test]
 fn the_no_groups_branch_still_discloses_an_unreadable_directory() {
-    // No shared token, no camera burst, no installer set — plan.groups stays
-    // empty and run_scan() takes the early "Nothing here needs organising"
+    // No shared token, no camera burst, no installer set. plan.groups stays
+    // empty. run_scan() takes the early "Nothing here needs organising"
     // branch, which is a SEPARATE print site from render(). That branch must
     // not claim completeness either.
     let root = unique_temp("human-empty");

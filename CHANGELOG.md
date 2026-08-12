@@ -12,29 +12,29 @@ one version the workspace has ever carried.
 
 ### Added
 
-- `sweep` — analyses a folder by name signal and proposes groups. `apply`
+- `sweep`: analyses a folder by name signal and proposes groups. `apply`
   moves them, `undo` reverses, `verify` prints the tool's own privacy posture.
   Files that look like personal records are never moved, in any mode.
-- `sweep review` — walk each group, rename or skip, then apply.
-- `--inspect-content` — reads plain text files so sweep can refuse *more*
+- `sweep review`: walk each group, rename or skip, then apply.
+- `--inspect-content`: reads plain text files so sweep can refuse *more*
   files. Content findings can only widen refusal; they never name a group or
   affect where anything moves. Consent is asked for separately from `--yes`.
-- `stash` — moves everything in a folder into one hidden holding directory and
+- `stash`: moves everything in a folder into one hidden holding directory and
   brings it back with `stash pop`. The deadline lives in the directory name, so
   there is no second state store to drift.
-- `unpack` — one command for `.zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz
+- `unpack`: one command for `.zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz
   .dmg`, extracting into its own directory. Nothing is parsed in-process; the
   system tools do the work. Every archive is listed and judged before anything
   is written, and member paths that escape the target are refused.
-- Encrypted undo journal (ChaCha20-Poly1305), keyed from the login keychain.
+- Encrypted undo journal (XChaCha20-Poly1305), keyed from the login keychain.
   There is no plaintext fallback: if sealing is unavailable the tool refuses.
   Journals are pruned after 30 days.
 - `--json` on all three tools, for callers that are not people.
 - `--version` on all three tools.
 - A no-network witness: a symbol scan of the shipped binary, plus
-  `scripts/no-network-test.sh`, which runs the whole suite under a macOS
-  sandbox profile that denies sockets — and proves the sandbox denies them
-  before trusting the result.
+  `scripts/no-network-test.sh`. This script runs the whole suite under a
+  macOS sandbox profile that denies sockets. It proves the sandbox denies
+  them before trusting the result.
 - Apache-2.0 licence and NOTICE.
 
 ### Changed

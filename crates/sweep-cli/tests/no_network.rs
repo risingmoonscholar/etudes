@@ -1,4 +1,4 @@
-//! M8 — the no-network witness.
+//! M8: the no-network witness.
 //!
 //! `deny.toml` stops a networking crate entering the tree. This test checks the
 //! artifact that actually ships: it scans the built binary for the symbols a
@@ -32,9 +32,9 @@ const FORBIDDEN: &[&str] = &[
 /// naming or ELF's bare naming, versioned or not.
 ///
 /// A dynamically linked ELF binary's undefined glibc symbols usually carry a
-/// version suffix, e.g. `socket@GLIBC_2.2.5` — matching `sym` verbatim against
+/// version suffix, e.g. `socket@GLIBC_2.2.5`. Matching `sym` verbatim against
 /// bare `"socket"` would silently miss every one of them on a typical Ubuntu
-/// build, so the suffix is stripped before comparing.
+/// build. The suffix is stripped before comparing.
 fn is_forbidden(sym: &str) -> bool {
     let sym = sym.split('@').next().unwrap_or(sym);
     let sym = sym.strip_prefix('_').unwrap_or(sym);
@@ -57,7 +57,7 @@ fn binary_path() -> Option<std::path::PathBuf> {
 fn the_shipped_binary_links_no_networking_symbols() {
     let Some(bin) = binary_path() else {
         // Building the test does not guarantee the bin target was built. Skip
-        // loudly rather than pass silently — a green test that checked nothing
+        // loudly rather than pass silently. A green test that checked nothing
         // is worse than no test.
         eprintln!("SKIPPED: sweep binary not built; run `cargo build` first");
         return;
@@ -76,7 +76,7 @@ fn the_shipped_binary_links_no_networking_symbols() {
 
     // Guard against a green result that checked nothing: if the scan sees no
     // symbols at all, the invocation is broken, not the binary clean. Verified
-    // against a control binary that does open a socket — it reports _socket,
+    // against a control binary that does open a socket. It reports _socket,
     // _connect and _getaddrinfo here.
     let symbol_count = text.lines().filter(|l| !l.trim().is_empty()).count();
     assert!(
@@ -107,15 +107,15 @@ fn the_shipped_binary_links_no_networking_symbols() {
 /// kinds, and returns the direct-and-transitive dependency lines (the root
 /// line itself is checked and dropped).
 ///
-/// `cargo tree` — not a text/TOML parse of the manifest — because a text
+/// `cargo tree` (not a text/TOML parse of the manifest) because a text
 /// parse can be fooled by `[target.'cfg(...)'.dependencies]` tables or
 /// dotted-key syntax (`[dependencies.foo]`); cargo's own manifest parser and
 /// resolver sees what cargo would actually build regardless of how an entry
 /// is spelled or where it sits in the file. This function is called with
 /// `--target=all` (cfg-gated dependencies still count) and `--all-features`
 /// (an optional dependency behind a feature nothing enables by default is
-/// otherwise invisible even to `cargo tree`), and with no `--depth` limit —
-/// a dependency hiding *below* the allowed `fixtures` crate must surface
+/// otherwise invisible even to `cargo tree`), and with no `--depth` limit.
+/// A dependency hiding *below* the allowed `fixtures` crate must surface
 /// too, since fixtures is supposed to be zero-dependency itself. `--offline`
 /// matters because this test also runs under scripts/no-network-test.sh,
 /// which denies socket access at the OS level; the workspace's deps are
@@ -137,7 +137,7 @@ fn etude_core_tree(edges: &str) -> Vec<String> {
         ])
         .current_dir(manifest_dir)
         .output()
-        .expect("failed to run `cargo tree` — is cargo on PATH?");
+        .expect("failed to run `cargo tree`. Is cargo on PATH?");
 
     assert!(
         out.status.success(),
@@ -164,7 +164,7 @@ fn etude_core_tree(edges: &str) -> Vec<String> {
 fn the_engine_crate_has_no_dependencies() {
     // Normal and build dependencies are what actually ship in the compiled
     // binary. This is the literal "sweep links no third-party code" claim,
-    // and it must hold with no exceptions at all — not even `fixtures`.
+    // and it must hold with no exceptions at all. Not even `fixtures`.
     let shipped = etude_core_tree("normal,build");
     assert!(
         shipped.is_empty(),
@@ -177,13 +177,13 @@ fn the_engine_crate_has_no_dependencies() {
     // can possibly cause to build when etude-core's own tests run. Comparing
     // this against `shipped` above (which must be empty) means the only
     // thing this list is allowed to contain is the one dev-only fixture
-    // crate — if `fixtures` were reclassified as a normal/build dependency
+    // crate. If `fixtures` were reclassified as a normal/build dependency
     // instead, it would show up in `shipped` and fail there.
     let everything = etude_core_tree("normal,build,dev");
 
     // The one dependency etude-core is allowed to carry: a workspace-internal
     // crate that builds synthetic test fixtures. Matching on the exact local
-    // path — not just the name "fixtures" — closes off a crate registered
+    // path, not just the name "fixtures", closes off a crate registered
     // under the same name on crates.io being swapped in instead.
     let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent() // crates/

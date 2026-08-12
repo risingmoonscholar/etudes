@@ -26,7 +26,7 @@ fn lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Test sealer. Not a cipher — it proves the *plumbing* is sealed-only. The
+/// Test sealer. Not a cipher. It proves the *plumbing* is sealed-only. The
 /// real cipher is tested in etude-keep, and the end-to-end pairing is tested in
 /// the CLI integration test.
 struct TestSeal;
@@ -322,7 +322,7 @@ fn apply_refuses_when_two_planned_destinations_collide() {
 /// directory entry on APFS. The ASCII-case sibling of this test
 /// (`apply_refuses_when_two_planned_destinations_collide`) gets a clean
 /// pre-flight `DestinationCollision` and zero files moved. This one must get
-/// the same treatment — not a partial apply where the first file actually
+/// the same treatment, not a partial apply where the first file actually
 /// moves and the second fails against the filesystem mid-run.
 #[test]
 // APFS treats NFC and NFD spellings as one directory entry; ext4 does not,
@@ -554,7 +554,7 @@ fn apply_refuses_synced_destination_when_allow_sync_was_never_granted() {
 fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
     let _g = lock();
     // Real repro shape: the root itself lives inside a synced tree
-    // (.../Dropbox/Projects), scanned with --allow-sync — exactly what
+    // (.../Dropbox/Projects), scanned with --allow-sync. This is exactly what
     // stress/scenarios/20-allow-sync-apply-illusion.sh does against the CLI.
     let base = std::env::temp_dir().join(format!("sweep_au_sync_ok_{}", std::process::id()));
     let root = base.join("Dropbox").join("Projects");
@@ -645,8 +645,8 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
     assert!(!out.root_is_synced, "fixture root is not synced");
     assert!(out.allow_sync, "the flag itself must still be recorded");
 
-    // The user renamed this group to "Dropbox" — coincidence, not intent to
-    // touch real Dropbox. The destination now matches a sync marker.
+    // The user renamed this group to "Dropbox". That is coincidence, not
+    // intent to touch real Dropbox. The destination now matches a sync marker.
     let p = Plan {
         root: out.root.clone(),
         groups: vec![plan::Group {

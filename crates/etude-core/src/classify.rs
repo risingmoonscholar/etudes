@@ -5,7 +5,7 @@
 //! tool's reasoning by eye.
 //!
 //! Order matters. `sensitive` runs first and removes files from consideration by
-//! every other detector — a tax document is not a shared-token candidate even
+//! every other detector. A tax document is not a shared-token candidate even
 //! when forty files share its token.
 
 use crate::Category;

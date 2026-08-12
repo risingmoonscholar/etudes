@@ -5,15 +5,15 @@
 # the journal format is a sealed base frame followed by appended sealed
 # "done" progress frames (one per file, fsynced individually), so a crash
 # mid-write is exactly a truncated file on disk. This scenario does not rely
-# on timing a kill precisely — it takes a journal from a real, fully
+# on timing a kill precisely. It takes a journal from a real, fully
 # completed apply and truncates it at exact byte offsets after the fact,
 # which is a strictly *easier* case than a real crash (a real crash can only
 # ever cut off whole or partial trailing frames, same as this does).
 #
 # The property under test: "the tool refuses to act on a damaged journal
 # rather than acting on a partial one." When this scenario was written,
-# `apply_progress` half-replayed a truncated tail on purpose — as far as it
-# verified and no further, silently — and this scenario is what caught that
+# `apply_progress` half-replayed a truncated tail on purpose (as far as it
+# verified and no further, silently), and this scenario is what caught that
 # quietly producing stranded files under a reported exit-0 success. That has
 # since been fixed: a torn trailing frame now refuses the whole journal
 # rather than being silently dropped. The scenario stays in place because the
@@ -31,7 +31,7 @@ make_tree() {
 }
 
 journal_wipe() {
-  # `sweep undo` always picks the journal with the newest mtime — with no
+  # `sweep undo` always picks the journal with the newest mtime. With no
   # per-directory selector, stale journals from an earlier trial must be
   # cleared first or a truncation could land on the wrong file while undo
   # quietly acts on an untouched one, masking the very thing under test.
@@ -53,7 +53,7 @@ journal_wipe
 "$SWEEP" apply "$D" --yes >/dev/null 2>&1
 JF=$(journal_file)
 if [ -z "$JF" ] || [ ! -f "$JF" ]; then
-  unproven "journal truncation matrix" "no journal file found after apply — cannot attack what was not written"
+  unproven "journal truncation matrix" "no journal file found after apply. Cannot attack what was not written"
   exit 0
 fi
 FULL_SIZE=$(stat -f%z "$JF" 2>/dev/null || stat -c%s "$JF")
@@ -111,7 +111,7 @@ for pct in 60 75 85 95 99; do
   # Two acceptable outcomes for a damaged journal: (a) refuse outright
   # (nonzero exit, nothing touched), or (b) fully succeed with every file
   # actually restored. What must NOT happen: exit 0 while files are still
-  # stranded at their destination — that is "success" lying about the
+  # stranded at their destination. That is "success" lying about the
   # state of the user's files.
   if [ "$code" = "0" ] && [ "$stranded" != "0" ]; then
     DEEP_BAD=$((DEEP_BAD + 1))
@@ -124,9 +124,9 @@ for pct in 60 75 85 95 99; do
 done
 
 if [ "$DEEP_BAD" -eq 0 ]; then
-  pass "journal truncated past its base frame (trailing progress cut, as a real crash would leave it) is either refused or fully honoured — never a silent partial success"
+  pass "journal truncated past its base frame (trailing progress cut, as a real crash would leave it) is either refused or fully honoured. Never a silent partial success"
 else
-  fail "journal truncated past its base frame silently HALF-LOADS in $DEEP_BAD/5 cases: sweep undo exits 0 and prints no error, but leaves files stranded at their destination that it never mentions and will never retry — the exact 'half-load is worse than fail-to-load' failure the brief warns about. First reproduction:
+  fail "journal truncated past its base frame silently HALF-LOADS in $DEEP_BAD/5 cases: sweep undo exits 0 and prints no error, but leaves files stranded at their destination that it never mentions and will never retry. This is the exact 'half-load is worse than fail-to-load' failure the brief warns about. First reproduction:
 $DEEP_FIRST"
 fi
 

@@ -95,8 +95,8 @@ fn visible(root: &Path) -> usize {
 #[test]
 fn the_folder_is_actually_empty_afterwards() {
     // "Your Desktop is clear" has to be literally true, including directories
-    // and symlinks — the two things sweep's scanner deliberately does not
-    // return, and the reason whole_units exists.
+    // and symlinks. Those are the two things sweep's scanner deliberately
+    // does not return. That is the reason whole_units exists.
     let _g = lock();
     let root = setup("clear");
     assert!(visible(&root) > 0, "fixture produced nothing to stash");

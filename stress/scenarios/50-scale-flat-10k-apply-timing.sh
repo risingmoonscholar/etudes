@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 10,000 files in one flat directory — the "camera roll dumped straight onto
-# Desktop" shape, at a size fixtures never reach. Two things get measured:
+# 10,000 files in one flat directory (the "camera roll dumped straight onto
+# Desktop" shape), at a size fixtures never reach. Two things get measured:
 #
 #   1. Real wall-clock for plan / apply / undo, so "usable at scale" has a
 #      number instead of a guess. The journal fsyncs once per moved file
@@ -12,7 +12,7 @@
 #   2. Whether classification holds up when filenames are sequential numbers
 #      instead of hand-picked fixture names. The sensitive-marker detector
 #      does plain substring matching (etude-core/src/classify.rs,
-#      SENSITIVE_MARKERS) against markers like "1099" and "1040" — both of
+#      SENSITIVE_MARKERS) against markers like "1099" and "1040", both of
 #      which are also plausible 4-digit substrings of an ordinary sequential
 #      camera index. At fixture scale (tens of files) that collision almost
 #      never fires. At 10,000 sequential files it is close to guaranteed.
@@ -59,14 +59,14 @@ printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
 # "1099" and "1040" are tax-form markers (classify.rs SENSITIVE_MARKERS) and
 # also ordinary 4-digit substrings. Among 10,000 sequential zero-padded
 # indices, at least one is expected to collide with each. Confirm whether it
-# actually did, and name it if so — a group member vanishing into "personal
+# actually did, and name it if so. A group member vanishing into "personal
 # record: tax documents" because its index happened to be 1099 is a real,
-# user-visible false positive, and it is specific to scale: the reference
+# user-visible false positive. It is specific to scale: the reference
 # desktop fixture (a few hundred files, hand-picked names) cannot produce it.
 if [ "${PERSONAL:-0}" -gt 0 ]; then
-  fail "no ordinary sequential camera file is misclassified as a personal record: $PERSONAL of $N were — likely IMG_01099.jpg / IMG_01040.jpg colliding with the tax-form substring markers \"1099\"/\"1040\" purely by coincidence of their index. Repro: touch 10000 sequentially-numbered IMG_NNNNN.jpg files and run \`sweep DIR --json\`; left_alone.by_category reports tax documents even though nothing tax-related exists in the tree. This is a real false positive that only shows up at this scale — grep etude-core/src/classify.rs for SENSITIVE_MARKERS, entries (\"1099\", Category::Tax) and (\"1040\", Category::Tax) are unqualified substrings with no word-boundary check."
+  fail "no ordinary sequential camera file is misclassified as a personal record: $PERSONAL of $N were. Likely IMG_01099.jpg / IMG_01040.jpg colliding with the tax-form substring markers \"1099\"/\"1040\" purely by coincidence of their index. Repro: touch 10000 sequentially-numbered IMG_NNNNN.jpg files and run \`sweep DIR --json\`; left_alone.by_category reports tax documents even though nothing tax-related exists in the tree. This is a real false positive that only shows up at this scale. grep etude-core/src/classify.rs for SENSITIVE_MARKERS. Entries (\"1099\", Category::Tax) and (\"1040\", Category::Tax) are unqualified substrings with no word-boundary check."
 else
-  pass "no sequential-index/tax-marker substring collision occurred in this run (probabilistic — see comment; a 0-personal outcome here does not mean the detector is safe, only that this particular seed of indices didn't collide)"
+  pass "no sequential-index/tax-marker substring collision occurred in this run (probabilistic: see comment; a 0-personal outcome here does not mean the detector is safe, only that this particular seed of indices didn't collide)"
 fi
 
 # --- apply (real journal, real fsync-per-move) --------------------------
@@ -111,9 +111,9 @@ echo "" >&2
 echo "    ── scale verdict ──" >&2
 printf '    measured:      N=%-6s plan=%ss  apply=%ss  undo=%ss\n' "$N" "$PLAN_S" "$APPLY_S" "$UNDO_S" >&2
 printf '    extrapolated:  N=20000 (the scan cap) apply ≈ %ss\n' "$EXTRAP_20K" >&2
-printf '    extrapolated:  N=50000 apply ≈ %ss  — but N=50000 can never reach apply: see 50-scale-cap-boundary-50k.sh, sweep refuses at scan time (20,000-item cap) before a journal is ever opened.\n' "$EXTRAP_50K" >&2
+printf '    extrapolated:  N=50000 apply ≈ %ss. N=50000 can never reach apply: see 50-scale-cap-boundary-50k.sh. sweep refuses at scan time (20,000-item cap) before a journal is ever opened.\n' "$EXTRAP_50K" >&2
 if (( $(echo "$APPLY_S > 30" | bc -l) )); then
-  fail "apply --yes on a 10,000-file Desktop-shaped folder took ${APPLY_S}s (>30s) with the journal on. A user who dumps a 10k-photo camera roll onto Desktop and runs sweep apply will sit and wait roughly a minute doing nothing else with that terminal. This is a genuine usability ceiling worth having a number for, not a pass/fail bug — reported here because 'slow is a finding, not a failure of the test.'"
+  fail "apply --yes on a 10,000-file Desktop-shaped folder took ${APPLY_S}s (>30s) with the journal on. A user who dumps a 10k-photo camera roll onto Desktop and runs sweep apply will sit and wait roughly a minute doing nothing else with that terminal. This is a genuine usability ceiling worth having a number for, not a pass/fail bug. Reported here because 'slow is a finding, not a failure of the test.'"
 else
   pass "apply on 10,000 files completed in a plainly usable time (${APPLY_S}s)"
 fi

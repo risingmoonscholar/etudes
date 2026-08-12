@@ -4,7 +4,7 @@
 #
 #   - "moved rather than copied where possible" (apply.rs move_one: tries
 #     fs::hard_link + unlink before ever falling back to a real copy, and
-#     hard_link is a directory-entry operation — O(1) in the file's size).
+#     hard_link is a directory-entry operation: O(1) in the file's size).
 #     A hard link preserves the inode number; a copy creates a new one. That
 #     is a hard, checkable fact, not a timing guess.
 #   - "nothing reads its contents" (journal.rs edge_hash reads at most 4 KiB
@@ -34,7 +34,7 @@ else
   DISK_BLOCKS_BEFORE=$(du -k "$BIGFILE" | cut -f1)
   printf '    sparse file: %s MB apparent, %s KB actually on disk\n' "$SIZE_MB" "$DISK_BLOCKS_BEFORE" >&2
   if [ "$DISK_BLOCKS_BEFORE" -lt $((SIZE_MB * 1024 / 2)) ]; then
-    pass "the fixture file is genuinely sparse (disk usage far below apparent size) — a real test of 'don't read it', not an accident of a fully-written file"
+    pass "the fixture file is genuinely sparse (disk usage far below apparent size). A real test of 'don't read it', not an accident of a fully-written file"
   else
     unproven "fixture sparseness" "truncate did not produce a sparse file on this filesystem (disk usage ≈ apparent size); the move-not-copy and no-read checks below still run, but a real copy would be harder to distinguish from a move by disk usage alone"
   fi
@@ -47,7 +47,7 @@ else
   # Plan first: this is where edge_hash touches every member, including the
   # huge file, to fingerprint it for the journal. Fingerprinting happens at
   # apply time (apply.rs calls fingerprint() while building journal entries),
-  # not at plan time — so the real test is apply's wall clock.
+  # not at plan time. The real test is apply's wall clock.
   t0=$(date +%s.%N)
   APPLY_OUT=$("$SWEEP" apply "$D" --yes 2>&1)
   APPLY_EC=$?
@@ -62,29 +62,29 @@ else
   else
     INODE_AFTER=$(stat -f%i "$NEWPATH")
     if [ "$INODE_BEFORE" = "$INODE_AFTER" ]; then
-      pass "the $SIZE_MB MB file kept its inode across the move ($INODE_BEFORE) — proof it was moved (hard-link+unlink), not copied"
+      pass "the $SIZE_MB MB file kept its inode across the move ($INODE_BEFORE). Proof it was moved (hard-link+unlink), not copied"
     else
-      fail "the $SIZE_MB MB file's inode changed across apply (before=$INODE_BEFORE after=$INODE_AFTER) — this means it was actually COPIED, not moved. For a file this size that is a real performance and disk-space regression, not just a style issue."
+      fail "the $SIZE_MB MB file's inode changed across apply (before=$INODE_BEFORE after=$INODE_AFTER). This means it was actually COPIED, not moved. For a file this size that is a real performance and disk-space regression, not just a style issue."
     fi
 
     SIZE_AFTER=$(stat -f%z "$NEWPATH")
     assert_eq "$APPARENT_SIZE" "$SIZE_AFTER" "the moved file's apparent size is unchanged"
 
     DISK_BLOCKS_AFTER=$(du -k "$NEWPATH" | cut -f1)
-    assert_eq "$DISK_BLOCKS_BEFORE" "$DISK_BLOCKS_AFTER" "actual disk usage is unchanged by the move (no real data was written — a copy of a sparse file this size would either materialize the holes or at best re-punch them, and would not be free)"
+    assert_eq "$DISK_BLOCKS_BEFORE" "$DISK_BLOCKS_AFTER" "actual disk usage is unchanged by the move (no real data was written. A copy of a sparse file this size would either materialize the holes or at best re-punch them, and would not be free)"
   fi
 
   # The real evidence for "nothing reads its contents": apply's wall-clock
   # cost here should be governed by fsync-per-move overhead (see
   # 50-scale-flat-10k-apply-timing.sh), not by 500 MB of I/O. A few hundred
   # MB read at even a slow 200 MB/s would add ~2.5s; reading it at typical
-  # SSD speeds would be closer to instant anyway, so this bound is
-  # deliberately loose — it is there to catch a full read/copy, not to
+  # SSD speeds would be closer to instant anyway. This bound is
+  # deliberately loose. It is there to catch a full read/copy, not to
   # re-litigate storage speed.
   if (( $(echo "$APPLY_S < 15" | bc -l) )); then
-    pass "apply on a tree containing a $SIZE_MB MB file completed in ${APPLY_S}s — consistent with fingerprinting only the first/last 4 KiB (edge_hash), not the whole file"
+    pass "apply on a tree containing a $SIZE_MB MB file completed in ${APPLY_S}s. Consistent with fingerprinting only the first/last 4 KiB (edge_hash), not the whole file"
   else
-    fail "apply took ${APPLY_S}s for 10 files including one $SIZE_MB MB file — slow enough to suggest the whole file's content was read or copied rather than moved"
+    fail "apply took ${APPLY_S}s for 10 files including one $SIZE_MB MB file. Slow enough to suggest the whole file's content was read or copied rather than moved"
   fi
 
   # --- undo: same inode-preservation check in reverse ---------------------

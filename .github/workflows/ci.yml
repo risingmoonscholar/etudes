@@ -15,14 +15,15 @@ jobs:
   linux:
     name: second-platform check, non-blocking (ubuntu)
     runs-on: ubuntu-latest
-    # Not a support claim. This project is macOS only — see the readme.
+    # Not a support claim. This project is macOS only. See the readme.
     #
     # It runs because a second machine is the cheapest way to find out what the
     # first one let you assume. In one afternoon it caught six things: a test
     # reading munmap'd memory, three tests that assumed a keychain exists, one
     # that asserted a property of the machine it was written on, and a real bug
-    # where apply refused legal work on a case-sensitive filesystem — which
-    # exists on macOS too, and which the mac suite structurally could not see.
+    # in apply. Apply refused legal work on a case-sensitive filesystem. This
+    # filesystem type exists on macOS too. The mac suite could not detect it
+    # structurally.
     #
     # It fails loudly and it does not gate anything. Those are different
     # things and continue-on-error confuses them: it renders a failed job as a
@@ -31,7 +32,7 @@ jobs:
     #
     # Non-blocking is a branch-protection decision, not a workflow one. This is
     # deliberately NOT in the required-checks list, so a red here never stops a
-    # merge — it just sits there being true.
+    # merge. It just sits there being true.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

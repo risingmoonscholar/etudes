@@ -2,7 +2,7 @@
 # The debris every real macOS folder accumulates: .DS_Store, AppleDouble
 # resource-fork shadows (._name), .localized, and the custom-folder-icon
 # file whose name is literally "Icon" followed by a raw carriage return
-# (no dot prefix — Finder hides it via an attribute flag, not by naming
+# (no dot prefix. Finder hides it via an attribute flag, not by naming
 # convention). None of this is the user's data; none of it should be
 # grouped, moved as if meaningful, or allowed to corrupt output formatting.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
@@ -32,9 +32,9 @@ assert_eq 6 "$scanned" "scanned excludes .DS_Store, ._SomeFile.pdf and .localize
 assert_eq 3 "$hidden" "all three dotfiles counted as skipped-hidden"
 
 # --- Icon<CR> does not break JSON output ---
-# Read as raw stdin bytes, never through a Python string literal — a source
+# Read as raw stdin bytes, never through a Python string literal. A source
 # embedding of "\r" would get double-interpreted by Python's own escape
-# handling before json even saw it, which would test this script's
+# handling before json even saw it. That would test this script's
 # quoting instead of sweep's escaping.
 valid=$(python3 -c "
 import json, sys
@@ -55,8 +55,8 @@ print(any('Icon' in p for p in paths))
 assert_eq "True" "$icon_present" "Icon<CR> is reported (left alone, no clear group) rather than silently vanishing"
 
 # --- Round-trip Icon<CR> through a real move (stash) and check the exact
-#     bytes, not a terminal rendering of them — a bare \r moves the cursor,
-#     so 'ls' output alone would lie about whether the name survived intact.
+#     bytes, not a terminal rendering of them. A bare \r moves the cursor.
+#     'ls' output alone would lie about whether the name survived intact.
 S="$W/ScreenShareFolder"
 mkdir -p "$S"
 python3 -c "

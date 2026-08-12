@@ -34,8 +34,8 @@ fn stash_bin() -> Command {
 /// `stash` seals its journal with a key from the login keychain and refuses to
 /// write one in the clear. A CI runner has no keychain, and a Linux runner has
 /// no `security` binary at all, so on both of those the refusal is the correct
-/// behaviour rather than a failure — and a test that assumes otherwise is
-/// asserting "a keychain exists", which is not a property of this tool.
+/// behaviour rather than a failure. A test that assumes otherwise is
+/// asserting "a keychain exists". That is not a property of this tool.
 ///
 /// Both branches assert something. The environment decides which claim is
 /// under test, never whether one is.
@@ -139,9 +139,9 @@ fn an_exhausted_pop_exits_1_not_0() {
 }
 
 /// `Journal::load_sealed` now refuses a journal torn mid progress-frame
-/// (issue #3) instead of half-loading it — but `stash`'s own journal
-/// lookup used to swallow that refusal with `.ok()` in a `filter_map`,
-/// which turned "damaged" into "absent" with no trace. `pop` must at
+/// (issue #3) instead of half-loading it. But `stash`'s own journal
+/// lookup used to swallow that refusal with `.ok()` in a `filter_map`.
+/// That turned "damaged" into "absent" with no trace. `pop` must at
 /// least say the journal was found and is damaged, not just claim there
 /// is nothing here.
 #[test]

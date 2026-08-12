@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # --allow-sync is documented as the way to proceed inside a cloud-synced
 # folder. `sweep PATH --allow-sync` does exactly that: it plans, and even
-# prints "warning: this folder is inside a cloud-synced tree" — which reads
+# prints "warning: this folder is inside a cloud-synced tree". This reads
 # as "noted, continuing", not as "this will fail later".
 #
 # It does fail later. apply.rs's own destination-sync guard
@@ -10,7 +10,7 @@
 # root that `sweep PATH --allow-sync` just finished planning successfully.
 # Since an accepted group's destination is always a direct child of the
 # scanned root, this means: the moment a root needs --allow-sync to be
-# scanned, applying to it can never succeed, with or without the flag —
+# scanned, applying to it can never succeed, with or without the flag,
 # for Dropbox, Google Drive, OneDrive, every provider sweep recognizes.
 #
 # The flag doesn't unlock the folder. It unlocks a preview of a folder
@@ -34,7 +34,7 @@ for provider in "Dropbox" "Google Drive" "OneDrive"; do
     pass "$provider: apply --allow-sync actually applies, as the plan step implied it would"
   else
     fail "REAL DEFECT ($provider): apply --allow-sync --yes exited $code (wanted 0) \
-with: ${out%%$'\n'*} — apply.rs's DestinationIsSynced check runs unconditionally \
+with: ${out%%$'\n'*}. apply.rs's DestinationIsSynced check runs unconditionally \
 and never sees the allow_sync flag at all. Since a group's destination is always \
 root/<group-name>, ANY root that needed --allow-sync to be scanned will ALSO fail \
 this check on apply, always, for every provider, with no override. The flag only \

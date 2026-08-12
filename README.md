@@ -2,7 +2,7 @@
 
 Three small command-line tools that tidy a folder without reading your private files.
 
-**macOS only.** Not a stepping stone to other platforms — the design leans on
+**macOS only.** Not a stepping stone to other platforms. The design leans on
 Darwin in ways that are not incidental: the keychain holds the journal key, the
 sandbox witness is `sandbox-exec`, sync detection knows where iCloud Drive
 lives, and name comparison asks CoreFoundation. Each of those would need a
@@ -21,7 +21,7 @@ Scanned 100 items  ·  names, sizes and dates only  ·  no contents read
   acme              5 files   5 filenames contain "acme"
 
   Left alone       24 files
-    14 look like personal records — sweep does not touch these
+    14 look like personal records. sweep does not touch these
     10 no clear group
 
   skipped 1 hidden item and 3 symlinks
@@ -61,7 +61,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 154 tests
+cargo test --all                # 157 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -81,7 +81,7 @@ to your files.
 
 ## Try it without risking a real folder
 
-The fixture generator builds a deliberately adversarial tree — tax forms,
+The fixture generator builds a deliberately adversarial tree: tax forms,
 medical records, an identity document, a filename containing a tab, a 200-character
 filename, symlinks that point outside the directory. No real file of yours is
 read during development or testing.
@@ -95,14 +95,14 @@ cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 ## Two rules the tools share
 
 **Never coin a label the filesystem did not already contain.** A folder named
-`Tax return 2024` is itself a disclosure — visible in Finder, indexed by
+`Tax return 2024` is itself a disclosure, visible in Finder, indexed by
 Spotlight, captured by every backup. Group names come only from words your own
 filenames already carry. If *you* want a revealing name, `sweep review` will let
 you choose one after telling you what it costs.
 
 **Reading more must mean acting less.** `sweep --inspect-content` is off by
 default and needs consent separate from `--yes`. What it reads can only ever
-move a file into "left alone" — it never influences a destination.
+move a file into "left alone". It never influences a destination.
 
 ## For agents as well as people
 
@@ -110,7 +110,7 @@ These are built to be driven by both. The agent-facing surface is deliberate,
 not incidental.
 
 **Structured output.** `--json` on every tool, emitting the same data the human
-rendering is drawn from — a tool that tells a person one thing and an agent
+rendering is drawn from. A tool that tells a person one thing and an agent
 another is the worst kind of interface.
 
 ```sh
@@ -122,8 +122,8 @@ unpack a.zip --json             # what happened, or why it was refused
 ```
 
 **Meaningful exit codes**, uniform across the tools: `0` done · `1` nothing to
-do · `2` refused · `3` error. "Refused" is distinct from "error" on purpose —
-an agent must be able to tell a safety stop from a crash.
+do · `2` refused · `3` error. "Refused" is distinct from "error" on purpose.
+An agent must be able to tell a safety stop from a crash.
 
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:
@@ -137,8 +137,8 @@ property holds no matter who is driving:
 
 **`--json` discloses less, not more.** For files that look like personal
 records, the JSON carries counts by category and **never the paths**. An agent
-gets "3 tax documents were left alone", not a list of which files those are —
-handing over that index is exactly what the naming rule exists to prevent.
+gets "3 tax documents were left alone", not a list of which files those are.
+Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
@@ -157,7 +157,7 @@ fails only when the number gets worse. The ones you are most likely to meet:
 
 | | |
 |---|---|
-| [#8](../../issues/8) | Apply to two folders in a row and only the newest journal is reachable — `sweep undo` has no per-directory selector. |
+| [#8](../../issues/8) | Apply to two folders in a row. Only the newest journal is reachable. `sweep undo` has no per-directory selector. |
 | [#4](../../issues/4) | A folder that cannot be read is skipped without saying so, and the scanned count implies it was complete. |
 | [#5](../../issues/5) | Killing an apply between two syscalls can leave one file in two places, and undo will not clean it up. |
 
@@ -172,12 +172,12 @@ hazard that could not be exercised on this machine is not a hazard that passed.
 
 ```
 crates/
-  etude-core/    scan, plan, apply, journal-first undo — zero dependencies
+  etude-core/    scan, plan, apply, journal-first undo, zero dependencies
   etude-keep/    journal encryption (XChaCha20-Poly1305, key in the keychain)
-  etude-read/    content inspection — mlock'd, zeroed, never persisted
+  etude-read/    content inspection, mlock'd, zeroed, never persisted
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
-  unpack-cli/    bin: unpack — dispatches to system tools, parses nothing
+  unpack-cli/    bin: unpack, dispatches to system tools, parses nothing
   fixtures/      synthetic adversarial trees; no real file is read in testing
 ```
 

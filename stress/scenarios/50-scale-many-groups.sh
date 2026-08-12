@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Hundreds of distinct groups in one folder — the shape of a shared drive or
+# Hundreds of distinct groups in one folder (the shape of a shared drive or
 # an old "Projects" folder with a client subfolder's worth of naming per
-# client, never a handful of screenshots. Checks:
+# client), never a handful of screenshots. Checks:
 #   - every group sweep proposes gets a genuinely distinct name (no two
 #     groups collide, which would make one of them silently unreachable via
 #     `apply --only NAME`)
@@ -19,12 +19,12 @@ MEMBERS_PER_GROUP=5
 # Member suffixes are single letters (a, b, c, ...) on purpose: classify.rs's
 # tokens() drops any token shorter than 3 characters, so these never become
 # tokens themselves. The first attempt at this fixture used "_member0".."_4"
-# as the differentiator and got exactly 5 groups back, not 300 — "member0"
+# as the differentiator and got exactly 5 groups back, not 300. "member0"
 # is itself a valid >=3-char token that recurs across all 300 filenames
 # (300 members, tied for the biggest group), so the largest-group-first
 # grouping rule (plan.rs: sort candidates by size desc) picked "member0"
 # through "member4" as five giant groups before "grp003tag" and friends ever
-# got a turn. That was a bug in this fixture, not in sweep — real distinct
+# got a turn. That was a bug in this fixture, not in sweep. Real distinct
 # groups need a differentiator that cannot itself qualify as a token.
 LETTERS="abcde"
 i=0
@@ -56,7 +56,7 @@ GROUP_COUNT=$(wc -l < "$GROUP_NAMES_FILE" | tr -d ' ')
 assert_eq "$NGROUPS" "$GROUP_COUNT" "sweep proposed exactly $NGROUPS groups (one per shared token, none merged, none split)"
 
 UNIQUE_COUNT=$(sort -u "$GROUP_NAMES_FILE" | wc -l | tr -d ' ')
-assert_eq "$NGROUPS" "$UNIQUE_COUNT" "every group name is unique — no two groups collide"
+assert_eq "$NGROUPS" "$UNIQUE_COUNT" "every group name is unique. No two groups collide"
 
 MEMBER_TOTAL=$(grep -o '"count":[0-9]*' <<<"$PLAN_JSON" | cut -d: -f2 | awk '{s+=$1} END {print s}')
 assert_eq "$TOTAL" "$MEMBER_TOTAL" "every one of the $TOTAL files ended up counted in exactly one group"
@@ -71,7 +71,7 @@ printf '    longest output line: %s chars (300-group listing did not blow up)\n'
 if [ "$LONGEST_LINE" -lt 200 ]; then
   pass "no single line in the 300-group listing is unreasonably wide"
 else
-  fail "a line in the 300-group listing is $LONGEST_LINE characters wide — likely unreadable in a normal terminal"
+  fail "a line in the 300-group listing is $LONGEST_LINE characters wide. Likely unreadable in a normal terminal"
 fi
 
 # --- apply moves everything into distinctly-named directories -----------
@@ -86,7 +86,7 @@ AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
 assert_eq "$TOTAL" "$AFTER" "apply lost no files across $NGROUPS groups"
 
 DEST_DIRS=$(find "$D" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-assert_eq "$NGROUPS" "$DEST_DIRS" "exactly $NGROUPS destination directories were created — one per group, none merged"
+assert_eq "$NGROUPS" "$DEST_DIRS" "exactly $NGROUPS destination directories were created. One per group, none merged"
 
 # Spot-check a handful across the range land in the right, uniquely-named
 # place (not just that counts add up).

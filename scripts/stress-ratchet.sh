@@ -2,7 +2,7 @@
 # Run the stress suite and fail only when a scenario fails that we did not
 # already know about.
 #
-# Eleven scenarios fail today by design — they are filed defects kept failing so
+# Six scenarios fail today by design; they are filed defects kept failing so
 # the reproductions stay alive. Gating on zero would make the build permanently
 # red, and a red build is one nobody reads.
 #
@@ -34,14 +34,14 @@ echo "  assertions      $passed passed, $unproven unproven"
 
 if [ -n "$fixed" ]; then
   echo ""
-  echo "  passing that were expected to fail — re-run before trusting it,"
+  echo "  passing that were expected to fail. re-run before trusting it."
   echo "  some of these are races that can get lucky:"
   sed 's/^/    /' <<<"$fixed"
 fi
 
 if [ "$passed" -eq 0 ]; then
   echo ""
-  echo "NOTHING WAS PROVEN — the suite did not really run here."
+  echo "NOTHING WAS PROVEN: the suite did not really run here."
   exit 2
 fi
 

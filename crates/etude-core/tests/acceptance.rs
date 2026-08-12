@@ -1,7 +1,7 @@
 //! Acceptance tests.
 //!
 //! These are not unit tests. Each one makes a privacy claim falsifiable. They
-//! run against the synthetic fixture tree only — no real user file is read.
+//! run against the synthetic fixture tree only. No real user file is read.
 
 use std::fs;
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ fn no_sensitive_fixture_is_ever_grouped() {
 
     for s in &fx.sensitive {
         // scan() canonicalizes, which on macOS rewrites /var to /private/var.
-        // Any caller holding pre-scan paths must canonicalize to compare — the
+        // Any caller holding pre-scan paths must canonicalize to compare. The
         // same requirement undo will have when it verifies journal entries.
         let s = s.canonicalize().expect("fixture path canonicalizes");
 

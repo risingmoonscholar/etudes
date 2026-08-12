@@ -2,13 +2,13 @@
 # Sync-client detection breadth, plus the specific hazard every sync client
 # shares: when a file is "evicted" to save local space (iCloud Optimise
 # Storage, Dropbox Smart Sync, Google Drive streaming), what's left on disk
-# in its place is a placeholder — for iCloud, a zero-byte stub named
+# in its place is a placeholder: for iCloud, a zero-byte stub named
 # ".<original name>.icloud". Moving that stub anywhere and calling it the
 # file would silently hand the user an empty husk instead of their document.
 #
 # The apply half of this check deliberately runs on a PLAIN (non-synced)
 # directory. Applying inside an actually-synced root is proven broken on
-# its own terms in 20-allow-sync-apply-illusion.sh — mixing that defect
+# its own terms in 20-allow-sync-apply-illusion.sh. Mixing that defect
 # into this scenario would make a stub-handling failure indistinguishable
 # from the unrelated apply-refusal defect. This isolates one property at a
 # time, which is the same reason sweep's own detectors stay single-purpose.
@@ -63,10 +63,10 @@ if [ -z "$moved_dir" ]; then
   fail "expected a 'deck' group directory after apply; none found"
 else
   moved_count=$(find "$moved_dir" -type f | wc -l | tr -d ' ')
-  assert_eq 5 "$moved_count" "exactly the 5 real files moved — the stub did not tag along"
+  assert_eq 5 "$moved_count" "exactly the 5 real files moved. the stub did not tag along"
   stub_survived=0
   [ -f "$PLAIN/.deck_notes_5.pdf.icloud" ] && stub_survived=1
   assert_eq 1 "$stub_survived" "the eviction stub is still exactly where it was, untouched"
   stub_size=$(stat -f%z "$PLAIN/.deck_notes_5.pdf.icloud" 2>/dev/null)
-  assert_eq 0 "$stub_size" "the stub is still zero bytes — nothing wrote fake content into it"
+  assert_eq 0 "$stub_size" "the stub is still zero bytes. nothing wrote fake content into it"
 fi

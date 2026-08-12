@@ -13,7 +13,7 @@ status=0
 for f in README.md demo/index.html; do
   claimed=$(grep -oE '[0-9]+ tests' "$f" | head -1 | grep -oE '[0-9]+' || true)
   if [ -z "$claimed" ]; then
-    echo "no test count claimed in $f — skipping"
+    echo "no test count claimed in $f, skipping"
     continue
   fi
   if [ "$claimed" != "$actual" ]; then

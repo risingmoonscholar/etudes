@@ -11,16 +11,16 @@
 # "injection" surface in the tool itself. What IS worth proving by hand:
 #   - every name survives plan -> apply -> undo BYTE-FOR-BYTE, including the
 #     shell-metacharacter ones
-#   - a filename that is literally the text "$(whoami)" is never evaluated —
-#     no file or directory named after the real output of whoami ever appears
+#   - a filename that is literally the text "$(whoami)" is never evaluated.
+#     No file or directory named after the real output of whoami ever appears
 #   - nothing crashes, nothing silently drops a file
 #
 # A note on the harness: lib.sh's assert_intact counts files with
 # `find DIR -type f | wc -l`. A filename containing an embedded newline adds
 # an extra apparent line to find's default output, so assert_intact
 # OVERCOUNTS by one for every such name in the tree. This scenario does NOT
-# use assert_intact once the newline-name is on disk — it counts with
-# `find -print0` instead — and flags the harness gap explicitly below rather
+# use assert_intact once the newline-name is on disk. It counts with
+# `find -print0` instead. It flags the harness gap explicitly below rather
 # than silently working around it.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
@@ -74,7 +74,7 @@ find "$D" -type f -print0 | xargs -0 -n1 basename -- > "$AFTER_LIST" 2>/dev/null
 if diff -q <(sort "$BEFORE_LIST") <(sort "$AFTER_LIST") >/dev/null 2>&1; then
   pass "every pathological filename survived apply byte-for-byte identical (compared as the exact set of basenames, before vs after)"
 else
-  fail "filenames changed across apply — diff: $(diff <(sort "$BEFORE_LIST") <(sort "$AFTER_LIST") | head -5 | tr '\n' ' ')"
+  fail "filenames changed across apply. Diff: $(diff <(sort "$BEFORE_LIST") <(sort "$AFTER_LIST") | head -5 | tr '\n' ' ')"
 fi
 
 nul_count_recursive() { find "$1" -type f -print0 | tr -cd '\0' | wc -c | tr -d ' '; }
@@ -87,9 +87,9 @@ assert_eq "$BEFORE" "$AFTER_COUNT" "apply lost none of the 12 pathological files
 # canary is a second, independent check aimed specifically at command
 # substitution / shell evaluation of a filename.
 if [ -e "$CANARY" ]; then
-  fail "a file named \$(whoami) or \`id\` in text form somehow caused real shell evaluation — canary file exists"
+  fail "a file named \$(whoami) or \`id\` in text form somehow caused real shell evaluation. Canary file exists"
 else
-  pass "the literal text \"\$(whoami)\" and a literal backtick command substitution were never evaluated — no canary, no unexpected file anywhere (see the byte-exact basename diff above)"
+  pass "the literal text \"\$(whoami)\" and a literal backtick command substitution were never evaluated. No canary, no unexpected file anywhere (see the byte-exact basename diff above)"
 fi
 
 # --- the 255-byte name specifically ---

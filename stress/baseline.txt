@@ -3,8 +3,8 @@
 # These are real defects, filed as issues #3 to #13, kept failing on purpose so
 # the reproductions do not rot.
 #
-# This is a SET, not a count. Several scenarios are probabilistic — they race a
-# signal against a two-syscall move, so "3 of 50 trials" one run and "8 of 50"
+# This is a SET, not a count. Several scenarios are probabilistic. They race a
+# signal against a two-syscall move. "3 of 50 trials" one run and "8 of 50"
 # the next is the same defect rolling different dice. Gating on the number
 # produced false regressions and false fixes; gating on which scenarios fail
 # does not.

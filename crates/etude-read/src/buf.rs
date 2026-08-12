@@ -84,7 +84,7 @@ impl LockedBuf {
     /// reading the allocation *after* the drop, which is undefined behaviour
     /// and segfaulted on Linux: `read_capped` reserves `MAX_READ` (1 MiB),
     /// glibc serves anything past its 128 KiB mmap threshold with `mmap`, and
-    /// freeing an `mmap`ed block `munmap`s it — so the pages were gone. macOS
+    /// freeing an `mmap`ed block `munmap`s it. So the pages were gone. macOS
     /// keeps the region mapped, so the same read quietly succeeded there and
     /// the suite was green on the machine it was written on.
     ///

@@ -42,9 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The page reads transcripts.json at runtime. If it is missing the page
-      # renders a "not loaded" message, which would be a broken demo published
-      # quietly — so fail here instead.
+      # The page reads transcripts.json at runtime. If it is missing, the page
+      # renders a "not loaded" message. That is a broken demo published
+      # quietly. Fail here instead.
       - name: Refuse to publish a demo with no transcripts
         run: |
           test -f demo/transcripts.json || { echo "demo/transcripts.json missing"; exit 1; }

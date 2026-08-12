@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # .app, .rtfd, .bundle, .framework and .photoslibrary are directories the
 # user experiences as one file. Recursing into one and scattering its
-# contents doesn't just misfile things — for a .app it destroys a working
-# application (code signature included), and for a .photoslibrary it is a
+# contents doesn't just misfile things. For a .app it destroys a working
+# application (code signature included). For a .photoslibrary it is a
 # privacy catastrophe (every photo's real path exposed as a loose file).
 #
 # Attack: a package containing a nested package (a .framework inside an
@@ -21,7 +21,7 @@ mkdir -p "$APP/Contents/Frameworks/Sparkle.framework/Versions/A"
 echo "SYNTHETIC-SENSITIVE" > "$APP/Contents/MacOS/SSN_card_scan.jpg"
 : > "$APP/Contents/Frameworks/Sparkle.framework/Versions/A/Sparkle"
 
-# A .photoslibrary too — same opacity rule, different consequence.
+# A .photoslibrary too: same opacity rule, different consequence.
 LIB="$D/Northwind Deck Photos.photoslibrary"
 mkdir -p "$LIB/originals/2024/03"
 echo "SYNTHETIC-SENSITIVE" > "$LIB/originals/2024/03/passport_scan.png"
@@ -68,7 +68,7 @@ if [ -n "$moved_app" ] && [ -n "$moved_lib" ]; then
             "$(find "$moved_lib" -type f | wc -l | tr -d ' ')" \
             ".photoslibrary internal file count unchanged by the move"
   content=$(cat "$moved_app/Contents/MacOS/SSN_card_scan.jpg" 2>/dev/null)
-  assert_eq "SYNTHETIC-SENSITIVE" "$content" "file inside the package is byte-identical after the move (and was never independently classified as sensitive — the package itself was the unit)"
+  assert_eq "SYNTHETIC-SENSITIVE" "$content" "file inside the package is byte-identical after the move (and was never independently classified as sensitive. the package itself was the unit)"
 else
   fail "a package did not survive the apply intact: app=[$moved_app] lib=[$moved_lib]"
 fi

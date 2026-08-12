@@ -4,12 +4,12 @@
 # Journal ids were recently changed (nanos-pid-counter-hash) specifically to
 # avoid same-second collisions between processes. This attacks that directly:
 # two `sweep apply` runs, launched in the same instant against two different
-# directories, sharing one XDG_STATE_HOME. Two things are checked —
+# directories, sharing one XDG_STATE_HOME. Two things are checked:
 #
 #   1. Do the journals collide or cross-contaminate (directory A's moves
 #      showing up recorded against directory B, or one process's journal
 #      write clobbering the other's)?
-#   2. `sweep undo` has no directory argument — it always reverses "the most
+#   2. `sweep undo` has no directory argument. It always reverses "the most
 #      recent apply". With two applies racing, only one journal can hold that
 #      title. Does the CLI's own success message ("Undo with: sweep undo"),
 #      printed identically by both processes, silently overpromise for
@@ -61,7 +61,7 @@ JCOUNT=$(find "$XDG_STATE_HOME/etudes" -maxdepth 1 -name 'sweep-*.journal' 2>/de
 assert_eq 2 "$JCOUNT" "two concurrent applies produced two distinct journal files (no id collision clobbered one)"
 
 # --- The undo-reachability trap: both processes print "Undo with: sweep
-# undo" — do both promises actually hold?
+# undo". Do both promises actually hold?
 JID1=$(grep -o 'sweep-[^ ]*\.journal' "/tmp/conc_d1_out.$$" | head -1)
 JID2=$(grep -o 'sweep-[^ ]*\.journal' "/tmp/conc_d2_out.$$" | head -1)
 
@@ -79,7 +79,7 @@ D2_RESTORED2=$([ "$(find "$D2" -maxdepth 1 -type f -exec basename {} \; | sort)"
 if [ "$D1_RESTORED2" = yes ] && [ "$D2_RESTORED2" = yes ]; then
   pass "calling \`sweep undo\` twice after two concurrent applies reversed both directories"
 else
-  fail "\`sweep undo\` cannot reach both concurrent applies. Both processes printed 'Undo with: sweep undo' as if that promise held for each of them independently, but sweep has no per-directory undo selector — it always reverses whichever journal has the newest mtime. After call 1, only $WHICH_FIRST was restored. After call 2: D1 restored=$D1_RESTORED2, D2 restored=$D2_RESTORED2. The directory left un-restored is not corrupted or lost, but its undo is silently unreachable through the documented CLI (\`sweep undo\` takes no PATH argument) — it sits fully-applied until the journal's 30-day TTL prunes it.
+  fail "\`sweep undo\` cannot reach both concurrent applies. Both processes printed 'Undo with: sweep undo' as if that promise held for each of them independently, but sweep has no per-directory undo selector. It always reverses whichever journal has the newest mtime. After call 1, only $WHICH_FIRST was restored. After call 2: D1 restored=$D1_RESTORED2, D2 restored=$D2_RESTORED2. The directory left un-restored is not corrupted or lost, but its undo is silently unreachable through the documented CLI (\`sweep undo\` takes no PATH argument). It sits fully-applied until the journal's 30-day TTL prunes it.
   call 1 said: $(cat "/tmp/conc_undo1.$$")
   call 2 said: $(cat "/tmp/conc_undo2.$$")"
 fi

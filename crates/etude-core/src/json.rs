@@ -1,8 +1,8 @@
 //! Minimal JSON emitter.
 //!
 //! `etude-core` has zero dependencies and that is a load-bearing claim, so
-//! `serde_json` is not an option. This is a writer only — the tools emit JSON
-//! and never parse it, so a full parser would be unused surface.
+//! `serde_json` is not an option. This is a writer only. The tools emit JSON
+//! and never parse it. A full parser would be unused surface.
 //!
 //! Escaping is the part worth getting right: filenames legitimately contain
 //! quotes, backslashes, tabs, newlines and control characters, and the fixture
@@ -48,7 +48,7 @@ pub fn arr(items: impl IntoIterator<Item = String>) -> String {
 }
 
 /// `{"k": v}` from already-encoded values. Key order is preserved, so output is
-/// byte-stable across runs — a plan that reorders cannot be diffed.
+/// byte-stable across runs. A plan that reorders cannot be diffed.
 pub fn obj(fields: &[(&str, String)]) -> String {
     let inner: Vec<String> = fields
         .iter()

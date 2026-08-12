@@ -6,7 +6,7 @@
 #
 # Exit: 0 all passed · 1 something failed · 2 nothing could be proven here.
 #
-# Scenarios emulate deployed conditions — a real Desktop mid-project, a synced
+# Scenarios emulate deployed conditions: a real Desktop mid-project, a synced
 # folder, a card dump, an interrupted run. None of it is your data; every tree
 # is generated.
 set -uo pipefail
@@ -30,7 +30,7 @@ for s in stress/scenarios/*.sh; do
   p=$(grep -c '^    ok ' <<<"$out"); f=$(grep -c '^    FAIL ' <<<"$out"); u=$(grep -c '^    unproven ' <<<"$out")
   # Silence is not success. A scenario that asserted nothing did not run.
   if [ $((p + f + u)) -eq 0 ]; then
-    echo "    FAIL     this scenario produced no assertions at all — it did not run"
+    echo "    FAIL     this scenario produced no assertions at all. It did not run"
     f=1
   fi
   TOTAL_P=$((TOTAL_P+p)); TOTAL_F=$((TOTAL_F+f)); TOTAL_U=$((TOTAL_U+u))
@@ -47,7 +47,7 @@ if [ ${#ALL_FAIL[@]} -gt 0 ]; then
 fi
 if [ ${#ALL_UNPROVEN[@]} -gt 0 ]; then
   echo ""
-  echo "  NOT PROVEN ON THIS HOST — these are not passes:"
+  echo "  NOT PROVEN ON THIS HOST (not passes):"
   printf '    %s\n' "${ALL_UNPROVEN[@]}"
 fi
 echo "═══════════════════════════════════════════"

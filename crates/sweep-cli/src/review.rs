@@ -8,8 +8,8 @@
 //! file.
 //!
 //! The reason is the threat model. A persisted plan is a second plaintext
-//! index of the user's filenames sitting on disk between two commands — the
-//! same problem the journal has, without the journal's justification.
+//! index of the user's filenames sitting on disk between two commands. That
+//! is the same problem the journal has, without the journal's justification.
 //! Eliminating it removes an asset rather than protecting one.
 //!
 //! The cost is that review cannot be resumed after quitting. That is the right
@@ -18,7 +18,7 @@
 //! # The rename escape hatch
 //!
 //! sweep never coins a label the filesystem did not already contain. The user
-//! is under no such rule — if they want a folder called `Tax 2024`, that is
+//! is under no such rule. If they want a folder called `Tax 2024`, that is
 //! their call. `r` is how they say so, and it is the only path by which a
 //! sensitive-sounding directory name can ever be created.
 
@@ -85,8 +85,9 @@ pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
     run_with(plan, &mut locked)
 }
 
-/// The reviewable loop, with input injected so the interactive flow — including
-/// the rename escape hatch — can be tested rather than demonstrated by hand.
+/// The reviewable loop, with input injected so the interactive flow
+/// (including the rename escape hatch) can be tested rather than
+/// demonstrated by hand.
 pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome> {
     println!(
         "\nReviewing {} group(s). Nothing moves until the end.\n",
@@ -98,7 +99,7 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         loop {
             let g = &plan.groups[i];
             println!(
-                "  {}  —  {} files  —  {}",
+                "  {}: {} files, {}",
                 g.name,
                 g.members.len(),
                 g.signal.describe()
@@ -159,7 +160,7 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
                     println!("\n  Cancelled. Nothing has been moved.");
                     return Ok(Outcome::Cancelled);
                 }
-                _ => println!("    unrecognised — a, s, r, d or q\n"),
+                _ => println!("    unrecognised: a, s, r, d or q\n"),
             }
         }
     }
@@ -319,7 +320,7 @@ mod tests {
     #[test]
     fn accepts_a_name_the_user_deliberately_chose() {
         // The naming rule binds sweep, not the user. If they want "Tax 2024",
-        // they may have it — that is the whole point of the escape hatch.
+        // they may have it. That is the whole point of the escape hatch.
         assert!(validate("Tax 2024").is_ok());
         assert!(validate("Bali trip").is_ok());
         assert!(validate("Acme redesign").is_ok());

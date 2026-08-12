@@ -1,5 +1,5 @@
 #!/bin/sh
-# M8 — run the whole test suite with networking structurally impossible.
+# M8: run the whole test suite with networking structurally impossible.
 #
 # This is the strongest form of sweep's central claim. `deny.toml` stops a
 # networking crate entering the tree and the symbol scan checks the shipped
@@ -57,7 +57,7 @@ fi
 
 # And it must FAIL when sandboxed. This is the load-bearing check.
 if ! sandbox-exec -f "$PROFILE" "$WORK/probe"; then
-    echo "no-network: sandbox did NOT block a socket — the profile is broken" >&2
+    echo "no-network: sandbox did NOT block a socket. the profile is broken" >&2
     exit 2
 fi
 echo "    ok: control probe connects unsandboxed, is denied under the profile"

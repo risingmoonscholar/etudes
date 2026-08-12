@@ -4,14 +4,14 @@
 # sweep's whole undo promise rests on one claim: a crash mid-move leaves every
 # file at its origin or its destination, never lost, never duplicated. This
 # attacks that claim directly by kill -9'ing a real apply at many different
-# points — including as early and as late as the run allows — and checking
+# points (including as early and as late as the run allows) and checking
 # the tree by NAME SET, not just by count, both right after the kill and
 # again after `sweep undo`.
 #
 # No timeout/gtimeout is used: this host has neither. Interruption is timed
 # by polling the destination directory for a specific number of moved files,
 # which is exact regardless of host speed, then delivering the signal
-# immediately — more reliable than a wall-clock sleep would be.
+# immediately. This is more reliable than a wall-clock sleep would be.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 # One screenshot-shaped tree of N files, named so every filename is unique.
@@ -24,7 +24,7 @@ make_tree() {
 }
 
 # Run one apply, kill -9 once the destination has TARGET moved files (or the
-# process exits first, meaning the whole apply beat the target — too fast to
+# process exits first, meaning the whole apply beat the target, too fast to
 # use for this trial). Echoes: "killed" or "finished-early".
 run_and_kill() {
   local d="$1" target="$2"
@@ -58,11 +58,11 @@ trial() {
   local outcome; outcome=$(run_and_kill "$d" "$target")
 
   # Note whether the raw kill (before undo gets a chance to reconcile
-  # anything) already produced a duplicate — diagnostic, not itself a fail:
+  # anything) already produced a duplicate, diagnostic, not itself a fail:
   # the brief's property is checked after undo runs, below.
   local after_kill_n; after_kill_n=$(find "$d" -type f | wc -l | tr -d ' ')
   local pre_undo_note=""
-  [ "$after_kill_n" != "$before_n" ] && pre_undo_note=" (tree already had $after_kill_n files, not $before_n, right after the kill — before undo ran at all)"
+  [ "$after_kill_n" != "$before_n" ] && pre_undo_note=" (tree already had $after_kill_n files, not $before_n, right after the kill, before undo ran at all)"
 
   "$SWEEP" undo >/tmp/sigkill_trial_undo_out.$$ 2>&1
   local after_set; after_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
@@ -73,12 +73,12 @@ trial() {
     echo "  baseline count=$before_n, post-undo total count=$after_n"
     local dupes; dupes=$(comm -12 <(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort) <(find "$d" -mindepth 2 -type f -exec basename {} \; | sort))
     if [ -n "$dupes" ]; then
-      echo "  duplicated (same file present at BOTH origin and its sorted destination, forever — sweep undo left it there):"
+      echo "  duplicated (same file present at BOTH origin and its sorted destination, forever, because sweep undo left it there):"
       echo "$dupes" | sed 's/^/    /'
     fi
     local missing; missing=$(comm -23 <(echo "$before_set") <(echo "$after_set"))
     if [ -n "$missing" ]; then
-      echo "  missing from origin after undo (not necessarily lost — check if it is stranded elsewhere):"
+      echo "  missing from origin after undo (not necessarily lost: check if it is stranded elsewhere):"
       echo "$missing" | sed 's/^/    /'
     fi
     echo "  sweep undo said:"

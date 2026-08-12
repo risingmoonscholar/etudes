@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Race: a source file is deleted after sweep's internal re-scan finds it but
 # before its own turn in the move loop. `sweep apply` re-scans and re-plans
-# in one call — the "plan" and "apply" the family targets are two passes
+# in one call. The "plan" and "apply" the family targets are two passes
 # inside that single invocation: pass 1 fingerprints every accepted file and
 # writes the journal, pass 2 actually moves each one, and journal writes are
 # fsynced per entry. That fsync cost gives every move a real, multi-millisecond
@@ -66,7 +66,7 @@ T0_START=$(now_ms)
 T0_END=$(now_ms)
 T0=$((T0_END - T0_START))
 if [ "$T0" -lt 20 ]; then
-  unproven "file vanishes mid-apply" "baseline apply of $N files finished in ${T0}ms on this host — too fast for a background process to land inside the window"
+  unproven "file vanishes mid-apply" "baseline apply of $N files finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
   exit 0
 fi
 
@@ -97,7 +97,7 @@ for frac in "${FRACTIONS[@]}"; do
 
   if [ "$CODE" != "0" ] && [ ! -e "$TARGET" ]; then
     # Confirm it's actually gone, not just relocated under a name we didn't
-    # expect (e.g. classify put it somewhere odd) — search the whole tree.
+    # expect (e.g. classify put it somewhere odd). Search the whole tree.
     if ! find "$D" -name "$(basename "$TARGET")" 2>/dev/null | grep -q .; then
       HIT=1
       break
@@ -106,7 +106,7 @@ for frac in "${FRACTIONS[@]}"; do
 done
 
 if [ "$HIT" != "1" ]; then
-  unproven "file vanishes mid-apply" "deletion never landed inside the apply window across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms) — could not exercise the race on this host"
+  unproven "file vanishes mid-apply" "deletion never landed inside the apply window across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms). Could not exercise the race on this host"
   exit 0
 fi
 
@@ -123,14 +123,14 @@ fi
 # The only file that should be missing anywhere in the tree is the one we
 # ourselves deleted. Nothing else the tool touched should have vanished.
 AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
-assert_eq "$((BEFORE - 1))" "$AFTER" "exactly one file missing after the crash — the one we deleted, nothing more"
+assert_eq "$((BEFORE - 1))" "$AFTER" "exactly one file missing after the crash (the one we deleted, nothing more)"
 
 MOVED=$(find "$D" -mindepth 2 -type f 2>/dev/null | wc -l | tr -d ' ')
 echo "    ($MOVED files had already landed in the destination group before the abort)"
 
 # The journal must not claim the deleted file as moved. If it lied, `undo`
 # would either try to restore a file that was never really relocated (and
-# find nothing at the recorded destination — a story that would look
+# find nothing at the recorded destination, a story that would look
 # identical to "already gone", masking the lie) or the restored count would
 # not match what we can independently verify was actually moved.
 UNDO_OUT=$("$SWEEP" undo 2>&1)
@@ -138,7 +138,7 @@ RESTORED=$(echo "$UNDO_OUT" | grep -o 'Restored [0-9]*' | grep -o '[0-9]*')
 assert_eq "$MOVED" "${RESTORED:-BAD}" "undo restored exactly the files that were actually moved before the crash"
 
 if echo "$UNDO_OUT" | grep -qi "already gone"; then
-  fail "undo reported files as 'already gone' — the journal claimed a move that never happened: $UNDO_OUT"
+  fail "undo reported files as 'already gone'. The journal claimed a move that never happened: $UNDO_OUT"
 else
   pass "no phantom entries: undo never claimed anything was moved-then-missing"
 fi

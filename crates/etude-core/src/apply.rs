@@ -11,7 +11,7 @@
 //! this module is quieter than it should be. Filed rather than hidden.
 //!
 //! `undo()` persists its own progress per entry and self-heals an entry whose
-//! move landed but whose record did not — see its doc comment for exactly what
+//! move landed but whose record did not. See its doc comment for exactly what
 //! that promises and what it does not.
 
 use std::collections::HashSet;
@@ -52,8 +52,8 @@ impl std::fmt::Display for ApplyError {
             ),
             ApplyError::CannotCompareNames(p) => write!(
                 f,
-                "refused: cannot compare {} against the other destinations — the system \
-                 would not normalise the name, so a collision cannot be ruled out",
+                "refused: cannot compare {} against the other destinations. The system \
+                 would not normalise the name. A collision cannot be ruled out",
                 crate::redact::path(p)
             ),
             ApplyError::DestinationIsSynced(p) => write!(
@@ -174,9 +174,9 @@ pub fn apply(
 /// Whether `dir` treats two names differing only in case as the same entry.
 ///
 /// Asked, not assumed. The previous version lowercased every destination
-/// unconditionally, which is right on APFS and wrong on ext4 — where
-/// `Report.pdf` and `report.pdf` are two genuinely different files, and
-/// folding them made `apply` refuse a legal plan on the default filesystem of
+/// unconditionally. That is right on APFS and wrong on ext4. On ext4,
+/// `Report.pdf` and `report.pdf` are two genuinely different files. Folding
+/// them made `apply` refuse a legal plan on the default filesystem of
 /// every Linux machine. The macOS suite could not see it: APFS collapses those
 /// two names into one directory entry, so the fixture only ever had one file.
 ///
@@ -184,8 +184,8 @@ pub fn apply(
 /// machine you happen to be on is not a property of the world, and the fix is
 /// to ask rather than to guess better.
 ///
-/// When it cannot be determined — an unwritable directory, a probe that will
-/// not create — the answer is "folds". That refuses more than necessary rather
+/// When it cannot be determined (an unwritable directory, a probe that will
+/// not create), the answer is "folds". That refuses more than necessary rather
 /// than missing a real collision, and refusing is the direction this tool is
 /// allowed to be wrong in.
 fn folds_case(dir: &Path) -> bool {
@@ -210,20 +210,20 @@ fn folds_case(dir: &Path) -> bool {
 /// but it does not touch Unicode *normalization*. "café" typed as one
 /// precomposed code point (NFC, U+00E9) and as `e` followed by a combining
 /// acute accent (NFD, U+0065 U+0301) are different byte strings in Rust, but
-/// APFS treats them as the exact same directory entry — the guard that used
-/// plain `to_lowercase` saw two distinct destinations, let the plan through,
+/// APFS treats them as the exact same directory entry. The guard that used
+/// plain `to_lowercase` saw two distinct destinations. It let the plan through,
 /// moved the first file for real, then hit EEXIST on the second mid-run.
 ///
 /// `etude-core` carries zero dependencies (see `Cargo.toml`), so this does
 /// not pull in a Unicode-normalization crate. Instead, on macOS, it asks the
 /// OS itself: `CFStringNormalize` from CoreFoundation, linked directly (the
 /// same raw-FFI pattern `scan.rs` already uses for `getuid` and
-/// `journal.rs` for `utimes` — no build.rs, no crates.io dependency, just a
+/// `journal.rs` for `utimes`: no build.rs, no crates.io dependency, just a
 /// framework the OS already ships). This uses the actual Unicode tables
-/// macOS normalizes with, so it is not a hand-rolled table that covers "the
-/// common accented Latin cases" and quietly misses everything else —
-/// Hangul, Vietnamese multi-diacritic stacks, whatever else CoreFoundation's
-/// NFC implementation covers, all go through the same call.
+/// macOS normalizes with. It is not a hand-rolled table that covers "the
+/// common accented Latin cases" and quietly misses everything else. Hangul,
+/// Vietnamese multi-diacritic stacks, and anything else CoreFoundation's NFC
+/// implementation covers all go through the same call.
 ///
 /// What this does NOT cover, stated plainly:
 /// - **Non-UTF-8 paths.** Unreachable in practice, and the earlier version of
@@ -243,8 +243,9 @@ fn folds_case(dir: &Path) -> bool {
 ///   case this issue actually reports (`café`), not against every such
 ///   legacy exception, if any still apply on APFS.
 /// - **Non-macOS targets.** There is no CoreFoundation to call into off
-///   Darwin, so this falls back to the pre-fix plain-lowercase behavior —
-///   unchanged from before, not a regression, but also not fixed there.
+///   Darwin. This falls back to the pre-fix plain-lowercase behavior. That
+///   behavior is unchanged from before. It is not a regression, but also
+///   not fixed there.
 fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
     let lossy = path.to_string_lossy();
     let cased = |s: String| if folds_case { s.to_lowercase() } else { s };
@@ -252,8 +253,8 @@ fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
     {
         // A review caught the first version falling back to plain lowercasing
         // when normalization failed. That is the pre-fix behaviour restored
-        // silently — the exact partial apply this is meant to prevent, made
-        // less likely rather than loud. If the OS cannot tell us the
+        // silently. That is the exact partial apply this is meant to prevent,
+        // made less likely rather than loud. If the OS cannot tell us the
         // normalized form, we do not know whether two destinations collide,
         // and guessing "they don't" is the answer that moves files.
         macos_unicode::normalize_nfc(&lossy)
@@ -286,7 +287,7 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
     match fs::rename(from, to) {
         Ok(()) => Ok(Method::Rename),
         Err(e) if e.raw_os_error() == Some(18) => {
-            // EXDEV — cross-device. rename(2) cannot do this, so copy, verify
+            // EXDEV: cross-device. rename(2) cannot do this, so copy, verify
             // the copy landed intact, and only then unlink the source.
             fs::copy(from, to)?;
             let src_md = fs::metadata(from)?;
@@ -313,7 +314,7 @@ pub struct UndoReport {
     pub skipped_missing: Vec<PathBuf>,
     /// Set when a move failed and undo stopped early. `restored` and the
     /// `skipped_*` lists above still describe everything that happened
-    /// *before* the failure — they are never discarded just because the walk
+    /// *before* the failure. They are never discarded just because the walk
     /// did not finish. The caller must still persist `j` (e.g. via
     /// `save_sealed`) so the on-disk journal matches what was actually
     /// restored; `undo` mutates the in-memory entries but does not know how
@@ -330,8 +331,8 @@ pub struct UndoReport {
 /// never discards what it already did. Contrast with `apply()`, which
 /// persists progress to disk after every move via `record_done`; `undo` has
 /// no equivalent incremental on-disk format, so it mutates `j.entries[i].done`
-/// in memory only. The caller — which holds the sealer used to load `j` in
-/// the first place — is responsible for calling `j.save_sealed(..)` after
+/// in memory only. The caller (which holds the sealer used to load `j` in
+/// the first place) is responsible for calling `j.save_sealed(..)` after
 /// this returns, on *both* the success and the `error.is_some()` path, or
 /// the journal will drift from physical reality exactly the way it used to.
 pub fn undo(j: &mut Journal) -> UndoReport {
@@ -401,8 +402,8 @@ pub fn undo(j: &mut Journal) -> UndoReport {
 
 // The counter makes same-process collisions impossible (monotonic, never
 // repeats). pid + nanos only make cross-process collisions astronomically
-// unlikely — not impossible (pid reuse after wraparound with a repeated or
-// backward-stepping clock reading remains a theoretical residual risk).
+// unlikely. Not impossible: pid reuse after wraparound with a repeated or
+// backward-stepping clock reading remains a theoretical residual risk.
 fn journal_id(plan: &Plan) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -423,7 +424,7 @@ fn journal_id(plan: &Plan) -> String {
 
 /// Raw FFI into CoreFoundation, linked directly with no crates.io
 /// dependency (same pattern as the `getuid`/`utimes` calls elsewhere in this
-/// crate). Used only to ask macOS to normalize a string to NFC — see the
+/// crate). Used only to ask macOS to normalize a string to NFC. See the
 /// doc comment on `dedupe_key` above for why.
 #[cfg(target_os = "macos")]
 mod macos_unicode {
@@ -472,7 +473,7 @@ mod macos_unicode {
 
     /// Returns `s` normalized to NFC via CoreFoundation, or `None` if any
     /// step of the FFI round-trip fails (caller falls back to un-normalized
-    /// lowercasing — see `dedupe_key`).
+    /// lowercasing, see `dedupe_key`).
     pub fn normalize_nfc(s: &str) -> Option<String> {
         // SAFETY: all CF calls below are given valid pointers of the type
         // each function expects, and every non-null CFTypeRef we create is
@@ -556,9 +557,9 @@ mod tests {
     fn the_probe_agrees_with_the_filesystem_it_is_asked_about() {
         // The first version of this test asserted the probe returns true,
         // because "the default macOS volume folds case". That is a property of
-        // the machine it was written on, and it failed on the ubuntu job —
-        // which is precisely the bug this probe exists to fix, committed into
-        // the test for that fix. Worth leaving the note.
+        // the machine it was written on. It failed on the ubuntu job. That is
+        // precisely the bug this probe exists to fix, committed into the
+        // test for that fix. Worth leaving the note.
         //
         // The property is not "folds" or "does not fold". It is that the probe
         // agrees with the filesystem in front of it, on whatever machine that

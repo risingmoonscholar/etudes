@@ -1,4 +1,4 @@
-# cargo-deny policy — the mechanical half of the no-network claim.
+# cargo-deny policy: the mechanical half of the no-network claim.
 #
 # A policy is not a property. This file plus the symbol scan in
 # crates/sweep-cli/tests/no_network.rs is what turns "sweep does not use the
@@ -11,8 +11,8 @@ multiple-versions = "warn"
 wildcards = "deny"
 
 # Nothing that can open a socket, resolve a name, or drive an async runtime.
-# If any of these ever appears — directly or transitively — the check fails and
-# the reason is that sweep would have gained network capability.
+# If any of these ever appears, directly or transitively, the check fails.
+# The reason is that sweep would have gained network capability.
 deny = [
     { name = "reqwest" },
     { name = "hyper" },

@@ -1,4 +1,4 @@
-//! unpack — stop thinking about archive formats.
+//! unpack: stop thinking about archive formats.
 //!
 //! # Why this parses nothing
 //!
@@ -25,7 +25,7 @@ use std::process::{Command, ExitCode, Stdio};
 use safety::Unsafe;
 
 const USAGE: &str = "\
-unpack — stop thinking about archive formats
+unpack: stop thinking about archive formats
 
 USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
@@ -161,7 +161,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
     if entries.len() > safety::MAX_ENTRIES {
         eprintln!(
-            "unpack: refused — {} entries exceeds the {} cap",
+            "unpack: refused, {} entries exceeds the {} cap",
             entries.len(),
             safety::MAX_ENTRIES
         );
@@ -236,7 +236,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     if !blocked.is_empty() {
         // Refuse the whole archive. Extracting the safe subset of a hostile
         // archive gives the attacker a partial success and the user a mess.
-        eprintln!("\nunpack: REFUSED — this archive tries to write outside the target.\n");
+        eprintln!("\nunpack: REFUSED. This archive tries to write outside the target.\n");
         for b in blocked.iter().take(10) {
             eprintln!("  {b}");
         }
@@ -426,7 +426,7 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
     for e in rd.flatten() {
         let to = dest.join(e.file_name());
         if to.exists() {
-            return false; // collision — leave the structure alone
+            return false; // collision, leave the structure alone
         }
         if std::fs::rename(e.path(), &to).is_err() {
             return false;

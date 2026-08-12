@@ -27,7 +27,7 @@ assert_exit 0 "planning a tree with a case-only name pair succeeds" -- "$SWEEP" 
 assert_exit 2 "apply refuses the case-collision cleanly (DestinationCollision)" \
   -- "$SWEEP" apply "$D" --depth 2 --yes
 
-assert_intact "$D" "$BEFORE" "nothing moved — the refusal was pre-flight, not partial"
+assert_intact "$D" "$BEFORE" "nothing moved. the refusal was pre-flight, not partial"
 [ -f "$D/ClientA/invoice_Report.pdf" ] && pass "ClientA's file is exactly where it started" \
   || fail "ClientA's file moved despite the refusal"
 [ -f "$D/ClientB/invoice_report.PDF" ] && pass "ClientB's file is exactly where it started" \

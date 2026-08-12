@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 /// Directory names that are never entered, regardless of depth or location.
-/// A credential/noise directory is dangerous by NAME, wherever it appears —
+/// A credential/noise directory is dangerous by NAME, wherever it appears.
 /// `.ssh` under a project checkout is still `.ssh`. This list must not carry
 /// anything that is only dangerous because of WHERE it sits; that's what
 /// `is_refused_system_location` is for. See the split's rationale below.
@@ -28,7 +28,7 @@ const NEVER_ENTER: &[&str] = &[
     ".git",
 ];
 
-/// Directory suffixes that are opaque units — moved whole, never entered.
+/// Directory suffixes that are opaque units. Moved whole, never entered.
 /// Walking into a `.photoslibrary` is both wrong and a privacy catastrophe.
 const PACKAGE_SUFFIXES: &[&str] = &[
     ".app",
@@ -66,7 +66,7 @@ pub struct ScanConfig {
     /// as entries instead of being descended into, and symlinks are returned as
     /// links rather than skipped.
     ///
-    /// sweep leaves this off — it organises *files*, and moving a symlink versus
+    /// sweep leaves this off. It organises *files*. Moving a symlink versus
     /// its target are different operations its plan cannot express. stash turns
     /// it on, because "clear this folder" is meaningless if a directory stays
     /// behind. Added when stash became the second caller.
@@ -167,9 +167,9 @@ pub struct ScanOutcome {
     /// Entries refused by POLICY: a credential/noise directory by name
     /// (`.ssh`, `node_modules`, ...) or an absolute system location
     /// (`/System`, `~/Library`, ...). sweep could have looked and chose not
-    /// to — this is restraint, not a failure.
+    /// to. This is restraint, not a failure.
     pub skipped_system: usize,
-    /// Directories `read_dir` could not even open — permission denied, a
+    /// Directories `read_dir` could not even open: permission denied, a
     /// path too long for the OS, or any other I/O failure. This is NOT a
     /// policy choice: sweep tried to look and could not. Unlike
     /// `skipped_system`, this means the directory's contents are completely
@@ -179,8 +179,8 @@ pub struct ScanOutcome {
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
-    /// `root_is_synced` — a caller can pass `--allow-sync` on a root that
-    /// turns out not to be synced at all, and that consent must still be
+    /// `root_is_synced`. A caller can pass `--allow-sync` on a root that
+    /// turns out not to be synced at all. That consent must still be
     /// honoured later if a destination happens to look synced (e.g. a
     /// `sweep review` rename to a name that collides with a sync marker).
     /// `Plan::allow_sync` is copied from this field for exactly that reason.
@@ -208,15 +208,15 @@ fn never_enter(name: &str) -> bool {
 
 /// Absolute system roots refused outright, regardless of `$HOME`. `/Library`
 /// is the system-wide counterpart to `$HOME/Library` (LaunchDaemons, root-
-/// owned Application Support, etc.) — a different directory from any user's
-/// home Library, but no less sensitive.
+/// owned Application Support, etc.). It is a different directory from any
+/// user's home Library, but no less sensitive.
 const SYSTEM_ROOTS: &[&str] = &["/System", "/Applications", "/Library"];
 
 /// Whether `path` is a system location that is never organised.
 ///
 /// This deliberately does NOT consult `$HOME`. An earlier version did, and it
-/// meant a wrong `HOME` silently unprotected the real `~/Library` — the
-/// environment became a safety input, and it failed open. There is no way to
+/// meant a wrong `HOME` silently unprotected the real `~/Library`. The
+/// environment became a safety input. It failed open. There is no way to
 /// validate `HOME` from inside the process, so the honest fix is not to need it.
 ///
 /// The rule instead: a `Library` component is refused wherever it appears,
@@ -287,7 +287,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         }
     }
 
-    // Refuse system locations outright, by absolute position — see
+    // Refuse system locations outright, by absolute position. See
     // `is_refused_system_location`.
     if is_refused_system_location(&root) {
         return Err(ScanError::RefusedSystemLocation(root.clone()));
@@ -319,7 +319,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
             cap: cfg.max_entries,
         });
     }
-    // Deterministic order — a plan must be byte-identical across runs.
+    // Deterministic order. A plan must be byte-identical across runs.
     out.entries.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(out)
 }
@@ -339,7 +339,7 @@ fn walk(
     let rd = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(_) => {
-            // A genuine I/O failure, not a policy refusal — sweep tried to
+            // A genuine I/O failure, not a policy refusal. sweep tried to
             // read this directory and could not. Counted separately from
             // `skipped_system` so a caller can tell "sweep declined to
             // look" apart from "sweep could not see". Its contents are
@@ -357,7 +357,7 @@ fn walk(
         let path = item.path();
         let name = item.file_name().to_string_lossy().into_owned();
 
-        // symlink_metadata does not follow — this is the TOCTOU-safe read.
+        // symlink_metadata does not follow. This is the TOCTOU-safe read.
         let meta = match fs::symlink_metadata(&path) {
             Ok(m) => m,
             Err(_) => continue,
@@ -366,7 +366,7 @@ fn walk(
         if meta.file_type().is_symlink() {
             if cfg.whole_units {
                 // Move the link itself. No target is followed, so an escaping
-                // or cyclic link is inert — it is just a small file to relocate.
+                // or cyclic link is inert. It is just a small file to relocate.
                 out.entries.push(Entry {
                     path,
                     name,
@@ -412,7 +412,7 @@ fn walk(
             {
                 use std::os::unix::fs::MetadataExt;
                 if !visited.insert((meta.dev(), meta.ino())) {
-                    continue; // already seen — cycle
+                    continue; // already seen: cycle
                 }
             }
             walk(root, &path, depth + 1, cfg, out, visited)?;
@@ -454,8 +454,8 @@ mod tests {
     }
 
     // is_refused_system_location is a pure function, tested directly against
-    // synthetic absolute paths — no real /System, /Applications, or /Library
-    // is ever touched, and no real $HOME is ever used as the `home` argument.
+    // synthetic absolute paths. No real /System, /Applications, or /Library
+    // is ever touched. No real $HOME is ever used as the `home` argument.
 
     #[test]
     fn system_and_applications_and_library_stay_refused() {
@@ -465,7 +465,7 @@ mod tests {
         assert!(is_refused_system_location(Path::new(
             "/Applications/Xcode.app"
         )));
-        // The system-wide /Library, distinct from $HOME/Library — this is
+        // The system-wide /Library, distinct from $HOME/Library. This is
         // the gap an adversarial review caught: narrowing Library's refusal
         // to $HOME/Library alone silently reopened the system-wide one.
         assert!(is_refused_system_location(Path::new(
@@ -489,9 +489,9 @@ mod tests {
         // Deliberate. Telling `~/Projects/Library` apart from `~/Library` needs
         // to know where home is, and the only way to ask is `$HOME`, which a
         // caller can lie about. A wrong `HOME` then unprotects the real
-        // `~/Library` — the environment becomes a safety input and it fails
+        // `~/Library`. The environment becomes a safety input. It fails
         // open. Refusing to organise a folder you named Library is the smaller
-        // harm, and it is what happened before any of this was split apart.
+        // harm. It is what happened before any of this was split apart.
         assert!(is_refused_system_location(Path::new(
             "/Users/fixture/Projects/Library"
         )));
@@ -524,9 +524,9 @@ mod tests {
 
     #[test]
     fn without_a_trustworthy_home_library_is_refused_anywhere_fail_closed() {
-        // No known $HOME (unset, empty, or relative — home_dir() returns
-        // None for all three): there is no way to scope the iCloud
-        // carve-out, so this falls back to the pre-fix behaviour of
+        // No known $HOME (unset, empty, or relative: home_dir() returns
+        // None for all three). There is no way to scope the iCloud
+        // carve-out. This falls back to the pre-fix behaviour of
         // refusing any `Library` component, anywhere. This is what an
         // adversarial review caught: `env -u HOME sweep ~/Library/Preferences`
         // must not silently drop the Library guard.

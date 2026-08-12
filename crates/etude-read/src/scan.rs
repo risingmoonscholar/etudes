@@ -8,7 +8,7 @@
 //! can influence a group name.
 
 /// What kind of sensitive material was found. Mirrors `etude_core::Category`
-/// without depending on it — this crate stays standalone.
+/// without depending on it. This crate stays standalone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Found {
     Identity,

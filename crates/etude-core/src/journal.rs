@@ -3,9 +3,9 @@
 //! # Encryption
 //!
 //! The journal is sealed by a [`Sealer`] supplied by the caller. `etude-core`
-//! deliberately does not know how — keeping the engine dependency-free is what
-//! makes the no-network claim cheap to check, so the cipher lives in
-//! `etude-keep` and is injected here.
+//! deliberately does not know how. Keeping the engine dependency-free makes
+//! the no-network claim cheap to check. The cipher lives in `etude-keep` and
+//! is injected here.
 //!
 //! There is no plaintext fallback. If sealing is unavailable the journal is not
 //! written and the caller is told, because silently degrading to plaintext is
@@ -58,7 +58,7 @@ pub struct Entry {
     pub mtime_secs: i64,
     pub inode: u64,
     /// FNV-1a over the first and last 4 KiB. Change detection, **not**
-    /// integrity — it defeats accident, not an adversary.
+    /// integrity. It defeats accident, not an adversary.
     pub edge_hash: u64,
     /// False until the move has actually succeeded on disk.
     pub done: bool,
@@ -233,7 +233,7 @@ impl Journal {
         f.write_all(&sealed).map_err(JournalError::Io)?;
         // Append to an existing file creates no new directory entry, so the
         // directory fsync from write_bytes already covers the name. sync_all
-        // on the file is enough — that's why this is O(1).
+        // on the file is enough. That's why this is O(1).
         f.sync_all().map_err(JournalError::Io)?;
         Ok(())
     }
@@ -246,17 +246,17 @@ impl Journal {
     ///
     /// A progress frame is only ever appended *after* the move it describes
     /// has already succeeded (see `apply`'s ordering rule), so a partially
-    /// written trailing frame is not "work that never happened" — it is
+    /// written trailing frame is not "work that never happened". It is
     /// proof the write was interrupted after the real move, not evidence the
     /// move didn't occur. Silently discarding it would misreport a completed
     /// move as pending, which is exactly the half-loaded state that strands
     /// files: `undo` would see `done: false` and skip a file that is in fact
     /// sitting at its destination. So a damaged tail refuses the whole load
-    /// loudly instead of guessing. A *clean* end of file — the boundary
-    /// between two intact frames, including "no progress written yet" — is
+    /// loudly instead of guessing. A *clean* end of file (the boundary
+    /// between two intact frames, including "no progress written yet") is
     /// not damage and loads normally.
     ///
-    /// Journals written before length-framing — a single unframed sealed blob —
+    /// Journals written before length-framing (a single unframed sealed blob)
     /// are still accepted. Framed parse is tried first; any failure falls back
     /// to opening the whole file as one sealed blob (the pre-framing format).
     pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
@@ -293,7 +293,7 @@ impl Journal {
     /// `apply`), so any frame that fails to read back whole and authentic is
     /// refused rather than dropped: dropping it would silently downgrade a
     /// finished move to "not done" and strand the file. Only a clean
-    /// boundary — `raw` fully consumed with no leftover bytes — is treated as
+    /// boundary (`raw` fully consumed with no leftover bytes) is treated as
     /// "nothing more was recorded"; anything else is reported as damage.
     fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) -> Result<(), JournalError> {
         let mut offset = 0usize;
@@ -359,7 +359,7 @@ impl Journal {
         let p = self.path();
         // Write to a temp file in the same directory, then rename: a crash
         // mid-write cannot leave a half-parsed journal. The rename also
-        // atomically discards any previously-appended progress frames — there
+        // atomically discards any previously-appended progress frames. There
         // is no separate truncate step, so a crash cannot pair a new base with
         // stale progress that would over-claim on the next load.
         let tmp = p.with_extension("journal.tmp");
@@ -504,15 +504,16 @@ fn sync_dir(_dir: &Path) -> Result<(), JournalError> {
 /// Facts about a file, captured at apply time and re-checked at undo time.
 ///
 /// Package directories (`.app`, `.photoslibrary`) are moved as single units, so
-/// this must accept a directory. There is nothing to hash — opening a directory
-/// fails — so the edge hash is 0 and identity rests on inode and mtime. Found by
+/// this must accept a directory. There is nothing to hash. Opening a directory
+/// fails. The edge hash is then 0. Identity rests on inode and mtime instead.
+/// Found by
 /// stash, which moves everything including packages; sweep would have hit the
 /// same panic the first time a `.app` landed in a group.
 pub fn fingerprint(p: &Path) -> io::Result<(u64, i64, u64, u64)> {
     // symlink_metadata, not metadata: a symlink must be identified by the LINK,
     // never by its target. Following it makes the link's fingerprint change
-    // whenever the target does — stash found this with a link pointing at the
-    // folder being emptied, which reported the link as modified and refused to
+    // whenever the target does. stash found this with a link pointing at the
+    // folder being emptied. It reported the link as modified and refused to
     // restore it.
     let md = fs::symlink_metadata(p)?;
     let size = md.len();
@@ -537,7 +538,7 @@ pub fn fingerprint(p: &Path) -> io::Result<(u64, i64, u64, u64)> {
 
 /// FNV-1a over the first and last 4 KiB.
 ///
-/// This detects accidental change — an edit, a replacement, a different file at
+/// This detects accidental change: an edit, a replacement, a different file at
 /// the same path. It is **not** an integrity check and must never be described
 /// as one: an adversary can trivially preserve it.
 pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
@@ -625,8 +626,8 @@ mod tests {
         fn utimes(path: *const std::ffi::c_char, times: *const TimeVal) -> i32;
     }
 
-    /// Smoke test: proves write_bytes actually calls sync_dir after rename —
-    /// not a full crash-consistency proof.
+    /// Smoke test: proves write_bytes actually calls sync_dir after rename.
+    /// Not a full crash-consistency proof.
     #[test]
     fn a_saved_journal_leaves_its_directory_fsyncable() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
@@ -694,7 +695,7 @@ mod tests {
     }
 
     /// Appended progress frames must carry the corrected method, not just the
-    /// done bit — otherwise undo's inode check picks the Rename path for a
+    /// done bit. Otherwise undo's inode check picks the Rename path for a
     /// CopyUnlink entry after reload.
     #[test]
     fn record_done_preserves_copy_unlink_method_across_reload() {
@@ -748,7 +749,7 @@ mod tests {
 
     /// A full `save_sealed` replaces the whole file (base + any appended
     /// progress). Stale progress must not resurrect a done bit the base
-    /// explicitly cleared — e.g. after undo flips an entry back to not-done.
+    /// explicitly cleared, e.g. after undo flips an entry back to not-done.
     #[test]
     fn save_sealed_discards_prior_progress_frames() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
@@ -802,8 +803,8 @@ mod tests {
     }
 
     /// The defect in issue #3: a journal cut off mid-way through its last
-    /// progress frame — exactly what a crash leaves behind, since the move
-    /// for that entry already succeeded before the frame write started —
+    /// progress frame (exactly what a crash leaves behind, since the move
+    /// for that entry already succeeded before the frame write started)
     /// must be refused outright, not half-loaded with the interrupted
     /// entry silently downgraded to "not done". A silent downgrade is worse
     /// than a refusal: `undo` would see `done: false`, skip the file, and
@@ -854,9 +855,9 @@ mod tests {
             ],
         };
         j.save_sealed(&Identity).expect("base journal");
-        // Both moves genuinely completed on disk — record_done is only ever
-        // called after move_one returns Ok (see apply's ordering rule) — and
-        // both progress frames were fully appended and fsynced here.
+        // Both moves genuinely completed on disk. record_done is only ever
+        // called after move_one returns Ok (see apply's ordering rule).
+        // Both progress frames were fully appended and fsynced here.
         j.record_done(0, Method::Rename, &Identity)
             .expect("record entry 0 done");
         j.record_done(1, Method::Rename, &Identity)
@@ -877,9 +878,10 @@ mod tests {
         // Assert the property, not one specific implementation of it: what
         // strands a file is an entry reading back as `done: false` when its
         // move already happened, not the particular error type a refusal
-        // uses. So two outcomes are acceptable here — refuse the load
-        // outright, or load it with entry 1 correctly marked done — and only
-        // the third (loaded, but silently downgraded to not-done) is the bug.
+        // uses. Two outcomes are acceptable here: refuse the load
+        // outright, or load it with entry 1 correctly marked done. Only
+        // the third outcome is the bug: loaded, but silently downgraded to
+        // not-done.
         // A test that only checked `result.is_err()` would keep passing even
         // if a future change swapped in some other error, or accidentally
         // returned `Ok` with the entry correctly marked done; neither of
@@ -894,9 +896,9 @@ mod tests {
             Ok(loaded) => {
                 assert!(
                     loaded.entries[1].done,
-                    "loaded a torn journal with entry 1 marked not-done: its move \
-                     already happened on disk, so undo would skip it and strand it \
-                     without a word — exactly the defect this test exists to catch"
+                    "loaded a torn journal with entry 1 marked not-done. Its move \
+                     already happened on disk. undo would skip it and strand it \
+                     without a word. That is exactly the defect this test exists to catch"
                 );
             }
         }
@@ -905,9 +907,9 @@ mod tests {
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 
-    /// A clean end of file — the file ends exactly on a frame boundary, as it
+    /// A clean end of file (the file ends exactly on a frame boundary, as it
     /// does after a normal save with no progress yet, or after a crash that
-    /// landed cleanly on a frame boundary before a later move ever started —
+    /// landed cleanly on a frame boundary before a later move ever started)
     /// is not damage and must still load normally. Only a torn frame is
     /// refused.
     #[test]
@@ -958,7 +960,7 @@ mod tests {
         j.save_sealed(&Identity).expect("base journal");
         j.record_done(0, Method::Rename, &Identity)
             .expect("record entry 0 done");
-        // Entry 1 was never even attempted — a crash landed cleanly between
+        // Entry 1 was never even attempted. A crash landed cleanly between
         // the two moves. No bytes for it exist at all, so this is not a
         // torn frame.
 
@@ -973,8 +975,8 @@ mod tests {
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 
-    /// Journals written before length-framing must still load after upgrade —
-    /// otherwise in-flight undo breaks until TTL prunes them.
+    /// Journals written before length-framing must still load after upgrade.
+    /// Otherwise in-flight undo breaks until TTL prunes them.
     #[test]
     fn load_sealed_reads_legacy_unframed_journals() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();

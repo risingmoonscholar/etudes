@@ -1,7 +1,7 @@
 //! Defect #1: `Library`/`System`/`Applications` were refused by NAME anywhere
 //! in the path, conflated with credential directories (which correctly ARE
-//! name-based). That made `$HOME/Library/Mobile Documents` — iCloud Drive,
-//! where a Mac with "Desktop & Documents" sync on keeps the real Desktop —
+//! name-based). That made `$HOME/Library/Mobile Documents` (iCloud Drive,
+//! where a Mac with "Desktop & Documents" sync on keeps the real Desktop)
 //! permanently unreachable: the system-location refusal fired before
 //! `is_synced`/`--allow-sync` ever got a chance to run.
 //!
@@ -27,8 +27,8 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 /// Sets `HOME` for the duration of the guard, restoring whatever was there
-/// (or unsetting it) on drop — so a failing test can't leak a fake HOME into
-/// the rest of the suite.
+/// (or unsetting it) on drop. This stops a failing test from leaking a
+/// fake HOME into the rest of the suite.
 struct FakeHome {
     previous: Option<std::ffi::OsString>,
 }
@@ -81,7 +81,7 @@ fn icloud_desktop_is_reachable_with_allow_sync() {
     let _fake_home = FakeHome::set(&home);
 
     // Without --allow-sync: refused, but as a SYNC refusal, not a system
-    // location refusal — proof the two paths finally meet.
+    // location refusal. That is proof the two paths finally meet.
     let cfg_default = ScanConfig::default();
     let err = scan::scan(&desktop, &cfg_default).expect_err("should refuse without allow_sync");
     assert!(
@@ -130,7 +130,7 @@ fn without_home_a_library_folder_anywhere_is_refused_not_silently_allowed() {
     let _g = lock();
     // Real adversarial-review finding: with HOME unset (`env -u HOME sweep
     // ...`), home_dir() has nothing to scope $HOME/Library against, and a
-    // naive implementation would just never refuse Library at all — turning
+    // naive implementation would just never refuse Library at all. That turns
     // a real system-location guard into a no-op. It must fail closed
     // instead: refuse a `Library` component anywhere, same as before this
     // defect was split apart.

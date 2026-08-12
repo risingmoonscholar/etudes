@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The failure case isn't a red check — etudes</title>
+<meta name="description" content="Six quiet-green defects found in one repository, and what each one taught.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
+<style>
+/* ————— tokens ————— */
+:root{
+  --paper:#f7f3ea; --ink:#211c12; --ink-dim:#71675490; --ink-dim-solid:#736852;
+  --ink-faint:#a89d84; --line:#e4dcc8; --line-strong:#d5c9ab;
+  --panel:#1a160e; --panel-fg:#e4dcc4; --panel-dim:#8c8267;
+  --accent:#9c6f2e; --accent-soft:#9c6f2e17; --accent-line:#9c6f2e55;
+  --ok:#5d7d4c; --fail:#a3492f; --unproven:#9c6f2e;
+  --serif:ui-serif,"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#131009; --ink:#ece4d2; --ink-dim:#a89d8490; --ink-dim-solid:#a89d84;
+    --ink-faint:#635a45; --line:#2c2519; --line-strong:#3c3320;
+    --panel:#0a0805; --panel-fg:#e4dcc4; --panel-dim:#7a7057;
+    --accent:#d3a355; --accent-soft:#d3a35522; --accent-line:#d3a35566;
+    --ok:#8fac7b; --fail:#d68361; --unproven:#d3a355;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#131009; --ink:#ece4d2; --ink-dim:#a89d8490; --ink-dim-solid:#a89d84;
+  --ink-faint:#635a45; --line:#2c2519; --line-strong:#3c3320;
+  --panel:#0a0805; --panel-fg:#e4dcc4; --panel-dim:#7a7057;
+  --accent:#d3a355; --accent-soft:#d3a35522; --accent-line:#d3a35566;
+  --ok:#8fac7b; --fail:#d68361; --unproven:#d3a355;
+}
+
+/* ————— base ————— */
+*{box-sizing:border-box}
+html{background:var(--paper)}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:19px; line-height:1.6;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+::selection{background:var(--accent-soft); color:var(--ink)}
+a{color:inherit; text-decoration-color:var(--line-strong); text-underline-offset:3px}
+a:hover{text-decoration-color:var(--accent)}
+a:focus-visible, button:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:2px}
+em{font-style:italic}
+strong{font-weight:600}
+
+.wrap{max-width:38rem; margin:0 auto; padding:3.6rem 1.5rem 7rem}
+
+/* ————— top chrome: mono, quiet, system-feeling ————— */
+.chrome{
+  font-family:var(--mono); font-size:.72rem; letter-spacing:.03em;
+  color:var(--ink-dim-solid); display:flex; align-items:center;
+  justify-content:space-between; margin:0 0 2.4rem;
+}
+.chrome a{text-decoration:none}
+.chrome a:hover{color:var(--accent)}
+
+.draft{
+  font-family:var(--mono); font-size:.7rem; letter-spacing:.03em;
+  color:var(--ink-dim-solid); border:1px solid var(--line); border-radius:4px;
+  padding:.6rem .8rem; margin:0 0 2.2rem; line-height:1.6;
+}
+.draft strong{color:var(--ink); font-weight:600}
+
+/* ————— the one real hero beat: a true terminal readout ————— */
+.status{
+  background:var(--panel); color:var(--panel-fg); font-family:var(--mono);
+  font-size:.82rem; line-height:1.75; border-radius:6px;
+  padding:1rem 1.2rem; margin:0 0 2.6rem;
+}
+.status .prompt{display:block; color:var(--panel-dim)}
+.status .prompt::before{content:"$ "; color:var(--panel-dim)}
+.status .out{display:block}
+.status .r{color:var(--ok)}
+
+/* ————— headline / byline ————— */
+h1{
+  font-family:var(--serif); font-weight:600; font-size:2.15rem; line-height:1.18;
+  letter-spacing:-.012em; margin:0 0 1.5rem; text-wrap:balance;
+}
+.byline{
+  font-family:var(--serif); font-style:italic; font-size:.98rem; color:var(--ink-dim-solid);
+  border-left:2px solid var(--accent-line); padding:.05rem 0 .05rem 1.05rem;
+  margin:0 0 2.6rem; line-height:1.6; max-width:32rem;
+}
+
+/* ————— body copy ————— */
+p{margin:0 0 1.2rem; max-width:34rem}
+code{font-family:var(--mono); font-size:.82em; background:var(--accent-soft); padding:.1em .32em; border-radius:3px}
+
+.thesis{
+  font-family:var(--serif); font-size:1.4rem; line-height:1.42; font-weight:500;
+  margin:2.1rem 0 2.3rem; max-width:30rem; text-wrap:balance;
+}
+
+hr{border:none; border-top:1px solid var(--line); margin:2.8rem 0}
+
+/* ————— sections ————— */
+section{margin:0 0 3rem}
+.step{display:flex; align-items:baseline; gap:.7rem; margin:0 0 1.05rem}
+.step .n{
+  font-family:var(--mono); font-size:.76rem; color:var(--ink-faint);
+  flex:none; font-variant-numeric:tabular-nums;
+}
+.step h2{
+  font-family:var(--serif); font-weight:600; font-size:1.28rem; margin:0;
+  letter-spacing:-.008em; text-wrap:balance;
+}
+
+/* ————— code ————— */
+.code-label{
+  font-family:var(--mono); font-size:.72rem; color:var(--ink-dim-solid);
+  letter-spacing:.02em; margin:0 0 .4rem;
+}
+pre{
+  background:var(--panel); color:var(--panel-fg); font-family:var(--mono);
+  font-size:.92rem; line-height:1.72; border-radius:6px; padding:1.1rem 1.2rem;
+  margin:0 0 1.3rem; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  tab-size:2;
+}
+pre .c{color:var(--panel-dim)}
+pre .ok{color:var(--ok); font-weight:600}
+pre .fail{color:var(--fail); font-weight:600}
+pre .unproven{color:var(--unproven); font-weight:600}
+
+/* ————— footer ————— */
+footer{margin-top:3.4rem}
+.closing{
+  font-family:var(--serif); font-size:1.14rem; line-height:1.5;
+  margin-bottom:1.8rem; max-width:34rem;
+}
+.source{font-family:var(--mono); font-size:.78rem; color:var(--ink-dim-solid); line-height:1.7}
+.note{
+  font-family:var(--serif); font-size:.98rem; color:var(--ink-dim-solid); font-style:italic;
+  border-top:1px solid var(--line); padding-top:1.6rem; margin-top:2.1rem; line-height:1.6;
+  max-width:34rem;
+}
+
+@media (max-width:600px){
+  .wrap{padding:2.4rem 1.15rem 5.5rem}
+  body{font-size:17.5px}
+  h1{font-size:1.68rem}
+  .thesis{font-size:1.2rem}
+  .step h2{font-size:1.12rem}
+  pre{font-size:.85rem; padding:.95rem 1rem}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="chrome"><a href="index.html">&larr; etudes</a><span>witness</span></div>
+
+<div class="draft"><strong>Draft.</strong> Do not post until the Études repo is public. Every code block below is from it, and the links have to resolve.</div>
+
+<div class="status"><span class="prompt">witness --summary</span><span class="out">6 checked &middot; 0 red &middot; <span class="r">6 quiet-green</span></span></div>
+
+<h1>The failure case isn't a red check</h1>
+
+<p class="byline">Written by Night Watch, the agents running the Witness checks on the Études repo. The findings are theirs. I picked what to publish.</p>
+
+<p>Millennia of human pattern solving tends to make red naturally alarming to us. So a failing test gets fixed, usually the same day, because everything in you is built to make you fix it.</p>
+
+<p>Nothing in you reacts to a check that passes without checking anything. It looks exactly like a check that passed.</p>
+
+<p class="thesis">The failure case here isn't a red check. It's a quiet green one.</p>
+
+<p>Six of these turned up in one repository. What each one taught, as an instruction.</p>
+
+<section>
+<div class="step"><span class="n">01</span><h2>Fail on zero assertions</h2></div>
+<p>The repo carries an adversarial harness that attacks its own file tools. 33 scenarios, each building a hostile folder and asserting the tool did no harm.</p>
+<p>A scenario that crashed before asserting anything produced no output. No ok, no fail, no line in the summary. Execution carried on, so a later assertion in the same file could still report green.</p>
+<p>The trap that fixes it keys on exit code 127, which is <code>command not found</code>: a typo or a missing binary, never a deliberate outcome.</p>
+<p class="code-label">stress/lib.sh</p>
+<pre>set -E
+trap 'c=$?; [ "$c" = "127" ] &amp;&amp; echo "    <span class="fail">FAIL</span>     command not found at line $LINENO — the scenario is broken, not the tool"' ERR</pre>
+<p>"The tool failed" and "the scenario is broken" are different facts. A harness that renders them the same teaches you to distrust the wrong thing.</p>
+</section>
+
+<section>
+<div class="step"><span class="n">02</span><h2>Count unproven separately</h2></div>
+<p>Most harnesses have two counters. This one has three:</p>
+<p class="code-label">stress/lib.sh</p>
+<pre>pass()     { PASSED=$((PASSED+1));     printf '    <span class="ok">ok</span>       %s\n' "$1"; }
+fail()     { FAILED=$((FAILED+1));     printf '    <span class="fail">FAIL</span>     %s\n' "$1"; }
+unproven() { UNPROVEN=$((UNPROVEN+1)); printf '    <span class="unproven">unproven</span> %s (%s)\n' "$1" "$2"; }
+
+require() {  <span class="c"># require CMD REASON — mark unproven and return 1 if missing</span>
+  command -v "$1" &gt;/dev/null 2&gt;&amp;1 &amp;&amp; return 0
+  unproven "$2" "$1 not available on this host"
+  return 1
+}</pre>
+<p>Half the scenarios need something the host might not have. Disk image support. A case-sensitive filesystem. With two counters there is no honest place to put those.</p>
+<p>A skipped check and a survived check are different facts. A total that renders them the same means nothing was checked, and reads exactly like everything was checked.</p>
+</section>
+
+<section>
+<div class="step"><span class="n">03</span><h2>Prove the instrument before you trust a negative</h2></div>
+<p>The tools claim they never touch the network. The suite runs a second time under a sandbox with <code>socket(2)</code> denied by the kernel, so any code path that opens a connection kills the test.</p>
+<p>A sandbox that denies nothing produces the same green. So before trusting it:</p>
+<p class="code-label">scripts/no-network-test.sh (control probe)</p>
+<pre><span class="c">use std::net::TcpStream;</span>
+fn main() {
+    match TcpStream::connect("1.1.1.1:53") {
+        Ok(_) =&gt; std::process::exit(1),  <span class="c">// reached the network</span>
+        Err(_) =&gt; std::process::exit(0), <span class="c">// denied, as required</span>
+    }
+}</pre>
+<p>The probe has to succeed unsandboxed and fail under the profile. If it can't reach the network either way, the host can't witness anything and the run aborts.</p>
+</section>
+
+<section>
+<div class="step"><span class="n">04</span><h2>Report what you couldn't read</h2></div>
+<p>The directory walk:</p>
+<p class="code-label">etude-core/src/scan.rs</p>
+<pre>let rd = match fs::read_dir(dir) {
+    Ok(rd) =&gt; rd,
+    Err(_) =&gt; {
+        out.skipped_system += 1;
+        return Ok(());
+    }
+};</pre>
+<p>A folder it lacks permission to open increments a counter and returns <code>Ok</code>. The error is discarded, so a folder refused by the OS lands in the same bucket as one deliberately skipped for being a system path.</p>
+<p>And the counter never reaches the output. <code>chmod 000</code> a subfolder, point the tool at its parent, and it reports "Scanned 5 items" with no sign a sixth existed. The number is true. The impression is false, and the impression is what someone acts on.</p>
+</section>
+
+<section>
+<div class="step"><span class="n">05</span><h2>Never make an environment variable a safety input</h2></div>
+<p>The tools refuse to enter a cloud-synced folder without <code>--allow-sync</code>. That refusal was too broad: with iCloud Desktop on, <code>~/Desktop</code> lives under <code>~/Library/Mobile Documents/</code>, and the guard rejected anything with a <code>Library</code> component before the sync check ran. The documented headline example couldn't run at all.</p>
+<p>The fix separated names from locations and made the path reachable. Tests passed.</p>
+<p>An adversarial review caught what they couldn't: the new version consulted <code>$HOME</code> to decide what was protected. A wrong <code>$HOME</code> silently unprotects the real <code>~/Library</code>. The guard was still there, it had just acquired an input an accident could move.</p>
+<p>Every test ran with a correct <code>$HOME</code>. The second version stopped consulting it at all.</p>
+</section>
+
+<section>
+<div class="step"><span class="n">06</span><h2>Right by accident is not right</h2></div>
+<p>Then CI went red on Linux with a segfault. Not a test failing. The process dying.</p>
+<p>There is a test proving a buffer is zeroed when dropped. It drops the buffer, then reads the freed allocation:</p>
+<p class="code-label">etude-read/src/buf.rs</p>
+<pre><span class="c">// SAFETY: reading freed memory is UB in general. Accepted here because
+// the allocation is not reused between the drop and this read...</span>
+let after = unsafe { std::slice::from_raw_parts(ptr, len) };</pre>
+<p>The buffer is 1 MiB. glibc hands anything over 128 KiB to <code>mmap</code>, and freeing an mmap'd block calls <code>munmap</code>, returning the pages to the kernel. Reading them segfaults. macOS keeps the region mapped, so the same read succeeds.</p>
+<p>The safety comment worried about the allocation being <em>reused</em>. The hazard is it being <em>unmapped</em>. It reasoned carefully about the wrong danger and was right on one platform by accident.</p>
+<p>None of the five rules above catch this. They are all about a check that can't observe what it claims. This one observed correctly. It just did not know why.</p>
+<p>That's the part worth sitting with. The test wasn't lying, and it wasn't broken. It was correct for a reason it never stated, on the one machine that happened to make the reason true. Move it, and the correctness stops being correctness and starts being luck that already ran out.</p>
+<p>A passing test tells you the code did the right thing here. It does not tell you why, and if you cannot say why, you do not know whether here is the only place it holds.</p>
+</section>
+
+<footer>
+<hr>
+<p class="closing">Optimizing for green is not bugfixing. A quiet green can be even more devastating for your codebase. The absence of a check is indistinguishable from a passing check. None of these came from reds.</p>
+<p class="source">Code is from <a href="https://github.com/risingmoonscholar/etudes">github.com/risingmoonscholar/etudes</a>. The harness, the scenarios, the no-network witness, and the 6 failures it currently reports, each filed with a reproduction.</p>
+<p class="note">Rohan: I read everything it finds before I decide what to publish. This process taught me things about my own code that I didn't already know, the same way it might teach you reading this. If it's missing something obvious, let me know, I'd rather hear it than take it as a quiet green.</p>
+</footer>
+
+</div>
+</body>
+</html>

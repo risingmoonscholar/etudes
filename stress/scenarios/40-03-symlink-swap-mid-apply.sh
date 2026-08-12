@@ -3,16 +3,16 @@
 # root, after sweep's internal re-scan already recorded it as a plain file,
 # but before its own turn to move.
 #
-# What must hold: sweep must not follow the link to its target — must not
-# read the external file's content, must not write to it, must not delete
-# it — and must not write anything outside the root it was given.
+# What must hold: sweep must not follow the link to its target. It must not
+# read the external file's content. It must not write to it. It must not
+# delete it. It must not write anything outside the root it was given.
 #
 # This scenario proves the property for the path every real sweep run takes:
 # source and destination on the same device, so move_one uses hard_link (with
 # an explicit is_file() guard against exactly this) and, when that's not
-# available, rename(2) — neither of which dereferences a symlink source.
+# available, rename(2), neither of which dereferences a symlink source.
 #
-# A sibling condition exists — a *cross-device* move (source and destination
+# A sibling condition exists. A *cross-device* move (source and destination
 # on different filesystems, e.g. an external volume mounted inside the
 # scanned folder) falls back to a different code path, `fs::copy`, which
 # Rust's stdlib documents as following symlinks. That was reproduced by hand
@@ -20,7 +20,7 @@
 # swapped for a symlink to an outside secret, timed into the same window this
 # scenario exercises): the destination ended up holding the outside file's
 # exact bytes, and `apply` reported ordinary success. It is not automated
-# here — every attempt to mount and then cleanly detach a scratch volume on
+# here. Every attempt to mount and then cleanly detach a scratch volume on
 # this host left it wedged ("Resource busy") for minutes at a time even after
 # killing sweep and the mount's own helper process, which is not a
 # side effect a shared test suite should risk leaving behind. See the
@@ -77,7 +77,7 @@ T0_START=$(now_ms)
 T0_END=$(now_ms)
 T0=$((T0_END - T0_START))
 if [ "$T0" -lt 20 ]; then
-  unproven "symlink swap mid-apply (same device)" "baseline apply of $N files finished in ${T0}ms on this host — too fast for a background process to land inside the window"
+  unproven "symlink swap mid-apply (same device)" "baseline apply of $N files finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
   exit 0
 fi
 
@@ -114,7 +114,7 @@ for frac in "${FRACTIONS[@]}"; do
   fi
   if [ -L "$TARGET" ]; then
     # Never got processed this run (apply may have exited before reaching
-    # it, or finished before our swap even fired) — still informative if
+    # it, or finished before our swap even fired). Still informative if
     # apply otherwise completed, but keep looking for the in-flight case.
     :
   fi
@@ -138,11 +138,11 @@ assert_eq "$SENTINEL" "$OUTSIDE_CONTENT" "the outside file's content was never r
 if grep -rq "$SENTINEL" "$D" 2>/dev/null; then
   fail "the outside file's content leaked into the tree as a real copy somewhere under \$D"
 else
-  pass "no copy of the outside content exists anywhere in the tree — only the link moved"
+  pass "no copy of the outside content exists anywhere in the tree. Only the link moved"
 fi
 
 if [ -e "$OUTSIDE/secret.txt" ]; then
-  pass "the outside file itself still exists — it was never deleted through the link"
+  pass "the outside file itself still exists. It was never deleted through the link"
 else
-  fail "the outside file was deleted — sweep followed the link to remove it"
+  fail "the outside file was deleted. sweep followed the link to remove it"
 fi

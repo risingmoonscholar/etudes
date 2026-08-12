@@ -1,6 +1,6 @@
 //! Journal encryption (M7).
 //!
-//! Isolated in its own crate so that `etude-core` — the classification engine —
+//! Isolated in its own crate so that `etude-core` (the classification engine)
 //! keeps **zero dependencies**. The no-network claim is about the engine, and
 //! keeping the engine dependency-free is what makes that claim cheap to check.
 //!
@@ -156,7 +156,7 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
 }
 
 /// Remove the key. Returns true only once a subsequent read confirms it is
-/// gone — including when it was already absent. After a confirmed destroy,
+/// gone. Including when it was already absent. After a confirmed destroy,
 /// existing journals are unreadable by anyone.
 pub fn destroy_key() -> bool {
     // A missing /usr/bin/security cannot have deleted anything, so report
@@ -331,7 +331,7 @@ mod tests {
         let b = seal(&K, b"same").expect("seal");
         assert_ne!(
             a, b,
-            "identical ciphertext for identical input — nonce reuse"
+            "identical ciphertext for identical input, nonce reuse"
         );
     }
 }

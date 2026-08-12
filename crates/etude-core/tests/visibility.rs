@@ -5,8 +5,8 @@
 //! survives from `scan()` through `plan::build()` into both the JSON and the
 //! field a human-facing renderer would read, and that a directory `scan()`
 //! could not open at all is distinguished from a directory `scan()` refused
-//! to enter on purpose (a `.ssh`, or an absolute system location) — the two
-//! mean different things to a user and the code can tell them apart.
+//! to enter on purpose (a `.ssh`, or an absolute system location). The two
+//! mean different things to a user. The code can tell them apart.
 
 #![cfg(unix)]
 
@@ -31,7 +31,7 @@ fn unique_root(tag: &str) -> PathBuf {
 struct Cleanup(PathBuf);
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        // Restore permissions first — rm -rf of a 000 dir fails otherwise.
+        // Restore permissions first. rm -rf of a 000 dir fails otherwise.
         let locked = self.0.join("locked");
         let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(&self.0);
@@ -64,15 +64,15 @@ fn an_unreadable_directory_is_counted_not_dropped() {
     // The 5 visible files were found; the 5 behind the locked door were not.
     assert_eq!(out.entries.len(), 5, "visible files should still be found");
 
-    // The failure to read `locked/` MUST be counted — this is the whole
+    // The failure to read `locked/` MUST be counted. This is the whole
     // issue. It is a real read_dir() failure, not a policy refusal, so it
     // must land in its own field, separate from a deliberate refusal.
     assert_eq!(
         out.skipped_unreadable, 1,
         "the unreadable subdirectory was not counted at all"
     );
-    // And it must NOT be silently folded into the policy-refusal bucket —
-    // sweep never chose to skip `locked/`, it tried and failed.
+    // And it must NOT be silently folded into the policy-refusal bucket.
+    // sweep never chose to skip `locked/`. It tried and failed.
     assert_eq!(
         out.skipped_system, 0,
         "a genuine read failure was counted as a deliberate refusal"
@@ -101,10 +101,10 @@ fn an_unreadable_directory_is_counted_not_dropped() {
 #[test]
 fn a_deliberate_refusal_is_not_confused_with_a_read_failure() {
     // never_enter names (node_modules etc.) are a policy choice, not an I/O
-    // error — scan() could have read them and chose not to. That must land
+    // error. scan() could have read them and chose not to. That must land
     // in skipped_system, not skipped_unreadable, or a user reading
     // `--explain` cannot tell "you can't see this" from "sweep declined to
-    // look". (Not `.ssh` — a dot-prefixed name is caught by the earlier
+    // look". (Not `.ssh`. A dot-prefixed name is caught by the earlier
     // is_hidden() check first, which would test the wrong branch.)
     let root = unique_root("policy-refusal");
     let _ = fs::remove_dir_all(&root);

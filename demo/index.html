@@ -3,81 +3,101 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>etudes — small studies in local-first software</title>
+<title>etudes: small studies in local-first software</title>
 <meta name="description" content="Three command-line tools that tidy a folder without reading your private files. Every demo below is real recorded output.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 <style>
 :root{
-  --bg:#fbfbfa; --fg:#16150f; --dim:#6b6a63; --line:#e2e0d8;
-  --term-bg:#1c1b17; --term-fg:#d8d5c8; --accent:#8a6a3b;
+  --bg:#f7f3ea; --fg:#211c12; --dim:#736852; --dim-solid:#736852; --line:#e4dcc8; --line-strong:#d5c9ab;
+  --term-bg:#1a160e; --term-fg:#e4dcc4; --term-dim:#8c8267; --accent:#9c6f2e; --accent-soft:#9c6f2e17;
+  --serif:ui-serif,"New York","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
-    --bg:#121210; --fg:#e6e3d9; --dim:#8f8d84; --line:#2b2a25;
-    --term-bg:#0d0d0b; --term-fg:#d8d5c8; --accent:#c9a86a;
+    --bg:#131009; --fg:#ece4d2; --dim:#a89d8490; --dim-solid:#a89d84; --line:#2c2519; --line-strong:#3c3320;
+    --term-bg:#0a0805; --term-fg:#e4dcc4; --term-dim:#7a7057; --accent:#d3a355; --accent-soft:#d3a35522;
   }
 }
 :root[data-theme="dark"]{
-  --bg:#121210; --fg:#e6e3d9; --dim:#8f8d84; --line:#2b2a25;
-  --term-bg:#0d0d0b; --term-fg:#d8d5c8; --accent:#c9a86a;
+  --bg:#131009; --fg:#ece4d2; --dim:#a89d8490; --dim-solid:#a89d84; --line:#2c2519; --line-strong:#3c3320;
+  --term-bg:#0a0805; --term-fg:#e4dcc4; --term-dim:#7a7057; --accent:#d3a355; --accent-soft:#d3a35522;
 }
 *{box-sizing:border-box}
+html{background:var(--bg)}
 body{
   margin:0; background:var(--bg); color:var(--fg);
-  font-family:var(--sans); font-size:17px; line-height:1.65;
-  -webkit-font-smoothing:antialiased;
+  font-family:var(--serif); font-size:19px; line-height:1.6;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
-.wrap{max-width:46rem; margin:0 auto; padding:5rem 1.5rem 8rem}
-h1{font-size:1.4rem; font-weight:600; letter-spacing:-.01em; margin:0 0 .3rem}
-h2{font-size:1.15rem; font-weight:600; margin:0 0 .4rem}
-h3{font-size:.8rem; font-weight:600; text-transform:uppercase; letter-spacing:.09em;
-   color:var(--dim); margin:2.4rem 0 .8rem}
-p{margin:0 0 1.1rem; max-width:38rem}
-a{color:inherit; text-underline-offset:3px; text-decoration-color:var(--line)}
+::selection{background:var(--accent-soft); color:var(--fg)}
+.wrap{max-width:44rem; margin:0 auto; padding:3.4rem 1.5rem 8rem}
+.chrome{
+  font-family:var(--mono); font-size:.72rem; letter-spacing:.03em; color:var(--dim-solid);
+  display:flex; justify-content:flex-end; margin:0 0 2.2rem;
+}
+.chrome a{text-decoration:none}
+.chrome a:hover{color:var(--accent)}
+h1{font-family:var(--serif); font-size:1.9rem; font-weight:600; letter-spacing:-.012em; margin:0 0 .4rem; text-wrap:balance}
+h2{font-family:var(--serif); font-size:1.32rem; font-weight:600; margin:0 0 .5rem; letter-spacing:-.006em}
+h3{font-family:var(--mono); font-size:.76rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em;
+   color:var(--dim-solid); margin:2.2rem 0 .9rem}
+p{margin:0 0 1.15rem; max-width:36rem}
+a{color:inherit; text-underline-offset:3px; text-decoration-color:var(--line-strong)}
 a:hover{text-decoration-color:var(--accent)}
-code{font-family:var(--mono); font-size:.88em}
-hr{border:0; border-top:1px solid var(--line); margin:4rem 0}
-.lede{color:var(--dim); margin-bottom:2.5rem}
+a:focus-visible, button:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:2px}
+code{font-family:var(--mono); font-size:.83em; background:var(--accent-soft); padding:.08em .28em; border-radius:3px}
+hr{border:0; border-top:1px solid var(--line); margin:3.4rem 0}
+.lede{font-family:var(--serif); font-size:1.14rem; color:var(--dim-solid); margin-bottom:2.4rem; max-width:32rem}
 .tool{margin:0 0 1rem}
-.tool-head{display:flex; align-items:baseline; gap:.7rem; margin-bottom:.2rem}
-.tool-head code{font-size:1.05rem; font-weight:600; font-family:var(--mono)}
-.ver{font-size:.72rem; color:var(--dim); font-family:var(--mono)}
-.tabs{display:flex; gap:.3rem; margin:1.4rem 0 0; border-bottom:1px solid var(--line)}
+.tool-head{display:flex; align-items:baseline; gap:.7rem; margin-bottom:.4rem}
+.tool-head code{font-size:1.1rem; font-weight:600; font-family:var(--mono); background:none; padding:0}
+.ver{font-size:.72rem; color:var(--dim-solid); font-family:var(--mono)}
+.tabs{display:flex; gap:.3rem; margin:1.5rem 0 0; border-bottom:1px solid var(--line)}
 .tab{
   background:none; border:0; border-bottom:2px solid transparent; margin-bottom:-1px;
-  font:inherit; font-size:.82rem; color:var(--dim); padding:.4rem .7rem; cursor:pointer;
+  font:inherit; font-family:var(--mono); font-size:.8rem; color:var(--dim-solid); padding:.45rem .7rem; cursor:pointer;
 }
 .tab[aria-selected="true"]{color:var(--fg); border-bottom-color:var(--accent)}
 .panel[hidden]{display:none}
 .term{
   background:var(--term-bg); color:var(--term-fg); font-family:var(--mono);
-  font-size:12.5px; line-height:1.55; padding:1rem 1.1rem; margin:1.1rem 0 .5rem;
-  border-radius:5px; overflow-x:auto; white-space:pre; tab-size:4;
+  font-size:.86rem; line-height:1.68; padding:1.05rem 1.15rem; margin:1.2rem 0 .6rem;
+  border-radius:6px; overflow-x:auto; white-space:pre; tab-size:4;
+  -webkit-overflow-scrolling:touch;
 }
 .term .cmd{color:var(--accent)}
-.term .cmd::before{content:"$ "; opacity:.6}
+.term .cmd::before{content:"$ "; color:var(--term-dim)}
 .runline{display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; margin:.4rem 0 0}
 .runline button{
   font:inherit; font-size:.78rem; font-family:var(--mono); cursor:pointer;
-  background:none; color:var(--dim); border:1px solid var(--line);
+  background:none; color:var(--dim-solid); border:1px solid var(--line);
   border-radius:4px; padding:.22rem .6rem;
 }
 .runline button:hover{color:var(--fg); border-color:var(--accent)}
-.note{font-size:.78rem; color:var(--dim); margin:.5rem 0 0}
-table{border-collapse:collapse; width:100%; font-size:.86rem; margin:.4rem 0 1.2rem}
-th,td{text-align:left; padding:.42rem .7rem .42rem 0; border-bottom:1px solid var(--line);
+.note{font-family:var(--sans); font-size:.8rem; color:var(--dim-solid); margin:.55rem 0 0; line-height:1.55}
+table{border-collapse:collapse; width:100%; font-size:.85rem; margin:.5rem 0 1.3rem; font-family:var(--sans)}
+th,td{text-align:left; padding:.45rem .7rem .45rem 0; border-bottom:1px solid var(--line);
       vertical-align:top}
-th{font-weight:600; font-size:.74rem; text-transform:uppercase; letter-spacing:.07em; color:var(--dim)}
+th{font-weight:600; font-size:.72rem; text-transform:uppercase; letter-spacing:.07em; color:var(--dim-solid)}
 td code{white-space:nowrap}
-.foot{font-size:.82rem; color:var(--dim); margin-top:4rem}
-.foot a{text-decoration-color:var(--line)}
-@media (max-width:600px){ .wrap{padding:3rem 1.1rem 5rem} body{font-size:16px} }
+.foot{font-family:var(--mono); font-size:.78rem; color:var(--dim-solid); margin-top:4rem}
+.foot a{text-decoration-color:var(--line-strong)}
+@media (max-width:600px){
+  .wrap{padding:2.4rem 1.15rem 5.5rem}
+  body{font-size:17.5px}
+  h1{font-size:1.6rem}
+  h2{font-size:1.2rem}
+  .lede{font-size:1.05rem}
+  .term{font-size:.8rem; padding:.9rem 1rem}
+}
 </style>
 </head>
 <body>
 <div class="wrap">
+
+<div class="chrome"><a href="article-quiet-green.html">witness &rarr;</a></div>
 
 <h1>etudes</h1>
 <p class="lede">Three command-line tools that tidy a folder without reading your private files.</p>
@@ -120,12 +140,12 @@ declared in the artifact, and nothing else is touched.</p>
 
 <h3>Check the claims yourself</h3>
 <div class="term"><span class="cmd">cargo test --all</span>
-154 tests
+157 tests
 
 <span class="cmd">scripts/no-network-test.sh</span>
 the same suite, with socket(2) denied by the OS</div>
 <p class="note">The second is macOS-only. It uses <code>sandbox-exec</code>, and elsewhere
-exits 2 saying the claim cannot be made on this host — a witness that quietly passes where
+exits 2 saying the claim cannot be made on this host. A witness that quietly passes where
 it cannot observe anything is worse than no witness.</p>
 
 <hr>
@@ -134,34 +154,8 @@ it cannot observe anything is worse than no witness.</p>
 <p>A test that passes is not the same as a test that checked something, and nothing in a
 green summary distinguishes them. <em>Witness</em> is the name for the checks in this repo
 that can testify: each one can demonstrate it is able to observe the failure it claims to
-rule out.</p>
-
-<p>Four rules, all cheap, none clever.</p>
-
-<p><strong>Prove the instrument before trusting a negative.</strong> The no-network run
-denies <code>socket(2)</code> at the kernel. Before believing that, it compiles a control
-program that dials <code>1.1.1.1</code> and requires it to succeed unsandboxed and fail
-under the profile. A sandbox that denies nothing produces the same green.</p>
-
-<p><strong>Unproven is a third outcome.</strong> A hazard this machine cannot exercise —
-no disk image support, a missing tool, a filesystem that is not here — is counted
-separately and printed under its own heading. A skipped check and a survived check are
-different facts, and a total that renders them the same means <em>nothing was checked</em>
-while reading exactly like <em>everything was checked</em>.</p>
-
-<p><strong>Zero assertions is a failure.</strong> A scenario that dies before asserting
-used to produce no output at all, and execution carried on, so a later assertion could
-report green. The harness built to find silent failure had one.</p>
-
-<p><strong>Break it on purpose before believing it.</strong> Every rule above was verified
-by making it fail first — a deliberately broken scenario, a missing tool, a control that
-could not reach the network. A check nobody has watched go red is decoration.</p>
-
-<p><strong>Run it somewhere else.</strong> A suite that has only ever run on one machine
-has tested that machine. A test here was right on macOS for two years and segfaulted the
-first time it ran on Linux, because it read a freed 1&nbsp;MiB buffer that glibc had already
-handed back to the kernel. It observed the correct thing, on the platform where it ran, by
-depending on allocator behaviour it never stated.</p>
+rule out. Six rules, all cheap, none clever, one of them found mid-write when CI itself
+went red: <a href="article-quiet-green.html">The failure case isn't a red check</a>.</p>
 
 <h3>Night Watch</h3>
 <p>Night Watch is the agent that runs these against this repo, unattended, and files what
@@ -173,7 +167,7 @@ in them is the agent's rather than mine.</p>
 exit 0 pass · 1 fail · 2 nothing proven</div>
 <p class="note">The failures are real and left open on purpose. A repository that argues
 for honest reporting and hides its own defect list would be making the opposite argument.
-<a href="https://github.com/risingmoonscholar/etudes/issues">Read them</a> — they include a
+<a href="https://github.com/risingmoonscholar/etudes/issues">Read them</a>. They include a
 data-loss bug introduced by one of my own fixes.</p>
 
 <p>This is what I have an agent doing on a small project. If it is missing something
@@ -184,6 +178,13 @@ Apache-2.0 · <a href="https://github.com/risingmoonscholar/etudes">source</a>
 </p>
 
 </div>
+
+<!-- TRANSCRIPTS_INLINE_START -->
+<!-- Written by scripts/capture-demos.sh alongside demo/transcripts.json, same
+     data, same step, so a double-clicked file:// copy works without a server.
+     fetch() is still tried first below; this is the fallback, not the source. -->
+<script type="application/json" id="transcripts-inline">{"generated_by": "scripts/capture-demos.sh", "commit": "3efd66d", "note": "Real stdout from binaries built out of this tree, run against the synthetic mkfx fixture. Not hand-written.", "substitution_rule": "The temporary directory the fixture was built in is rendered as ~/Desktop. No other edit is made to captured output. The real path is a mktemp name and is not recorded.", "transcripts": [{"label": "sweep-plan", "command": "sweep ~/Desktop", "exit": 0, "stdout": "\nScanned 100 items  \u00b7  names, sizes and dates only  \u00b7  no contents read\n\n  Screenshots      34 files   named \"Screenshot ...\"\n  Photos, Aug 12   27 files   camera names, taken within 3 days\n  Installers        3 files   .dmg and .pkg\n  notes             7 files   7 filenames contain \"notes\"\n  acme              5 files   5 filenames contain \"acme\"\n\n  Left alone       24 files\n    14 look like personal records. sweep does not touch these\n    10 no clear group\n\n  skipped 1 hidden item and 3 symlinks\n\nNothing has been moved.  Nothing left this machine.\nNote: this listing is in your terminal scrollback.\nReview: sweep review <path>     Apply: sweep apply <path> --yes\n"}, {"label": "sweep-explain", "command": "sweep ~/Desktop --explain", "exit": 0, "stdout": "\nScanned 100 items  \u00b7  names, sizes and dates only  \u00b7  no contents read\n\n  Screenshots      34 files   named \"Screenshot ...\"\n  Photos, Aug 12   27 files   camera names, taken within 3 days\n  Installers        3 files   .dmg and .pkg\n  notes             7 files   7 filenames contain \"notes\"\n  acme              5 files   5 filenames contain \"acme\"\n\n  Left alone       24 files\n    14 look like personal records. sweep does not touch these\n        3  tax documents\n        3  identity documents\n        3  medical records\n        1  financial records\n        3  credentials or keys\n        1  legal documents\n    10 no clear group\n\n  skipped 1 hidden item and 3 symlinks\n\n--- signal trace ---\n\nScreenshots: named \"Screenshot ...\"\n    ~/Desktop/Screenshot 2026-07-01 at 9.28.11 AM.png\n    ~/Desktop/Screenshot 2026-07-02 at 9.01.11 AM.png\n    ~/Desktop/Screenshot 2026-07-02 at 9.29.11 AM.png\n    ~/Desktop/Screenshot 2026-07-03 at 9.02.11 AM.png\n    ~/Desktop/Screenshot 2026-07-03 at 9.30.11 AM.png\n    ~/Desktop/Screenshot 2026-07-04 at 9.03.11 AM.png\n    ~/Desktop/Screenshot 2026-07-04 at 9.31.11 AM.png\n    ~/Desktop/Screenshot 2026-07-05 at 9.04.11 AM.png\n    ~/Desktop/Screenshot 2026-07-05 at 9.32.11 AM.png\n    ~/Desktop/Screenshot 2026-07-06 at 9.05.11 AM.png\n    ~/Desktop/Screenshot 2026-07-06 at 9.33.11 AM.png\n    ~/Desktop/Screenshot 2026-07-07 at 9.06.11 AM.png\n    ~/Desktop/Screenshot 2026-07-07 at 9.34.11 AM.png\n    ~/Desktop/Screenshot 2026-07-08 at 9.07.11 AM.png\n    ~/Desktop/Screenshot 2026-07-09 at 9.08.11 AM.png\n    ~/Desktop/Screenshot 2026-07-10 at 9.09.11 AM.png\n    ~/Desktop/Screenshot 2026-07-11 at 9.10.11 AM.png\n    ~/Desktop/Screenshot 2026-07-12 at 9.11.11 AM.png\n    ~/Desktop/Screenshot 2026-07-13 at 9.12.11 AM.png\n    ~/Desktop/Screenshot 2026-07-14 at 9.13.11 AM.png\n    ~/Desktop/Screenshot 2026-07-15 at 9.14.11 AM.png\n    ~/Desktop/Screenshot 2026-07-16 at 9.15.11 AM.png\n    ~/Desktop/Screenshot 2026-07-17 at 9.16.11 AM.png\n    ~/Desktop/Screenshot 2026-07-18 at 9.17.11 AM.png\n    ~/Desktop/Screenshot 2026-07-19 at 9.18.11 AM.png\n    ~/Desktop/Screenshot 2026-07-20 at 9.19.11 AM.png\n    ~/Desktop/Screenshot 2026-07-21 at 9.20.11 AM.png\n    ~/Desktop/Screenshot 2026-07-22 at 9.21.11 AM.png\n    ~/Desktop/Screenshot 2026-07-23 at 9.22.11 AM.png\n    ~/Desktop/Screenshot 2026-07-24 at 9.23.11 AM.png\n    ~/Desktop/Screenshot 2026-07-25 at 9.24.11 AM.png\n    ~/Desktop/Screenshot 2026-07-26 at 9.25.11 AM.png\n    ~/Desktop/Screenshot 2026-07-27 at 9.26.11 AM.png\n    ~/Desktop/Screenshot 2026-07-28 at 9.27.11 AM.png\n\nPhotos, Aug 12: camera names, taken within 3 days\n    ~/Desktop/IMG_4400.HEIC\n    ~/Desktop/IMG_4401.HEIC\n    ~/Desktop/IMG_4402.HEIC\n    ~/Desktop/IMG_4403.HEIC\n    ~/Desktop/IMG_4404.HEIC\n    ~/Desktop/IMG_4405.HEIC\n    ~/Desktop/IMG_4406.HEIC\n    ~/Desktop/IMG_4407.HEIC\n    ~/Desktop/IMG_4408.HEIC\n    ~/Desktop/IMG_4409.HEIC\n    ~/Desktop/IMG_4410.HEIC\n    ~/Desktop/IMG_4411.HEIC\n    ~/Desktop/IMG_4412.HEIC\n    ~/Desktop/IMG_4413.HEIC\n    ~/Desktop/IMG_4414.HEIC\n    ~/Desktop/IMG_4415.HEIC\n    ~/Desktop/IMG_4416.HEIC\n    ~/Desktop/IMG_4417.HEIC\n    ~/Desktop/IMG_4418.HEIC\n    ~/Desktop/IMG_4419.HEIC\n    ~/Desktop/IMG_4420.HEIC\n    ~/Desktop/IMG_4421.HEIC\n    ~/Desktop/IMG_4422.HEIC\n    ~/Desktop/IMG_4423.HEIC\n    ~/Desktop/IMG_4424.HEIC\n    ~/Desktop/IMG_4425.HEIC\n    ~/Desktop/IMG_4426.HEIC\n\nInstallers: .dmg and .pkg\n    ~/Desktop/Docker-4.28.0.dmg\n    ~/Desktop/Figma-124.5.dmg\n    ~/Desktop/node-v22.1.0.pkg\n\nnotes: 7 filenames contain \"notes\"\n    ~/Desktop/cafe\u0301_notes.pdf\n    ~/Desktop/notes-a.txt\n    ~/Desktop/notes-b.txt\n    ~/Desktop/notes-c.md\n    ~/Desktop/notes-d.txt\n    ~/Desktop/notes-e.txt\n    ~/Desktop/notes.txt\n\nacme: 5 filenames contain \"acme\"\n    ~/Desktop/acme_brand_guide.pdf\n    ~/Desktop/acme_homepage_mock.fig\n    ~/Desktop/acme_logo_v3.psd\n    ~/Desktop/acme_nav_spec.md\n    ~/Desktop/acme_palette.sketch\n\nNothing has been moved.  Nothing left this machine.\nNote: this listing is in your terminal scrollback.\nReview: sweep review <path>     Apply: sweep apply <path> --yes\n"}, {"label": "sweep-json", "command": "sweep ~/Desktop --json", "exit": 0, "stdout": "{\"root\":\"~/Desktop\",\"scanned\":100,\"groups\":[{\"name\":\"Screenshots\",\"signal\":\"named \\\"Screenshot ...\\\"\",\"accepted\":false,\"count\":34,\"members\":[\"~/Desktop/Screenshot 2026-07-01 at 9.28.11 AM.png\",\"~/Desktop/Screenshot 2026-07-02 at 9.01.11 AM.png\",\"~/Desktop/Screenshot 2026-07-02 at 9.29.11 AM.png\",\"~/Desktop/Screenshot 2026-07-03 at 9.02.11 AM.png\",\"~/Desktop/Screenshot 2026-07-03 at 9.30.11 AM.png\",\"~/Desktop/Screenshot 2026-07-04 at 9.03.11 AM.png\",\"~/Desktop/Screenshot 2026-07-04 at 9.31.11 AM.png\",\"~/Desktop/Screenshot 2026-07-05 at 9.04.11 AM.png\",\"~/Desktop/Screenshot 2026-07-05 at 9.32.11 AM.png\",\"~/Desktop/Screenshot 2026-07-06 at 9.05.11 AM.png\",\"~/Desktop/Screenshot 2026-07-06 at 9.33.11 AM.png\",\"~/Desktop/Screenshot 2026-07-07 at 9.06.11 AM.png\",\"~/Desktop/Screenshot 2026-07-07 at 9.34.11 AM.png\",\"~/Desktop/Screenshot 2026-07-08 at 9.07.11 AM.png\",\"~/Desktop/Screenshot 2026-07-09 at 9.08.11 AM.png\",\"~/Desktop/Screenshot 2026-07-10 at 9.09.11 AM.png\",\"~/Desktop/Screenshot 2026-07-11 at 9.10.11 AM.png\",\"~/Desktop/Screenshot 2026-07-12 at 9.11.11 AM.png\",\"~/Desktop/Screenshot 2026-07-13 at 9.12.11 AM.png\",\"~/Desktop/Screenshot 2026-07-14 at 9.13.11 AM.png\",\"~/Desktop/Screenshot 2026-07-15 at 9.14.11 AM.png\",\"~/Desktop/Screenshot 2026-07-16 at 9.15.11 AM.png\",\"~/Desktop/Screenshot 2026-07-17 at 9.16.11 AM.png\",\"~/Desktop/Screenshot 2026-07-18 at 9.17.11 AM.png\",\"~/Desktop/Screenshot 2026-07-19 at 9.18.11 AM.png\",\"~/Desktop/Screenshot 2026-07-20 at 9.19.11 AM.png\",\"~/Desktop/Screenshot 2026-07-21 at 9.20.11 AM.png\",\"~/Desktop/Screenshot 2026-07-22 at 9.21.11 AM.png\",\"~/Desktop/Screenshot 2026-07-23 at 9.22.11 AM.png\",\"~/Desktop/Screenshot 2026-07-24 at 9.23.11 AM.png\",\"~/Desktop/Screenshot 2026-07-25 at 9.24.11 AM.png\",\"~/Desktop/Screenshot 2026-07-26 at 9.25.11 AM.png\",\"~/Desktop/Screenshot 2026-07-27 at 9.26.11 AM.png\",\"~/Desktop/Screenshot 2026-07-28 at 9.27.11 AM.png\"]},{\"name\":\"Photos, Aug 12\",\"signal\":\"camera names, taken within 3 days\",\"accepted\":false,\"count\":27,\"members\":[\"~/Desktop/IMG_4400.HEIC\",\"~/Desktop/IMG_4401.HEIC\",\"~/Desktop/IMG_4402.HEIC\",\"~/Desktop/IMG_4403.HEIC\",\"~/Desktop/IMG_4404.HEIC\",\"~/Desktop/IMG_4405.HEIC\",\"~/Desktop/IMG_4406.HEIC\",\"~/Desktop/IMG_4407.HEIC\",\"~/Desktop/IMG_4408.HEIC\",\"~/Desktop/IMG_4409.HEIC\",\"~/Desktop/IMG_4410.HEIC\",\"~/Desktop/IMG_4411.HEIC\",\"~/Desktop/IMG_4412.HEIC\",\"~/Desktop/IMG_4413.HEIC\",\"~/Desktop/IMG_4414.HEIC\",\"~/Desktop/IMG_4415.HEIC\",\"~/Desktop/IMG_4416.HEIC\",\"~/Desktop/IMG_4417.HEIC\",\"~/Desktop/IMG_4418.HEIC\",\"~/Desktop/IMG_4419.HEIC\",\"~/Desktop/IMG_4420.HEIC\",\"~/Desktop/IMG_4421.HEIC\",\"~/Desktop/IMG_4422.HEIC\",\"~/Desktop/IMG_4423.HEIC\",\"~/Desktop/IMG_4424.HEIC\",\"~/Desktop/IMG_4425.HEIC\",\"~/Desktop/IMG_4426.HEIC\"]},{\"name\":\"Installers\",\"signal\":\".dmg and .pkg\",\"accepted\":false,\"count\":3,\"members\":[\"~/Desktop/Docker-4.28.0.dmg\",\"~/Desktop/Figma-124.5.dmg\",\"~/Desktop/node-v22.1.0.pkg\"]},{\"name\":\"notes\",\"signal\":\"7 filenames contain \\\"notes\\\"\",\"accepted\":false,\"count\":7,\"members\":[\"~/Desktop/cafe\u0301_notes.pdf\",\"~/Desktop/notes-a.txt\",\"~/Desktop/notes-b.txt\",\"~/Desktop/notes-c.md\",\"~/Desktop/notes-d.txt\",\"~/Desktop/notes-e.txt\",\"~/Desktop/notes.txt\"]},{\"name\":\"acme\",\"signal\":\"5 filenames contain \\\"acme\\\"\",\"accepted\":false,\"count\":5,\"members\":[\"~/Desktop/acme_brand_guide.pdf\",\"~/Desktop/acme_homepage_mock.fig\",\"~/Desktop/acme_logo_v3.psd\",\"~/Desktop/acme_nav_spec.md\",\"~/Desktop/acme_palette.sketch\"]}],\"left_alone\":{\"looks_personal\":14,\"by_category\":[{\"kind\":\"tax documents\",\"count\":3},{\"kind\":\"identity documents\",\"count\":3},{\"kind\":\"medical records\",\"count\":3},{\"kind\":\"financial records\",\"count\":1},{\"kind\":\"credentials or keys\",\"count\":3},{\"kind\":\"legal documents\",\"count\":1}],\"no_clear_group\":10,\"no_clear_group_paths\":[\"~/Desktop/Report.pdf\",\"~/Desktop/Some App.app\",\"~/Desktop/Untitled 3.pdf\",\"~/Desktop/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt\",\"~/Desktop/bali_beach_01.jpg\",\"~/Desktop/bali_beach_02.jpg\",\"~/Desktop/bali_temple.jpg\",\"~/Desktop/caf\u00e9_menu.pdf\",\"~/Desktop/final_FINAL_v2.docx\",\"~/Desktop/weird\\tname.txt\"]},\"skipped\":{\"hidden\":1,\"symlinks\":3,\"refused_system_location\":0,\"unreadable\":0},\"root_is_synced\":false}\n"}, {"label": "unpack-help", "command": "unpack help", "exit": 0, "stdout": "unpack: stop thinking about archive formats\n\nUSAGE\n    unpack ARCHIVE [--into DIR]    extract safely into its own directory\n    unpack ARCHIVE --list          show what is inside, extract nothing\n    --json                         machine-readable output (for agents)\n    --version                      print the version and exit\n    unpack help\n\nHandles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg using the tools\nalready on this machine. Nothing is parsed here.\n\nEvery archive is listed and judged BEFORE anything is written. Paths that\nescape the target, absolute paths and drive paths are refused outright.\n"}, {"label": "stash-put", "command": "stash ~/Desktop --for 3d", "exit": 0, "stdout": "\nStashed 104 items.\n~/Desktop is clear.\n\n  Due back: in 3 days\n  stash does not run in the background. Run `stash pop`,\n  or `stash status` to see what is overdue.\n\n  1 hidden item was left in place.\n"}]}</script>
+<!-- TRANSCRIPTS_INLINE_END -->
 
 <script>
 const API = {
@@ -219,7 +220,7 @@ const API = {
       ["stash status", "what is stashed, and when it is due back"],
     ],
     flags: [
-      ["--for DURATION", "30m · 2h · 3d · 1w — default: no deadline"],
+      ["--for DURATION", "30m · 2h · 3d · 1w, default: no deadline"],
       ["--json", "machine-readable output"],
       ["--version", "print the version and exit"],
     ],
@@ -246,15 +247,32 @@ const API = {
 const EXITS = [["0","done"],["1","nothing to do"],["2","refused"],["3","error"]];
 const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+// Two sources for the same generated data. fetch() is the real path, used by
+// GitHub Pages and any real HTTP server. The inline <script> below it is a
+// fallback capture-demos.sh writes into this file at the same time it writes
+// transcripts.json, so a double-clicked file:// copy of this page still shows
+// real captured output instead of failing silently: file:// blocks fetch() of
+// a local JSON file, which is a browser security rule, not a bug here.
+function loadInline() {
+  const el = document.getElementById("transcripts-inline");
+  const text = el && el.textContent.trim();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+function paint(data) {
+  const byLabel = Object.fromEntries(data.transcripts.map(t => [t.label, t]));
+  for (const [name, spec] of Object.entries(API)) {
+    render(document.querySelector(`[data-tool="${name}"]`), name, spec, byLabel, data.commit);
+  }
+}
+
 fetch("transcripts.json")
   .then(r => r.ok ? r.json() : Promise.reject(r.status))
-  .then(data => {
-    const byLabel = Object.fromEntries(data.transcripts.map(t => [t.label, t]));
-    for (const [name, spec] of Object.entries(API)) {
-      render(document.querySelector(`[data-tool="${name}"]`), name, spec, byLabel, data.commit);
-    }
-  })
+  .then(paint)
   .catch(() => {
+    const inline = loadInline();
+    if (inline) { paint(inline); return; }
     document.querySelectorAll(".tool").forEach(el => {
       el.innerHTML = '<p class="note">Transcripts not loaded. Run <code>scripts/capture-demos.sh</code>.</p>';
     });

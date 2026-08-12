@@ -101,8 +101,8 @@ fn inspection_never_creates_or_renames_a_group() {
     let names_without: Vec<&String> = without.groups.iter().map(|g| &g.name).collect();
     let names_with: Vec<&String> = with.groups.iter().map(|g| &g.name).collect();
 
-    // Groups may DISAPPEAR — refusing members can drop a group below its
-    // minimum size, which is narrowing and therefore allowed. What may never
+    // Groups may DISAPPEAR. Refusing members can drop a group below its
+    // minimum size. That is narrowing and therefore allowed. What may never
     // happen is a group appearing, or a name changing.
     for n in &names_with {
         assert!(
@@ -119,7 +119,7 @@ fn inspection_never_creates_or_renames_a_group() {
             .expect("group survived inspection but did not exist without it");
         assert!(
             b.members.len() <= a.members.len(),
-            "group {} GREW after inspection — content must only widen refusal",
+            "group {} GREW after inspection. Content must only widen refusal",
             b.name
         );
         for m in &b.members {

@@ -17,9 +17,9 @@ pub const MAX_ENTRIES: usize = 200_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Unsafe {
-    /// `/etc/passwd` — would write outside the target entirely.
+    /// `/etc/passwd`: would write outside the target entirely.
     AbsolutePath(String),
-    /// `../../.ssh/authorized_keys` — the classic Zip Slip.
+    /// `../../.ssh/authorized_keys`: the classic Zip Slip.
     Escapes(String),
     /// Windows drive letters and UNC paths.
     DriveOrUnc(String),
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn a_path_that_dips_and_returns_is_still_refused() {
-        // "a/../b" is fine — it never leaves. "a/../../b" is not.
+        // "a/../b" is fine. It never leaves. "a/../../b" is not.
         assert_eq!(judge("a/../b"), None, "a harmless path was refused");
         assert!(judge("a/../../b").is_some(), "an escaping path was allowed");
     }
@@ -213,8 +213,9 @@ mod tests {
 
     #[test]
     fn a_loose_file_at_top_level_means_no_wrapper() {
-        // Stripping here would drop README.md into the parent directory —
-        // exactly the "exploding into the current directory" this prevents.
+        // Stripping here would drop README.md into the parent directory.
+        // That is exactly the "exploding into the current directory" this
+        // prevents.
         let paths: Vec<String> = ["proj/a.txt", "README.md"]
             .iter()
             .map(|s| s.to_string())

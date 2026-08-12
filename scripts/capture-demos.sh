@@ -87,7 +87,7 @@ for name in sorted(os.listdir(caps)):
         "stdout": text,
     })
 
-json.dump({
+payload = {
     "generated_by": "scripts/capture-demos.sh",
     "commit": rev,
     "note": ("Real stdout from binaries built out of this tree, run against the "
@@ -96,6 +96,33 @@ json.dump({
                           "rendered as ~/Desktop. No other edit is made to captured "
                           "output. The real path is a mktemp name and is not recorded."),
     "transcripts": transcripts,
-}, open(out, "w"), indent=2)
+}
+json.dump(payload, open(out, "w"), indent=2)
 print(f"wrote {out}: {len(transcripts)} transcripts at {rev}")
+
+# Same payload, written a second place: an inline <script> in demo/index.html,
+# between two HTML comment markers, so a double-clicked file:// copy of the
+# page works without a server. fetch() stays the primary path in the page's
+# own JS; this is only the fallback it reaches for when fetch() is blocked.
+# "</" is escaped inside the JSON so no captured stdout can accidentally close
+# the surrounding <script> tag early.
+index_path = os.path.join(os.path.dirname(out), "index.html")
+start, end = "<!-- TRANSCRIPTS_INLINE_START -->", "<!-- TRANSCRIPTS_INLINE_END -->"
+html = open(index_path).read()
+if start in html and end in html:
+    before, rest = html.split(start, 1)
+    _, after = rest.split(end, 1)
+    inline_json = json.dumps(payload).replace("</", "<\\/")
+    block = (
+        f"{start}\n"
+        "<!-- Written by scripts/capture-demos.sh alongside demo/transcripts.json, same\n"
+        "     data, same step, so a double-clicked file:// copy works without a server.\n"
+        "     fetch() is still tried first below; this is the fallback, not the source. -->\n"
+        f'<script type="application/json" id="transcripts-inline">{inline_json}</script>\n'
+        f"{end}"
+    )
+    open(index_path, "w").write(before + block + after)
+    print(f"embedded the same {len(transcripts)} transcripts inline in {index_path}")
+else:
+    print(f"WARNING: {index_path} has no TRANSCRIPTS_INLINE markers; inline fallback not written")
 PY

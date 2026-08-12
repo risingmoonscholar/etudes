@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Interruption family: kill during undo.
 #
-# Undo is itself a mutation — sweep moves files back one at a time. This
+# Undo is itself a mutation. sweep moves files back one at a time. This
 # checks two separate things:
 #
 #   1. Resumption: kill -9 partway through `sweep undo`, then run `sweep undo`
@@ -9,8 +9,8 @@
 #      their destination, or does it double-restore / strand something?
 #
 #   2. Convergence: after a killed-then-resumed undo finishes, does the tool
-#      ever say "Nothing to undo. This journal was already restored." again —
-#      or does every future `sweep undo` call keep re-reporting the same
+#      ever say "Nothing to undo. This journal was already restored." again?
+#      Or does every future `sweep undo` call keep re-reporting the same
 #      stale progress forever, because the killed run never got to persist
 #      what it actually did?
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
@@ -120,15 +120,15 @@ while [ "$attempt" -lt 5 ]; do
 done
 
 # Now that resuming is done (or gave up trying to make further progress),
-# does the journal report a clean "already restored" on the next call — the
-# state a fully-reversed journal is supposed to reach?
+# does the journal report a clean "already restored" on the next call (the
+# state a fully-reversed journal is supposed to reach)?
 final_out=$("$SWEEP" undo 2>&1)
 final_code=$?
 
 if echo "$final_out" | grep -q "already restored"; then
   pass "after a killed-then-resumed undo finishes, the journal converges: a further \`sweep undo\` correctly reports nothing left to do"
 else
-  fail "after a killed-then-resumed undo finishes, the journal never converges to 'already restored' — every future \`sweep undo\` call (exit $final_code) keeps re-walking and re-reporting stale progress on this journal, because the killed run never persisted what it actually did before dying. Output on this call:
+  fail "after a killed-then-resumed undo finishes, the journal never converges to 'already restored'. Every future \`sweep undo\` call (exit $final_code) keeps re-walking and re-reporting stale progress on this journal, because the killed run never persisted what it actually did before dying. Output on this call:
 $final_out"
 fi
 

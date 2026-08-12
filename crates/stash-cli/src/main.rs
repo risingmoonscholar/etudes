@@ -1,4 +1,4 @@
-//! stash — clean now, decide later.
+//! stash: clean now, decide later.
 //!
 //! Moves everything in a folder into one hidden holding directory, and brings
 //! it all back on demand. It makes no organisational decisions, which is the
@@ -19,7 +19,7 @@
 //! # Where the deadline lives
 //!
 //! In the holding directory's own name: `.stash-<restore-by-epoch>`. No sidecar
-//! file, no second state store, nothing to fall out of sync — the deadline is
+//! file, no second state store, nothing to fall out of sync. The deadline is
 //! derived from the filesystem rather than recorded next to it.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ use etude_core::plan::{Group, Plan, Signal};
 use etude_core::scan::{self, ScanConfig};
 
 const USAGE: &str = "\
-stash — clean now, decide later
+stash: clean now, decide later
 
 USAGE
     stash [PATH] [--for DURATION]   move everything into a hidden holding folder
@@ -201,7 +201,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         }
     };
     if outcome.entries.is_empty() {
-        println!("Nothing to stash — {} is already clear.", path.display());
+        println!("Nothing to stash. {} is already clear.", path.display());
         return ExitCode::from(1);
     }
 
@@ -301,7 +301,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
     }
 }
 
-/// No done entries means pop already ran — exit 1, don't call undo again.
+/// No done entries means pop already ran. Exit 1. Don't call undo again.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
     !j.entries.iter().any(|e| e.done)
 }
@@ -309,9 +309,9 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
 /// Load a journal by id, warning to stderr rather than silently vanishing it
 /// when the failure is a damaged journal (not simply absent). Without this,
 /// a truncated journal reads as "no stash here" instead of "a stash exists
-/// and can't be trusted" — the same half-load-as-silence shape as issue #3,
-/// just one layer up: `load_sealed` now refuses damaged journals loudly, but
-/// `.ok()` at this call site was throwing that refusal away.
+/// and can't be trusted". This is the same half-load-as-silence shape as
+/// issue #3, just one layer up. `load_sealed` now refuses damaged journals
+/// loudly. But `.ok()` at this call site was throwing that refusal away.
 fn load_or_warn(
     tool: &str,
     id: &str,
@@ -332,8 +332,8 @@ fn load_or_warn(
 /// A journal for `target`, or `None` alongside whether at least one journal
 /// on disk was found but refused to load (`damaged`). Distinguishing the two
 /// `None` cases matters: a caller that treats "damaged and dropped" the same
-/// as "genuinely never existed" reports the wrong exit class — the same
-/// severity distinction `sweep undo` already makes between `NotFound` (exit
+/// as "genuinely never existed" reports the wrong exit class. This is the
+/// same severity distinction `sweep undo` already makes between `NotFound` (exit
 /// 1) and any other load failure (exit 3).
 fn journal_for_root(
     tool: &str,
@@ -391,7 +391,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         // that only checks the exit class doesn't read this the same as a
         // folder that was simply never stashed.
         None if damaged => {
-            eprintln!("stash: cannot restore {} — see above", target.display());
+            eprintln!("stash: cannot restore {}. See above", target.display());
             return ExitCode::from(3);
         }
         None if named.is_some() => {
@@ -448,7 +448,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
                 );
             }
             Err(save_err) => eprintln!(
-                "stash: additionally, the journal could not be updated ({save_err}) — it may not reflect the items just restored."
+                "stash: additionally, the journal could not be updated ({save_err}). It may not reflect the items just restored."
             ),
         }
         return ExitCode::from(3);
@@ -531,7 +531,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
             match deadline_of(name) {
                 Some(t) if t <= now_secs() => {
                     println!(
-                        "  OVERDUE since {} — run `stash pop {}`",
+                        "  OVERDUE since {}. run `stash pop {}`",
                         human_time(t),
                         root.display()
                     );
@@ -810,8 +810,8 @@ mod tests {
     #[test]
     fn status_points_at_a_stash_in_another_folder_instead_of_denying_it() {
         // The bug: stash a folder, ask for status somewhere else, and status
-        // said "Nothing stashed" — a denial of something `stash pop` would
-        // happily restore.
+        // said "Nothing stashed". That is a denial of something `stash pop`
+        // would happily restore.
         let here = Path::new("/tmp/here");
         let plain = nothing_here(here, None);
         assert_eq!(plain, "Nothing stashed in /tmp/here.");
