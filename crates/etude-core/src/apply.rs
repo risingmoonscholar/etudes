@@ -4,11 +4,12 @@
 //! and each entry is marked done only after its move succeeds. So the journal
 //! never claims a move that did not happen.
 //!
-//! It can still under-report. A crash in the window between a move succeeding
-//! and its progress frame reaching disk leaves the entry reading as not done,
-//! and `undo` then skips a file that is really at its destination without
-//! saying so. That window is narrow, it is not closed, and it is the one place
-//! this module is quieter than it should be. Filed rather than hidden.
+//! A crash between a move succeeding and its progress frame reaching disk
+//! leaves the entry reading as not done. `undo` recovers that one entry — and
+//! only that one — because apply moves in order, so the successor of the last
+//! recorded done is the single place a crash can hide. On macOS the move
+//! itself is one atomic syscall, so the window only exists at all on the
+//! link+unlink fallback path and in journals written before the change.
 //!
 //! `undo()` persists its own progress per entry and self-heals an entry whose
 //! move landed but whose record did not. See its doc comment for exactly what
@@ -280,7 +281,7 @@ fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
 ///
 /// A future tidy-up replacing this with `fs::rename` would silently clobber on
 /// collision and reopen nothing else — `fs::rename` overwrites. The test
-/// `a_plain_rename_never_replaces_this` exists so that tidy-up fails loudly.
+/// `a_plain_rename_never_replaces_this` in apply_undo.rs fails on that tidy-up.
 #[cfg(target_os = "macos")]
 fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
     use std::ffi::CString;
@@ -304,6 +305,14 @@ fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
     } else {
         Err(io::Error::last_os_error())
     }
+}
+
+/// Test-only window onto `move_one`, so the no-clobber promise its comment
+/// makes can be asserted from an integration test without making the real
+/// function public API.
+#[doc(hidden)]
+pub fn move_one_for_tests(from: &Path, to: &Path) -> io::Result<Method> {
+    move_one(from, to)
 }
 
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {

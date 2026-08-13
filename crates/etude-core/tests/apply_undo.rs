@@ -675,10 +675,10 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
 
 #[test]
 fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
-    // Issue #5. `move_one` hard-links then unlinks, which is two syscalls. A
-    // signal landing between them leaves the file at BOTH paths, same inode,
-    // and undo used to report it as skipped_changed and walk away — so the
-    // duplicate was permanent and untracked.
+    // Issue #5's crash shape, which on macOS can now only arise from the
+    // link+unlink FALLBACK path (renamex_np unsupported) or a journal written
+    // before the atomic move landed: two syscalls, a signal between them, the
+    // file at BOTH paths with the same inode. Undo used to walk away from it.
     //
     // Same inode at both paths is not ambiguity. It is proof they are one
     // file, and that the unlink half never ran. Removing the destination link
@@ -813,4 +813,36 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
 
     let _ = fs::remove_dir_all(&root);
     unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+}
+
+#[test]
+fn a_plain_rename_never_replaces_this() {
+    // The comment on rename_excl warns that a future tidy-up replacing it with
+    // fs::rename would silently clobber on collision. This is the test that
+    // comment promises: move_one must REFUSE an existing destination, never
+    // overwrite it. fs::rename overwrites, so swapping it in turns this red.
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_noclobber_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+
+    let from = root.join("mover.txt");
+    let to = root.join("occupied.txt");
+    fs::write(&from, b"wants to move").expect("write");
+    fs::write(&to, b"already living here").expect("write");
+
+    let err = apply::move_one_for_tests(&from, &to)
+        .expect_err("moving onto an existing file must be refused");
+    assert_eq!(err.raw_os_error(), Some(17), "EEXIST, not a silent replace");
+    assert_eq!(
+        fs::read(&to).expect("read"),
+        b"already living here",
+        "the occupant was replaced"
+    );
+    assert!(
+        from.exists(),
+        "the source must be untouched by a refused move"
+    );
+
+    let _ = fs::remove_dir_all(&root);
 }

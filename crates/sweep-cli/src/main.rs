@@ -242,70 +242,6 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
     }
 }
 
-// Scan accepts only these. A typo'd flag must not scan anyway: the user who
-// typed --explainn believes they are reading --explain output, which is a
-// silent lie. Same principle APPLY_FLAGS states for moves, applied to reads.
-const SCAN_FLAGS: &[(&str, bool)] = &[
-    ("--depth", true),
-    ("--json", false),
-    ("--quiet", false),
-    ("--explain", false),
-    ("--allow-sync", false),
-    ("--inspect-content", false),
-    ("--version", false),
-];
-
-/// The closest known flag, if it is close enough to be a plausible typo.
-/// Distance cap of 2 keeps "--frobnicate" from suggesting anything.
-fn nearest_flag(typo: &str, flags: &'static [(&'static str, bool)]) -> Option<&'static str> {
-    fn dist(a: &str, b: &str) -> usize {
-        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-        let mut prev: Vec<usize> = (0..=b.len()).collect();
-        for i in 1..=a.len() {
-            let mut cur = vec![i];
-            for j in 1..=b.len() {
-                let c = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-                cur.push((prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + c));
-            }
-            prev = cur;
-        }
-        prev[b.len()]
-    }
-    flags
-        .iter()
-        .map(|(name, _)| (*name, dist(typo, name)))
-        .min_by_key(|(_, d)| *d)
-        .filter(|(_, d)| *d <= 2)
-        .map(|(name, _)| name)
-}
-
-/// Reject unknown scan flags with a nudge instead of scanning anyway.
-fn check_scan_flags(args: &[String]) -> Result<(), String> {
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
-        if a.starts_with("--") {
-            match SCAN_FLAGS.iter().find(|(name, _)| *name == a.as_str()) {
-                Some((_, takes_value)) => {
-                    if *takes_value {
-                        i += 1;
-                    }
-                }
-                None => {
-                    return Err(match nearest_flag(a, SCAN_FLAGS) {
-                        Some(sugg) => {
-                            format!("unknown option {a}. Did you mean {sugg}? Run `sweep help`.")
-                        }
-                        None => format!("unknown option {a}. Run `sweep help`."),
-                    });
-                }
-            }
-        }
-        i += 1;
-    }
-    Ok(())
-}
-
 // apply rejects everything not listed here; a silent typo can authorize moves.
 const APPLY_FLAGS: &[(&str, bool)] = &[
     ("--yes", false),
@@ -402,35 +338,6 @@ fn scan_and_plan(
 }
 
 fn run_scan(path: &Path, args: &[String]) -> ExitCode {
-    if let Err(msg) = check_scan_flags(args) {
-        eprintln!("sweep: {msg}");
-        return ExitCode::from(2);
-    }
-    if !path.exists() {
-        // A bare word that is not a path is far more likely a typo'd
-        // subcommand than a folder. Nudge toward the command list, not
-        // toward an io error about a "file".
-        let shown = path.display();
-        if !path.is_absolute() && !shown.to_string().contains('/') {
-            eprintln!(
-                "sweep: `{shown}` is not a command and no such folder exists here.\n\
-                 Commands are: review, apply, undo, forget, verify, lesson. Run `sweep help`."
-            );
-            // A bare word is a usage mistake, and 2 is the refusal code. This
-            // half of the split is right.
-            return ExitCode::from(2);
-        } else {
-            eprintln!(
-                "sweep: no such folder: {shown}\n\
-                 sweep [PATH] scans a folder and plans, changing nothing. Run `sweep help`."
-            );
-        }
-        // But a path that is genuinely not there is an error, not a refusal.
-        // `sweep /nope` is not a typo the user can be nudged out of; the
-        // folder is missing and 3 is what the readme sells as meaning that.
-        // Splitting the two is better than either code applied to both.
-        return ExitCode::from(3);
-    }
     let quiet = has(args, "--quiet");
     let explain = has(args, "--explain");
 
