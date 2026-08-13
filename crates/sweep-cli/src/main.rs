@@ -242,6 +242,95 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
     }
 }
 
+// Scan rejects everything not listed here, for the same reason apply does.
+// A typo'd flag that scans anyway is a silent lie: someone who types
+// --explainn believes they are reading --explain output and gets a plain scan
+// that looks exactly like success. --jsonn is worse, because whatever was
+// going to parse the output receives prose instead.
+const SCAN_FLAGS: &[(&str, bool)] = &[
+    ("--depth", true),
+    ("--json", false),
+    ("--quiet", false),
+    ("--explain", false),
+    ("--allow-sync", false),
+    ("--inspect-content", false),
+    ("--version", false),
+    ("--help", false),
+];
+
+/// Flags that exist but not here. Naming the right place beats calling a real
+/// flag unknown, and `--only` in particular is currently accepted and ignored
+/// on a scan, which is the same silent lie in a quieter shape.
+const FLAGS_ELSEWHERE: &[(&str, &str)] = &[
+    ("--only", "`sweep apply`"),
+    ("--yes", "`sweep apply` and `sweep forget`"),
+    ("--no-journal", "`sweep review` and `sweep apply`"),
+];
+
+/// The closest known flag, when it is close enough to be a plausible typo.
+/// A cap of 2 keeps `--frobnicate` from confidently suggesting `--json`.
+fn nearest_flag(typo: &str, flags: &'static [(&'static str, bool)]) -> Option<&'static str> {
+    fn dist(a: &str, b: &str) -> usize {
+        let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        for i in 1..=a.len() {
+            let mut cur = vec![i];
+            for j in 1..=b.len() {
+                let c = usize::from(a[i - 1] != b[j - 1]);
+                cur.push((prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + c));
+            }
+            prev = cur;
+        }
+        prev[b.len()]
+    }
+    flags
+        .iter()
+        .map(|(name, _)| (*name, dist(typo, name)))
+        .min_by_key(|(_, d)| *d)
+        .filter(|(_, d)| *d <= 2)
+        .map(|(name, _)| name)
+}
+
+/// Reject unknown scan flags with a nudge instead of scanning anyway.
+fn check_scan_flags(args: &[String]) -> Result<(), String> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        // Everything after `--` is a path, not a flag.
+        if a == "--" {
+            break;
+        }
+        if a.starts_with("--") {
+            match SCAN_FLAGS.iter().find(|(name, _)| *name == a.as_str()) {
+                Some((_, takes_value)) => {
+                    if *takes_value {
+                        i += 1;
+                    }
+                }
+                None => {
+                    if let Some((_, where_)) =
+                        FLAGS_ELSEWHERE.iter().find(|(name, _)| *name == a.as_str())
+                    {
+                        return Err(format!(
+                            "{a} applies to {where_}, not to a scan. A scan changes \
+                             nothing and writes nothing, so there is nothing here for \
+                             it to affect."
+                        ));
+                    }
+                    return Err(match nearest_flag(a, SCAN_FLAGS) {
+                        Some(sugg) => {
+                            format!("unknown option {a}. Did you mean {sugg}? Run `sweep help`.")
+                        }
+                        None => format!("unknown option {a}. Run `sweep help`."),
+                    });
+                }
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
 // apply rejects everything not listed here; a silent typo can authorize moves.
 const APPLY_FLAGS: &[(&str, bool)] = &[
     ("--yes", false),
@@ -294,6 +383,12 @@ fn scan_and_plan(
     path: &Path,
     args: &[String],
 ) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
+    // Before anything reads the disk. A refused flag must not produce output
+    // that looks like a scan, which is the whole defect.
+    if let Err(msg) = check_scan_flags(args) {
+        eprintln!("sweep: {msg}");
+        return Err(ExitCode::from(2));
+    }
     let depth = match parse_depth(args) {
         Ok(d) => d,
         Err(msg) => {
@@ -1310,5 +1405,81 @@ mod tests {
             entries: vec![sample_entry(false), sample_entry(true)],
         };
         assert!(!journal_is_fully_undone(&pending));
+    }
+
+    #[test]
+    fn a_typod_scan_flag_is_refused_rather_than_scanned_anyway() {
+        // The defect: `sweep ~/Desktop --explainn` printed an ordinary scan.
+        // The person reading it believes they are looking at --explain output.
+        // --jsonn is worse, because whatever was going to parse that gets
+        // prose and a success-shaped exit.
+        for typo in ["--explainn", "--jsonn", "--quite", "--depht"] {
+            let err = check_scan_flags(&[typo.to_string()])
+                .expect_err("a typo'd flag must not be accepted");
+            assert!(
+                err.contains("Did you mean"),
+                "{typo} should suggest a real flag, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flag_that_is_nothing_like_a_real_one_gets_no_suggestion() {
+        // A confident wrong suggestion is worse than none. The distance cap
+        // is what keeps --frobnicate from being told it meant --json.
+        let err = check_scan_flags(&["--frobnicate".to_string()]).expect_err("must refuse");
+        assert!(
+            !err.contains("Did you mean"),
+            "should not guess at an unrelated word, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_real_flag_in_the_wrong_place_says_where_it_belongs() {
+        // --only was accepted and ignored on a scan, which is the same silent
+        // lie in a quieter shape. Calling a real flag "unknown" would be its
+        // own small lie, so it names the right command instead.
+        let err = check_scan_flags(&["--only".to_string()]).expect_err("must refuse");
+        assert!(
+            err.contains("sweep apply"),
+            "should name where it works: {err}"
+        );
+        assert!(!err.contains("unknown"), "--only is not unknown: {err}");
+    }
+
+    #[test]
+    fn every_flag_the_scan_path_accepts_is_still_accepted() {
+        // The regression guard. A whitelist that drifts from the real flag
+        // surface breaks working commands, which is worse than the bug it
+        // fixes. Every one of these is documented in `sweep help`.
+        let ok: &[&[&str]] = &[
+            &[],
+            &["--json"],
+            &["--quiet"],
+            &["--explain"],
+            &["--allow-sync"],
+            &["--inspect-content"],
+            &["--depth", "2"],
+            &["--json", "--quiet"],
+            &["--explain", "--depth", "3"],
+            &["--depth", "8", "--inspect-content"],
+        ];
+        for args in ok {
+            let v: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+            assert!(
+                check_scan_flags(&v).is_ok(),
+                "a documented invocation was refused: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_is_not_mistaken_for_a_flag() {
+        // --depth takes a value, so the whitelist has to skip it. Without
+        // that, `--depth 2` would work but `--depth --json` would report the
+        // wrong problem.
+        assert!(check_scan_flags(&["--depth".into(), "2".into()]).is_ok());
+        // And everything after `--` is a path, however flag-shaped it looks.
+        assert!(check_scan_flags(&["--".into(), "--not-a-flag".into()]).is_ok());
     }
 }
