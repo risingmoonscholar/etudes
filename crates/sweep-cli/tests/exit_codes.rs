@@ -437,3 +437,82 @@ fn undo_can_reach_an_apply_that_is_not_the_most_recent() {
         "every file should be back at the root of A: {msg}"
     );
 }
+
+/// The defect itself, witnessed through the shipped binary rather than the
+/// helper: a typo'd flag must not produce output that looks like a scan.
+///
+/// A review pointed out the unit tests only proved `check_scan_flags` returns
+/// an error. That is the implementation. What the bug was actually about is
+/// what a person sees on their terminal, which is this.
+#[test]
+fn a_typod_scan_flag_prints_no_scan_output() {
+    let dir = TestDir(unique_temp("typo"));
+    std::fs::create_dir_all(&dir.0).expect("mkdir");
+    for n in 0..3 {
+        std::fs::write(dir.0.join(format!("shot{n}.png")), b"x").expect("write");
+    }
+
+    // The real flag scans, so the fixture is known to produce output.
+    let good = sweep_bin()
+        .arg(&dir.0)
+        .arg("--explain")
+        .output()
+        .expect("run");
+    let good_out = String::from_utf8_lossy(&good.stdout);
+    assert!(
+        good_out.contains("Scanned"),
+        "the fixture must produce a scan for the comparison to mean anything"
+    );
+
+    for typo in ["--explainn", "--jsonn", "--quite"] {
+        let out = sweep_bin().arg(&dir.0).arg(typo).output().expect("run");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.contains("Scanned"),
+            "{typo} printed scan output; a reader cannot tell they did not get \
+             the flag they asked for"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{typo} must exit 2, the refusal code, not a success-shaped one"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("Did you mean"),
+            "{typo} should point at the flag that was meant, got: {stderr}"
+        );
+    }
+}
+
+/// The other half of the same contract: refusing typos must not cost anyone a
+/// working command. Every invocation here is documented in `sweep help`.
+#[test]
+fn documented_scan_invocations_still_run() {
+    let dir = TestDir(unique_temp("still-works"));
+    std::fs::create_dir_all(&dir.0).expect("mkdir");
+    for n in 0..3 {
+        std::fs::write(dir.0.join(format!("shot{n}.png")), b"x").expect("write");
+    }
+
+    let ok: &[&[&str]] = &[
+        &[],
+        &["--json"],
+        &["--quiet"],
+        &["--explain"],
+        &["--allow-sync"],
+        &["--inspect-content"],
+        &["--depth", "2"],
+        &["--json", "--quiet"],
+        &["--explain", "--depth", "3"],
+    ];
+    for args in ok {
+        let out = sweep_bin().arg(&dir.0).args(*args).output().expect("run");
+        assert_ne!(
+            out.status.code(),
+            Some(2),
+            "a documented invocation was refused: {args:?} — {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

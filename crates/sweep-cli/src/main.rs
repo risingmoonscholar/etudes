@@ -254,7 +254,6 @@ const SCAN_FLAGS: &[(&str, bool)] = &[
     ("--explain", false),
     ("--allow-sync", false),
     ("--inspect-content", false),
-    ("--no-journal", false),
     ("--version", false),
     ("--help", false),
 ];
@@ -262,7 +261,16 @@ const SCAN_FLAGS: &[(&str, bool)] = &[
 /// Flags that exist but not here. Naming the right place beats calling a real
 /// flag unknown, and `--only` in particular is currently accepted and ignored
 /// on a scan, which is the same silent lie in a quieter shape.
-const FLAGS_ELSEWHERE: &[(&str, &str)] = &[("--only", "apply"), ("--yes", "apply")];
+/// Flags that exist, but not on a scan. Naming the right place beats calling
+/// a real flag unknown, and every one of these was previously accepted and
+/// silently ignored here — the same lie as a typo, in a quieter shape. A
+/// review caught `--no-journal` sitting in SCAN_FLAGS as a scan no-op, which
+/// contradicted the reason the whitelist exists at all.
+const FLAGS_ELSEWHERE: &[(&str, &str)] = &[
+    ("--only", "`sweep apply`"),
+    ("--yes", "`sweep apply` and `sweep forget`"),
+    ("--no-journal", "`sweep review` and `sweep apply`"),
+];
 
 /// The closest known flag, when it is close enough to be a plausible typo.
 /// A cap of 2 keeps `--frobnicate` from confidently suggesting `--json`.
@@ -309,8 +317,9 @@ fn check_scan_flags(args: &[String]) -> Result<(), String> {
                         FLAGS_ELSEWHERE.iter().find(|(name, _)| *name == a.as_str())
                     {
                         return Err(format!(
-                            "{a} applies to `sweep {where_}`, not to a scan. \
-                             A scan changes nothing, so there is nothing for it to do here."
+                            "{a} applies to {where_}, not to a scan. A scan changes \
+                             nothing and writes nothing, so there is nothing here for \
+                             it to affect."
                         ));
                     }
                     return Err(match nearest_flag(a, SCAN_FLAGS) {
@@ -1455,7 +1464,6 @@ mod tests {
             &["--explain"],
             &["--allow-sync"],
             &["--inspect-content"],
-            &["--no-journal"],
             &["--depth", "2"],
             &["--json", "--quiet"],
             &["--explain", "--depth", "3"],
