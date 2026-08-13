@@ -827,7 +827,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
 fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     // Pass the sealer: undo persists each reversal as it happens now, so a
     // kill partway through leaves a journal that agrees with the disk.
-    let r = etude_core::apply::undo(j, Some(sl));
+    let r = etude_core::apply::undo(j, sl);
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} files.", r.restored);
@@ -842,6 +842,21 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
     if !r.skipped_missing.is_empty() {
         println!("  {} were already gone.", r.skipped_missing.len());
+    }
+    if r.already_reversed > 0 {
+        println!(
+            "  {} were already restored by an earlier run that did not finish.",
+            r.already_reversed
+        );
+    }
+    if !r.reconciled.is_empty() {
+        // Different from healed: nothing was reachable by two names here. An
+        // earlier undo moved these home and was killed before it could write
+        // that down, so this run only had to agree with the disk.
+        println!(
+            "  {} were already home from an interrupted restore; the journal now says so.",
+            r.reconciled.len()
+        );
     }
     if !r.healed.is_empty() {
         // Say it rather than fold it into `restored`. Nothing moved: a crash

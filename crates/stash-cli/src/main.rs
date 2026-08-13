@@ -416,7 +416,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         println!("\nNothing to restore. This stash was already popped.");
         return ExitCode::from(1);
     }
-    let r = etude_core::apply::undo(&mut j, Some(&sl));
+    let r = etude_core::apply::undo(&mut j, &sl);
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} items.", r.restored);
@@ -431,6 +431,21 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if !r.skipped_missing.is_empty() {
         println!("  {} were already gone.", r.skipped_missing.len());
+    }
+    if r.already_reversed > 0 {
+        println!(
+            "  {} were already restored by an earlier run that did not finish.",
+            r.already_reversed
+        );
+    }
+    if !r.reconciled.is_empty() {
+        // Different from healed: nothing was reachable by two names here. An
+        // earlier undo moved these home and was killed before it could write
+        // that down, so this run only had to agree with the disk.
+        println!(
+            "  {} were already home from an interrupted restore; the journal now says so.",
+            r.reconciled.len()
+        );
     }
     if !r.healed.is_empty() {
         println!(
@@ -794,7 +809,7 @@ mod tests {
         let mut journal = journal_for_root("stash", &TestSeal, &target)
             .0
             .expect("live journal");
-        let r = etude_core::apply::undo(&mut journal, None);
+        let r = etude_core::apply::undo(&mut journal, &TestSeal);
         assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
         journal.save_sealed(&TestSeal).expect("resave journal");
 

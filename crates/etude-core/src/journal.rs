@@ -77,10 +77,11 @@ pub struct Entry {
 /// undo's progress boundary instead, and two correct features quietly
 /// disagreed about what the field said.
 ///
-/// On disk nothing changes: `Planned` and `Reversed` both encode as `0` in
-/// the base frame, because in both the file sits at its origin. The
-/// difference is reconstructed from the appended progress frames, so journals
-/// written before this load exactly as they did.
+/// On disk the base frame gains one value: `Reversed` writes `2` where
+/// `Moved` writes `1` and `Planned` writes `0`. Journals written before this
+/// only ever held 0 or 1 and load unchanged. An older binary reading a newer
+/// journal tests `== "1"`, so it reads a 2 as not-moved — true, since the
+/// file is at its origin; it loses only the knowledge that undo put it there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryState {
     /// Apply has not moved this file yet.
@@ -198,7 +199,21 @@ impl Journal {
                 e.mtime_secs,
                 e.inode,
                 e.edge_hash,
-                if e.state == EntryState::Moved { 1 } else { 0 }
+                match e.state {
+                    EntryState::Planned => 0,
+                    EntryState::Moved => 1,
+                    // 2, so a reversal survives save_sealed. A review caught
+                    // this encoding as 0 and reloading as Planned, which put
+                    // an entry undo had already finished back in reach of
+                    // apply's crash recovery — the exact collapse the three
+                    // states exist to prevent.
+                    //
+                    // Readable by older binaries in the useful direction:
+                    // their check is `== "1"`, so a 2 reads as not-moved, and
+                    // the file really is at its origin. They lose only the
+                    // knowledge that undo was what put it there.
+                    EntryState::Reversed => 2,
+                }
             ));
         }
         s
@@ -228,10 +243,12 @@ impl Journal {
                         // 0 covers both Planned and Reversed: the file is at
                         // its origin either way, and which of the two is
                         // reconstructed from the progress frames below.
-                        state: if f[8] == "1" {
-                            EntryState::Moved
-                        } else {
-                            EntryState::Planned
+                        state: match f[8] {
+                            "1" => EntryState::Moved,
+                            "2" => EntryState::Reversed,
+                            // Anything else is Planned. Journals written
+                            // before this only ever wrote 0 or 1.
+                            _ => EntryState::Planned,
                         },
                     });
                 }
@@ -427,6 +444,16 @@ impl Journal {
                     if index >= self.entries.len() || expected_undone.is_some_and(|e| index != e) {
                         return Err(JournalError::Malformed(
                             "journal damaged: progress record out of order",
+                        ));
+                    }
+                    // Undo can only reverse what apply moved. An undone frame
+                    // for an entry that is not currently Moved means the
+                    // stream is inconsistent — replayed out of order, or two
+                    // undone frames for one entry — and a review asked for it
+                    // to be caught rather than absorbed.
+                    if self.entries[index].state != EntryState::Moved {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: a reversal for an entry that was not moved",
                         ));
                     }
                     // Reversed, not Planned. The file is at its origin either
@@ -893,7 +920,9 @@ mod tests {
             .expect("progress");
 
         // Simulate undo: entry is no longer done; caller persists via save_sealed.
-        j.entries[0].state = EntryState::Planned;
+        // Undo reverses, which is Reversed — not Planned. Planned would say
+        // apply never moved it, which is a different situation entirely.
+        j.entries[0].state = EntryState::Reversed;
         j.save_sealed(&Identity).expect("re-save after undo");
 
         let back = Journal::load_sealed("test", "discard", &Identity).expect("reload");

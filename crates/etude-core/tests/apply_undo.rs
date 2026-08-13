@@ -124,7 +124,7 @@ fn apply_then_undo_restores_every_path() {
     }
 
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal loads");
-    let ur = apply::undo(&mut j, None);
+    let ur = apply::undo(&mut j, &TestSeal);
 
     assert!(ur.error.is_none(), "unexpected undo error: {:?}", ur.error);
     assert_eq!(
@@ -182,7 +182,7 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
 
     let _ = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL));
     let mut j = Journal::latest_sealed("test", &TestSeal).expect("journal");
-    let r = apply::undo(&mut j, None);
+    let r = apply::undo(&mut j, &TestSeal);
 
     assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
     assert_eq!(
@@ -210,7 +210,7 @@ fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     let victim = j.entries[0].to.clone();
     fs::write(&victim, b"the user edited this after applying\n").expect("mutate");
 
-    let r = apply::undo(&mut j, None);
+    let r = apply::undo(&mut j, &TestSeal);
 
     assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
     assert!(
@@ -722,7 +722,7 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
         }],
     };
 
-    let r = apply::undo(&mut j, None);
+    let r = apply::undo(&mut j, &TestSeal);
 
     assert!(
         !to.exists(),
@@ -799,7 +799,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
         ],
     };
 
-    let r = apply::undo(&mut j, None);
+    let r = apply::undo(&mut j, &TestSeal);
 
     // Entry 1 is past the successor (entry 0), so recovery must not look at
     // it. The user's link survives.
@@ -914,7 +914,7 @@ fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
 
     // Resume. It must restore exactly the two that are left.
     let mut j2 = reloaded;
-    let r = apply::undo(&mut j2, Some(&sealer));
+    let r = apply::undo(&mut j2, &sealer);
     assert!(r.error.is_none(), "resumed undo errored: {:?}", r.error);
     assert_eq!(r.restored, 2, "a resumed undo must only do the work left");
     assert_eq!(
@@ -927,9 +927,70 @@ fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
         assert!(root.join(format!("f{n}.png")).exists(), "f{n} is not home");
     }
     let mut j3 = Journal::load_sealed("test", &j2.id, &sealer).expect("reload again");
-    let r3 = apply::undo(&mut j3, Some(&sealer));
+    let r3 = apply::undo(&mut j3, &sealer);
     assert_eq!(r3.restored, 0, "a third run must find nothing left to do");
     assert_eq!(r3.already_reversed, 4);
+
+    let _ = fs::remove_dir_all(&root);
+    unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+}
+
+#[test]
+fn a_reversal_survives_being_saved_and_reloaded() {
+    // A review caught Reversed encoding as 0 in the base frame and reloading
+    // as Planned. That put an entry undo had already finished back in reach of
+    // apply's crash recovery, which is the exact collapse the three states
+    // exist to prevent: a user who hard-linked the old destination back would
+    // have had that name deleted.
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_roundtrip_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let state = root.join("state");
+    fs::create_dir_all(&state).expect("mkdir state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let sealer = TestSeal;
+
+    let from = root.join("a.png");
+    let to = root.join("Screenshots").join("a.png");
+    fs::create_dir_all(to.parent().expect("parent")).expect("mkdir");
+    fs::write(&from, b"home already").expect("write");
+    let (size, mtime, inode, edge) = etude_core::journal::fingerprint(&from).expect("fp");
+
+    let j = Journal {
+        id: "roundtrip".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries: vec![Entry {
+            from: from.clone(),
+            to: to.clone(),
+            method: Method::Rename,
+            size,
+            mtime_secs: mtime,
+            inode,
+            edge_hash: edge,
+            state: etude_core::journal::EntryState::Reversed,
+        }],
+    };
+    j.save_sealed(&sealer).expect("save");
+
+    let back = Journal::load_sealed("test", &j.id, &sealer).expect("reload");
+    assert_eq!(
+        back.entries[0].state,
+        etude_core::journal::EntryState::Reversed,
+        "a reversal came back as something else, so undo's finished work is \
+         indistinguishable from work apply never started"
+    );
+
+    // And the consequence that makes it matter: recovery must not touch it.
+    let mut j2 = back;
+    fs::hard_link(&from, &to).expect("user links the old destination back");
+    let r = apply::undo(&mut j2, &sealer);
+    assert!(
+        to.exists(),
+        "recovery deleted a name the user made, because a reloaded reversal \
+         looked like an entry apply never got to"
+    );
+    assert!(r.healed.is_empty());
 
     let _ = fs::remove_dir_all(&root);
     unsafe { std::env::remove_var("ETUDE_STATE_DIR") };

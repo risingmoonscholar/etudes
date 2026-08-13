@@ -27,7 +27,7 @@ fn main() {
         j.entries.len(),
         done_before
     );
-    let r = apply::undo(&mut j, None);
+    let r = apply::undo(&mut j, &TestSeal);
     println!(
         "sigkill_undo: restored={} skipped_changed={} skipped_missing={} error={:?}",
         r.restored,
