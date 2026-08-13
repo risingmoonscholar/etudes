@@ -20,7 +20,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::journal::{Entry, Journal, Method, Sealer, fingerprint};
+use crate::journal::{Entry, EntryState, Journal, Method, Sealer, fingerprint};
 use crate::plan::Plan;
 
 #[derive(Debug)]
@@ -127,7 +127,7 @@ pub fn apply(
                 mtime_secs,
                 inode,
                 edge_hash,
-                done: false,
+                state: EntryState::Planned,
             });
         }
     }
@@ -156,7 +156,7 @@ pub fn apply(
         }
         let method = move_one(&from, &to).map_err(ApplyError::Io)?;
         j.entries[i].method = method;
-        j.entries[i].done = true;
+        j.entries[i].state = EntryState::Moved;
         moved += 1;
         // Append a sealed done-record (index + corrected method). The base
         // journal was written before the loop; rewriting it here was O(n²).
@@ -382,6 +382,15 @@ fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
               partial restore is silent unless this field is inspected"]
 pub struct UndoReport {
     pub restored: usize,
+    /// Entries a previous, killed undo had already put back. Counted rather
+    /// than re-walked: issue #7 was that these looked identical to entries
+    /// never moved, so every resumed run reported the same work forever.
+    pub already_reversed: usize,
+    /// Entries a killed undo had moved home without recording, found by the
+    /// origin matching the journal's fingerprint. Distinct from `healed`,
+    /// which is one file that was reachable by two names — these are files
+    /// already where they belong, with only the record missing.
+    pub reconciled: Vec<PathBuf>,
     /// Entries skipped because the file changed after apply. Never forced.
     pub skipped_changed: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
@@ -389,15 +398,15 @@ pub struct UndoReport {
     /// Half-moves collapsed: a crash between the link and the unlink left one
     /// file reachable by two names, and undo removed the extra name. Reported
     /// separately from `restored` because nothing was moved, something was
-    /// tidied, and a user deserves to know the difference.
+    /// tidied, and a user deserves to know the difference. See `reconciled`
+    /// for the other shape, where the file was already home.
     pub healed: Vec<PathBuf>,
     /// Set when a move failed and undo stopped early. `restored` and the
     /// `skipped_*` lists above still describe everything that happened
     /// *before* the failure. They are never discarded just because the walk
-    /// did not finish. The caller must still persist `j` (e.g. via
-    /// `save_sealed`) so the on-disk journal matches what was actually
-    /// restored; `undo` mutates the in-memory entries but does not know how
-    /// to seal them.
+    /// did not finish. Each reversal is already on disk by the time this is
+    /// set, appended as it happened, so a caller that gives up here still
+    /// leaves a journal that agrees with the filesystem.
     pub error: Option<ApplyError>,
 }
 
@@ -426,14 +435,19 @@ fn same_file(_a: &Path, _b: &Path) -> bool {
 /// overwritten.
 ///
 /// Always returns a report, even when a move fails partway through: this
-/// never discards what it already did. Contrast with `apply()`, which
-/// persists progress to disk after every move via `record_done`; `undo` has
-/// no equivalent incremental on-disk format, so it mutates `j.entries[i].done`
-/// in memory only. The caller (which holds the sealer used to load `j` in
-/// the first place) is responsible for calling `j.save_sealed(..)` after
-/// this returns, on *both* the success and the `error.is_some()` path, or
-/// the journal will drift from physical reality exactly the way it used to.
-pub fn undo(j: &mut Journal) -> UndoReport {
+/// never discards what it already did.
+///
+/// Progress is persisted per entry via `record_undone`, mirroring what
+/// `apply()` does with `record_done`, so a killed run resumes where it
+/// stopped instead of walking everything again. That is why the sealer is
+/// required rather than optional: an undo that cannot write its progress is
+/// the exact defect issue #7 filed, and passing `None` used to reintroduce it
+/// silently — including in this crate's own crash-safety example.
+///
+/// Saving the whole journal afterwards is still worthwhile (it rewrites the
+/// base frame and drops the accumulated progress records), but it is no
+/// longer what makes the on-disk state correct.
+pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
     let mut r = UndoReport::default();
 
     // Apply moves entries in order and seals a done record after each, so
@@ -444,16 +458,27 @@ pub fn undo(j: &mut Journal) -> UndoReport {
     // collision check had verified the destination was empty. Inference from
     // inode equality alone could not distinguish sweep's interrupted link
     // from a hard link the user made; position can.
-    let first_not_done = j.entries.iter().position(|e| !e.done);
+    let first_planned = j
+        .entries
+        .iter()
+        .position(|e| e.state == EntryState::Planned);
 
     // Reverse order, so nested destinations empty before their parents.
     for i in (0..j.entries.len()).rev() {
         let e = j.entries[i].clone();
-        if !e.done {
+        if !e.is_moved() {
             // Only the successor entry gets recovery. Everything past it never
             // started, and no inference is applied there — which is what keeps
             // a user's own hard links out of reach.
-            if Some(i) != first_not_done {
+            if e.state == EntryState::Reversed {
+                // Undo already put this one back, on an earlier run that was
+                // killed before it finished. Nothing to do, and crucially no
+                // recovery inference either: the file is home and the journal
+                // says so.
+                r.already_reversed += 1;
+                continue;
+            }
+            if Some(i) != first_planned {
                 continue;
             }
             if e.to.exists() && e.from.exists() && same_file(&e.to, &e.from) {
@@ -496,6 +521,37 @@ pub fn undo(j: &mut Journal) -> UndoReport {
             continue;
         }
         if !e.to.exists() {
+            // The destination is gone and the entry still says Moved. That is
+            // consistent with a killed undo having moved the file home in the
+            // gap between the move and its record — but consistent is not
+            // proof, and a review caught the first version of this treating it
+            // as proof.
+            //
+            // Healing on absence alone can abandon a live file: if anything at
+            // all sits at the origin, the entry gets written off and every
+            // later run says nothing is left to undo while the file is still
+            // at its destination. So the origin has to BE the file the journal
+            // describes, checked the way the restore path checks a destination.
+            //
+            // Inode is deliberately not compared. A cross-device undo copies
+            // rather than renames, so it legitimately changes; size, mtime and
+            // the edge hash survive either path.
+            let is_the_file = e.from.exists()
+                && match fingerprint(&e.from) {
+                    Ok((size, mtime, _inode, hash)) => {
+                        size == e.size && mtime == e.mtime_secs && hash == e.edge_hash
+                    }
+                    Err(_) => false,
+                };
+            if is_the_file {
+                j.entries[i].state = EntryState::Reversed;
+                if let Err(err) = j.record_undone(i, sealer) {
+                    r.error = Some(ApplyError::Journal(err));
+                    break;
+                }
+                r.reconciled.push(e.from.clone());
+                continue;
+            }
             r.skipped_missing.push(e.to.clone());
             continue;
         }
@@ -533,8 +589,16 @@ pub fn undo(j: &mut Journal) -> UndoReport {
         }
         match move_one(&e.to, &e.from) {
             Ok(_) => {
-                j.entries[i].done = false;
+                j.entries[i].state = EntryState::Reversed;
                 r.restored += 1;
+                // Persist it now, not at the end. Issue #7: a kill here used
+                // to leave the journal claiming every entry was still at its
+                // destination, so the next run walked them all again and the
+                // count never converged.
+                if let Err(err) = j.record_undone(i, sealer) {
+                    r.error = Some(ApplyError::Journal(err));
+                    break;
+                }
             }
             Err(err) => {
                 r.error = Some(ApplyError::Io(err));

@@ -62,8 +62,44 @@ pub struct Entry {
     /// FNV-1a over the first and last 4 KiB. Change detection, **not**
     /// integrity. It defeats accident, not an adversary.
     pub edge_hash: u64,
-    /// False until the move has actually succeeded on disk.
-    pub done: bool,
+    /// Where this entry stands. See [`EntryState`] — a bool used to carry
+    /// three meanings and two of them shared a value.
+    pub state: EntryState,
+}
+
+/// What has physically happened to one entry's file.
+///
+/// This was a `done: bool` until issue #7 needed undo to record its own
+/// progress. Then `false` meant both "apply never moved this" and "undo
+/// already moved it back" — the same value for opposite situations, and the
+/// crash-recovery added for issue #5 reads the first not-yet-moved entry as
+/// apply's crash point. With one bool, a resumed undo made that index mean
+/// undo's progress boundary instead, and two correct features quietly
+/// disagreed about what the field said.
+///
+/// On disk the base frame gains one value: `Reversed` writes `2` where
+/// `Moved` writes `1` and `Planned` writes `0`. Journals written before this
+/// only ever held 0 or 1 and load unchanged. An older binary reading a newer
+/// journal tests `== "1"`, so it reads a 2 as not-moved — true, since the
+/// file is at its origin; it loses only the knowledge that undo put it there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryState {
+    /// Apply has not moved this file yet.
+    Planned,
+    /// Apply moved it. It is at the destination.
+    Moved,
+    /// Undo moved it back. It is at the origin, and undo is finished with it.
+    Reversed,
+}
+
+impl Entry {
+    /// Whether the file is at its destination. The old `done` bit, kept as a
+    /// question rather than a field so the two not-at-destination cases stay
+    /// distinguishable.
+    #[must_use]
+    pub fn is_moved(&self) -> bool {
+        self.state == EntryState::Moved
+    }
 }
 
 #[derive(Debug, Default)]
@@ -163,7 +199,21 @@ impl Journal {
                 e.mtime_secs,
                 e.inode,
                 e.edge_hash,
-                if e.done { 1 } else { 0 }
+                match e.state {
+                    EntryState::Planned => 0,
+                    EntryState::Moved => 1,
+                    // 2, so a reversal survives save_sealed. A review caught
+                    // this encoding as 0 and reloading as Planned, which put
+                    // an entry undo had already finished back in reach of
+                    // apply's crash recovery — the exact collapse the three
+                    // states exist to prevent.
+                    //
+                    // Readable by older binaries in the useful direction:
+                    // their check is `== "1"`, so a 2 reads as not-moved, and
+                    // the file really is at its origin. They lose only the
+                    // knowledge that undo was what put it there.
+                    EntryState::Reversed => 2,
+                }
             ));
         }
         s
@@ -190,7 +240,16 @@ impl Journal {
                         mtime_secs: f[5].parse().map_err(|_| JournalError::Malformed("mtime"))?,
                         inode: f[6].parse().map_err(|_| JournalError::Malformed("inode"))?,
                         edge_hash: f[7].parse().map_err(|_| JournalError::Malformed("hash"))?,
-                        done: f[8] == "1",
+                        // 0 covers both Planned and Reversed: the file is at
+                        // its origin either way, and which of the two is
+                        // reconstructed from the progress frames below.
+                        state: match f[8] {
+                            "1" => EntryState::Moved,
+                            "2" => EntryState::Reversed,
+                            // Anything else is Planned. Journals written
+                            // before this only ever wrote 0 or 1.
+                            _ => EntryState::Planned,
+                        },
                     });
                 }
                 _ => {}
@@ -236,6 +295,34 @@ impl Journal {
         // Append to an existing file creates no new directory entry, so the
         // directory fsync from write_bytes already covers the name. sync_all
         // on the file is enough. That's why this is O(1).
+        f.sync_all().map_err(JournalError::Io)?;
+        Ok(())
+    }
+
+    /// Append one sealed "entry i has been reversed" frame.
+    ///
+    /// Undo's counterpart to [`Self::record_done`]. Undo walks entries in
+    /// reverse index order, so a suffix of these frames with strictly
+    /// decreasing indices is exactly what undo has already put back on disk.
+    /// Without it a killed undo leaves the journal claiming every entry is
+    /// still at its destination when some are already home, so the next run
+    /// walks them all again and the journal never converges to "nothing left
+    /// to undo".
+    pub fn record_undone(&self, index: usize, sealer: &dyn Sealer) -> Result<(), JournalError> {
+        let payload = format!("undone\t{index}\n");
+        let sealed = sealer
+            .seal(payload.as_bytes())
+            .map_err(JournalError::Seal)?;
+        let len = u32::try_from(sealed.len())
+            .map_err(|_| JournalError::Malformed("progress record too large"))?;
+        // Same append-only, no-create discipline as record_done: the base
+        // frame must already be there.
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(self.path())
+            .map_err(JournalError::Io)?;
+        f.write_all(&len.to_le_bytes()).map_err(JournalError::Io)?;
+        f.write_all(&sealed).map_err(JournalError::Io)?;
         f.sync_all().map_err(JournalError::Io)?;
         Ok(())
     }
@@ -299,7 +386,13 @@ impl Journal {
     /// "nothing more was recorded"; anything else is reported as damage.
     fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) -> Result<(), JournalError> {
         let mut offset = 0usize;
-        let mut expected = 0usize;
+        // Two cursors, because two writers append here. Apply counts up from
+        // 0; undo counts down from the last entry it reversed. The first
+        // undone frame may land at any index — undo starts at the highest
+        // entry that was actually moved — so the cursor is set on first sight
+        // and strict from then on.
+        let mut expected_done = 0usize;
+        let mut expected_undone: Option<usize> = None;
         while offset < raw.len() {
             if offset + 4 > raw.len() {
                 return Err(JournalError::Malformed(
@@ -323,25 +416,68 @@ impl Journal {
             })?;
             let text = text.trim_end_matches('\n');
             let f: Vec<&str> = text.split('\t').collect();
-            if f.len() != 3 || f[0] != "done" {
-                return Err(JournalError::Malformed(
-                    "journal damaged: progress record has the wrong shape",
-                ));
+            match f.first().copied() {
+                // Apply's frames, written 0..n as it walks forward.
+                Some("done") if f.len() == 3 => {
+                    let index: usize = f[1].parse().map_err(|_| {
+                        JournalError::Malformed("journal damaged: progress record index")
+                    })?;
+                    let method = Method::parse(f[2]).ok_or(JournalError::Malformed(
+                        "journal damaged: progress record method",
+                    ))?;
+                    if index != expected_done || index >= self.entries.len() {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: progress record out of order",
+                        ));
+                    }
+                    self.entries[index].state = EntryState::Moved;
+                    self.entries[index].method = method;
+                    expected_done += 1;
+                }
+                // Undo's frames, written n-1..0 as it walks back. Its own
+                // cursor, counting down, so an out-of-order frame of either
+                // kind is still caught rather than trusted.
+                Some("undone") if f.len() == 2 => {
+                    let index: usize = f[1].parse().map_err(|_| {
+                        JournalError::Malformed("journal damaged: progress record index")
+                    })?;
+                    // Strictly decreasing, with holes allowed. Undo walks
+                    // backwards but writes no frame for an entry it skips as
+                    // changed or missing, so 2 then 0 is a normal stream. A
+                    // review caught the first version demanding index - 1
+                    // exactly, which would have failed to load a journal from
+                    // any run where a skip sat between two reversals — the
+                    // runs where these frames matter most.
+                    //
+                    // Duplicates and replays are still caught by the check
+                    // below that the entry is currently Moved.
+                    if index >= self.entries.len() || expected_undone.is_some_and(|e| index >= e) {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: progress record out of order",
+                        ));
+                    }
+                    // Undo can only reverse what apply moved. An undone frame
+                    // for an entry that is not currently Moved means the
+                    // stream is inconsistent — replayed out of order, or two
+                    // undone frames for one entry — and a review asked for it
+                    // to be caught rather than absorbed.
+                    if self.entries[index].state != EntryState::Moved {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: a reversal for an entry that was not moved",
+                        ));
+                    }
+                    // Reversed, not Planned. The file is at its origin either
+                    // way, but only Reversed says undo already handled it, and
+                    // apply's crash recovery keys off the first Planned entry.
+                    self.entries[index].state = EntryState::Reversed;
+                    expected_undone = Some(index);
+                }
+                _ => {
+                    return Err(JournalError::Malformed(
+                        "journal damaged: progress record has the wrong shape",
+                    ));
+                }
             }
-            let index: usize = f[1]
-                .parse()
-                .map_err(|_| JournalError::Malformed("journal damaged: progress record index"))?;
-            let method = Method::parse(f[2]).ok_or(JournalError::Malformed(
-                "journal damaged: progress record method",
-            ))?;
-            if index != expected || index >= self.entries.len() {
-                return Err(JournalError::Malformed(
-                    "journal damaged: progress record out of order",
-                ));
-            }
-            self.entries[index].done = true;
-            self.entries[index].method = method;
-            expected += 1;
         }
         Ok(())
     }
@@ -687,13 +823,13 @@ mod tests {
                 mtime_secs: 99,
                 inode: 7,
                 edge_hash: 1234,
-                done: true,
+                state: EntryState::Moved,
             }],
         };
         let back = Journal::decode(&j.encode()).expect("decode");
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
-        assert!(back.entries[0].done);
+        assert!(back.entries[0].is_moved());
     }
 
     /// Appended progress frames must carry the corrected method, not just the
@@ -730,7 +866,7 @@ mod tests {
                 mtime_secs: 0,
                 inode: 1,
                 edge_hash: 0,
-                done: false,
+                state: EntryState::Planned,
             }],
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -738,7 +874,10 @@ mod tests {
             .expect("record_done");
 
         let back = Journal::load_sealed("test", "method", &Identity).expect("reload");
-        assert!(back.entries[0].done, "done bit lost on progress reload");
+        assert!(
+            back.entries[0].is_moved(),
+            "done bit lost on progress reload"
+        );
         assert_eq!(
             back.entries[0].method,
             Method::CopyUnlink,
@@ -783,7 +922,7 @@ mod tests {
                 mtime_secs: 0,
                 inode: 1,
                 edge_hash: 0,
-                done: false,
+                state: EntryState::Planned,
             }],
         };
         j.save_sealed(&Identity).expect("base");
@@ -791,12 +930,14 @@ mod tests {
             .expect("progress");
 
         // Simulate undo: entry is no longer done; caller persists via save_sealed.
-        j.entries[0].done = false;
+        // Undo reverses, which is Reversed — not Planned. Planned would say
+        // apply never moved it, which is a different situation entirely.
+        j.entries[0].state = EntryState::Reversed;
         j.save_sealed(&Identity).expect("re-save after undo");
 
         let back = Journal::load_sealed("test", "discard", &Identity).expect("reload");
         assert!(
-            !back.entries[0].done,
+            !back.entries[0].is_moved(),
             "stale progress resurrected a cleared done bit"
         );
 
@@ -842,7 +983,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 1,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/b"),
@@ -852,7 +993,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 2,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
             ],
         };
@@ -897,7 +1038,7 @@ mod tests {
             }
             Ok(loaded) => {
                 assert!(
-                    loaded.entries[1].done,
+                    loaded.entries[1].is_moved(),
                     "loaded a torn journal with entry 1 marked not-done. Its move \
                      already happened on disk. undo would skip it and strand it \
                      without a word. That is exactly the defect this test exists to catch"
@@ -945,7 +1086,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 1,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/b"),
@@ -955,7 +1096,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 2,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
             ],
         };
@@ -967,9 +1108,12 @@ mod tests {
         // torn frame.
 
         let back = Journal::load_sealed("test", "clean", &Identity).expect("clean load");
-        assert!(back.entries[0].done, "entry 0's completed move was lost");
         assert!(
-            !back.entries[1].done,
+            back.entries[0].is_moved(),
+            "entry 0's completed move was lost"
+        );
+        assert!(
+            !back.entries[1].is_moved(),
             "entry 1 was reported done despite never being recorded"
         );
 
@@ -1010,7 +1154,7 @@ mod tests {
                     mtime_secs: 99,
                     inode: 7,
                     edge_hash: 1234,
-                    done: true,
+                    state: EntryState::Moved,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/c"),
@@ -1020,7 +1164,7 @@ mod tests {
                     mtime_secs: 1,
                     inode: 2,
                     edge_hash: 5,
-                    done: false,
+                    state: EntryState::Planned,
                 },
             ],
         };
@@ -1032,10 +1176,10 @@ mod tests {
         assert_eq!(back.entries.len(), 2);
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
-        assert!(back.entries[0].done, "done entry lost on legacy load");
+        assert!(back.entries[0].is_moved(), "done entry lost on legacy load");
         assert_eq!(back.entries[1].method, Method::CopyUnlink);
         assert!(
-            !back.entries[1].done,
+            !back.entries[1].is_moved(),
             "not-done entry flipped on legacy load"
         );
 

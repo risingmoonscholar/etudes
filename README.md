@@ -55,7 +55,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 162 tests
+cargo test --all                # 165 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -142,17 +142,16 @@ apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 33 scenarios, 2 of them failing
+bash stress/run.sh        # 33 scenarios, 1 of them failing
 ```
 
-The 2 failing scenarios are real and they are [filed](../../issues), each with a
-reproduction. They fail on purpose so the reproductions do not rot, and CI
-fails only when the number gets worse. The ones you are most likely to meet:
+The one failing scenario is real and it is [filed](../../issues), with a
+reproduction. It fails on purpose so the reproduction does not rot, and CI
+fails only when the number gets worse:
 
 | | |
 |---|---|
-| [#7](../../issues/7) | Kill `sweep undo` partway and resume: the journal can keep re-reporting stale progress. A fix exists on a branch and is not merged. |
-| [#12](../../issues/12) | 10,000 files takes about a minute with the journal on. A measurement, not a defect, kept failing so the number stays visible. |
+| [#12](../../issues/12) | 10,000 files takes about a minute with the journal on. A measurement rather than a defect, kept failing so the number stays visible. |
 
 The best story in the tracker is closed: an earlier fix swapped `rename` for
 `link` plus `unlink` to stop silent overwrites, and that opened a crash window

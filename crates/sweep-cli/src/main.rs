@@ -629,7 +629,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 
 /// No done entries means undo already ran. Exit 1. Don't call undo again.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
-    !j.entries.iter().any(|e| e.done)
+    !j.entries.iter().any(|e| e.is_moved())
 }
 
 /// Shared tail of `apply` and `review`.
@@ -738,7 +738,7 @@ fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::J
     let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
-        .find(|j| j.entries.iter().any(|e| e.done))
+        .find(|j| j.entries.iter().any(|e| e.is_moved()))
 }
 
 /// Find the newest sweep journal whose root is `target` and that still has
@@ -758,7 +758,7 @@ fn sweep_journal_for_root(
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
         .find(|j| {
-            j.entries.iter().any(|e| e.done)
+            j.entries.iter().any(|e| e.is_moved())
                 && j.root.canonicalize().is_ok_and(|root| root == target)
         })
 }
@@ -825,7 +825,9 @@ fn cmd_undo(args: &[String]) -> ExitCode {
 
 /// The part of undo that is the same whether a path was named or not.
 fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
-    let r = etude_core::apply::undo(j);
+    // Pass the sealer: undo persists each reversal as it happens now, so a
+    // kill partway through leaves a journal that agrees with the disk.
+    let r = etude_core::apply::undo(j, sl);
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} files.", r.restored);
@@ -840,6 +842,21 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
     if !r.skipped_missing.is_empty() {
         println!("  {} were already gone.", r.skipped_missing.len());
+    }
+    if r.already_reversed > 0 {
+        println!(
+            "  {} were already restored by an earlier run that did not finish.",
+            r.already_reversed
+        );
+    }
+    if !r.reconciled.is_empty() {
+        // Different from healed: nothing was reachable by two names here. An
+        // earlier undo moved these home and was killed before it could write
+        // that down, so this run only had to agree with the disk.
+        println!(
+            "  {} were already home from an interrupted restore; the journal now says so.",
+            r.reconciled.len()
+        );
     }
     if !r.healed.is_empty() {
         // Say it rather than fold it into `restored`. Nothing moved: a crash
@@ -1259,7 +1276,7 @@ mod tests {
         assert_eq!(apply_exit_code(&io), ExitCode::from(3));
     }
 
-    fn sample_entry(done: bool) -> etude_core::journal::Entry {
+    fn sample_entry(moved: bool) -> etude_core::journal::Entry {
         etude_core::journal::Entry {
             from: PathBuf::from("/tmp/a"),
             to: PathBuf::from("/tmp/b"),
@@ -1268,7 +1285,11 @@ mod tests {
             mtime_secs: 0,
             inode: 0,
             edge_hash: 0,
-            done,
+            state: if moved {
+                etude_core::journal::EntryState::Moved
+            } else {
+                etude_core::journal::EntryState::Planned
+            },
         }
     }
 

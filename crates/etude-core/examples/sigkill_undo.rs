@@ -21,13 +21,13 @@ impl Sealer for TestSeal {
 
 fn main() {
     let mut j = Journal::latest_sealed("sigkilltest", &TestSeal).expect("load journal");
-    let done_before = j.entries.iter().filter(|e| e.done).count();
+    let done_before = j.entries.iter().filter(|e| e.is_moved()).count();
     println!(
         "sigkill_undo: journal has {} entries, {} marked done",
         j.entries.len(),
         done_before
     );
-    let r = apply::undo(&mut j);
+    let r = apply::undo(&mut j, &TestSeal);
     println!(
         "sigkill_undo: restored={} skipped_changed={} skipped_missing={} error={:?}",
         r.restored,
