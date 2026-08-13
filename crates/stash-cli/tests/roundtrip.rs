@@ -118,7 +118,7 @@ fn everything_comes_back_including_directories_and_symlinks() {
 
     let rep = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
     let mut j = Journal::load_sealed("stash", &rep.journal_id, &TestSeal).expect("journal");
-    let ur = apply::undo(&mut j);
+    let ur = apply::undo(&mut j, None);
 
     assert!(ur.error.is_none(), "unexpected undo error: {:?}", ur.error);
     assert_eq!(ur.restored, count, "not everything was restored");
@@ -148,7 +148,7 @@ fn a_symlink_is_fingerprinted_by_the_link_not_its_target() {
 
     let rep = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
     let mut j = Journal::load_sealed("stash", &rep.journal_id, &TestSeal).expect("journal");
-    let ur = apply::undo(&mut j);
+    let ur = apply::undo(&mut j, None);
 
     assert!(ur.error.is_none(), "unexpected undo error: {:?}", ur.error);
     let self_link = root.canonicalize().unwrap().join("self_link");

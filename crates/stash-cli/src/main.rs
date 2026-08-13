@@ -416,7 +416,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         println!("\nNothing to restore. This stash was already popped.");
         return ExitCode::from(1);
     }
-    let r = etude_core::apply::undo(&mut j);
+    let r = etude_core::apply::undo(&mut j, Some(&sl));
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} items.", r.restored);
@@ -794,7 +794,7 @@ mod tests {
         let mut journal = journal_for_root("stash", &TestSeal, &target)
             .0
             .expect("live journal");
-        let r = etude_core::apply::undo(&mut journal);
+        let r = etude_core::apply::undo(&mut journal, None);
         assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
         journal.save_sealed(&TestSeal).expect("resave journal");
 

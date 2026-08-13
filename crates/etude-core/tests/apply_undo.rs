@@ -124,7 +124,7 @@ fn apply_then_undo_restores_every_path() {
     }
 
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal loads");
-    let ur = apply::undo(&mut j);
+    let ur = apply::undo(&mut j, None);
 
     assert!(ur.error.is_none(), "unexpected undo error: {:?}", ur.error);
     assert_eq!(
@@ -182,7 +182,7 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
 
     let _ = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL));
     let mut j = Journal::latest_sealed("test", &TestSeal).expect("journal");
-    let r = apply::undo(&mut j);
+    let r = apply::undo(&mut j, None);
 
     assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
     assert_eq!(
@@ -210,7 +210,7 @@ fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     let victim = j.entries[0].to.clone();
     fs::write(&victim, b"the user edited this after applying\n").expect("mutate");
 
-    let r = apply::undo(&mut j);
+    let r = apply::undo(&mut j, None);
 
     assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
     assert!(
@@ -722,7 +722,7 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
         }],
     };
 
-    let r = apply::undo(&mut j);
+    let r = apply::undo(&mut j, None);
 
     assert!(
         !to.exists(),
@@ -799,7 +799,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
         ],
     };
 
-    let r = apply::undo(&mut j);
+    let r = apply::undo(&mut j, None);
 
     // Entry 1 is past the successor (entry 0), so recovery must not look at
     // it. The user's link survives.
@@ -845,4 +845,92 @@ fn a_plain_rename_never_replaces_this() {
     );
 
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
+    // Issue #7. Undo used to hold every reversal in memory and write the
+    // journal once at the end, so a kill partway through left the file on
+    // disk claiming all entries were still at their destinations. The next
+    // run walked all of them again, reported the same restored count again,
+    // and the journal never converged to "nothing left to undo".
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_resume_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let state = root.join("state");
+    fs::create_dir_all(&state).expect("mkdir state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let sealer = TestSeal;
+    let group = root.join("Screenshots");
+    fs::create_dir_all(&group).expect("mkdir group");
+
+    // Build the post-apply state directly, the way the other tests here do:
+    // files at their destinations, entries fingerprinted from what is really
+    // on disk rather than hand-written to pass.
+    let mut entries = Vec::new();
+    for n in 0..4 {
+        let from = root.join(format!("f{n}.png"));
+        let to = group.join(format!("f{n}.png"));
+        fs::write(&to, format!("file {n}")).expect("write");
+        let (size, mtime, inode, edge) =
+            etude_core::journal::fingerprint(&to).expect("fingerprint");
+        entries.push(Entry {
+            from,
+            to,
+            method: Method::Rename,
+            size,
+            mtime_secs: mtime,
+            inode,
+            edge_hash: edge,
+            state: etude_core::journal::EntryState::Moved,
+        });
+    }
+    let mut j = Journal {
+        id: "resume".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries,
+    };
+    j.save_sealed(&sealer).expect("save");
+
+    // Undo the top two, persisting as it goes, then stop as a kill would.
+    for i in (2..4).rev() {
+        let e = j.entries[i].clone();
+        fs::rename(&e.to, &e.from).expect("manual reverse");
+        j.entries[i].state = etude_core::journal::EntryState::Reversed;
+        j.record_undone(i, &sealer).expect("record");
+    }
+
+    // Reload from disk. This is the whole point: what the killed run left
+    // behind has to say two are already home.
+    let reloaded = Journal::load_sealed("test", &j.id, &sealer).expect("reload");
+    assert_eq!(
+        reloaded.entries.iter().filter(|e| e.is_moved()).count(),
+        2,
+        "the journal on disk still claims four files are at their destinations, \
+         so a resumed undo will walk the two that are already home"
+    );
+
+    // Resume. It must restore exactly the two that are left.
+    let mut j2 = reloaded;
+    let r = apply::undo(&mut j2, Some(&sealer));
+    assert!(r.error.is_none(), "resumed undo errored: {:?}", r.error);
+    assert_eq!(r.restored, 2, "a resumed undo must only do the work left");
+    assert_eq!(
+        r.already_reversed, 2,
+        "and must recognise the finished work"
+    );
+
+    // Converged: everything home, and a third run finds nothing.
+    for n in 0..4 {
+        assert!(root.join(format!("f{n}.png")).exists(), "f{n} is not home");
+    }
+    let mut j3 = Journal::load_sealed("test", &j2.id, &sealer).expect("reload again");
+    let r3 = apply::undo(&mut j3, Some(&sealer));
+    assert_eq!(r3.restored, 0, "a third run must find nothing left to do");
+    assert_eq!(r3.already_reversed, 4);
+
+    let _ = fs::remove_dir_all(&root);
+    unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
 }

@@ -825,7 +825,9 @@ fn cmd_undo(args: &[String]) -> ExitCode {
 
 /// The part of undo that is the same whether a path was named or not.
 fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
-    let r = etude_core::apply::undo(j);
+    // Pass the sealer: undo persists each reversal as it happens now, so a
+    // kill partway through leaves a journal that agrees with the disk.
+    let r = etude_core::apply::undo(j, Some(sl));
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} files.", r.restored);

@@ -17,5 +17,4 @@
 #
 # Marked (flaky) below: known not to fire on every run.
 
-30-kill-mid-undo
 50-scale-flat-10k-apply-timing

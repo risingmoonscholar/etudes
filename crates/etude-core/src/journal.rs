@@ -282,6 +282,34 @@ impl Journal {
         Ok(())
     }
 
+    /// Append one sealed "entry i has been reversed" frame.
+    ///
+    /// Undo's counterpart to [`Self::record_done`]. Undo walks entries in
+    /// reverse index order, so a suffix of these frames with strictly
+    /// decreasing indices is exactly what undo has already put back on disk.
+    /// Without it a killed undo leaves the journal claiming every entry is
+    /// still at its destination when some are already home, so the next run
+    /// walks them all again and the journal never converges to "nothing left
+    /// to undo".
+    pub fn record_undone(&self, index: usize, sealer: &dyn Sealer) -> Result<(), JournalError> {
+        let payload = format!("undone\t{index}\n");
+        let sealed = sealer
+            .seal(payload.as_bytes())
+            .map_err(JournalError::Seal)?;
+        let len = u32::try_from(sealed.len())
+            .map_err(|_| JournalError::Malformed("progress record too large"))?;
+        // Same append-only, no-create discipline as record_done: the base
+        // frame must already be there.
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(self.path())
+            .map_err(JournalError::Io)?;
+        f.write_all(&len.to_le_bytes()).map_err(JournalError::Io)?;
+        f.write_all(&sealed).map_err(JournalError::Io)?;
+        f.sync_all().map_err(JournalError::Io)?;
+        Ok(())
+    }
+
     /// Load and unseal. `id` is the bare id; `tool` selects the namespace.
     ///
     /// On-disk layout is length-framed: a required base frame (sealed encode
@@ -341,7 +369,13 @@ impl Journal {
     /// "nothing more was recorded"; anything else is reported as damage.
     fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) -> Result<(), JournalError> {
         let mut offset = 0usize;
-        let mut expected = 0usize;
+        // Two cursors, because two writers append here. Apply counts up from
+        // 0; undo counts down from the last entry it reversed. The first
+        // undone frame may land at any index — undo starts at the highest
+        // entry that was actually moved — so the cursor is set on first sight
+        // and strict from then on.
+        let mut expected_done = 0usize;
+        let mut expected_undone: Option<usize> = None;
         while offset < raw.len() {
             if offset + 4 > raw.len() {
                 return Err(JournalError::Malformed(
@@ -365,25 +399,48 @@ impl Journal {
             })?;
             let text = text.trim_end_matches('\n');
             let f: Vec<&str> = text.split('\t').collect();
-            if f.len() != 3 || f[0] != "done" {
-                return Err(JournalError::Malformed(
-                    "journal damaged: progress record has the wrong shape",
-                ));
+            match f.first().copied() {
+                // Apply's frames, written 0..n as it walks forward.
+                Some("done") if f.len() == 3 => {
+                    let index: usize = f[1].parse().map_err(|_| {
+                        JournalError::Malformed("journal damaged: progress record index")
+                    })?;
+                    let method = Method::parse(f[2]).ok_or(JournalError::Malformed(
+                        "journal damaged: progress record method",
+                    ))?;
+                    if index != expected_done || index >= self.entries.len() {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: progress record out of order",
+                        ));
+                    }
+                    self.entries[index].state = EntryState::Moved;
+                    self.entries[index].method = method;
+                    expected_done += 1;
+                }
+                // Undo's frames, written n-1..0 as it walks back. Its own
+                // cursor, counting down, so an out-of-order frame of either
+                // kind is still caught rather than trusted.
+                Some("undone") if f.len() == 2 => {
+                    let index: usize = f[1].parse().map_err(|_| {
+                        JournalError::Malformed("journal damaged: progress record index")
+                    })?;
+                    if index >= self.entries.len() || expected_undone.is_some_and(|e| index != e) {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: progress record out of order",
+                        ));
+                    }
+                    // Reversed, not Planned. The file is at its origin either
+                    // way, but only Reversed says undo already handled it, and
+                    // apply's crash recovery keys off the first Planned entry.
+                    self.entries[index].state = EntryState::Reversed;
+                    expected_undone = index.checked_sub(1);
+                }
+                _ => {
+                    return Err(JournalError::Malformed(
+                        "journal damaged: progress record has the wrong shape",
+                    ));
+                }
             }
-            let index: usize = f[1]
-                .parse()
-                .map_err(|_| JournalError::Malformed("journal damaged: progress record index"))?;
-            let method = Method::parse(f[2]).ok_or(JournalError::Malformed(
-                "journal damaged: progress record method",
-            ))?;
-            if index != expected || index >= self.entries.len() {
-                return Err(JournalError::Malformed(
-                    "journal damaged: progress record out of order",
-                ));
-            }
-            self.entries[index].state = EntryState::Moved;
-            self.entries[index].method = method;
-            expected += 1;
         }
         Ok(())
     }

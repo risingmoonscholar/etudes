@@ -382,6 +382,10 @@ fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
               partial restore is silent unless this field is inspected"]
 pub struct UndoReport {
     pub restored: usize,
+    /// Entries a previous, killed undo had already put back. Counted rather
+    /// than re-walked: issue #7 was that these looked identical to entries
+    /// never moved, so every resumed run reported the same work forever.
+    pub already_reversed: usize,
     /// Entries skipped because the file changed after apply. Never forced.
     pub skipped_changed: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
@@ -433,7 +437,7 @@ fn same_file(_a: &Path, _b: &Path) -> bool {
 /// the first place) is responsible for calling `j.save_sealed(..)` after
 /// this returns, on *both* the success and the `error.is_some()` path, or
 /// the journal will drift from physical reality exactly the way it used to.
-pub fn undo(j: &mut Journal) -> UndoReport {
+pub fn undo(j: &mut Journal, sealer: Option<&dyn Sealer>) -> UndoReport {
     let mut r = UndoReport::default();
 
     // Apply moves entries in order and seals a done record after each, so
@@ -444,7 +448,10 @@ pub fn undo(j: &mut Journal) -> UndoReport {
     // collision check had verified the destination was empty. Inference from
     // inode equality alone could not distinguish sweep's interrupted link
     // from a hard link the user made; position can.
-    let first_not_done = j.entries.iter().position(|e| !e.is_moved());
+    let first_planned = j
+        .entries
+        .iter()
+        .position(|e| e.state == EntryState::Planned);
 
     // Reverse order, so nested destinations empty before their parents.
     for i in (0..j.entries.len()).rev() {
@@ -453,7 +460,15 @@ pub fn undo(j: &mut Journal) -> UndoReport {
             // Only the successor entry gets recovery. Everything past it never
             // started, and no inference is applied there — which is what keeps
             // a user's own hard links out of reach.
-            if Some(i) != first_not_done {
+            if e.state == EntryState::Reversed {
+                // Undo already put this one back, on an earlier run that was
+                // killed before it finished. Nothing to do, and crucially no
+                // recovery inference either: the file is home and the journal
+                // says so.
+                r.already_reversed += 1;
+                continue;
+            }
+            if Some(i) != first_planned {
                 continue;
             }
             if e.to.exists() && e.from.exists() && same_file(&e.to, &e.from) {
@@ -496,6 +511,39 @@ pub fn undo(j: &mut Journal) -> UndoReport {
             continue;
         }
         if !e.to.exists() {
+            // The destination is gone and the entry still says Moved. That is
+            // consistent with a killed undo having moved the file home in the
+            // gap between the move and its record — but consistent is not
+            // proof, and a review caught the first version of this treating it
+            // as proof.
+            //
+            // Healing on absence alone can abandon a live file: if anything at
+            // all sits at the origin, the entry gets written off and every
+            // later run says nothing is left to undo while the file is still
+            // at its destination. So the origin has to BE the file the journal
+            // describes, checked the way the restore path checks a destination.
+            //
+            // Inode is deliberately not compared. A cross-device undo copies
+            // rather than renames, so it legitimately changes; size, mtime and
+            // the edge hash survive either path.
+            let is_the_file = e.from.exists()
+                && match fingerprint(&e.from) {
+                    Ok((size, mtime, _inode, hash)) => {
+                        size == e.size && mtime == e.mtime_secs && hash == e.edge_hash
+                    }
+                    Err(_) => false,
+                };
+            if is_the_file {
+                j.entries[i].state = EntryState::Reversed;
+                if let Some(sl) = sealer
+                    && let Err(err) = j.record_undone(i, sl)
+                {
+                    r.error = Some(ApplyError::Journal(err));
+                    break;
+                }
+                r.healed.push(e.from.clone());
+                continue;
+            }
             r.skipped_missing.push(e.to.clone());
             continue;
         }
@@ -535,6 +583,16 @@ pub fn undo(j: &mut Journal) -> UndoReport {
             Ok(_) => {
                 j.entries[i].state = EntryState::Reversed;
                 r.restored += 1;
+                // Persist it now, not at the end. Issue #7: a kill here used
+                // to leave the journal claiming every entry was still at its
+                // destination, so the next run walked them all again and the
+                // count never converged.
+                if let Some(sl) = sealer
+                    && let Err(err) = j.record_undone(i, sl)
+                {
+                    r.error = Some(ApplyError::Journal(err));
+                    break;
+                }
             }
             Err(err) => {
                 r.error = Some(ApplyError::Io(err));
