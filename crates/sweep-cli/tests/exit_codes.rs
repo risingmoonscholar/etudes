@@ -356,3 +356,84 @@ fn the_lesson_never_prints_a_bare_double_hyphen() {
         }
     }
 }
+
+#[test]
+fn undo_can_reach_an_apply_that_is_not_the_most_recent() {
+    // Issue #8. `sweep undo` took no path and always reversed the newest
+    // journal, so applying to two folders left the first one unreachable: its
+    // journal stayed on disk for its full retention as an index of the user's
+    // filenames, with no remaining way to use it. The exposure without the
+    // benefit.
+    //
+    // `stash pop` already takes an optional path for exactly this reason.
+    let a = unique_temp("undo-two-a");
+    let b = unique_temp("undo-two-b");
+    let state = unique_temp("undo-two-state");
+    for d in [&a, &b, &state] {
+        let _ = std::fs::remove_dir_all(d);
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let (_a, _b, _s) = (
+        TestDir(a.clone()),
+        TestDir(b.clone()),
+        TestDir(state.clone()),
+    );
+
+    for dir in [&a, &b] {
+        for i in 1..=4 {
+            std::fs::write(
+                dir.join(format!("Screenshot 2026-01-0{i} at 9.0{i}.11 AM.png")),
+                b"x",
+            )
+            .unwrap();
+        }
+    }
+
+    let apply = |dir: &std::path::Path| {
+        sweep_bin()
+            .env("ETUDE_STATE_DIR", &state)
+            .args(["apply"])
+            .arg(dir)
+            .args(["--yes"])
+            .output()
+            .unwrap()
+    };
+
+    let first = apply(&a);
+    if !first.status.success() {
+        assert_refused_for_want_of_a_keychain(&first);
+        return;
+    }
+    assert!(apply(&b).status.success(), "second apply");
+
+    // Undo the newest, which is B.
+    let undo_b = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["undo"])
+        .output()
+        .unwrap();
+    assert_eq!(undo_b.status.code(), Some(0), "undo of the newest apply");
+
+    // A is still applied. Name it, and it must come back.
+    let undo_a = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["undo"])
+        .arg(&a)
+        .output()
+        .unwrap();
+    let msg = String::from_utf8_lossy(&undo_a.stdout).to_string()
+        + &String::from_utf8_lossy(&undo_a.stderr);
+    assert_eq!(
+        undo_a.status.code(),
+        Some(0),
+        "naming an earlier apply must reach it: {msg}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&a)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().is_file())
+            .count(),
+        4,
+        "every file should be back at the root of A: {msg}"
+    );
+}

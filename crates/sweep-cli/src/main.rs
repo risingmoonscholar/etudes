@@ -21,7 +21,7 @@ USAGE
     sweep review PATH            walk each group, rename or skip, then apply
     sweep apply PATH --yes       move every proposed group
     sweep apply PATH --only NAME move one group
-    sweep undo                   reverse the most recent apply
+    sweep undo [PATH]            reverse the most recent apply, or that folder's
     sweep forget                 remove sweep's journals; ask before destroying
                                  a key stash also relies on
     sweep verify                 print sweep's own privacy posture
@@ -68,7 +68,7 @@ fn main() -> ExitCode {
         Some("verify") => verify(),
         Some("lesson") => cmd_lesson(&args),
         Some("apply") => cmd_apply(&args),
-        Some("undo") => cmd_undo(),
+        Some("undo") => cmd_undo(&args),
         Some("forget") => cmd_forget(&args),
         Some("review") => cmd_review(&args),
         Some("--") => match args.get(1) {
@@ -733,10 +733,69 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     run_apply(&p, sl)
 }
 
-fn cmd_undo() -> ExitCode {
+/// The newest sweep journal that still has entries to reverse.
+fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::Journal> {
+    let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
+    ids.into_iter()
+        .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
+        .find(|j| j.entries.iter().any(|e| e.done))
+}
+
+/// Find the newest sweep journal whose root is `target` and that still has
+/// something to reverse.
+///
+/// Issue #8. `undo` used to take the newest journal and nothing else, so
+/// applying to two folders left the first unreachable: its journal sat on disk
+/// for its full retention as an index of the user's filenames, with no
+/// remaining way to use it. That is the exposure without the benefit.
+///
+/// `stash pop` already took a path for the same reason. This is the same shape.
+fn sweep_journal_for_root(
+    sl: &dyn etude_core::journal::Sealer,
+    target: &Path,
+) -> Option<etude_core::Journal> {
+    let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
+    ids.into_iter()
+        .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
+        .find(|j| {
+            j.entries.iter().any(|e| e.done)
+                && j.root.canonicalize().is_ok_and(|root| root == target)
+        })
+}
+
+fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(sl) = sealer() else {
         return ExitCode::from(2);
     };
+
+    // A named path reverses that folder's apply, whichever one it was.
+    if let Some(named) = args.iter().skip(1).find(|a| !a.starts_with('-')) {
+        let path = PathBuf::from(expand_tilde(named));
+        let Ok(target) = path.canonicalize() else {
+            eprintln!("sweep: no folder at {}", path.display());
+            return ExitCode::from(3);
+        };
+        return match sweep_journal_for_root(&sl, &target) {
+            Some(mut j) => finish_undo(&mut j, &sl),
+            None => {
+                eprintln!(
+                    "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
+                    target.display()
+                );
+                ExitCode::from(1)
+            }
+        };
+    }
+
+    // No path named: reverse the newest apply that still HAS something to
+    // reverse, rather than the newest journal full stop. Otherwise a second
+    // `undo` reports "already restored" about the one it just did and the
+    // apply before it stays unreachable forever, which is issue #8 wearing a
+    // different hat: the first fix let you name a folder, this one lets you
+    // just run it twice.
+    if let Some(mut j) = newest_undoable(&sl) {
+        return finish_undo(&mut j, &sl);
+    }
     let mut j = match etude_core::Journal::latest_sealed("sweep", &sl) {
         Ok(j) => j,
         Err(e) => {
@@ -761,7 +820,12 @@ fn cmd_undo() -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    let r = etude_core::apply::undo(&mut j);
+    finish_undo(&mut j, &sl)
+}
+
+/// The part of undo that is the same whether a path was named or not.
+fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
+    let r = etude_core::apply::undo(j);
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} files.", r.restored);
@@ -783,7 +847,7 @@ fn cmd_undo() -> ExitCode {
     // succeeded changes what we can honestly tell the user next -- claiming
     // "resumable" while the save failed would repeat the exact lie this fix
     // exists to remove, just moved one line later.
-    let saved = j.save_sealed(&sl);
+    let saved = j.save_sealed(sl);
     if let Some(err) = r.error {
         eprintln!("sweep: {err}");
         match saved {
