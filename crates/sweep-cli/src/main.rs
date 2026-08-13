@@ -145,9 +145,15 @@ const LESSON: &[(&str, &str)] = &[
         "Put it back",
         "    sweep undo\n\
          \n\
-         Finder returns to before the last apply, not before the one in step 3.\n\
-         Undo reverses the most recent apply only, so the group you moved there\n\
-         stays where you put it.\n\
+         Finder returns to before the apply in step 4. Run it again and it goes\n\
+         back another step, to before the one group you moved in step 3.\n\
+         \n\
+             sweep undo\n\
+             sweep undo Desktop\n\
+         \n\
+         Each run reverses the most recent apply that has not been reversed yet.\n\
+         Naming a folder finds that folder's, which is what makes two applies to\n\
+         two different folders both reachable.\n\
          \n\
          That worked because the apply wrote a journal. Skip the journal and you\n\
          give up the undo:\n\
@@ -161,10 +167,9 @@ const LESSON: &[(&str, &str)] = &[
         "Destroy what it remembered",
         "    sweep undo\n\
          \n\
-         It refuses. Undo reaches one apply back, never a stack, so the group\n\
-         you moved in step 3 is now beyond it.\n\
+         It refuses now: everything it recorded has already been put back.\n\
          \n\
-         Its journal is still on disk. It can no longer undo anything, and it is\n\
+         The journal is still on disk. It can no longer undo anything, and it is\n\
          still an index of your filenames for the rest of its thirty days. That\n\
          is what this removes:\n\
          \n\
