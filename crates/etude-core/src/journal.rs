@@ -441,7 +441,17 @@ impl Journal {
                     let index: usize = f[1].parse().map_err(|_| {
                         JournalError::Malformed("journal damaged: progress record index")
                     })?;
-                    if index >= self.entries.len() || expected_undone.is_some_and(|e| index != e) {
+                    // Strictly decreasing, with holes allowed. Undo walks
+                    // backwards but writes no frame for an entry it skips as
+                    // changed or missing, so 2 then 0 is a normal stream. A
+                    // review caught the first version demanding index - 1
+                    // exactly, which would have failed to load a journal from
+                    // any run where a skip sat between two reversals — the
+                    // runs where these frames matter most.
+                    //
+                    // Duplicates and replays are still caught by the check
+                    // below that the entry is currently Moved.
+                    if index >= self.entries.len() || expected_undone.is_some_and(|e| index >= e) {
                         return Err(JournalError::Malformed(
                             "journal damaged: progress record out of order",
                         ));
@@ -460,7 +470,7 @@ impl Journal {
                     // way, but only Reversed says undo already handled it, and
                     // apply's crash recovery keys off the first Planned entry.
                     self.entries[index].state = EntryState::Reversed;
-                    expected_undone = index.checked_sub(1);
+                    expected_undone = Some(index);
                 }
                 _ => {
                     return Err(JournalError::Malformed(

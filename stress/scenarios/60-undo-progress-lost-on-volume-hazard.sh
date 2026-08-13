@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Deepest finding in this family. `undo()` (etude-core/src/apply.rs) does NOT
-# have the crash-safe incremental journaling that `apply()` has. apply()
-# calls record_done() -- appended, sealed, fsync'd -- after every single
-# successful move, specifically so that "a crash at any point leaves a
-# journal that describes exactly what happened" (the doc comment at the top
-# of apply.rs). undo()'s loop has no equivalent: it only mutates
-# `j.entries[i].done` in memory, and the one place that persists it
-# (`j.save_sealed(&sl)` in sweep-cli's cmd_undo) is reached ONLY on the Ok
-# path. If undo() errors out partway through -- via the `?` on
-# `move_one(...).map_err(ApplyError::Io)?` -- every file it already
-# physically restored before the error is silently dropped from both the
-# report AND the on-disk journal.
+# Deepest finding in this family, and now a regression guard rather than a
+# reproduction: `undo()` used to lack the crash-safe incremental journaling
+# that `apply()` has. apply() calls record_done() -- appended, sealed,
+# fsync'd -- after every successful move, so a crash at any point leaves a
+# journal that describes exactly what happened. undo()'s loop had no
+# equivalent: it mutated state in memory only, and the one place that
+# persisted it was reached ONLY on the Ok path. If undo errored partway
+# through, every file it had already physically restored was silently dropped
+# from both the report and the on-disk journal.
+#
+# Fixed for issue #7: undo calls record_undone() per reversal, the mirror of
+# record_done. This scenario stays because the hazard it builds is real and
+# the guarantee is worth re-checking, not because the defect is still there.
 #
 # This is demonstrated with a real, deterministic volume hazard rather than
 # disk-fill timing luck: a shared-token group whose members live on two

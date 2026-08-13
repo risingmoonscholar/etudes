@@ -995,3 +995,72 @@ fn a_reversal_survives_being_saved_and_reloaded() {
     let _ = fs::remove_dir_all(&root);
     unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
 }
+
+#[test]
+fn a_skip_between_two_reversals_still_reloads() {
+    // A review caught the replay cursor demanding consecutive indices. Undo
+    // walks backwards but writes no frame for an entry it skips as changed or
+    // missing, so a real run produces holes: reverse 2, skip 1, reverse 0.
+    // The strict version rejected that journal as damaged, which would have
+    // broken resume in exactly the runs where the frames matter.
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_holes_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let state = root.join("state");
+    fs::create_dir_all(&state).expect("mkdir state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let sealer = TestSeal;
+    let group = root.join("Screenshots");
+    fs::create_dir_all(&group).expect("mkdir");
+
+    let mut entries = Vec::new();
+    for n in 0..3 {
+        let to = group.join(format!("f{n}.png"));
+        fs::write(&to, format!("file {n}")).expect("write");
+        let (size, mtime, inode, edge) =
+            etude_core::journal::fingerprint(&to).expect("fingerprint");
+        entries.push(Entry {
+            from: root.join(format!("f{n}.png")),
+            to,
+            method: Method::Rename,
+            size,
+            mtime_secs: mtime,
+            inode,
+            edge_hash: edge,
+            state: etude_core::journal::EntryState::Moved,
+        });
+    }
+    let mut j = Journal {
+        id: "holes".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries,
+    };
+    j.save_sealed(&sealer).expect("save");
+
+    // Reverse 2 and 0, leaving 1 alone the way a skip would.
+    for i in [2usize, 0usize] {
+        let e = j.entries[i].clone();
+        fs::rename(&e.to, &e.from).expect("reverse");
+        j.entries[i].state = etude_core::journal::EntryState::Reversed;
+        j.record_undone(i, &sealer).expect("record");
+    }
+
+    let back = Journal::load_sealed("test", &j.id, &sealer)
+        .expect("a journal with a skip between two reversals must still load");
+    assert_eq!(
+        back.entries[2].state,
+        etude_core::journal::EntryState::Reversed
+    );
+    assert_eq!(
+        back.entries[1].state,
+        etude_core::journal::EntryState::Moved
+    );
+    assert_eq!(
+        back.entries[0].state,
+        etude_core::journal::EntryState::Reversed
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+}
