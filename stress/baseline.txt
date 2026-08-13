@@ -17,8 +17,5 @@
 #
 # Marked (flaky) below: known not to fire on every run.
 
-30-graceful-signal-mid-apply
 30-kill-mid-undo
-30-sigkill-mid-apply
-40-06-permission-change-mid-apply
 50-scale-flat-10k-apply-timing

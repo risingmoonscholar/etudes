@@ -432,6 +432,12 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     if !r.skipped_missing.is_empty() {
         println!("  {} were already gone.", r.skipped_missing.len());
     }
+    if !r.healed.is_empty() {
+        println!(
+            "  {} left over from an interrupted run: one file was reachable by two\n  names and the extra name has been removed.",
+            r.healed.len()
+        );
+    }
     // Persist regardless of outcome: on error just as much as on success, so
     // the on-disk journal matches what was actually restored rather than
     // still claiming every entry is pending. Whether *this* save itself

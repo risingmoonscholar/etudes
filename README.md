@@ -55,7 +55,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 159 tests
+cargo test --all                # 162 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -142,22 +142,23 @@ apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 33 scenarios, 5 of them failing
+bash stress/run.sh        # 33 scenarios, 2 of them failing
 ```
 
-The 5 failing scenarios are real and they are [filed](../../issues), each with a
+The 2 failing scenarios are real and they are [filed](../../issues), each with a
 reproduction. They fail on purpose so the reproductions do not rot, and CI
 fails only when the number gets worse. The ones you are most likely to meet:
 
 | | |
 |---|---|
-| [#8](../../issues/8) | Apply to two folders in a row. Only the newest journal is reachable. `sweep undo` has no per-directory selector. |
-| [#4](../../issues/4) | A folder that cannot be read is skipped without saying so, and the scanned count implies it was complete. |
-| [#5](../../issues/5) | Killing an apply between two syscalls can leave one file in two places, and undo will not clean it up. |
+| [#7](../../issues/7) | Kill `sweep undo` partway and resume: the journal can keep re-reporting stale progress. A fix exists on a branch and is not merged. |
+| [#12](../../issues/12) | 10,000 files takes about a minute with the journal on. A measurement, not a defect, kept failing so the number stays visible. |
 
-The third one is a bug my own fix caused: closing a silent-overwrite hole meant
-replacing `rename` with `link` plus `unlink`, which is two operations rather
-than one.
+The best story in the tracker is closed: an earlier fix swapped `rename` for
+`link` plus `unlink` to stop silent overwrites, and that opened a crash window
+where a killed process left one file under two names. It is now a single
+atomic rename, and the recovery for old journals knows which link was sweep's
+by its position in the journal rather than by guessing from inodes.
 
 There is also an `unproven` count, kept separate from the passes on purpose. A
 hazard that could not be exercised on this machine is not a hazard that passed.
