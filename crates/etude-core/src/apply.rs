@@ -20,7 +20,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::journal::{Entry, Journal, Method, Sealer, fingerprint};
+use crate::journal::{Entry, EntryState, Journal, Method, Sealer, fingerprint};
 use crate::plan::Plan;
 
 #[derive(Debug)]
@@ -127,7 +127,7 @@ pub fn apply(
                 mtime_secs,
                 inode,
                 edge_hash,
-                done: false,
+                state: EntryState::Planned,
             });
         }
     }
@@ -156,7 +156,7 @@ pub fn apply(
         }
         let method = move_one(&from, &to).map_err(ApplyError::Io)?;
         j.entries[i].method = method;
-        j.entries[i].done = true;
+        j.entries[i].state = EntryState::Moved;
         moved += 1;
         // Append a sealed done-record (index + corrected method). The base
         // journal was written before the loop; rewriting it here was O(n²).
@@ -444,12 +444,12 @@ pub fn undo(j: &mut Journal) -> UndoReport {
     // collision check had verified the destination was empty. Inference from
     // inode equality alone could not distinguish sweep's interrupted link
     // from a hard link the user made; position can.
-    let first_not_done = j.entries.iter().position(|e| !e.done);
+    let first_not_done = j.entries.iter().position(|e| !e.is_moved());
 
     // Reverse order, so nested destinations empty before their parents.
     for i in (0..j.entries.len()).rev() {
         let e = j.entries[i].clone();
-        if !e.done {
+        if !e.is_moved() {
             // Only the successor entry gets recovery. Everything past it never
             // started, and no inference is applied there — which is what keeps
             // a user's own hard links out of reach.
@@ -533,7 +533,7 @@ pub fn undo(j: &mut Journal) -> UndoReport {
         }
         match move_one(&e.to, &e.from) {
             Ok(_) => {
-                j.entries[i].done = false;
+                j.entries[i].state = EntryState::Reversed;
                 r.restored += 1;
             }
             Err(err) => {

@@ -629,7 +629,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 
 /// No done entries means undo already ran. Exit 1. Don't call undo again.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
-    !j.entries.iter().any(|e| e.done)
+    !j.entries.iter().any(|e| e.is_moved())
 }
 
 /// Shared tail of `apply` and `review`.
@@ -738,7 +738,7 @@ fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::J
     let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
-        .find(|j| j.entries.iter().any(|e| e.done))
+        .find(|j| j.entries.iter().any(|e| e.is_moved()))
 }
 
 /// Find the newest sweep journal whose root is `target` and that still has
@@ -758,7 +758,7 @@ fn sweep_journal_for_root(
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
         .find(|j| {
-            j.entries.iter().any(|e| e.done)
+            j.entries.iter().any(|e| e.is_moved())
                 && j.root.canonicalize().is_ok_and(|root| root == target)
         })
 }
@@ -1259,7 +1259,7 @@ mod tests {
         assert_eq!(apply_exit_code(&io), ExitCode::from(3));
     }
 
-    fn sample_entry(done: bool) -> etude_core::journal::Entry {
+    fn sample_entry(moved: bool) -> etude_core::journal::Entry {
         etude_core::journal::Entry {
             from: PathBuf::from("/tmp/a"),
             to: PathBuf::from("/tmp/b"),
@@ -1268,7 +1268,11 @@ mod tests {
             mtime_secs: 0,
             inode: 0,
             edge_hash: 0,
-            done,
+            state: if moved {
+                etude_core::journal::EntryState::Moved
+            } else {
+                etude_core::journal::EntryState::Planned
+            },
         }
     }
 

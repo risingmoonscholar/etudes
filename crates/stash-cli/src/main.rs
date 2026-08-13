@@ -303,7 +303,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 
 /// No done entries means pop already ran. Exit 1. Don't call undo again.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
-    !j.entries.iter().any(|e| e.done)
+    !j.entries.iter().any(|e| e.is_moved())
 }
 
 /// Load a journal by id, warning to stderr rather than silently vanishing it
@@ -882,7 +882,7 @@ mod tests {
         assert_eq!(apply_exit_code(&io), ExitCode::from(3));
     }
 
-    fn sample_entry(done: bool) -> etude_core::journal::Entry {
+    fn sample_entry(moved: bool) -> etude_core::journal::Entry {
         etude_core::journal::Entry {
             from: PathBuf::from("/tmp/a"),
             to: PathBuf::from("/tmp/b"),
@@ -891,7 +891,11 @@ mod tests {
             mtime_secs: 0,
             inode: 0,
             edge_hash: 0,
-            done,
+            state: if moved {
+                etude_core::journal::EntryState::Moved
+            } else {
+                etude_core::journal::EntryState::Planned
+            },
         }
     }
 

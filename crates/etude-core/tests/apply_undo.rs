@@ -154,7 +154,7 @@ fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
     assert!(matches!(err, ApplyError::Injected(FAIL)));
 
     let j = Journal::latest_sealed("test", &TestSeal).expect("journal exists after a crash");
-    let done: Vec<_> = j.entries.iter().filter(|e| e.done).collect();
+    let done: Vec<_> = j.entries.iter().filter(|e| e.is_moved()).collect();
     assert_eq!(
         done.len(),
         FAIL,
@@ -168,7 +168,7 @@ fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
             "journal says done but source is still there"
         );
     }
-    for e in j.entries.iter().filter(|e| !e.done) {
+    for e in j.entries.iter().filter(|e| !e.is_moved()) {
         assert!(e.from.exists(), "journal says not-done but source is gone");
     }
     cleanup(&root);
@@ -469,8 +469,8 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
     assert_eq!(j_b.entries.len(), 1);
     assert_eq!(j_a.entries[0].from, src_a);
     assert_eq!(j_b.entries[0].from, src_b);
-    assert!(j_a.entries[0].done);
-    assert!(j_b.entries[0].done);
+    assert!(j_a.entries[0].is_moved());
+    assert!(j_b.entries[0].is_moved());
 
     cleanup(&root);
 }
@@ -718,7 +718,7 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
             // signal between the link and the unlink leaves it false. A review
             // caught the first version of this test setting it true, which is
             // the user-hard-linked-something case and not this bug at all.
-            done: false,
+            state: etude_core::journal::EntryState::Planned,
         }],
     };
 
@@ -784,7 +784,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
                 mtime_secs: m0,
                 inode: i0,
                 edge_hash: h0,
-                done: false,
+                state: etude_core::journal::EntryState::Planned,
             },
             Entry {
                 from: b_from.clone(),
@@ -794,7 +794,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
                 mtime_secs: m1,
                 inode: i1,
                 edge_hash: h1,
-                done: false,
+                state: etude_core::journal::EntryState::Planned,
             },
         ],
     };

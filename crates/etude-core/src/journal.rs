@@ -62,8 +62,43 @@ pub struct Entry {
     /// FNV-1a over the first and last 4 KiB. Change detection, **not**
     /// integrity. It defeats accident, not an adversary.
     pub edge_hash: u64,
-    /// False until the move has actually succeeded on disk.
-    pub done: bool,
+    /// Where this entry stands. See [`EntryState`] — a bool used to carry
+    /// three meanings and two of them shared a value.
+    pub state: EntryState,
+}
+
+/// What has physically happened to one entry's file.
+///
+/// This was a `done: bool` until issue #7 needed undo to record its own
+/// progress. Then `false` meant both "apply never moved this" and "undo
+/// already moved it back" — the same value for opposite situations, and the
+/// crash-recovery added for issue #5 reads the first not-yet-moved entry as
+/// apply's crash point. With one bool, a resumed undo made that index mean
+/// undo's progress boundary instead, and two correct features quietly
+/// disagreed about what the field said.
+///
+/// On disk nothing changes: `Planned` and `Reversed` both encode as `0` in
+/// the base frame, because in both the file sits at its origin. The
+/// difference is reconstructed from the appended progress frames, so journals
+/// written before this load exactly as they did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryState {
+    /// Apply has not moved this file yet.
+    Planned,
+    /// Apply moved it. It is at the destination.
+    Moved,
+    /// Undo moved it back. It is at the origin, and undo is finished with it.
+    Reversed,
+}
+
+impl Entry {
+    /// Whether the file is at its destination. The old `done` bit, kept as a
+    /// question rather than a field so the two not-at-destination cases stay
+    /// distinguishable.
+    #[must_use]
+    pub fn is_moved(&self) -> bool {
+        self.state == EntryState::Moved
+    }
 }
 
 #[derive(Debug, Default)]
@@ -163,7 +198,7 @@ impl Journal {
                 e.mtime_secs,
                 e.inode,
                 e.edge_hash,
-                if e.done { 1 } else { 0 }
+                if e.state == EntryState::Moved { 1 } else { 0 }
             ));
         }
         s
@@ -190,7 +225,14 @@ impl Journal {
                         mtime_secs: f[5].parse().map_err(|_| JournalError::Malformed("mtime"))?,
                         inode: f[6].parse().map_err(|_| JournalError::Malformed("inode"))?,
                         edge_hash: f[7].parse().map_err(|_| JournalError::Malformed("hash"))?,
-                        done: f[8] == "1",
+                        // 0 covers both Planned and Reversed: the file is at
+                        // its origin either way, and which of the two is
+                        // reconstructed from the progress frames below.
+                        state: if f[8] == "1" {
+                            EntryState::Moved
+                        } else {
+                            EntryState::Planned
+                        },
                     });
                 }
                 _ => {}
@@ -339,7 +381,7 @@ impl Journal {
                     "journal damaged: progress record out of order",
                 ));
             }
-            self.entries[index].done = true;
+            self.entries[index].state = EntryState::Moved;
             self.entries[index].method = method;
             expected += 1;
         }
@@ -687,13 +729,13 @@ mod tests {
                 mtime_secs: 99,
                 inode: 7,
                 edge_hash: 1234,
-                done: true,
+                state: EntryState::Moved,
             }],
         };
         let back = Journal::decode(&j.encode()).expect("decode");
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
-        assert!(back.entries[0].done);
+        assert!(back.entries[0].is_moved());
     }
 
     /// Appended progress frames must carry the corrected method, not just the
@@ -730,7 +772,7 @@ mod tests {
                 mtime_secs: 0,
                 inode: 1,
                 edge_hash: 0,
-                done: false,
+                state: EntryState::Planned,
             }],
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -738,7 +780,10 @@ mod tests {
             .expect("record_done");
 
         let back = Journal::load_sealed("test", "method", &Identity).expect("reload");
-        assert!(back.entries[0].done, "done bit lost on progress reload");
+        assert!(
+            back.entries[0].is_moved(),
+            "done bit lost on progress reload"
+        );
         assert_eq!(
             back.entries[0].method,
             Method::CopyUnlink,
@@ -783,7 +828,7 @@ mod tests {
                 mtime_secs: 0,
                 inode: 1,
                 edge_hash: 0,
-                done: false,
+                state: EntryState::Planned,
             }],
         };
         j.save_sealed(&Identity).expect("base");
@@ -791,12 +836,12 @@ mod tests {
             .expect("progress");
 
         // Simulate undo: entry is no longer done; caller persists via save_sealed.
-        j.entries[0].done = false;
+        j.entries[0].state = EntryState::Planned;
         j.save_sealed(&Identity).expect("re-save after undo");
 
         let back = Journal::load_sealed("test", "discard", &Identity).expect("reload");
         assert!(
-            !back.entries[0].done,
+            !back.entries[0].is_moved(),
             "stale progress resurrected a cleared done bit"
         );
 
@@ -842,7 +887,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 1,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/b"),
@@ -852,7 +897,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 2,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
             ],
         };
@@ -897,7 +942,7 @@ mod tests {
             }
             Ok(loaded) => {
                 assert!(
-                    loaded.entries[1].done,
+                    loaded.entries[1].is_moved(),
                     "loaded a torn journal with entry 1 marked not-done. Its move \
                      already happened on disk. undo would skip it and strand it \
                      without a word. That is exactly the defect this test exists to catch"
@@ -945,7 +990,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 1,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/b"),
@@ -955,7 +1000,7 @@ mod tests {
                     mtime_secs: 0,
                     inode: 2,
                     edge_hash: 0,
-                    done: false,
+                    state: EntryState::Planned,
                 },
             ],
         };
@@ -967,9 +1012,12 @@ mod tests {
         // torn frame.
 
         let back = Journal::load_sealed("test", "clean", &Identity).expect("clean load");
-        assert!(back.entries[0].done, "entry 0's completed move was lost");
         assert!(
-            !back.entries[1].done,
+            back.entries[0].is_moved(),
+            "entry 0's completed move was lost"
+        );
+        assert!(
+            !back.entries[1].is_moved(),
             "entry 1 was reported done despite never being recorded"
         );
 
@@ -1010,7 +1058,7 @@ mod tests {
                     mtime_secs: 99,
                     inode: 7,
                     edge_hash: 1234,
-                    done: true,
+                    state: EntryState::Moved,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/c"),
@@ -1020,7 +1068,7 @@ mod tests {
                     mtime_secs: 1,
                     inode: 2,
                     edge_hash: 5,
-                    done: false,
+                    state: EntryState::Planned,
                 },
             ],
         };
@@ -1032,10 +1080,10 @@ mod tests {
         assert_eq!(back.entries.len(), 2);
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
-        assert!(back.entries[0].done, "done entry lost on legacy load");
+        assert!(back.entries[0].is_moved(), "done entry lost on legacy load");
         assert_eq!(back.entries[1].method, Method::CopyUnlink);
         assert!(
-            !back.entries[1].done,
+            !back.entries[1].is_moved(),
             "not-done entry flipped on legacy load"
         );
 
