@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use etude_core::apply::{self, ApplyError};
-use etude_core::journal::Journal;
+use etude_core::journal::{Entry, Journal, Method};
 use etude_core::plan::{self, Plan};
 use etude_core::scan::{self, ScanConfig};
 
@@ -671,4 +671,146 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
     assert!(root.join("Dropbox").join("deck_notes.pdf").exists());
 
     cleanup(&root);
+}
+
+#[test]
+fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
+    // Issue #5. `move_one` hard-links then unlinks, which is two syscalls. A
+    // signal landing between them leaves the file at BOTH paths, same inode,
+    // and undo used to report it as skipped_changed and walk away — so the
+    // duplicate was permanent and untracked.
+    //
+    // Same inode at both paths is not ambiguity. It is proof they are one
+    // file, and that the unlink half never ran. Removing the destination link
+    // finishes the reversal rather than abandoning it.
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_halfmove_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let state = root.join("state");
+    fs::create_dir_all(&state).expect("mkdir state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let group = root.join("Screenshots");
+    fs::create_dir_all(&group).expect("mkdir");
+    let from = root.join("Screenshot 2026-01-01 at 9.00.00 AM.png");
+    fs::write(&from, b"one file, two names").expect("write");
+
+    let to = group.join("Screenshot 2026-01-01 at 9.00.00 AM.png");
+    fs::hard_link(&from, &to).expect("link");
+    // Deliberately do NOT unlink `from`: this is the crash window.
+
+    // Fingerprint it exactly the way apply would have, so undo sees a journal
+    // that matches reality rather than one hand-built to pass.
+    let (size, mtime, inode, edge) = etude_core::journal::fingerprint(&to).expect("fingerprint");
+
+    let mut j = Journal {
+        id: "halfmove".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries: vec![Entry {
+            from: from.clone(),
+            to: to.clone(),
+            method: Method::Rename,
+            size,
+            mtime_secs: mtime,
+            inode,
+            edge_hash: edge,
+            // The crash shape. `done` is set only AFTER move_one returns, so a
+            // signal between the link and the unlink leaves it false. A review
+            // caught the first version of this test setting it true, which is
+            // the user-hard-linked-something case and not this bug at all.
+            done: false,
+        }],
+    };
+
+    let r = apply::undo(&mut j);
+
+    assert!(
+        !to.exists(),
+        "the duplicate at the destination survived undo: one file is still \
+         reachable by two names and nothing tracks it"
+    );
+    assert!(from.exists(), "the file must remain at its origin");
+    assert_eq!(
+        r.healed.len(),
+        1,
+        "a collapsed half-move is healed, not restored: nothing moved, an extra \
+         name was removed"
+    );
+    assert_eq!(r.restored, 0, "nothing was moved back");
+
+    cleanup(&root);
+}
+
+#[test]
+fn a_users_own_hard_link_is_never_deleted_by_recovery() {
+    // The case that blocked the first version of this fix. A user hard-links a
+    // file into a planned destination themselves; same (dev, ino) at both
+    // names is then true for a pair sweep never touched. Recovery is scoped to
+    // the successor of the last done entry, so an entry beyond it must never
+    // have inference applied — and this asserts exactly that.
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_userlink_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let state = root.join("state");
+    fs::create_dir_all(&state).expect("mkdir state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let group = root.join("Screenshots");
+    fs::create_dir_all(&group).expect("mkdir");
+
+    // Entry 0: never started (not done, nothing moved).
+    let a_from = root.join("a.png");
+    fs::write(&a_from, b"entry zero").expect("write");
+
+    // Entry 1: ALSO not done, and the user has hard-linked from->to themselves.
+    let b_from = root.join("b.png");
+    let b_to = group.join("b.png");
+    fs::write(&b_from, b"the user's own link").expect("write");
+    fs::hard_link(&b_from, &b_to).expect("user's link");
+
+    let fp = |p: &std::path::Path| etude_core::journal::fingerprint(p).expect("fp");
+    let (s0, m0, i0, h0) = fp(&a_from);
+    let (s1, m1, i1, h1) = fp(&b_from);
+
+    let mut j = Journal {
+        id: "userlink".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries: vec![
+            Entry {
+                from: a_from.clone(),
+                to: group.join("a.png"),
+                method: Method::Rename,
+                size: s0,
+                mtime_secs: m0,
+                inode: i0,
+                edge_hash: h0,
+                done: false,
+            },
+            Entry {
+                from: b_from.clone(),
+                to: b_to.clone(),
+                method: Method::Rename,
+                size: s1,
+                mtime_secs: m1,
+                inode: i1,
+                edge_hash: h1,
+                done: false,
+            },
+        ],
+    };
+
+    let r = apply::undo(&mut j);
+
+    // Entry 1 is past the successor (entry 0), so recovery must not look at
+    // it. The user's link survives.
+    assert!(
+        b_to.exists(),
+        "recovery deleted a hard link the user made themselves: the exact \
+         failure a review blocked the first version of this fix for"
+    );
+    assert!(b_from.exists());
+    assert!(r.healed.is_empty(), "nothing here was sweep's to heal");
+
+    let _ = fs::remove_dir_all(&root);
+    unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
 }

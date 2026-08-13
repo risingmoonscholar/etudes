@@ -268,20 +268,64 @@ fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
 }
 
 /// link → unlink within one device; copy → verify → unlink across devices.
+/// One atomic, non-clobbering rename on macOS.
+///
+/// `renamex_np` with `RENAME_EXCL` is the whole point of issue #5's fix: the
+/// previous strategy was `link` then `unlink`, two syscalls, and a signal
+/// between them left one file reachable by both names. Undo then had to guess
+/// whose hard link the extra name was — a question with no safe answer. One
+/// syscall means there is no in-between state to interpret, and `RENAME_EXCL`
+/// refuses an existing destination at the filesystem level, backing up the
+/// plan-level collision check with one that cannot be raced.
+///
+/// A future tidy-up replacing this with `fs::rename` would silently clobber on
+/// collision and reopen nothing else — `fs::rename` overwrites. The test
+/// `a_plain_rename_never_replaces_this` exists so that tidy-up fails loudly.
+#[cfg(target_os = "macos")]
+fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn renamex_np(
+            from: *const core::ffi::c_char,
+            to: *const core::ffi::c_char,
+            flags: u32,
+        ) -> i32;
+    }
+    const RENAME_EXCL: u32 = 0x0000_0004;
+    let f = CString::new(from.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    let t = CString::new(to.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    // SAFETY: both pointers are valid NUL-terminated strings for the call.
+    let rc = unsafe { renamex_np(f.as_ptr(), t.as_ptr(), RENAME_EXCL) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
-    // link(2) follows symlinks to their targets and refuses directories, so
-    // only regular files can safely use link → unlink in place of rename.
-    if fs::symlink_metadata(from)?.file_type().is_file() {
-        match fs::hard_link(from, to) {
-            Ok(()) => {
-                // A crash before unlink leaves two readable names for one inode,
-                // trading atomicity for durability without clobbering either file.
-                fs::remove_file(from)?;
-                return Ok(Method::Rename);
-            }
+    // One syscall, no crash window, refuses to clobber. See rename_excl.
+    #[cfg(target_os = "macos")]
+    {
+        match rename_excl(from, to) {
+            Ok(()) => return Ok(Method::Rename),
+            // EXDEV: cross-device, fall through to the copy path below.
             Err(e) if e.raw_os_error() == Some(18) => {}
+            // ENOTSUP: a filesystem without renamex_np. Fall back to
+            // link+unlink, which keeps the old crash window on that volume
+            // only; undo's successor-entry recovery covers it.
+            Err(e) if e.raw_os_error() == Some(45) => {
+                return move_one_link_unlink(from, to);
+            }
             Err(e) => return Err(e),
         }
+    }
+    #[cfg(not(target_os = "macos"))]
+    if fs::symlink_metadata(from)?.file_type().is_file() {
+        return move_one_link_unlink(from, to);
     }
 
     match fs::rename(from, to) {
@@ -303,6 +347,27 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
     }
 }
 
+/// The pre-#5 strategy, kept only as the fallback for filesystems without
+/// `renamex_np` and for non-macOS builds. Two syscalls, so a crash between
+/// them leaves one file under two names; undo's successor-entry recovery is
+/// what makes that survivable.
+fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
+    if fs::symlink_metadata(from)?.file_type().is_file() {
+        match fs::hard_link(from, to) {
+            Ok(()) => {
+                fs::remove_file(from)?;
+                return Ok(Method::Rename);
+            }
+            Err(e) if e.raw_os_error() == Some(18) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    match fs::rename(from, to) {
+        Ok(()) => Ok(Method::Rename),
+        Err(e) => Err(e),
+    }
+}
+
 #[derive(Debug, Default)]
 #[must_use = "check `error`: undo() no longer returns a Result, so a failed \
               partial restore is silent unless this field is inspected"]
@@ -312,6 +377,11 @@ pub struct UndoReport {
     pub skipped_changed: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
     pub skipped_missing: Vec<PathBuf>,
+    /// Half-moves collapsed: a crash between the link and the unlink left one
+    /// file reachable by two names, and undo removed the extra name. Reported
+    /// separately from `restored` because nothing was moved, something was
+    /// tidied, and a user deserves to know the difference.
+    pub healed: Vec<PathBuf>,
     /// Set when a move failed and undo stopped early. `restored` and the
     /// `skipped_*` lists above still describe everything that happened
     /// *before* the failure. They are never discarded just because the walk
@@ -320,6 +390,25 @@ pub struct UndoReport {
     /// restored; `undo` mutates the in-memory entries but does not know how
     /// to seal them.
     pub error: Option<ApplyError>,
+}
+
+/// Whether two paths are the same file on disk, by device AND inode.
+///
+/// Inode alone is not identity: numbers are only unique within a filesystem,
+/// so two files on different volumes can share one. `scan` already pairs them
+/// and a review caught this not doing so.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_file(_a: &Path, _b: &Path) -> bool {
+    false
 }
 
 /// Reverse a journal, verifying each file before touching it.
@@ -338,10 +427,63 @@ pub struct UndoReport {
 pub fn undo(j: &mut Journal) -> UndoReport {
     let mut r = UndoReport::default();
 
+    // Apply moves entries in order and seals a done record after each, so
+    // after a crash exactly one entry can be mid-flight: the successor of the
+    // last recorded done. That position is the authorship proof the first
+    // version of this recovery lacked. Sweep wrote down that it was about to
+    // create precisely this link at precisely this path, and the plan-time
+    // collision check had verified the destination was empty. Inference from
+    // inode equality alone could not distinguish sweep's interrupted link
+    // from a hard link the user made; position can.
+    let first_not_done = j.entries.iter().position(|e| !e.done);
+
     // Reverse order, so nested destinations empty before their parents.
     for i in (0..j.entries.len()).rev() {
         let e = j.entries[i].clone();
         if !e.done {
+            // Only the successor entry gets recovery. Everything past it never
+            // started, and no inference is applied there — which is what keeps
+            // a user's own hard links out of reach.
+            if Some(i) != first_not_done {
+                continue;
+            }
+            if e.to.exists() && e.from.exists() && same_file(&e.to, &e.from) {
+                // The interrupted link+unlink of the fallback path: one file,
+                // two names, and the journal says sweep made the second.
+                match fs::remove_file(&e.to) {
+                    Ok(()) => r.healed.push(e.to.clone()),
+                    // Do not swallow it. Undo reporting a tidy it did not
+                    // manage is the shape this whole fix exists to remove.
+                    Err(err) => {
+                        r.error = Some(ApplyError::Io(err));
+                        break;
+                    }
+                }
+            } else if e.to.exists() && !e.from.exists() {
+                // Issue #14's shape: the move landed and the crash beat the
+                // done record. The fingerprint must still match what apply
+                // recorded, or this is not the file sweep moved.
+                if let Ok((size, mtime, _ino, hash)) = fingerprint(&e.to)
+                    && size == e.size
+                    && mtime == e.mtime_secs
+                    && hash == e.edge_hash
+                {
+                    if let Some(parent) = e.from.parent()
+                        && let Err(err) = fs::create_dir_all(parent)
+                    {
+                        r.error = Some(ApplyError::Io(err));
+                        break;
+                    }
+                    match move_one(&e.to, &e.from) {
+                        Ok(_) => r.restored += 1,
+                        Err(err) => {
+                            r.error = Some(ApplyError::Io(err));
+                            break;
+                        }
+                    }
+                }
+            }
+            // Only `from` exists: the move never started. Nothing to do.
             continue;
         }
         if !e.to.exists() {
@@ -363,6 +505,14 @@ pub fn undo(j: &mut Journal) -> UndoReport {
             continue;
         }
         if e.from.exists() {
+            // Something is at the origin. A review talked me out of treating a
+            // same-inode pair here as a half-move to collapse: at this point
+            // the entry says the move COMPLETED, so both names existing is far
+            // more likely a hard link the user made themselves than a crash,
+            // and deleting one would remove a name they meant to have.
+            //
+            // The crash case leaves `done` false and is handled above. This
+            // stays a refusal.
             r.skipped_changed.push(e.to.clone());
             continue;
         }

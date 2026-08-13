@@ -25,7 +25,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// How a file got to its destination. Undo reverses each differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
-    /// link → unlink within one device. Reversed the same way.
+    /// One same-device move. On macOS this is a single atomic renamex_np
+    /// with RENAME_EXCL; on filesystems without it, link then unlink.
+    /// Reversed the same way.
     Rename,
     /// copy → verify → unlink across devices. Reversed the same way.
     CopyUnlink,
