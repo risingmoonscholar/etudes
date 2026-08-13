@@ -2,13 +2,7 @@
 
 Three small command-line tools that tidy a folder without reading your private files.
 
-**macOS only.** Not a stepping stone to other platforms. The design leans on
-Darwin in ways that are not incidental: the keychain holds the journal key, the
-sandbox witness is `sandbox-exec`, sync detection knows where iCloud Drive
-lives, and name comparison asks CoreFoundation. Each of those would need a
-different answer elsewhere, and a port that guessed at them would be worse than
-no port.
-
+**macOS only.**
 ```console
 $ sweep ~/Desktop
 
