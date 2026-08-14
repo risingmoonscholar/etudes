@@ -9,25 +9,27 @@
 #      sync latency, not CPU. That should show up here as a roughly-linear
 #      apply time far slower than plan or undo.
 #
-#   2. Whether classification holds up on real camera filenames at scale. DCF
-#      (JEITA CP-3461 v2.0) names an image four alphanumeric characters then a
-#      number in 0001..9999 -- source: en.wikipedia.org/wiki/
-#      Design_rule_for_Camera_File_system, a secondary summary; the primary
-#      standard is paywalled and was not read. 10,000 sequential indices is
-#      exactly that range, so this generates DCF-conforming IMG_%04d names
-#      rather than the IMG_%05d this scenario used to write, which no camera
-#      produces (see issue #11 and CONTRIBUTING.md). A guard in classify.rs
-#      now excludes a numeric marker on a DCF-shaped name, so this is a
-#      regression witness for that guard rather than a live reproduction.
+#   2. Whether classification holds up on real camera filenames at scale.
+#      JEITA CP-3461B / CIPA DC-009-2010 section 4.3.1, read directly (not a
+#      summary): a DCF file number is a 4-digit number between "0001" and
+#      "9999"; "0000" is explicitly excluded. That is 9999 values, not
+#      10,000. This generates exactly that range, IMG_0001..IMG_9999, one
+#      file short of the round 10k this scenario is named for -- the extra
+#      slot is IMG_0000, which is not DCF-conforming and would not exercise
+#      what this scenario tests. It replaces the IMG_%05d (five digits) this
+#      scenario used to write, which no camera produces (issue #11,
+#      CONTRIBUTING.md). A guard in classify.rs now excludes a numeric marker
+#      on a DCF-shaped name, so this is a regression witness for that guard,
+#      not a live reproduction.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/flat"; mkdir -p "$D"
 
-N=10000
-echo "    building $N DCF-conforming files (IMG_0000..IMG_9999)..." >&2
+N=9999
+echo "    building $N DCF-conforming files (IMG_0001..IMG_9999)..." >&2
 t0=$(date +%s.%N)
-for i in $(seq 0 $((N-1))); do
+for i in $(seq 1 $N); do
   printf -v padded '%04d' "$i"
   : > "$D/IMG_${padded}.jpg"
 done
@@ -46,7 +48,7 @@ t1=$(date +%s.%N)
 PLAN_S=$(echo "$t1 - $t0" | bc)
 rm -f /tmp/plan_err_$$.txt
 
-assert_eq 0 "$PLAN_EC" "plan exits 0 on a 10,000-file flat directory"
+assert_eq 0 "$PLAN_EC" "plan exits 0 on a ~10k-file flat directory"
 assert_intact "$D" "$BEFORE" "planning moved nothing"
 
 SCANNED=$(grep -o '"scanned":[0-9]*' <<<"$PLAN_JSON" | head -1 | cut -d: -f2)
@@ -67,9 +69,9 @@ printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
 # user-visible false positive. It is specific to scale: the reference
 # desktop fixture (a few hundred files, hand-picked names) cannot produce it.
 if [ "${PERSONAL:-0}" -gt 0 ]; then
-  fail "a DCF-conforming camera file was misclassified as a personal record: $PERSONAL of $N were. IMG_0099.jpg or IMG_1099.jpg / IMG_1040.jpg would collide with the tax-form markers \"1099\"/\"1040\" by coincidence of their index, and the camera-name guard in classify.rs (is_dcf_camera_stem, see issue #11) is meant to exclude exactly that. grep etude-core/src/classify.rs for is_dcf_camera_stem."
+  fail "a DCF-conforming camera file was misclassified as a personal record: $PERSONAL of $N were. IMG_1099.jpg or IMG_1040.jpg would collide with the tax-form markers \"1099\"/\"1040\" by coincidence of their index, and the camera-name guard in classify.rs (is_dcf_camera_stem, see issue #11) is meant to exclude exactly that. grep etude-core/src/classify.rs for is_dcf_camera_stem."
 else
-  pass "every DCF-conforming filename in this run (IMG_0000..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled"
+  pass "every DCF-conforming filename in this run (IMG_0001..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled"
 fi
 
 # --- apply (real journal, real fsync-per-move) --------------------------
@@ -78,7 +80,7 @@ APPLY_OUT=$("$SWEEP" apply "$D" --yes 2>&1)
 APPLY_EC=$?
 t1=$(date +%s.%N)
 APPLY_S=$(echo "$t1 - $t0" | bc)
-assert_eq 0 "$APPLY_EC" "apply exits 0 on the 10,000-file plan"
+assert_eq 0 "$APPLY_EC" "apply exits 0 on the ~10k-file plan"
 
 AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE" "$AFTER" "apply lost no files (count identical, wherever they now live)"
@@ -116,7 +118,7 @@ printf '    measured:      N=%-6s plan=%ss  apply=%ss  undo=%ss\n' "$N" "$PLAN_S
 printf '    extrapolated:  N=20000 (the scan cap) apply ≈ %ss\n' "$EXTRAP_20K" >&2
 printf '    extrapolated:  N=50000 apply ≈ %ss. N=50000 can never reach apply: see 50-scale-cap-boundary-50k.sh. sweep refuses at scan time (20,000-item cap) before a journal is ever opened.\n' "$EXTRAP_50K" >&2
 if (( $(echo "$APPLY_S > 30" | bc -l) )); then
-  fail "apply --yes on a 10,000-file Desktop-shaped folder took ${APPLY_S}s (>30s) with the journal on. A user who dumps a 10k-photo camera roll onto Desktop and runs sweep apply will sit and wait roughly a minute doing nothing else with that terminal. This is a genuine usability ceiling worth having a number for, not a pass/fail bug. Reported here because 'slow is a finding, not a failure of the test.'"
+  fail "apply --yes on a ~10k-file Desktop-shaped folder took ${APPLY_S}s (>30s) with the journal on. A user who dumps a 10k-photo camera roll onto Desktop and runs sweep apply will sit and wait roughly a minute doing nothing else with that terminal. This is a genuine usability ceiling worth having a number for, not a pass/fail bug. Reported here because 'slow is a finding, not a failure of the test.'"
 else
   pass "apply on 10,000 files completed in a plainly usable time (${APPLY_S}s)"
 fi

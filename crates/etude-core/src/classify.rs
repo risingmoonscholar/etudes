@@ -77,26 +77,39 @@ const CREDENTIAL_NAMES: &[&str] = &[
     ".env",
 ];
 
-/// Extensions DCF assigns to a camera's own output: the still-image and
-/// thumbnail types the standard names, plus the video containers a phone
-/// records to. A guard against a device-assigned counter is only correct on
-/// files a device would actually produce.
+/// Extensions a camera or phone actually writes: JPEG/HEIF stills, RAW
+/// formats only cameras produce, and the video containers a phone records
+/// to. A guard against a device-assigned counter is only correct on files a
+/// device would actually produce.
+///
+/// Deliberately excludes .tif/.tiff. DCF's optional-file provision (4.5)
+/// allows them, but flatbed scanners write TIFF routinely, and a scanned tax
+/// form landing on a DCF-shaped name plus a numeric marker is exactly the
+/// case this guard must not clear. Including them would widen the known gap
+/// (see a_dcf_shaped_name_with_a_numeric_marker_is_the_known_gap) to a
+/// format scanners use, which RAW and HEIC do not.
 const DCF_IMAGE_EXTS: &[&str] = &[
-    "jpg", "jpeg", "heic", "heif", "thm", "tif", "tiff", "dng", "raw", "cr2", "nef", "arw", "mov",
-    "mp4",
+    "jpg", "jpeg", "heic", "heif", "thm", "dng", "raw", "cr2", "nef", "arw", "mov", "mp4",
 ];
 
-/// Whether `stem` has the shape DCF (JEITA CP-3461 v2.0) specifies for a
-/// camera-assigned image name: four alphanumeric characters, then a number
-/// in 0001..9999, no more and no fewer digits.
+/// Whether `stem` has the shape DCF specifies for a camera-assigned image
+/// name.
 ///
-/// Source: <https://en.wikipedia.org/wiki/Design_rule_for_Camera_File_system>,
-/// a secondary summary of CP-3461; the primary standard is paywalled and was
-/// not read. Documented prefixes are "100_ DSC0 DSC_ DSCF IMG_ MOV_ P000".
-/// This checks the general shape rather than a prefix list: Nikon's "DSCN"
-/// and Google's "PXL_" both conform to the same four-then-four rule without
-/// appearing in that list, and a vendor list is exactly the kind of platform
-/// guess CONTRIBUTING.md now asks not to make.
+/// Source: JEITA CP-3461B / CIPA DC-009-2010, "Design rule for Camera File
+/// system: DCF Unified Version 2.0", section 4.3.1 "DCF file names", p.15.
+/// Read directly, not summarised: <https://www.jeita.or.jp/cgi-bin/standard_e/pdf.cgi?jk_n=51&jk_pdf_file=CP>.
+/// Quoted: "The file name is 8 characters (not including the file
+/// extension). The first four characters consist only of the upper-case
+/// alphanumeric characters shown in Table 1 ... They shall not contain
+/// two-byte characters or special codes. The four characters that follow
+/// are a number between '0001' and '9999'. '0000' shall not be used."
+///
+/// This checks that shape rather than a prefix list. The standard's own
+/// worked example uses free characters "ABCDE" for a directory name, not a
+/// vendor tag, and real prefixes not appearing in any hand-written list
+/// (Nikon's "DSCN", Google's "PXL_") still conform to the same rule. A
+/// prefix list is exactly the kind of platform guess CONTRIBUTING.md asks
+/// not to make; checking the spec's actual structure avoids needing one.
 fn is_dcf_camera_stem(stem: &str) -> bool {
     let chars: Vec<char> = stem.chars().collect();
     if chars.len() != 8 {
@@ -323,20 +336,25 @@ mod tests {
         }
     }
 
-    /// Real sensitive filenames, taken from this repository's own fixture
-    /// generator (crates/fixtures/src/bin/mkfx.rs) rather than invented, plus
-    /// the macOS Finder duplicate suffix and the one adversarial case the fix
-    /// knowingly does not cover.
+    /// Real sensitive filenames. Provenance stated per name rather than
+    /// claimed in bulk: a review caught the first version of this test
+    /// crediting mkfx for two names it does not contain, which is the exact
+    /// mistake CONTRIBUTING.md exists to catch, now caught inside the fix
+    /// meant to demonstrate the rule.
     #[test]
     fn real_sensitive_files_are_still_refused() {
         let must_refuse = [
-            "1099-INT_first_national.pdf", // mkfx
-            "2024-1099-INT.pdf",           // mkfx
-            "W2_2024.pdf",                 // mkfx
-            "tax_return_2023_filed.pdf",   // mkfx
-            "2024-1099-INT copy.pdf",      // Finder duplicate suffix
-            "IMG_1040.pdf",                // camera-shaped stem, document extension
-            "scan_1099_int.jpg",           // human-named, not device-shaped
+            "W2_2024_acme_corp.pdf",       // crates/fixtures/src/lib.rs:15, verbatim
+            "1099-INT_first_national.pdf", // crates/fixtures/src/lib.rs:16, verbatim
+            "tax_return_2023_filed.pdf",   // crates/fixtures/src/lib.rs:17, verbatim
+            // Constructed, not drawn from a corpus: the pattern (a leading
+            // year, then a form code) is common on scanned tax documents,
+            // and "copy" is Finder's documented duplicate suffix. Neither
+            // claim is sourced beyond that pattern being plausible, which is
+            // weaker than the three lines above and is said so here.
+            "2024-1099-INT copy.pdf",
+            "IMG_1040.pdf",      // camera-shaped stem, but a document extension
+            "scan_1099_int.jpg", // human-named: "scan" prefix, not device-shaped
         ];
         for name in must_refuse {
             assert!(
@@ -346,21 +364,32 @@ mod tests {
         }
     }
 
-    /// The residual risk, named rather than hidden. A file that happens to be
-    /// exactly DCF-shaped AND carries a numeric marker is not distinguishable
-    /// from a camera file by shape alone, and stops being refused. Documented
-    /// in the fix's commit and in this test so the gap is asserted, not
-    /// silently accepted.
+    /// The residual risk, named at its actual width rather than as one
+    /// example. A review pointed out the first version of this test asserted
+    /// only "TAX_1040.jpg" and undersold the gap: ANY 8-character stem ending
+    /// in a numeric marker, on a camera-plausible extension, with no word
+    /// marker present, clears. That covers common tax-export and scan-tool
+    /// naming, not one exotic case.
     #[test]
     fn a_dcf_shaped_name_with_a_numeric_marker_is_the_known_gap() {
-        assert_eq!(
-            sensitive(&entry("TAX_1040.jpg")),
-            None,
-            "known gap: a DCF-shaped stem is indistinguishable from a camera's \
-             own counter. If this ever starts refusing, update the comment in \
-             is_dcf_camera_stem rather than leaving it describing a gap that \
-             closed by accident."
-        );
+        let known_gap = [
+            "TAX_1040.jpg", // the case originally named
+            "FORM1040.jpg", // common tax-software export naming
+            "20241040.jpg", // year + form number, still 8 chars
+            "SCAN1099.jpg", // "SCAN" is not a sensitive marker on its own
+        ];
+        for name in known_gap {
+            assert_eq!(
+                sensitive(&entry(name)),
+                None,
+                "{name}: known gap, an 8-char stem ending in a numeric marker \
+                 on a camera-plausible extension is indistinguishable from a \
+                 camera's own counter by shape alone. If any of these starts \
+                 refusing, update this test and the comment in \
+                 is_dcf_camera_stem rather than leaving both describing a gap \
+                 that closed by accident."
+            );
+        }
     }
 
     /// Word markers are untouched by the guard. It only ever removes a
