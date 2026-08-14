@@ -9,23 +9,26 @@
 #      sync latency, not CPU. That should show up here as a roughly-linear
 #      apply time far slower than plan or undo.
 #
-#   2. Whether classification holds up when filenames are sequential numbers
-#      instead of hand-picked fixture names. The sensitive-marker detector
-#      does plain substring matching (etude-core/src/classify.rs,
-#      SENSITIVE_MARKERS) against markers like "1099" and "1040", both of
-#      which are also plausible 4-digit substrings of an ordinary sequential
-#      camera index. At fixture scale (tens of files) that collision almost
-#      never fires. At 10,000 sequential files it is close to guaranteed.
+#   2. Whether classification holds up on real camera filenames at scale. DCF
+#      (JEITA CP-3461 v2.0) names an image four alphanumeric characters then a
+#      number in 0001..9999 -- source: en.wikipedia.org/wiki/
+#      Design_rule_for_Camera_File_system, a secondary summary; the primary
+#      standard is paywalled and was not read. 10,000 sequential indices is
+#      exactly that range, so this generates DCF-conforming IMG_%04d names
+#      rather than the IMG_%05d this scenario used to write, which no camera
+#      produces (see issue #11 and CONTRIBUTING.md). A guard in classify.rs
+#      now excludes a numeric marker on a DCF-shaped name, so this is a
+#      regression witness for that guard rather than a live reproduction.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/flat"; mkdir -p "$D"
 
 N=10000
-echo "    building $N files..." >&2
+echo "    building $N DCF-conforming files (IMG_0000..IMG_9999)..." >&2
 t0=$(date +%s.%N)
 for i in $(seq 0 $((N-1))); do
-  printf -v padded '%05d' "$i"
+  printf -v padded '%04d' "$i"
   : > "$D/IMG_${padded}.jpg"
 done
 t1=$(date +%s.%N)
@@ -64,9 +67,9 @@ printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
 # user-visible false positive. It is specific to scale: the reference
 # desktop fixture (a few hundred files, hand-picked names) cannot produce it.
 if [ "${PERSONAL:-0}" -gt 0 ]; then
-  fail "no ordinary sequential camera file is misclassified as a personal record: $PERSONAL of $N were. Likely IMG_01099.jpg / IMG_01040.jpg colliding with the tax-form substring markers \"1099\"/\"1040\" purely by coincidence of their index. Repro: touch 10000 sequentially-numbered IMG_NNNNN.jpg files and run \`sweep DIR --json\`; left_alone.by_category reports tax documents even though nothing tax-related exists in the tree. This is a real false positive that only shows up at this scale. grep etude-core/src/classify.rs for SENSITIVE_MARKERS. Entries (\"1099\", Category::Tax) and (\"1040\", Category::Tax) are unqualified substrings with no word-boundary check."
+  fail "a DCF-conforming camera file was misclassified as a personal record: $PERSONAL of $N were. IMG_0099.jpg or IMG_1099.jpg / IMG_1040.jpg would collide with the tax-form markers \"1099\"/\"1040\" by coincidence of their index, and the camera-name guard in classify.rs (is_dcf_camera_stem, see issue #11) is meant to exclude exactly that. grep etude-core/src/classify.rs for is_dcf_camera_stem."
 else
-  pass "no sequential-index/tax-marker substring collision occurred in this run (probabilistic: see comment; a 0-personal outcome here does not mean the detector is safe, only that this particular seed of indices didn't collide)"
+  pass "every DCF-conforming filename in this run (IMG_0000..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled"
 fi
 
 # --- apply (real journal, real fsync-per-move) --------------------------

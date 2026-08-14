@@ -77,6 +77,39 @@ const CREDENTIAL_NAMES: &[&str] = &[
     ".env",
 ];
 
+/// Extensions DCF assigns to a camera's own output: the still-image and
+/// thumbnail types the standard names, plus the video containers a phone
+/// records to. A guard against a device-assigned counter is only correct on
+/// files a device would actually produce.
+const DCF_IMAGE_EXTS: &[&str] = &[
+    "jpg", "jpeg", "heic", "heif", "thm", "tif", "tiff", "dng", "raw", "cr2", "nef", "arw", "mov",
+    "mp4",
+];
+
+/// Whether `stem` has the shape DCF (JEITA CP-3461 v2.0) specifies for a
+/// camera-assigned image name: four alphanumeric characters, then a number
+/// in 0001..9999, no more and no fewer digits.
+///
+/// Source: <https://en.wikipedia.org/wiki/Design_rule_for_Camera_File_system>,
+/// a secondary summary of CP-3461; the primary standard is paywalled and was
+/// not read. Documented prefixes are "100_ DSC0 DSC_ DSCF IMG_ MOV_ P000".
+/// This checks the general shape rather than a prefix list: Nikon's "DSCN"
+/// and Google's "PXL_" both conform to the same four-then-four rule without
+/// appearing in that list, and a vendor list is exactly the kind of platform
+/// guess CONTRIBUTING.md now asks not to make.
+fn is_dcf_camera_stem(stem: &str) -> bool {
+    let chars: Vec<char> = stem.chars().collect();
+    if chars.len() != 8 {
+        return false;
+    }
+    let (prefix, digits) = chars.split_at(4);
+    prefix
+        .iter()
+        .all(|c| c.is_ascii_alphanumeric() || *c == '_')
+        && digits.iter().all(char::is_ascii_digit)
+        && digits != ['0', '0', '0', '0']
+}
+
 /// Does this file look like a personal record? Returns the category if so.
 pub fn sensitive(e: &Entry) -> Option<Category> {
     let lower = e.name.to_ascii_lowercase();
@@ -88,10 +121,18 @@ pub fn sensitive(e: &Entry) -> Option<Category> {
     if CREDENTIAL_NAMES.iter().any(|n| stem == *n || lower == *n) {
         return Some(Category::Credential);
     }
+
+    // A camera's own counter carries no information about content, so a
+    // numeric marker matching only because it landed inside that counter is
+    // coincidence, not evidence. Word markers are unaffected: "passport" or
+    // "tax_return" inside a DCF-shaped stem is not something a camera wrote.
+    let camera_named = DCF_IMAGE_EXTS.contains(&e.ext.as_str()) && is_dcf_camera_stem(stem);
+
     // Longest marker wins, so "tax_return" beats a stray substring match.
     SENSITIVE_MARKERS
         .iter()
         .filter(|(m, _)| lower.contains(m))
+        .filter(|(m, _)| !(camera_named && m.chars().all(|c| c.is_ascii_digit())))
         .max_by_key(|(m, _)| m.len())
         .map(|(_, c)| *c)
 }
@@ -250,5 +291,83 @@ mod tests {
             t.contains(&"acme".to_string()),
             "distinctive token lost: {t:?}"
         );
+    }
+
+    /// Files a device actually produces. Shapes drawn from the DCF standard
+    /// (JEITA CP-3461 v2.0) and from Apple's documented iPhone naming, cited
+    /// in `is_dcf_camera_stem`'s doc comment. Not invented: a corpus built
+    /// from guesses about a platform proves nothing about that platform,
+    /// which is the mistake this fix exists to correct.
+    ///
+    /// DCF numbers are exactly four digits, so a four-digit marker can only
+    /// collide by equality: IMG_1040 and IMG_1099 are the only two possible
+    /// hits in a full 0001..9999 folder, which is what makes these two the
+    /// meaningful cases rather than an arbitrary pair.
+    #[test]
+    fn device_named_files_are_never_flagged_by_a_counter_collision() {
+        let camera_named = [
+            "IMG_1040.HEIC", // the collision this issue was filed over
+            "IMG_1099.jpg",
+            "DSC_1040.JPG", // documented DCF prefix
+            "DSCN1040.JPG", // Nikon; conforms to the shape, not the prefix list
+            "PXL_1040.jpg", // Google Pixel; same
+            "100_1040.jpg", // documented DCF prefix
+            "MOV_1040.mp4", // DCF allows non-JPG extensions for video
+        ];
+        for name in camera_named {
+            assert_eq!(
+                sensitive(&entry(name)),
+                None,
+                "{name} conforms to DCF and must not be flagged"
+            );
+        }
+    }
+
+    /// Real sensitive filenames, taken from this repository's own fixture
+    /// generator (crates/fixtures/src/bin/mkfx.rs) rather than invented, plus
+    /// the macOS Finder duplicate suffix and the one adversarial case the fix
+    /// knowingly does not cover.
+    #[test]
+    fn real_sensitive_files_are_still_refused() {
+        let must_refuse = [
+            "1099-INT_first_national.pdf", // mkfx
+            "2024-1099-INT.pdf",           // mkfx
+            "W2_2024.pdf",                 // mkfx
+            "tax_return_2023_filed.pdf",   // mkfx
+            "2024-1099-INT copy.pdf",      // Finder duplicate suffix
+            "IMG_1040.pdf",                // camera-shaped stem, document extension
+            "scan_1099_int.jpg",           // human-named, not device-shaped
+        ];
+        for name in must_refuse {
+            assert!(
+                sensitive(&entry(name)).is_some(),
+                "{name} must still be refused"
+            );
+        }
+    }
+
+    /// The residual risk, named rather than hidden. A file that happens to be
+    /// exactly DCF-shaped AND carries a numeric marker is not distinguishable
+    /// from a camera file by shape alone, and stops being refused. Documented
+    /// in the fix's commit and in this test so the gap is asserted, not
+    /// silently accepted.
+    #[test]
+    fn a_dcf_shaped_name_with_a_numeric_marker_is_the_known_gap() {
+        assert_eq!(
+            sensitive(&entry("TAX_1040.jpg")),
+            None,
+            "known gap: a DCF-shaped stem is indistinguishable from a camera's \
+             own counter. If this ever starts refusing, update the comment in \
+             is_dcf_camera_stem rather than leaving it describing a gap that \
+             closed by accident."
+        );
+    }
+
+    /// Word markers are untouched by the guard. It only ever removes a
+    /// NUMERIC marker on a camera-shaped name; "passport" or "medical" inside
+    /// one is not something a camera would write and stays refused.
+    #[test]
+    fn word_markers_are_not_affected_by_the_camera_guard() {
+        assert!(sensitive(&entry("passport_1040.jpg")).is_some());
     }
 }
