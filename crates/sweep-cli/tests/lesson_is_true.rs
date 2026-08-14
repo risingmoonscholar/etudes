@@ -225,6 +225,12 @@ fn steps_5_and_6_are_true_undo_walks_back_then_stops() {
         .args(["--only", &group, "--yes"])
         .output()
         .expect("run");
+    if refused_for_want_of_a_keychain(&first) {
+        // No keychain, so there is no journal to walk. The refusal is the
+        // claim under test here, and it was just asserted. Restored after an
+        // edit dropped it and the second-platform job caught the loss.
+        return;
+    }
     assert_eq!(
         first.status.code(),
         Some(0),
