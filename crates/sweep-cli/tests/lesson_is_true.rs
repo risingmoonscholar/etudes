@@ -34,6 +34,35 @@ fn sweep(state: &std::path::Path) -> Command {
     c
 }
 
+/// Whether this machine can seal a journal at all.
+///
+/// `apply` takes its key from the login keychain and refuses to write a
+/// journal in the clear. A Linux runner has no `security` binary, so the
+/// refusal is correct there rather than a failure, and a test that asserts
+/// apply succeeds would be asserting "a keychain exists" — a property of the
+/// machine, not of this tool.
+///
+/// Following the rule already set in exit_codes.rs: both branches assert
+/// something. The environment picks which claim is under test, never whether
+/// one is.
+fn refused_for_want_of_a_keychain(out: &std::process::Output) -> bool {
+    if out.status.code() == Some(0) || out.status.code() == Some(1) {
+        return false;
+    }
+    let msg = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    )
+    .to_lowercase();
+    let refused = msg.contains("keychain") || msg.contains("clear");
+    assert!(
+        refused,
+        "apply neither ran nor refused for want of a keychain: {msg}"
+    );
+    true
+}
+
 /// Every command the lesson prints must be one the tool accepts. A lesson that
 /// teaches a refused invocation is worse than no lesson.
 #[test]
@@ -89,6 +118,9 @@ fn every_command_the_lesson_prints_is_accepted() {
                 })
                 .collect();
             let run = sweep(&state).args(&args).output().expect("run");
+            if refused_for_want_of_a_keychain(&run) {
+                continue;
+            }
             let code = run.status.code();
             // 0 did it, 1 had nothing to do. Both are honest outcomes for a
             // taught command. 2 means the tool refuses what the lesson teaches
@@ -127,11 +159,14 @@ fn step_4_is_true_a_personal_record_survives_apply_everything() {
     std::fs::write(&private, b"tax").expect("write");
 
     let out = sweep(&state)
+        .args(["apply"])
         .arg(&work)
-        .args(["apply", "--yes"])
+        .arg("--yes")
         .output()
         .expect("run");
-    assert!(out.status.code() != Some(3), "apply errored");
+    // Either way the claim holds: if apply ran, the record must have survived
+    // it; if apply refused for want of a keychain, nothing moved at all.
+    let _ = refused_for_want_of_a_keychain(&out);
     assert!(
         private.exists(),
         "step 4 says a personal record cannot be moved by any flag, and one moved"
