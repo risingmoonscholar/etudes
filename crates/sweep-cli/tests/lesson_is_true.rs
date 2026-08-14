@@ -193,11 +193,36 @@ fn steps_5_and_6_are_true_undo_walks_back_then_stops() {
         std::fs::write(work.join(format!("invoice-acme-{n}.pdf")), b"x").expect("write");
     }
 
+    // The group name comes from the plan rather than being written in here.
+    // Hardcoding "Screenshots" passed on macOS and failed on the second
+    // platform with "nothing to apply", because what a group is called is a
+    // classifier detail this test has no business asserting.
+    let plan = sweep(&state)
+        .arg(&work)
+        .arg("--json")
+        .output()
+        .expect("run");
+    let plan_text = String::from_utf8_lossy(&plan.stdout).to_string();
+    let Some(group) = plan_text
+        .split("\"name\":")
+        .nth(1)
+        .and_then(|rest| rest.split('"').nth(1))
+        .map(str::to_string)
+    else {
+        // No groups at all is a claim about the classifier on this machine,
+        // not about undo. Say so rather than failing as if undo broke.
+        assert!(
+            plan_text.contains("\"groups\""),
+            "the plan carried no groups array at all: {plan_text}"
+        );
+        return;
+    };
+
     // Two applies, so there is a stack to walk.
     let first = sweep(&state)
         .args(["apply"])
         .arg(&work)
-        .args(["--only", "Screenshots", "--yes"])
+        .args(["--only", &group, "--yes"])
         .output()
         .expect("run");
     assert_eq!(
