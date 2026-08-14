@@ -103,6 +103,30 @@ fn main() -> ExitCode {
             println!("unpack {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        // A leading flag is never an archive name. Without this, `unpack
+        // --frobnicate` took the typo as a filename and reported "not a file"
+        // with exit 3, so a caller could not tell a usage mistake from a
+        // missing archive. Same defect stash had with `--version`, and the
+        // same answer: refuse with 2, which is what the exit-code contract
+        // reserves for a refusal.
+        Some(p) if p.starts_with('-') => {
+            // A real flag with no archive is a different mistake from a typo,
+            // and saying "unknown option" to a flag that exists is its own
+            // small lie.
+            const KNOWN: &[&str] = &["--list", "--json", "--into"];
+            if KNOWN.contains(&p) {
+                eprintln!(
+                    "unpack: {p} describes what to do with an archive, so it \
+                     needs one.\n     unpack ARCHIVE {p}"
+                );
+            } else {
+                eprintln!(
+                    "unpack: unknown option {p}.\n\
+                     Handles: --list, --json, --into DIR. Run `unpack help`."
+                );
+            }
+            ExitCode::from(2)
+        }
         Some(p) => run(&PathBuf::from(expand_tilde(p)), &args),
     }
 }

@@ -6,7 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Nothing has been tagged or published yet, so everything below sits under the
-one version the workspace has ever carried.
+one version the workspace has ever carried. The Fixed list is long because the
+adversarial harness and two independent reviewers were pointed at the tools
+before anyone else could be.
 
 ## [0.3.0] - 2026-08-10
 
@@ -58,3 +60,34 @@ one version the workspace has ever carried.
   `stash pop` would restore, instead of reporting nothing stashed.
 - A mistyped leading flag (`stash --dry-run`) is refused instead of being taken
   as consent to stash the current directory.
+- A move within one device is a single atomic syscall (`renamex_np` with
+  `RENAME_EXCL`) rather than `link` then `unlink`. A crash between those two
+  used to leave one file reachable by two names, and undo could not clean it up
+  without guessing whether the second name was sweep's or the user's.
+- `undo` records each reversal as it makes it, so a killed run resumes where it
+  stopped instead of walking everything again and never converging.
+- `undo` takes an optional folder, so applying to two folders in a row leaves
+  both reversible. Previously only the newest journal was reachable.
+- A folder that cannot be read is reported instead of being silently dropped
+  from a count that implied it was complete.
+- A truncated or torn journal is refused rather than half-loaded, in both
+  `sweep` and `stash`.
+- Two filenames macOS considers identical are caught at plan time, and the tool
+  asks the filesystem whether it folds case instead of assuming.
+- `sweep` can reach an iCloud Desktop, and `--allow-sync` reaches apply rather
+  than only the scan.
+- `sweep forget` no longer destroys the key `stash` relies on.
+- A misspelled scan flag is refused. `sweep PATH --explainn` used to print an
+  ordinary scan, so the reader believed they were seeing `--explain` output;
+  `--jsonn` returned prose to whatever was going to parse it.
+- `etude-read` proves its buffer erase without reading freed memory, which was
+  a segfault on Linux.
+- Every command checks its flags, from one table beside the dispatch rather
+  than a list per command. `sweep forget --frobnicate` used to destroy a
+  journal on a typo, and `undo` and `verify` ignored flags outright. Single
+  dash flags were ignored everywhere. A flag given to the wrong command names
+  the command it belongs to.
+- `--only` and `--depth` refuse a value that is another flag, instead of
+  taking it as a group name or a depth and reporting the confusing result.
+- `unpack` refuses a leading flag rather than reading it as an archive name,
+  which makes the exit-code contract uniform across the three tools.

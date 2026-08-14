@@ -55,6 +55,36 @@ fn main() -> ExitCode {
         eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
     }
 
+    // Every command's flags are checked here, once, before the command runs.
+    // Doing it per-command is what let three of them ship with no checking at
+    // all, and `sweep forget --frobnicate` destroy a journal on a typo.
+    // Which command was named, or "" for a bare scan. Derived from the table
+    // rather than listed again here: a second list of subcommands is the kind
+    // of duplicate that goes stale, and clippy's suggestion to simplify this
+    // to unwrap_or_default() would put a PATH in `cmd`, find no entry, and
+    // silently check nothing.
+    //
+    // A command dispatched but missing from the table lands on "" and is
+    // checked against the SCAN flags, which is neither open nor closed: it
+    // would allow --json and refuse a flag that command actually needed. That
+    // is a wrong answer rather than a safe one, so the real defence is the
+    // test every_dispatched_command_declares_its_flags, which stops such a
+    // command from shipping at all. An earlier version of this comment
+    // claimed it failed closed; a review pointed out that it does not.
+    let first = args.first().map(String::as_str).unwrap_or_default();
+    let cmd = if COMMAND_FLAGS
+        .iter()
+        .any(|(c, _)| !c.is_empty() && *c == first)
+    {
+        first
+    } else {
+        ""
+    };
+    if let Err(msg) = check_flags(cmd, &args) {
+        eprintln!("sweep: {msg}");
+        return ExitCode::from(2);
+    }
+
     match args.first().map(String::as_str) {
         None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
         Some("help" | "--help" | "-h") => {
@@ -145,9 +175,15 @@ const LESSON: &[(&str, &str)] = &[
         "Put it back",
         "    sweep undo\n\
          \n\
-         Finder returns to before the last apply, not before the one in step 3.\n\
-         Undo reverses the most recent apply only, so the group you moved there\n\
-         stays where you put it.\n\
+         Finder returns to before the apply in step 4. Run it again and it goes\n\
+         back another step, to before the one group you moved in step 3.\n\
+         \n\
+             sweep undo\n\
+             sweep undo Desktop\n\
+         \n\
+         Each run reverses the most recent apply that has not been reversed yet.\n\
+         Naming a folder finds that folder's, which is what makes two applies to\n\
+         two different folders both reachable.\n\
          \n\
          That worked because the apply wrote a journal. Skip the journal and you\n\
          give up the undo:\n\
@@ -161,10 +197,9 @@ const LESSON: &[(&str, &str)] = &[
         "Destroy what it remembered",
         "    sweep undo\n\
          \n\
-         It refuses. Undo reaches one apply back, never a stack, so the group\n\
-         you moved in step 3 is now beyond it.\n\
+         It refuses now: everything it recorded has already been put back.\n\
          \n\
-         Its journal is still on disk. It can no longer undo anything, and it is\n\
+         The journal is still on disk. It can no longer undo anything, and it is\n\
          still an index of your filenames for the rest of its thirty days. That\n\
          is what this removes:\n\
          \n\
@@ -242,34 +277,75 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
     }
 }
 
-// Scan rejects everything not listed here, for the same reason apply does.
-// A typo'd flag that scans anyway is a silent lie: someone who types
-// --explainn believes they are reading --explain output and gets a plain scan
-// that looks exactly like success. --jsonn is worse, because whatever was
-// going to parse the output receives prose instead.
-const SCAN_FLAGS: &[(&str, bool)] = &[
-    ("--depth", true),
-    ("--json", false),
-    ("--quiet", false),
-    ("--explain", false),
-    ("--allow-sync", false),
-    ("--inspect-content", false),
-    ("--version", false),
-    ("--help", false),
+/// Every command, and every flag reachable from it.
+///
+/// One table beside the dispatch, rather than a list per command. This bug
+/// class appeared five times — `stash --version` stashing the whole working
+/// directory, `sweep PATH --explainn` printing an ordinary scan, `unpack
+/// --frobnicate` reading a typo as an archive name, and `undo`, `verify` and
+/// `forget` ignoring flags outright — and each time the fix was to hand-add
+/// one more list, which left the next command exposed. Adding a command here
+/// *is* declaring its flags, so forgetting stops being possible rather than
+/// merely discouraged.
+///
+/// The sets come from each command's call graph, not from the body of its
+/// function. `--depth` is read by `parse_depth`, which `apply`, `review` and
+/// the scan path all call, so it belongs to all three. An earlier
+/// hand-written scan list missed exactly this kind of reach and omitted
+/// `--no-journal` and `--help`, which would have refused working commands.
+///
+/// An empty set is not a special case. The rule is that a flag nobody reads
+/// is an error, and `undo` and `verify` read none.
+const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
+    (
+        // The bare `sweep [PATH]` scan.
+        "",
+        &[
+            ("--depth", true),
+            ("--json", false),
+            ("--quiet", false),
+            ("--explain", false),
+            ("--allow-sync", false),
+            ("--inspect-content", false),
+        ],
+    ),
+    (
+        "apply",
+        &[
+            ("--yes", false),
+            ("--only", true),
+            ("--no-journal", false),
+            ("--depth", true),
+            ("--allow-sync", false),
+        ],
+    ),
+    (
+        "review",
+        &[
+            ("--allow-sync", false),
+            ("--no-journal", false),
+            ("--depth", true),
+        ],
+    ),
+    ("forget", &[("--yes", false)]),
+    ("undo", &[]),
+    ("verify", &[]),
+    ("lesson", &[]),
 ];
 
-/// Flags that exist but not here. Naming the right place beats calling a real
-/// flag unknown, and `--only` in particular is currently accepted and ignored
-/// on a scan, which is the same silent lie in a quieter shape.
-const FLAGS_ELSEWHERE: &[(&str, &str)] = &[
-    ("--only", "`sweep apply`"),
-    ("--yes", "`sweep apply` and `sweep forget`"),
-    ("--no-journal", "`sweep review` and `sweep apply`"),
-];
+/// Flags that exist, but not on the command they were given to. Naming the
+/// right place beats calling a real flag unknown.
+fn flag_belongs_to(flag: &str, not: &str) -> Vec<&'static str> {
+    COMMAND_FLAGS
+        .iter()
+        .filter(|(cmd, flags)| *cmd != not && flags.iter().any(|(f, _)| *f == flag))
+        .map(|(cmd, _)| if cmd.is_empty() { "a scan" } else { *cmd })
+        .collect()
+}
 
 /// The closest known flag, when it is close enough to be a plausible typo.
 /// A cap of 2 keeps `--frobnicate` from confidently suggesting `--json`.
-fn nearest_flag(typo: &str, flags: &'static [(&'static str, bool)]) -> Option<&'static str> {
+fn nearest_flag(typo: &str, flags: &[(&'static str, bool)]) -> Option<&'static str> {
     fn dist(a: &str, b: &str) -> usize {
         let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
         let mut prev: Vec<usize> = (0..=b.len()).collect();
@@ -291,33 +367,74 @@ fn nearest_flag(typo: &str, flags: &'static [(&'static str, bool)]) -> Option<&'
         .map(|(name, _)| name)
 }
 
-/// Reject unknown scan flags with a nudge instead of scanning anyway.
-fn check_scan_flags(args: &[String]) -> Result<(), String> {
+/// Refuse any flag the named command does not read.
+///
+/// `cmd` is the subcommand name, or `""` for a bare scan. Runs before the
+/// command does anything, so a refusal cannot produce output that looks like
+/// the work succeeding.
+fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
+    let Some((_, allowed)) = COMMAND_FLAGS.iter().find(|(c, _)| *c == cmd) else {
+        return Ok(());
+    };
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
-        // Everything after `--` is a path, not a flag.
+        // Everything after `--` is a path, however flag-shaped.
         if a == "--" {
             break;
         }
-        if a.starts_with("--") {
-            match SCAN_FLAGS.iter().find(|(name, _)| *name == a.as_str()) {
+        // A single dash counts too. The old per-command checks only looked at
+        // `--`, so `-n` and `-x` stayed silent everywhere, which is the same
+        // defect one level down. `-h` and `-V` are answered at dispatch and
+        // never reach here.
+        if a.starts_with('-') && !matches!(a.as_str(), "--help" | "--version" | "-h" | "-V") {
+            match allowed.iter().find(|(name, _)| *name == a.as_str()) {
                 Some((_, takes_value)) => {
                     if *takes_value {
+                        // A value that is itself flag-shaped means the value
+                        // was forgotten. `--only --yes` used to take "--yes"
+                        // as the group name, filter for a group called that,
+                        // find none and exit 1 saying there was nothing to
+                        // apply, which reads as "no work" rather than "you
+                        // typed it wrong".
+                        match args.get(i + 1) {
+                            Some(v) if v.starts_with('-') && v != "--" => {
+                                return Err(format!(
+                                    "{a} needs a value, and `{v}` is another option."
+                                ));
+                            }
+                            None => {
+                                return Err(format!("{a} needs a value and got nothing."));
+                            }
+                            Some(_) => {}
+                        }
                         i += 1;
                     }
                 }
                 None => {
-                    if let Some((_, where_)) =
-                        FLAGS_ELSEWHERE.iter().find(|(name, _)| *name == a.as_str())
-                    {
+                    let here = if cmd.is_empty() {
+                        "a scan".to_string()
+                    } else {
+                        format!("`sweep {cmd}`")
+                    };
+                    let elsewhere = flag_belongs_to(a, cmd);
+                    if !elsewhere.is_empty() {
+                        let list: Vec<String> = elsewhere
+                            .iter()
+                            .map(|c| {
+                                if *c == "a scan" {
+                                    "a scan".to_string()
+                                } else {
+                                    format!("`sweep {c}`")
+                                }
+                            })
+                            .collect();
                         return Err(format!(
-                            "{a} applies to {where_}, not to a scan. A scan changes \
-                             nothing and writes nothing, so there is nothing here for \
-                             it to affect."
+                            "{a} applies to {}, not to {here}.",
+                            list.join(" and ")
                         ));
                     }
-                    return Err(match nearest_flag(a, SCAN_FLAGS) {
+                    return Err(match nearest_flag(a, allowed) {
                         Some(sugg) => {
                             format!("unknown option {a}. Did you mean {sugg}? Run `sweep help`.")
                         }
@@ -331,15 +448,6 @@ fn check_scan_flags(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-// apply rejects everything not listed here; a silent typo can authorize moves.
-const APPLY_FLAGS: &[(&str, bool)] = &[
-    ("--yes", false),
-    ("--only", true),
-    ("--no-journal", false),
-    ("--depth", true),
-    ("--allow-sync", false),
-];
-
 fn apply_path(args: &[String]) -> Result<PathBuf, String> {
     let mut path = None;
     let mut i = 0;
@@ -351,7 +459,11 @@ fn apply_path(args: &[String]) -> Result<PathBuf, String> {
             }
             break;
         }
-        if let Some((_, takes_value)) = APPLY_FLAGS.iter().find(|(name, _)| *name == a) {
+        // Only to skip a flag's value while hunting for the path. Whether the
+        // flag is allowed at all is decided at dispatch now.
+        if let Some((_, allowed)) = COMMAND_FLAGS.iter().find(|(c, _)| *c == "apply")
+            && let Some((_, takes_value)) = allowed.iter().find(|(name, _)| *name == a)
+        {
             i += if *takes_value { 2 } else { 1 };
             continue;
         }
@@ -383,12 +495,6 @@ fn scan_and_plan(
     path: &Path,
     args: &[String],
 ) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
-    // Before anything reads the disk. A refused flag must not produce output
-    // that looks like a scan, which is the whole defect.
-    if let Err(msg) = check_scan_flags(args) {
-        eprintln!("sweep: {msg}");
-        return Err(ExitCode::from(2));
-    }
     let depth = match parse_depth(args) {
         Ok(d) => d,
         Err(msg) => {
@@ -1197,9 +1303,21 @@ mod tests {
     #[test]
     fn an_unrecognised_flag_to_apply_is_rejected_not_dropped() {
         for typo in ["--dry-run", "-n", "--force", "--all"] {
+            // Against apply's FLAGS, not against the command names. A blind
+            // rename turned this into a comparison of typos to "apply",
+            // "undo" and so on, which is true for every input and therefore
+            // asserted nothing. A review caught it.
+            let (_, apply_flags) = COMMAND_FLAGS
+                .iter()
+                .find(|(c, _)| *c == "apply")
+                .expect("apply is declared");
             assert!(
-                !APPLY_FLAGS.iter().any(|(name, _)| *name == typo),
+                !apply_flags.iter().any(|(name, _)| *name == typo),
                 "{typo} would be accepted by apply"
+            );
+            assert!(
+                check_flags("apply", &[typo.to_string()]).is_err(),
+                "{typo} must be refused at dispatch as well"
             );
         }
         let args = [
@@ -1414,7 +1532,7 @@ mod tests {
         // --jsonn is worse, because whatever was going to parse that gets
         // prose and a success-shaped exit.
         for typo in ["--explainn", "--jsonn", "--quite", "--depht"] {
-            let err = check_scan_flags(&[typo.to_string()])
+            let err = check_flags("", &[typo.to_string()])
                 .expect_err("a typo'd flag must not be accepted");
             assert!(
                 err.contains("Did you mean"),
@@ -1427,7 +1545,7 @@ mod tests {
     fn a_flag_that_is_nothing_like_a_real_one_gets_no_suggestion() {
         // A confident wrong suggestion is worse than none. The distance cap
         // is what keeps --frobnicate from being told it meant --json.
-        let err = check_scan_flags(&["--frobnicate".to_string()]).expect_err("must refuse");
+        let err = check_flags("", &["--frobnicate".to_string()]).expect_err("must refuse");
         assert!(
             !err.contains("Did you mean"),
             "should not guess at an unrelated word, got: {err}"
@@ -1439,7 +1557,7 @@ mod tests {
         // --only was accepted and ignored on a scan, which is the same silent
         // lie in a quieter shape. Calling a real flag "unknown" would be its
         // own small lie, so it names the right command instead.
-        let err = check_scan_flags(&["--only".to_string()]).expect_err("must refuse");
+        let err = check_flags("", &["--only".to_string()]).expect_err("must refuse");
         assert!(
             err.contains("sweep apply"),
             "should name where it works: {err}"
@@ -1467,7 +1585,7 @@ mod tests {
         for args in ok {
             let v: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
             assert!(
-                check_scan_flags(&v).is_ok(),
+                check_flags("", &v).is_ok(),
                 "a documented invocation was refused: {args:?}"
             );
         }
@@ -1478,8 +1596,144 @@ mod tests {
         // --depth takes a value, so the whitelist has to skip it. Without
         // that, `--depth 2` would work but `--depth --json` would report the
         // wrong problem.
-        assert!(check_scan_flags(&["--depth".into(), "2".into()]).is_ok());
+        assert!(check_flags("", &["--depth".into(), "2".into()]).is_ok());
         // And everything after `--` is a path, however flag-shaped it looks.
-        assert!(check_scan_flags(&["--".into(), "--not-a-flag".into()]).is_ok());
+        assert!(check_flags("", &["--".into(), "--not-a-flag".into()]).is_ok());
+    }
+
+    /// The gate. Every command in the dispatch must appear in COMMAND_FLAGS,
+    /// so a seventh command cannot ship with no flag checking the way `undo`,
+    /// `verify` and `forget` did.
+    ///
+    /// This asserts against the source of `main` rather than a second list,
+    /// because a second list is the thing that kept going stale.
+    #[test]
+    fn every_dispatched_command_declares_its_flags() {
+        let src = include_str!("main.rs");
+        let dispatch = src
+            .split_once("match args.first().map(String::as_str) {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map(|(d, _)| d)
+            .expect("the dispatch match must be findable");
+
+        let mut dispatched: Vec<String> = Vec::new();
+        for line in dispatch.lines() {
+            let t = line.trim();
+            if !t.starts_with("Some(") {
+                continue;
+            }
+            // Every literal in the arm, not just the first. An or-pattern like
+            // Some("purge" | "scrub") carries two, and a review caught the
+            // earlier version reading only the first and missing the rest.
+            let arm = t.split("=>").next().unwrap_or(t);
+            for piece in arm.split('"').skip(1).step_by(2) {
+                // help/version are answered at dispatch, never reaching a command.
+                if matches!(
+                    piece,
+                    "help" | "--help" | "-h" | "version" | "--version" | "-V" | "--"
+                ) {
+                    continue;
+                }
+                dispatched.push(piece.to_string());
+            }
+        }
+        // Naming them, rather than counting them. A count only catches "fewer
+        // than before": if a reformat broke the parse while the old arms still
+        // matched, a seventh command could slip past a length floor and this
+        // test would pass having checked nothing.
+        for known in ["apply", "undo", "forget", "review", "verify", "lesson"] {
+            assert!(
+                dispatched.iter().any(|d| d == known),
+                "the dispatch parser no longer finds `{known}`, so this test is \
+                 not reading the dispatch any more. Fix the parser before \
+                 trusting a green run. Found: {dispatched:?}"
+            );
+        }
+        for name in dispatched {
+            assert!(
+                COMMAND_FLAGS.iter().any(|(c, _)| *c == name),
+                "`sweep {name}` is dispatched but declares no flags in \
+                 COMMAND_FLAGS. An empty slice is the right answer if it reads \
+                 none, but it has to say so: leaving it out is how three \
+                 commands came to accept anything at all."
+            );
+        }
+    }
+
+    /// No command accepts a flag it does not read. The empty ones are the
+    /// point: a flag nobody reads is an error, not a no-op.
+    #[test]
+    fn a_command_that_reads_no_flags_accepts_none() {
+        for cmd in ["undo", "verify", "lesson"] {
+            let (_, flags) = COMMAND_FLAGS
+                .iter()
+                .find(|(c, _)| *c == cmd)
+                .expect("declared");
+            assert!(flags.is_empty(), "{cmd} is expected to read no flags");
+            assert!(
+                check_flags(cmd, &["--frobnicate".to_string()]).is_err(),
+                "{cmd} must refuse a flag it does not read"
+            );
+            assert!(
+                check_flags(cmd, &["--yes".to_string()]).is_err(),
+                "{cmd} must refuse even a real flag that belongs elsewhere"
+            );
+        }
+    }
+
+    /// A real flag given to the wrong command names the right one rather than
+    /// being called unknown.
+    #[test]
+    fn a_flag_on_the_wrong_command_names_the_right_one() {
+        let err = check_flags("undo", &["--yes".to_string()]).expect_err("refused");
+        assert!(err.contains("apply"), "should point at apply: {err}");
+        assert!(!err.contains("unknown"), "--yes is a real flag: {err}");
+
+        let err = check_flags("", &["--only".to_string()]).expect_err("refused");
+        assert!(err.contains("apply"), "should point at apply: {err}");
+    }
+
+    /// Flags that take a value must not swallow the next flag as that value in
+    /// a way that hides a second mistake.
+    #[test]
+    fn a_value_taking_flag_skips_only_its_value() {
+        assert!(check_flags("", &["--depth".into(), "2".into()]).is_ok());
+        assert!(check_flags("", &["--depth".into(), "2".into(), "--json".into()]).is_ok());
+        assert!(check_flags("", &["--".into(), "--not-a-flag".into()]).is_ok());
+    }
+
+    /// The cases the test above was named for but did not cover, which a
+    /// review pointed out. A flag-shaped value means the value was forgotten,
+    /// and swallowing it turns a typo into a confusing outcome rather than an
+    /// error: `--only --yes` used to filter for a group literally named
+    /// "--yes", find none, and exit 1 saying there was nothing to apply.
+    #[test]
+    fn a_flag_where_a_value_belongs_is_an_error_not_a_value() {
+        let err = check_flags("apply", &["--only".into(), "--yes".into()])
+            .expect_err("--only swallowed --yes as a group name");
+        assert!(err.contains("another option"), "got: {err}");
+
+        let err = check_flags("", &["--depth".into(), "--json".into()])
+            .expect_err("--depth swallowed --json as a depth");
+        assert!(err.contains("another option"), "got: {err}");
+
+        let err = check_flags("", &["--depth".into()]).expect_err("--depth with nothing after it");
+        assert!(err.contains("got nothing"), "got: {err}");
+
+        // But a value that merely looks unusual is still a value.
+        assert!(check_flags("apply", &["--only".into(), "2026-Photos".into()]).is_ok());
+    }
+
+    /// Single-dash flags were ignored everywhere, since every check only ever
+    /// looked at `--`. Found by fixing a test that had been comparing typos to
+    /// command names and asserting nothing.
+    #[test]
+    fn a_single_dash_flag_is_checked_too() {
+        for cmd in ["", "apply", "undo", "forget"] {
+            assert!(
+                check_flags(cmd, &["-x".to_string()]).is_err(),
+                "`-x` was ignored by {cmd:?}"
+            );
+        }
     }
 }
