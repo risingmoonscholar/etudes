@@ -82,3 +82,12 @@ before anyone else could be.
   `--jsonn` returned prose to whatever was going to parse it.
 - `etude-read` proves its buffer erase without reading freed memory, which was
   a segfault on Linux.
+- Every command checks its flags, from one table beside the dispatch rather
+  than a list per command. `sweep forget --frobnicate` used to destroy a
+  journal on a typo, and `undo` and `verify` ignored flags outright. Single
+  dash flags were ignored everywhere. A flag given to the wrong command names
+  the command it belongs to.
+- `--only` and `--depth` refuse a value that is another flag, instead of
+  taking it as a group name or a depth and reporting the confusing result.
+- `unpack` refuses a leading flag rather than reading it as an archive name,
+  which makes the exit-code contract uniform across the three tools.

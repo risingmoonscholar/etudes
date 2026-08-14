@@ -64,9 +64,13 @@ fn main() -> ExitCode {
     // to unwrap_or_default() would put a PATH in `cmd`, find no entry, and
     // silently check nothing.
     //
-    // A command dispatched but missing from the table lands on "" and gets
-    // checked against the scan flags, so it fails closed rather than open.
-    // The test every_dispatched_command_declares_its_flags catches it first.
+    // A command dispatched but missing from the table lands on "" and is
+    // checked against the SCAN flags, which is neither open nor closed: it
+    // would allow --json and refuse a flag that command actually needed. That
+    // is a wrong answer rather than a safe one, so the real defence is the
+    // test every_dispatched_command_declares_its_flags, which stops such a
+    // command from shipping at all. An earlier version of this comment
+    // claimed it failed closed; a review pointed out that it does not.
     let first = args.first().map(String::as_str).unwrap_or_default();
     let cmd = if COMMAND_FLAGS
         .iter()
@@ -286,8 +290,9 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
 ///
 /// The sets come from each command's call graph, not from the body of its
 /// function. `--depth` is read by `parse_depth`, which `apply`, `review` and
-/// the scan path all call; missing that is how an earlier hand-written list
-/// came to omit `--no-journal` and would have refused a working command.
+/// the scan path all call, so it belongs to all three. An earlier
+/// hand-written scan list missed exactly this kind of reach and omitted
+/// `--no-journal` and `--help`, which would have refused working commands.
 ///
 /// An empty set is not a special case. The rule is that a flag nobody reads
 /// is an error, and `undo` and `verify` read none.
@@ -378,11 +383,31 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
         if a == "--" {
             break;
         }
-        // `-h`/`-V` are handled at dispatch and never reach a command.
-        if a.starts_with("--") && a != "--help" && a != "--version" {
+        // A single dash counts too. The old per-command checks only looked at
+        // `--`, so `-n` and `-x` stayed silent everywhere, which is the same
+        // defect one level down. `-h` and `-V` are answered at dispatch and
+        // never reach here.
+        if a.starts_with('-') && !matches!(a.as_str(), "--help" | "--version" | "-h" | "-V") {
             match allowed.iter().find(|(name, _)| *name == a.as_str()) {
                 Some((_, takes_value)) => {
                     if *takes_value {
+                        // A value that is itself flag-shaped means the value
+                        // was forgotten. `--only --yes` used to take "--yes"
+                        // as the group name, filter for a group called that,
+                        // find none and exit 1 saying there was nothing to
+                        // apply, which reads as "no work" rather than "you
+                        // typed it wrong".
+                        match args.get(i + 1) {
+                            Some(v) if v.starts_with('-') && v != "--" => {
+                                return Err(format!(
+                                    "{a} needs a value, and `{v}` is another option."
+                                ));
+                            }
+                            None => {
+                                return Err(format!("{a} needs a value and got nothing."));
+                            }
+                            Some(_) => {}
+                        }
                         i += 1;
                     }
                 }
@@ -1278,9 +1303,21 @@ mod tests {
     #[test]
     fn an_unrecognised_flag_to_apply_is_rejected_not_dropped() {
         for typo in ["--dry-run", "-n", "--force", "--all"] {
+            // Against apply's FLAGS, not against the command names. A blind
+            // rename turned this into a comparison of typos to "apply",
+            // "undo" and so on, which is true for every input and therefore
+            // asserted nothing. A review caught it.
+            let (_, apply_flags) = COMMAND_FLAGS
+                .iter()
+                .find(|(c, _)| *c == "apply")
+                .expect("apply is declared");
             assert!(
-                !COMMAND_FLAGS.iter().any(|(name, _)| *name == typo),
+                !apply_flags.iter().any(|(name, _)| *name == typo),
                 "{typo} would be accepted by apply"
+            );
+            assert!(
+                check_flags("apply", &[typo.to_string()]).is_err(),
+                "{typo} must be refused at dispatch as well"
             );
         }
         let args = [
@@ -1582,25 +1619,36 @@ mod tests {
         let mut dispatched: Vec<String> = Vec::new();
         for line in dispatch.lines() {
             let t = line.trim();
-            let Some(rest) = t.strip_prefix("Some(\"") else {
-                continue;
-            };
-            let Some((name, _)) = rest.split_once('"') else {
-                continue;
-            };
-            // help/version are answered at dispatch and never reach a command.
-            if matches!(
-                name,
-                "help" | "--help" | "-h" | "version" | "--version" | "-V" | "--"
-            ) {
+            if !t.starts_with("Some(") {
                 continue;
             }
-            dispatched.push(name.to_string());
+            // Every literal in the arm, not just the first. An or-pattern like
+            // Some("purge" | "scrub") carries two, and a review caught the
+            // earlier version reading only the first and missing the rest.
+            let arm = t.split("=>").next().unwrap_or(t);
+            for piece in arm.split('"').skip(1).step_by(2) {
+                // help/version are answered at dispatch, never reaching a command.
+                if matches!(
+                    piece,
+                    "help" | "--help" | "-h" | "version" | "--version" | "-V" | "--"
+                ) {
+                    continue;
+                }
+                dispatched.push(piece.to_string());
+            }
         }
-        assert!(
-            dispatched.len() >= 6,
-            "found only {dispatched:?}; the parser stopped matching the dispatch"
-        );
+        // Naming them, rather than counting them. A count only catches "fewer
+        // than before": if a reformat broke the parse while the old arms still
+        // matched, a seventh command could slip past a length floor and this
+        // test would pass having checked nothing.
+        for known in ["apply", "undo", "forget", "review", "verify", "lesson"] {
+            assert!(
+                dispatched.iter().any(|d| d == known),
+                "the dispatch parser no longer finds `{known}`, so this test is \
+                 not reading the dispatch any more. Fix the parser before \
+                 trusting a green run. Found: {dispatched:?}"
+            );
+        }
         for name in dispatched {
             assert!(
                 COMMAND_FLAGS.iter().any(|(c, _)| *c == name),
@@ -1652,5 +1700,40 @@ mod tests {
         assert!(check_flags("", &["--depth".into(), "2".into()]).is_ok());
         assert!(check_flags("", &["--depth".into(), "2".into(), "--json".into()]).is_ok());
         assert!(check_flags("", &["--".into(), "--not-a-flag".into()]).is_ok());
+    }
+
+    /// The cases the test above was named for but did not cover, which a
+    /// review pointed out. A flag-shaped value means the value was forgotten,
+    /// and swallowing it turns a typo into a confusing outcome rather than an
+    /// error: `--only --yes` used to filter for a group literally named
+    /// "--yes", find none, and exit 1 saying there was nothing to apply.
+    #[test]
+    fn a_flag_where_a_value_belongs_is_an_error_not_a_value() {
+        let err = check_flags("apply", &["--only".into(), "--yes".into()])
+            .expect_err("--only swallowed --yes as a group name");
+        assert!(err.contains("another option"), "got: {err}");
+
+        let err = check_flags("", &["--depth".into(), "--json".into()])
+            .expect_err("--depth swallowed --json as a depth");
+        assert!(err.contains("another option"), "got: {err}");
+
+        let err = check_flags("", &["--depth".into()]).expect_err("--depth with nothing after it");
+        assert!(err.contains("got nothing"), "got: {err}");
+
+        // But a value that merely looks unusual is still a value.
+        assert!(check_flags("apply", &["--only".into(), "2026-Photos".into()]).is_ok());
+    }
+
+    /// Single-dash flags were ignored everywhere, since every check only ever
+    /// looked at `--`. Found by fixing a test that had been comparing typos to
+    /// command names and asserting nothing.
+    #[test]
+    fn a_single_dash_flag_is_checked_too() {
+        for cmd in ["", "apply", "undo", "forget"] {
+            assert!(
+                check_flags(cmd, &["-x".to_string()]).is_err(),
+                "`-x` was ignored by {cmd:?}"
+            );
+        }
     }
 }
