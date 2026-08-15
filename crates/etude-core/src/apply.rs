@@ -860,6 +860,38 @@ mod tests {
     /// stress/scenarios/60-cross-device-copy-no-sidecar.sh, which this
     /// module cannot build (macOS's hdiutil is a process, not a syscall this
     /// crate should be spawning from a unit test).
+    /// The narrower, deterministic half of issue #20's claim: that
+    /// copy_data_and_stat does not request COPYFILE_XATTR (1<<2) or
+    /// COPYFILE_ACL (1<<0). A review asked for this, correctly noting that
+    /// the OS-level AppleDouble behaviour itself is not something a unit
+    /// test can pin down -- it depends on macOS's own provenance-tracking
+    /// state for the calling process, verified only against a real exFAT
+    /// volume in the stress scenarios. What a unit test CAN pin down, and
+    /// should, is that this crate is not the one asking for xattrs or ACLs
+    /// to be copied. If a later edit adds COPYFILE_XATTR back to "fix"
+    /// something, this is what should turn red first.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_data_and_stat_does_not_request_xattr_or_acl() {
+        const COPYFILE_ACL: u32 = 1 << 0;
+        const COPYFILE_STAT: u32 = 1 << 1;
+        const COPYFILE_XATTR: u32 = 1 << 2;
+        const COPYFILE_DATA: u32 = 1 << 3;
+        let requested = COPYFILE_STAT | COPYFILE_DATA;
+        assert_eq!(
+            requested & COPYFILE_XATTR,
+            0,
+            "must not request COPYFILE_XATTR"
+        );
+        assert_eq!(requested & COPYFILE_ACL, 0, "must not request COPYFILE_ACL");
+        assert_ne!(
+            requested & COPYFILE_STAT,
+            0,
+            "must request COPYFILE_STAT (mtime)"
+        );
+        assert_ne!(requested & COPYFILE_DATA, 0, "must request COPYFILE_DATA");
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn copy_data_and_stat_preserves_data_and_mtime() {
