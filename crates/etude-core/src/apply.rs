@@ -341,6 +341,30 @@ pub fn move_one_for_tests(from: &Path, to: &Path) -> io::Result<Method> {
 /// from the real SDK header rather than assumed --
 /// `.../MacOSX.sdk/usr/include/copyfile.h`:
 /// `COPYFILE_STAT (1<<1)`, `COPYFILE_DATA (1<<3)`.
+// Module-level, not local to copy_data_and_stat, so a unit test can bind to
+// the actual production value instead of redeclaring its own copy that
+// could silently drift from what the real call site requests. A review
+// caught an earlier version of the test doing exactly that -- asserting
+// against local constants of the same name, which would stay green even if
+// the real call site changed.
+// ACL and XATTR are unused outside the test that proves they are NOT
+// requested -- that absence is the point, so #[allow(dead_code)] rather
+// than deleting them, which would silently drop the thing being asserted.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+const COPYFILE_ACL: u32 = 1 << 0;
+#[cfg(target_os = "macos")]
+const COPYFILE_STAT: u32 = 1 << 1;
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+const COPYFILE_XATTR: u32 = 1 << 2;
+#[cfg(target_os = "macos")]
+const COPYFILE_DATA: u32 = 1 << 3;
+/// What copy_data_and_stat actually requests. Read by the function AND by
+/// the test that checks it excludes XATTR/ACL, so the two cannot drift.
+#[cfg(target_os = "macos")]
+const COPY_DATA_AND_STAT_FLAGS: u32 = COPYFILE_STAT | COPYFILE_DATA;
+
 #[cfg(target_os = "macos")]
 fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
     use std::ffi::CString;
@@ -353,8 +377,6 @@ fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
             flags: u32,
         ) -> i32;
     }
-    const COPYFILE_STAT: u32 = 1 << 1;
-    const COPYFILE_DATA: u32 = 1 << 3;
     let f = CString::new(from.as_os_str().as_bytes())
         .map_err(|_| io::Error::other("path contains a NUL byte"))?;
     let t = CString::new(to.as_os_str().as_bytes())
@@ -367,7 +389,7 @@ fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
             f.as_ptr(),
             t.as_ptr(),
             std::ptr::null_mut(),
-            COPYFILE_STAT | COPYFILE_DATA,
+            COPY_DATA_AND_STAT_FLAGS,
         )
     };
     if rc == 0 {
@@ -853,13 +875,6 @@ mod macos_unicode {
 #[cfg(test)]
 mod tests {
 
-    /// Issue #20's contract: data and mtime survive, and nothing else is
-    /// asked for. Same-device is enough to prove data, mtime and the
-    /// no-clobber-required shape; the exFAT sidecar behaviour itself needs a
-    /// real foreign filesystem and lives in
-    /// stress/scenarios/60-cross-device-copy-no-sidecar.sh, which this
-    /// module cannot build (macOS's hdiutil is a process, not a syscall this
-    /// crate should be spawning from a unit test).
     /// The narrower, deterministic half of issue #20's claim: that
     /// copy_data_and_stat does not request COPYFILE_XATTR (1<<2) or
     /// COPYFILE_ACL (1<<0). A review asked for this, correctly noting that
@@ -873,25 +888,44 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn copy_data_and_stat_does_not_request_xattr_or_acl() {
-        const COPYFILE_ACL: u32 = 1 << 0;
-        const COPYFILE_STAT: u32 = 1 << 1;
-        const COPYFILE_XATTR: u32 = 1 << 2;
-        const COPYFILE_DATA: u32 = 1 << 3;
-        let requested = COPYFILE_STAT | COPYFILE_DATA;
+        // Binds to COPY_DATA_AND_STAT_FLAGS, the actual value the real
+        // function passes to copyfile() -- not a redeclared local copy. A
+        // review caught the first version of this test asserting against
+        // its own constants of the same name, which could not have gone red
+        // if the real call site changed. If a later edit adds
+        // COPYFILE_XATTR back to COPY_DATA_AND_STAT_FLAGS to "fix"
+        // something, this is what turns red first.
         assert_eq!(
-            requested & COPYFILE_XATTR,
+            COPY_DATA_AND_STAT_FLAGS & COPYFILE_XATTR,
             0,
             "must not request COPYFILE_XATTR"
         );
-        assert_eq!(requested & COPYFILE_ACL, 0, "must not request COPYFILE_ACL");
+        assert_eq!(
+            COPY_DATA_AND_STAT_FLAGS & COPYFILE_ACL,
+            0,
+            "must not request COPYFILE_ACL"
+        );
         assert_ne!(
-            requested & COPYFILE_STAT,
+            COPY_DATA_AND_STAT_FLAGS & COPYFILE_STAT,
             0,
             "must request COPYFILE_STAT (mtime)"
         );
-        assert_ne!(requested & COPYFILE_DATA, 0, "must request COPYFILE_DATA");
+        assert_ne!(
+            COPY_DATA_AND_STAT_FLAGS & COPYFILE_DATA,
+            0,
+            "must request COPYFILE_DATA"
+        );
     }
 
+    /// Issue #20's contract: data and mtime survive, and nothing else is
+    /// asked for. Same-device is enough to prove data, mtime and the
+    /// no-clobber-required shape; the exFAT sidecar behaviour itself needs a
+    /// real foreign filesystem and lives in
+    /// stress/scenarios/60-cross-device-copy-and-mtime.sh (and the
+    /// same-device fallback in
+    /// stress/scenarios/60-exfat-same-device-rename-fallback.sh), which
+    /// this module cannot build (macOS's hdiutil is a process, not a
+    /// syscall this crate should be spawning from a unit test).
     #[cfg(target_os = "macos")]
     #[test]
     fn copy_data_and_stat_preserves_data_and_mtime() {
