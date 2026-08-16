@@ -516,7 +516,7 @@ fn scan_and_plan(
     let outcome = match scan::scan(path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            refuse("could not read that folder", &e);
+            refuse_scan(&e);
             return Err(scan_exit_code(&e));
         }
     };
@@ -781,7 +781,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let outcome = match scan::scan(&path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            refuse("could not read that folder", &e);
+            refuse_scan(&e);
             return scan_exit_code(&e);
         }
     };
@@ -837,8 +837,39 @@ fn refuse(doing: &str, why: &impl std::fmt::Display) {
     eprintln!("       {why}");
 }
 
-/// Refusals are policy stops (2); everything else is a genuine
-/// failure (3) -- see README's "Meaningful exit codes".
+/// A scan error, named only when it needs naming.
+///
+/// Every ScanError variant except `Io` already says what it is -- "not a
+/// directory: ~/x", "refused: will not run as root", "refused: N items
+/// exceeds the M item cap". Wrapping those in "could not read that folder"
+/// produces two sentences arguing with each other, which is exactly the
+/// problem the NotFound case in `cmd_undo` avoids. A review caught the
+/// first version of this doing it to every variant.
+///
+/// `Io` is the only bare one, and the only one where the reader is left
+/// guessing what sweep was attempting.
+fn refuse_scan(e: &etude_core::scan::ScanError) {
+    match e {
+        etude_core::scan::ScanError::Io(_) => refuse("could not read that folder", e),
+        _ => eprintln!("sweep: {e}"),
+    }
+}
+
+/// An apply error, named only when it needs naming.
+///
+/// Same discipline as `refuse_scan`. `DestinationExists`,
+/// `DestinationCollision`, `IsSynced` and `CannotCompareNames` are refusals
+/// raised in preflight, before anything has moved, and each says so itself.
+/// A review pointed out that "could not finish moving the files" in front of
+/// one of those claims progress that never happened.
+fn refuse_apply(e: &etude_core::apply::ApplyError) {
+    use etude_core::apply::ApplyError as E;
+    match e {
+        E::Io(_) | E::Journal(_) => refuse("could not move the files", e),
+        _ => eprintln!("sweep: {e}"),
+    }
+}
+
 fn scan_exit_code(e: &etude_core::scan::ScanError) -> ExitCode {
     if e.is_refusal() {
         ExitCode::from(2)
@@ -885,7 +916,7 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            refuse("could not finish moving the files", &e);
+            refuse_apply(&e);
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
             apply_exit_code(&e)
         }
@@ -933,7 +964,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let outcome = match scan::scan(&path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            refuse("could not read that folder", &e);
+            refuse_scan(&e);
             return scan_exit_code(&e);
         }
     };
@@ -1112,7 +1143,7 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     // exists to remove, just moved one line later.
     let saved = j.save_sealed(sl);
     if let Some(err) = r.error {
-        refuse("could not finish putting the files back", &err);
+        refuse_apply(&err);
         match saved {
             Ok(()) => {
                 eprintln!(

@@ -531,34 +531,51 @@ fn documented_scan_invocations_still_run() {
 /// which is issue #4's fix and a different code path entirely.
 #[test]
 fn a_refusal_names_the_operation_not_only_the_reason() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Restores the mode on drop, including on a panic between the chmod and
+    // the assertions. A review caught the first version restoring inline:
+    // any panic in between (the spawn, an expect) would have left a 0o000
+    // directory behind that TestDir's own cleanup then could not walk, so a
+    // single failing assertion would have stranded an unreadable directory
+    // in the temp tree.
+    struct RestoreMode(std::path::PathBuf);
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            if let Ok(md) = std::fs::metadata(&self.0) {
+                let mut perms = md.permissions();
+                perms.set_mode(0o700);
+                let _ = std::fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+
     let root = TestDir(unique_temp("refusal-context"));
     let parent = root.0.join("parent");
     let child = parent.join("child");
     std::fs::create_dir_all(&child).expect("mkdir");
     std::fs::write(child.join("a.png"), b"x").expect("write");
 
-    // Make the parent unreadable so canonicalize() on the child fails.
     let mut perms = std::fs::metadata(&parent).expect("stat").permissions();
-    use std::os::unix::fs::PermissionsExt;
     perms.set_mode(0o000);
     std::fs::set_permissions(&parent, perms).expect("chmod");
+    let _restore = RestoreMode(parent.clone());
 
     let out = sweep_bin().arg(&child).output().expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
-    // Restore before asserting, so a failure here cannot leave an
-    // unreadable directory behind for the next test or the cleanup.
-    let mut restore = std::fs::metadata(&parent).expect("stat").permissions();
-    restore.set_mode(0o700);
-    std::fs::set_permissions(&parent, restore).expect("chmod back");
-
-    if stderr.is_empty() {
-        // Running as root, or a filesystem that ignores the mode bits: the
-        // condition could not be created, so there is nothing to assert.
-        // Saying so beats passing as though it had been checked.
-        eprintln!("could not make a directory unreadable on this host; not asserted");
-        return;
-    }
+    // An empty stderr means the condition could not be created at all --
+    // running as root, or a filesystem that ignores the mode bits. A review
+    // pointed out the first version returned early here, which cargo counts
+    // as a pass: a green test that checked nothing, the exact shape this
+    // project's `unproven` category exists to keep out of the pass column.
+    // Asserting instead means a host that cannot host this test says so.
+    assert!(
+        !stderr.is_empty(),
+        "could not make a directory unreadable on this host (running as root, \
+         or a filesystem ignoring mode bits), so the refusal path was never \
+         reached and this test proved nothing"
+    );
     assert!(
         stderr.contains("could not read that folder"),
         "the refusal must name what sweep was attempting, got: {stderr}"
