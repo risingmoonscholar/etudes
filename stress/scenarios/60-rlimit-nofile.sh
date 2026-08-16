@@ -104,7 +104,7 @@ KEYCHAIN_OK_LIM=""
 for lim in $(seq "$LOWEST_WORKABLE" -1 4); do
   bash -c "ulimit -n $lim 2>/dev/null" >/dev/null 2>&1 || continue
   LOG=$(mktemp "${TMPDIR:-/tmp}/etudes-rlimit-kc-XXXXXX")
-  bash -c "export XDG_STATE_HOME='$XDG_STATE_HOME'; ulimit -n $lim 2>/dev/null; exec \"$SWEEP\" apply \"$D\" --yes > \"$LOG\" 2>&1" 2>/dev/null
+  bash -c "export ETUDE_STATE_DIR='$ETUDE_STATE_DIR'; ulimit -n $lim 2>/dev/null; exec \"$SWEEP\" apply \"$D\" --yes > \"$LOG\" 2>&1" 2>/dev/null
   code=$?
   out=$(cat "$LOG"); rm -f "$LOG"
 
@@ -117,7 +117,7 @@ for lim in $(seq "$LOWEST_WORKABLE" -1 4); do
   if [ "$moved" -gt 0 ]; then
     KEYCHAIN_OK_LIM=$lim
     # Undo to reset for the next iteration.
-    bash -c "export XDG_STATE_HOME='$XDG_STATE_HOME'; \"$SWEEP\" undo" >/dev/null 2>&1
+    bash -c "export ETUDE_STATE_DIR='$ETUDE_STATE_DIR'; \"$SWEEP\" undo" >/dev/null 2>&1
     find "$D" -mindepth 2 -type f -exec mv {} "$D/" \; 2>/dev/null
     find "$D" -mindepth 1 -type d -empty -delete 2>/dev/null
   else

@@ -48,6 +48,12 @@ fn main() -> ExitCode {
     // to upload. Close that before doing any work. THREAT-MODEL § T5.
     disable_core_dumps();
 
+    // One-time move from the old XDG-style state directory to the correct
+    // macOS one (issue #23). Before anything reads state_dir(), so nothing
+    // else in this run can look in the new location and find it empty while
+    // the old one still has what it's looking for.
+    etude_core::journal::migrate_legacy_state_dir();
+
     // Journals past their TTL are dropped before anything else. Keeping an
     // index of the user's filenames forever keeps the exposure forever.
     let expired = etude_core::journal::prune_expired();

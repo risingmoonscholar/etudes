@@ -35,11 +35,11 @@ journal_wipe() {
   # per-directory selector, stale journals from an earlier trial must be
   # cleared first or a truncation could land on the wrong file while undo
   # quietly acts on an untouched one, masking the very thing under test.
-  rm -f "$XDG_STATE_HOME/etudes"/sweep-*.journal 2>/dev/null
+  rm -f "$ETUDE_STATE_DIR"/sweep-*.journal 2>/dev/null
 }
 
 journal_file() {
-  find "$XDG_STATE_HOME/etudes" -maxdepth 1 -name 'sweep-*.journal' 2>/dev/null | head -1
+  find "$ETUDE_STATE_DIR" -maxdepth 1 -name 'sweep-*.journal' 2>/dev/null | head -1
 }
 
 # --- Build one fully-applied tree and snapshot its intact journal ----------

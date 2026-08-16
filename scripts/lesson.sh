@@ -46,7 +46,7 @@ RC="$(mktemp "${TMPDIR:-/tmp}/etudes-lesson-rc-XXXXXX")"
 cat > "$RC" <<RCEOF
 export BASH_SILENCE_DEPRECATION_WARNING=1
 export PATH="$REPO/target/debug:\$PATH"
-export XDG_STATE_HOME="$STATE"
+export ETUDE_STATE_DIR="$STATE"
 export PRACTICE="$PRACTICE"
 reset() {
   rm -rf "\$PRACTICE"

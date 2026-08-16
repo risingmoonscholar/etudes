@@ -91,3 +91,7 @@ before anyone else could be.
   taking it as a group name or a depth and reporting the confusing result.
 - `unpack` refuses a leading flag rather than reading it as an archive name,
   which makes the exit-code contract uniform across the three tools.
+- The journal directory moved from `~/.local/state/etudes`, a Linux
+  convention on a macOS-only tool, to `~/Library/Application Support/etudes`,
+  the location Apple's own documentation specifies. An existing journal is
+  moved forward automatically the first time `sweep` or `stash` runs.

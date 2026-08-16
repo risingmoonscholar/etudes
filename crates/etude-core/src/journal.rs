@@ -138,17 +138,69 @@ impl std::fmt::Display for JournalError {
     }
 }
 
-/// Where journals live. Chosen to sit outside the default sync roots of iCloud
-/// Drive, Dropbox and OneDrive.
+/// Where journals live.
+///
+/// Source: Apple's own documentation for
+/// `FileManager.SearchPathDirectory.applicationSupportDirectory`
+/// (developer.apple.com), read directly rather than assumed -- per-user
+/// application files belong at `~/Library/Application Support/<AppName>/`,
+/// retrieved via `NSApplicationSupportDirectory` + `NSUserDomainMask`.
+///
+/// The previous default, `~/.local/state/etudes`, was an XDG (Linux)
+/// convention on a macOS-only tool. Its own comment justified that as
+/// "outside the default sync roots of iCloud Drive, Dropbox and OneDrive" --
+/// true, but `~/Library` is equally outside those roots (iCloud
+/// Desktop/Documents syncs `~/Desktop` and `~/Documents`, not `~/Library`),
+/// so the reasoning never actually required an XDG path. Issue #23.
+///
+/// `XDG_STATE_HOME` is gone as a fallback: it was a second override doing
+/// the same job as `ETUDE_STATE_DIR` while also being the Linux convention
+/// this fix removes. `ETUDE_STATE_DIR` stays -- it is the primary
+/// test-isolation mechanism across the suite, unrelated to which OS
+/// convention the un-overridden default follows.
 pub fn state_dir() -> PathBuf {
     if let Ok(x) = std::env::var("ETUDE_STATE_DIR") {
         return PathBuf::from(x);
     }
-    if let Ok(x) = std::env::var("XDG_STATE_HOME") {
-        return PathBuf::from(x).join("etudes");
-    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(home).join("Library/Application Support/etudes")
+}
+
+/// Where journals lived before issue #23. Only ever read by
+/// `migrate_legacy_state_dir`, and only to move what is there forward once.
+fn legacy_state_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     PathBuf::from(home).join(".local/state/etudes")
+}
+
+/// One-time migration from the old XDG-style location to the new
+/// Application Support one. A user's undo history is not something to
+/// silently orphan by moving where the tool looks for it -- the same
+/// principle behind the 30-day TTL being visible rather than quietly
+/// dropping journals.
+///
+/// Only runs when nothing has already overridden `state_dir()`: an explicit
+/// `ETUDE_STATE_DIR` means the caller has their own idea of where state
+/// lives, and migrating a directory it never asked about would be a
+/// surprise in the other direction.
+///
+/// Safe to call every time: it is a no-op unless the new location has never
+/// been used and the old one has something in it, and it moves the whole
+/// directory in one `fs::rename` rather than merging file-by-file, so there
+/// is no partial-migration state to reason about.
+pub fn migrate_legacy_state_dir() {
+    if std::env::var("ETUDE_STATE_DIR").is_ok() {
+        return;
+    }
+    let new = state_dir();
+    let old = legacy_state_dir();
+    if new.exists() || !old.exists() {
+        return;
+    }
+    if let Some(parent) = new.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::rename(&old, &new);
 }
 
 fn esc(p: &Path) -> String {
@@ -1185,5 +1237,151 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// Issue #23's contract: the un-overridden default is the macOS
+    /// convention, not the old XDG path. Testing HOME directly rather than
+    /// spawning the real binary -- an earlier attempt at this hung a live
+    /// shell on a real keychain prompt, because overriding HOME while a real
+    /// binary still calls /usr/bin/security is a system-level operation, not
+    /// a contained one. state_dir() only reads an env var; nothing here
+    /// touches the keychain.
+    ///
+    /// Restores whatever HOME was before it, rather than blindly removing
+    /// it. A review pointed out that env vars are process-global and cargo
+    /// runs tests on multiple threads in one process; STATE_DIR_LOCK
+    /// serializes these tests against each other, but not against some
+    /// unrelated test elsewhere in the crate reading HOME at the exact
+    /// moment one of these had removed it. Restoring what was actually
+    /// there closes that gap instead of assuming HOME is unset to begin
+    /// with, which on a real machine it never is.
+    struct RestoreEnvVar {
+        name: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+    impl RestoreEnvVar {
+        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prior = std::env::var_os(name);
+            unsafe { std::env::set_var(name, value) };
+            Self { name, prior }
+        }
+    }
+    impl Drop for RestoreEnvVar {
+        fn drop(&mut self) {
+            match self.prior.take() {
+                Some(v) => unsafe { std::env::set_var(self.name, v) },
+                None => unsafe { std::env::remove_var(self.name) },
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_state_dir_is_application_support_not_xdg() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+        let fake_home = std::env::temp_dir().join(format!("etudes_home_{}", std::process::id()));
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
+
+        let got = state_dir();
+
+        assert_eq!(
+            got,
+            fake_home.join("Library/Application Support/etudes"),
+            "the un-overridden default must be the macOS convention, got {got:?}"
+        );
+    }
+
+    /// XDG_STATE_HOME is gone as a fallback, not merely deprioritised. If a
+    /// test or a user's shell profile still sets it out of habit, it must be
+    /// silently ignored rather than silently honoured.
+    #[test]
+    fn xdg_state_home_is_no_longer_read() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+        let fake_home =
+            std::env::temp_dir().join(format!("etudes_home_xdg_{}", std::process::id()));
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
+        let _xdg = RestoreEnvVar::set("XDG_STATE_HOME", "/somewhere/that/must/be/ignored");
+
+        let got = state_dir();
+
+        assert_eq!(
+            got,
+            fake_home.join("Library/Application Support/etudes"),
+            "XDG_STATE_HOME must not affect the default any more, got {got:?}"
+        );
+    }
+
+    /// ETUDE_STATE_DIR still wins over everything -- the override this test
+    /// suite itself depends on throughout, unrelated to which OS convention
+    /// the un-overridden default follows.
+    #[test]
+    fn etude_state_dir_still_overrides_the_default() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let explicit = std::env::temp_dir().join(format!("etudes_explicit_{}", std::process::id()));
+        let _override = RestoreEnvVar::set("ETUDE_STATE_DIR", &explicit);
+
+        let got = state_dir();
+
+        assert_eq!(got, explicit, "an explicit override must still win");
+    }
+
+    /// The migration itself: an old journal at the legacy path must still be
+    /// reachable after the default moves, not silently orphaned. One
+    /// fs::rename of the whole directory, checked by reading the journal
+    /// back from its NEW location afterward -- not just checking that a
+    /// path no longer exists, which would pass even if the migration lost
+    /// the file rather than moving it.
+    #[test]
+    fn a_legacy_journal_is_migrated_forward_and_still_readable() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+        let fake_home = std::env::temp_dir().join(format!("etudes_migrate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&fake_home);
+        let legacy = fake_home.join(".local/state/etudes");
+        fs::create_dir_all(&legacy).expect("mkdir legacy");
+        fs::write(legacy.join("sweep-old-id.journal"), b"legacy content").expect("write");
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
+
+        migrate_legacy_state_dir();
+
+        let new_path = fake_home
+            .join("Library/Application Support/etudes")
+            .join("sweep-old-id.journal");
+        let content = fs::read(&new_path);
+        let _ = fs::remove_dir_all(&fake_home);
+
+        assert_eq!(
+            content.expect("migrated journal must be readable at the new path"),
+            b"legacy content",
+            "the migrated file's content must be intact, not just present"
+        );
+    }
+
+    /// A caller with an explicit ETUDE_STATE_DIR is not migrated. They have
+    /// their own idea of where state lives; moving a directory they never
+    /// asked about would be a surprise in the other direction.
+    #[test]
+    fn migration_does_not_run_when_etude_state_dir_is_set() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let fake_home =
+            std::env::temp_dir().join(format!("etudes_nomigrate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&fake_home);
+        let legacy = fake_home.join(".local/state/etudes");
+        fs::create_dir_all(&legacy).expect("mkdir legacy");
+        fs::write(legacy.join("sweep-old-id.journal"), b"legacy content").expect("write");
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
+        let explicit = std::env::temp_dir().join(format!("etudes_override_{}", std::process::id()));
+        let _override = RestoreEnvVar::set("ETUDE_STATE_DIR", &explicit);
+
+        migrate_legacy_state_dir();
+
+        let legacy_still_there = legacy.join("sweep-old-id.journal").exists();
+        let _ = fs::remove_dir_all(&fake_home);
+
+        assert!(
+            legacy_still_there,
+            "an explicit ETUDE_STATE_DIR must leave the legacy directory untouched"
+        );
     }
 }

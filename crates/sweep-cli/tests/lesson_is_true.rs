@@ -30,7 +30,7 @@ fn unique(tag: &str) -> PathBuf {
 
 fn sweep(state: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_sweep"));
-    c.env("XDG_STATE_HOME", state);
+    c.env("ETUDE_STATE_DIR", state);
     c
 }
 
@@ -100,7 +100,7 @@ fn every_command_the_lesson_prints_is_accepted() {
             }
             // `forget` destroys the key in the login keychain, which is shared
             // by every process on this machine and not scoped by
-            // XDG_STATE_HOME. Running it here sabotages whatever else is
+            // ETUDE_STATE_DIR. Running it here sabotages whatever else is
             // running, which is exactly what it did when this test was
             // written: it turned the undo-walk test red four runs in five.
             // Its own behaviour is covered in exit_codes.rs, serially.
