@@ -516,3 +516,72 @@ fn documented_scan_invocations_still_run() {
         );
     }
 }
+
+/// A refusal names the operation that failed, not only the reason.
+///
+/// The audit that produced this found nine sites forwarding an inner error
+/// with `eprintln!("sweep: {e}")`. "io error: Permission denied (os error
+/// 13)" is true and leaves the reader guessing whether sweep was reading
+/// their folder, writing a journal, or moving a file. rustc never does
+/// that: it names the operation, then the reason.
+///
+/// Triggers the real path rather than a synthetic one -- ScanError::Io comes
+/// from canonicalize(), so an unreadable PARENT is what reaches it. An
+/// unreadable target directory does not: those are counted and reported,
+/// which is issue #4's fix and a different code path entirely.
+#[test]
+fn a_refusal_names_the_operation_not_only_the_reason() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Restores the mode on drop, including on a panic between the chmod and
+    // the assertions. A review caught the first version restoring inline:
+    // any panic in between (the spawn, an expect) would have left a 0o000
+    // directory behind that TestDir's own cleanup then could not walk, so a
+    // single failing assertion would have stranded an unreadable directory
+    // in the temp tree.
+    struct RestoreMode(std::path::PathBuf);
+    impl Drop for RestoreMode {
+        fn drop(&mut self) {
+            if let Ok(md) = std::fs::metadata(&self.0) {
+                let mut perms = md.permissions();
+                perms.set_mode(0o700);
+                let _ = std::fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+
+    let root = TestDir(unique_temp("refusal-context"));
+    let parent = root.0.join("parent");
+    let child = parent.join("child");
+    std::fs::create_dir_all(&child).expect("mkdir");
+    std::fs::write(child.join("a.png"), b"x").expect("write");
+
+    let mut perms = std::fs::metadata(&parent).expect("stat").permissions();
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&parent, perms).expect("chmod");
+    let _restore = RestoreMode(parent.clone());
+
+    let out = sweep_bin().arg(&child).output().expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+    // An empty stderr means the condition could not be created at all --
+    // running as root, or a filesystem that ignores the mode bits. A review
+    // pointed out the first version returned early here, which cargo counts
+    // as a pass: a green test that checked nothing, the exact shape this
+    // project's `unproven` category exists to keep out of the pass column.
+    // Asserting instead means a host that cannot host this test says so.
+    assert!(
+        !stderr.is_empty(),
+        "could not make a directory unreadable on this host (running as root, \
+         or a filesystem ignoring mode bits), so the refusal path was never \
+         reached and this test proved nothing"
+    );
+    assert!(
+        stderr.contains("could not read that folder"),
+        "the refusal must name what sweep was attempting, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("os error"),
+        "and must still carry the OS's own reason, got: {stderr}"
+    );
+}
