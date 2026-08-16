@@ -383,10 +383,20 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
         return Ok(());
     };
     // Flags already seen, so a repeat is refused rather than silently
-    // dropped. Found by scoping a rustc-style caret: the only argument error
-    // where naming the token is genuinely ambiguous is a token that appears
-    // twice, and measuring that case showed sweep did not report it at all.
-    // It took the first occurrence and discarded the rest without a word.
+    // dropped. Found by scoping a rustc-style caret: the argument errors
+    // where naming the token is genuinely ambiguous are the ones where a
+    // token appears twice, and measuring the main such case showed sweep did
+    // not report it at all. It took the first occurrence and discarded the
+    // rest without a word.
+    //
+    // A review corrected an earlier version of this comment that said this
+    // was the ONLY ambiguous case. It is not. `--yes --only --yes` reports
+    // "--only needs a value, and `--yes` is another option" while two
+    // `--yes` tokens exist -- the second is rejected as a missing value, not
+    // as a repeat, so this check does not cover it. The message still names
+    // the flag whose value is missing, which is enough to locate the
+    // mistake, but a caret would genuinely be clearer there and that case is
+    // real rather than dismissed.
     //
     //   sweep DIR --depth 1 --depth 3    scanned 6   (--depth 3 ignored)
     //   sweep DIR --depth 3 --depth 1    scanned 12  (--depth 1 ignored)
@@ -1805,11 +1815,6 @@ mod tests {
         assert!(check_flags("", &["--".into(), "--not-a-flag".into()]).is_ok());
     }
 
-    /// The cases the test above was named for but did not cover, which a
-    /// review pointed out. A flag-shaped value means the value was forgotten,
-    /// and swallowing it turns a typo into a confusing outcome rather than an
-    /// error: `--only --yes` used to filter for a group literally named
-    /// "--yes", find none, and exit 1 saying there was nothing to apply.
     /// A repeated flag is refused, not silently reduced to its first
     /// occurrence.
     ///
@@ -1873,6 +1878,17 @@ mod tests {
         );
     }
 
+    /// A flag-shaped value means the value was forgotten, and swallowing it
+    /// turns a typo into a confusing outcome rather than an error: `--only
+    /// --yes` used to filter for a group literally named "--yes", find none,
+    /// and exit 1 saying there was nothing to apply.
+    ///
+    /// This is a DIFFERENT case from a repeated flag, and the difference
+    /// matters: here the second token is rejected as a missing value, not as
+    /// a repeat, even when it happens to be a flag that already appeared.
+    /// `sweep apply DIR --yes --only --yes` reports on `--yes` while two
+    /// `--yes` tokens exist -- a review raised that as the one place a caret
+    /// would still earn its keep, and it is not covered by refusing repeats.
     #[test]
     fn a_flag_where_a_value_belongs_is_an_error_not_a_value() {
         let err = check_flags("apply", &["--only".into(), "--yes".into()])
