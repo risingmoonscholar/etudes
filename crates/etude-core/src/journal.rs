@@ -130,7 +130,8 @@ pub enum JournalError {
 impl std::fmt::Display for JournalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JournalError::Io(e) => write!(f, "journal io: {}", e.kind()),
+            // The OS text, not the Rust category. See ApplyError::Io.
+            JournalError::Io(e) => write!(f, "journal io: {e}"),
             JournalError::Malformed(w) => write!(f, "journal malformed: {w}"),
             JournalError::NotFound => write!(f, "no journal found"),
             JournalError::Seal(m) => write!(f, "journal seal: {m}"),

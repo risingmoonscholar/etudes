@@ -152,7 +152,8 @@ impl std::fmt::Display for ScanError {
             ScanError::TooManyEntries { found, cap } => {
                 write!(f, "refused: {found} items exceeds the {cap} item cap")
             }
-            ScanError::Io(e) => write!(f, "io error: {}", e.kind()),
+            // The OS text, not the Rust category. See ApplyError::Io.
+            ScanError::Io(e) => write!(f, "io error: {e}"),
         }
     }
 }

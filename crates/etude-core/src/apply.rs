@@ -41,7 +41,36 @@ pub enum ApplyError {
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApplyError::Io(e) => write!(f, "io error: {}", e.kind()),
+            // The whole error, not e.kind(). kind() renders a Rust-internal
+            // category -- "uncategorized error", "entity not found" -- while
+            // the error itself renders what the OS actually said: "Operation
+            // not permitted (os error 1)". The category names nothing a user
+            // can search for and suggests nothing; the OS text does both.
+            //
+            // Found for real: apply on an exFAT volume reported "io error:
+            // uncategorized error" during issue #21, which is why that issue
+            // took a syscall-level reproduction to diagnose rather than
+            // reading the message. Noted there as a secondary finding and
+            // fixed here.
+            //
+            // On paths: an io::Error raised BY THE OS carries the errno and
+            // its text, never the path operated on, so rendering it in full
+            // does not weaken the "errors never contain paths unless
+            // --explain" claim. Checked directly against a filename designed
+            // to be obvious if it appeared.
+            //
+            // That is a fact about OS-raised errors, not about the type. A
+            // review corrected an earlier version of this comment that said
+            // io::Error can never hold a path: io::Error::other(msg) takes
+            // arbitrary text and would happily carry one. Nothing in this
+            // crate does that today -- every custom payload here is a fixed
+            // string ("path contains a NUL byte", "cross-device copy size
+            // mismatch") -- but the guarantee lives in what we construct,
+            // not in what the type forbids. Anyone adding an
+            // io::Error::other with a formatted path is the one who breaks
+            // it, and an_io_error_names_the_os_reason_without_naming_the_path
+            // is what should catch them.
+            ApplyError::Io(e) => write!(f, "io error: {e}"),
             ApplyError::Journal(e) => write!(f, "{e}"),
             ApplyError::DestinationExists(p) => {
                 write!(f, "destination already exists: {}", crate::redact::path(p))
@@ -874,6 +903,33 @@ mod macos_unicode {
 
 #[cfg(test)]
 mod tests {
+    /// Two claims at once, because the fix for one could break the other.
+    ///
+    /// An io error must render what the OS said, not Rust's internal
+    /// category: "uncategorized error" is what apply reported on an exFAT
+    /// volume during issue #21, and it names nothing a user can act on or
+    /// search for.
+    ///
+    /// And it must still not carry the path. `sweep --quiet` promising it
+    /// never prints a filename, and the readme promising errors carry no
+    /// paths without --explain, both depend on that -- so the test that
+    /// proves the message got MORE informative also proves it did not get
+    /// more revealing.
+    #[test]
+    fn an_io_error_names_the_os_reason_without_naming_the_path() {
+        let secret = std::path::Path::new("/nonexistent/TAX_RETURN_2024_SSN.pdf");
+        let io_err = fs::metadata(secret).expect_err("this path must not exist");
+        let rendered = format!("{}", ApplyError::Io(io_err));
+
+        assert!(
+            rendered.contains("os error"),
+            "the OS's own reason must survive into the message, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("TAX_RETURN"),
+            "an error must never carry the path it failed on, got: {rendered}"
+        );
+    }
 
     /// The narrower, deterministic half of issue #20's claim: that
     /// copy_data_and_stat does not request COPYFILE_XATTR (1<<2) or

@@ -290,7 +290,11 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
 
     // --- 4. extract --------------------------------------------------------
     if let Err(e) = std::fs::create_dir_all(&dest) {
-        eprintln!("unpack: cannot create the target ({})", e.kind());
+        // The OS text, not the Rust category -- "Permission denied
+        // (os error 13)" tells a user what to do; "permission denied"
+        // alone is the same words with the errno thrown away, and
+        // "uncategorized error" tells them nothing at all.
+        eprintln!("unpack: cannot create the target ({e})");
         return ExitCode::from(3);
     }
     if let Err(e) = extract(archive, fmt, &dest) {
@@ -352,7 +356,7 @@ fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
         .arg(archive)
         .stderr(Stdio::null())
         .output()
-        .map_err(|e| e.kind().to_string())?;
+        .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err("listing failed".into());
     }
@@ -374,7 +378,7 @@ fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<(), String> {
             .status(),
         Format::Gz => {
             let out_path = dest.join(stem(archive));
-            let f = std::fs::File::create(&out_path).map_err(|e| e.kind().to_string())?;
+            let f = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
             Command::new("gunzip")
                 .arg("-c")
                 .arg(archive)
@@ -397,7 +401,7 @@ fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<(), String> {
                 .status()
         }
     }
-    .map_err(|e| e.kind().to_string())?;
+    .map_err(|e| e.to_string())?;
 
     if status.success() {
         Ok(())
