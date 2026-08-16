@@ -382,6 +382,23 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     let Some((_, allowed)) = COMMAND_FLAGS.iter().find(|(c, _)| *c == cmd) else {
         return Ok(());
     };
+    // Flags already seen, so a repeat is refused rather than silently
+    // dropped. Found by scoping a rustc-style caret: the only argument error
+    // where naming the token is genuinely ambiguous is a token that appears
+    // twice, and measuring that case showed sweep did not report it at all.
+    // It took the first occurrence and discarded the rest without a word.
+    //
+    //   sweep DIR --depth 1 --depth 3    scanned 6   (--depth 3 ignored)
+    //   sweep DIR --depth 3 --depth 1    scanned 12  (--depth 1 ignored)
+    //
+    // The same command in a different order means a different thing, and
+    // nothing said so. On apply it decides which files move: `--only A
+    // --only B --yes` moved A and left every file in B where it was.
+    //
+    // No flag here is repeatable -- none accumulate, none are counters --
+    // so a repeat is always a mistake, and always one where the user
+    // believes something is happening that is not.
+    let mut seen: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -394,6 +411,13 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
         // defect one level down. `-h` and `-V` are answered at dispatch and
         // never reach here.
         if a.starts_with('-') && !matches!(a.as_str(), "--help" | "--version" | "-h" | "-V") {
+            if seen.contains(&a.as_str()) {
+                return Err(format!(
+                    "{a} was given more than once, and only the first would\n       \
+                     have been used. Remove the ones you do not mean."
+                ));
+            }
+            seen.push(a);
             match allowed.iter().find(|(name, _)| *name == a.as_str()) {
                 Some((_, takes_value)) => {
                     if *takes_value {
@@ -1786,6 +1810,69 @@ mod tests {
     /// and swallowing it turns a typo into a confusing outcome rather than an
     /// error: `--only --yes` used to filter for a group literally named
     /// "--yes", find none, and exit 1 saying there was nothing to apply.
+    /// A repeated flag is refused, not silently reduced to its first
+    /// occurrence.
+    ///
+    /// Measured before fixing, on a real tree: `--depth 1 --depth 3` scanned
+    /// 6 items and `--depth 3 --depth 1` scanned 12. Same flags, different
+    /// order, different meaning, nothing said. On apply it decided which
+    /// files moved -- `--only A --only B --yes` moved A and left every file
+    /// in B untouched while reporting success.
+    ///
+    /// No flag in this tool accumulates or counts, so a repeat is always a
+    /// mistake and always one where the user believes something is
+    /// happening that is not.
+    #[test]
+    fn a_repeated_flag_is_refused_rather_than_silently_ignored() {
+        for args in [
+            vec![
+                "--depth".to_string(),
+                "1".into(),
+                "--depth".into(),
+                "3".into(),
+            ],
+            vec!["--json".to_string(), "--json".into()],
+        ] {
+            let err = check_flags("", &args)
+                .expect_err("a repeated flag must be refused, not reduced to the first");
+            assert!(
+                err.contains("more than once"),
+                "the message must say what is wrong, got: {err}"
+            );
+        }
+        // apply's own flags, where the consequence is which files move.
+        let err = check_flags(
+            "apply",
+            &[
+                "--only".to_string(),
+                "a".into(),
+                "--only".into(),
+                "b".into(),
+            ],
+        )
+        .expect_err("a repeated --only must be refused");
+        assert!(err.contains("more than once"), "got: {err}");
+    }
+
+    /// The other half: a flag used once, and a value that happens to look
+    /// like a flag name, must still be accepted. A duplicate check that
+    /// compares values as well as flags would reject `--only --only`'s
+    /// legitimate cousin: a group genuinely named after a flag.
+    #[test]
+    fn using_each_flag_once_is_still_accepted() {
+        assert!(check_flags("", &["--depth".into(), "3".into()]).is_ok());
+        assert!(
+            check_flags("", &["--explain".into(), "--depth".into(), "2".into()]).is_ok(),
+            "distinct flags must not be mistaken for repeats"
+        );
+        // A value that is not flag-shaped but repeats a flag's NAME is a
+        // value, not a second flag: only args in flag position are checked.
+        assert!(
+            check_flags("apply", &["--only".into(), "depth".into()]).is_ok(),
+            "a group named like a flag is still a value"
+        );
+    }
+
     #[test]
     fn a_flag_where_a_value_belongs_is_an_error_not_a_value() {
         let err = check_flags("apply", &["--only".into(), "--yes".into()])
