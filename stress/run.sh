@@ -4,7 +4,8 @@
 #   stress/run.sh            all scenarios
 #   stress/run.sh scale      only scenarios whose name contains "scale"
 #
-# Exit: 0 all passed · 1 something failed · 2 nothing could be proven here.
+# Exit: 0 all passed · 1 something failed · 2 nothing could be proven here ·
+# 3 refused to start, another run is already in progress.
 #
 # Scenarios emulate deployed conditions: a real Desktop mid-project, a synced
 # folder, a card dump, an interrupted run. None of it is your data; every tree
@@ -20,7 +21,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 LOCK="${TMPDIR:-/tmp}/etudes-stress.lock"
 if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
   echo "another stress run is already in progress (pid $(cat "$LOCK")): $LOCK"
-  exit 2
+  # 3, not 2. A review pointed out that sharing 2 with "nothing could be
+  # proven here" is ambiguous to a caller: a script that retries
+  # automatically on "nothing proven" would not know a competing run was
+  # the actual reason.
+  exit 3
 fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT

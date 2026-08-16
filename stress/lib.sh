@@ -104,11 +104,13 @@ workdir() {
 # starts, plus refusing to let two batches run at once -- see run.sh.
 #
 # Usage: after a successful `hdiutil attach ... -mountpoint "$MNT"`, call
-# `register_mount "$MNT"`. The scenario's own EXIT trap should still remove
-# its workdir; this only adds the detach, ordered first, via bash's own trap
-# chaining (a second `trap ... EXIT` replaces the first, so this composes by
-# calling into whatever cleanup the scenario already defined, not by trying
-# to stack independent traps).
+# `register_mount "$MNT"`. This only appends to a list -- it does not wire
+# anything into a trap by itself. The scenario's own `cleanup()` must call
+# `detach_registered_mounts` before removing its workdir, the same way it
+# already calls `rm -rf "$W"`; get that ordering right once, in cleanup(),
+# and every mount registered here is detached in the right order regardless
+# of how many times the scenario re-attaches under the same or different
+# paths.
 declare -a REGISTERED_MOUNTS=()
 register_mount() {
   REGISTERED_MOUNTS+=("$1")
@@ -143,10 +145,26 @@ detach_registered_mounts() {
 # proportion for a test suite to do on its own. Reported and skipped, not
 # silently ignored.
 sweep_orphaned_volumes() {
-  command -v hdiutil >/dev/null 2>&1 || return 0
+  # Skipping silently is correct here -- failing the whole batch because an
+  # opportunistic cleaner lacks a tool would be worse than leaving an orphan
+  # for a human to find later, and every scenario that actually needs a
+  # volume already checks for hdiutil itself and goes unproven if it is
+  # missing. A one-line trace is still worth having so a silent skip is
+  # findable rather than invisible when someone is debugging why a leak
+  # from a prior run wasn't swept.
+  command -v hdiutil >/dev/null 2>&1 || {
+    echo "  orphan sweep: skipped, no hdiutil on this host" >&2
+    return 0
+  }
   local plist json dev mnt
-  plist=$(hdiutil info -plist 2>/dev/null) || return 0
-  json=$(plutil -convert json -o - - <<<"$plist" 2>/dev/null) || return 0
+  plist=$(hdiutil info -plist 2>/dev/null) || {
+    echo "  orphan sweep: skipped, hdiutil info failed" >&2
+    return 0
+  }
+  json=$(plutil -convert json -o - - <<<"$plist" 2>/dev/null) || {
+    echo "  orphan sweep: skipped, could not parse hdiutil's output" >&2
+    return 0
+  }
   local pairs
   pairs=$(python3 -c '
 import json, sys
@@ -162,7 +180,7 @@ for img in d.get("images", []):
             print(f"{dev}\t{mnt}")
 ' <<<"$json" 2>/dev/null)
   [ -z "$pairs" ] && return 0
-  local swept=0 stale=0
+  local swept=0 stale=0 refused=0
   while IFS=$'\t' read -r dev mnt; do
     [ -z "$dev" ] && continue
     if ! diskutil list "$dev" >/dev/null 2>&1; then
@@ -173,10 +191,17 @@ for img in d.get("images", []):
     if hdiutil detach "$dev" -force >/dev/null 2>&1; then
       swept=$((swept + 1))
       echo "  orphan sweep: detached $dev, left mounted at $mnt by a previous killed run" >&2
+    else
+      # A review caught this branch missing: a live, diskutil-confirmed
+      # device whose detach itself fails (e.g. genuinely busy) was silently
+      # dropped, with no line distinguishing it from a clean sweep or the
+      # kernel-gone stale case above.
+      refused=$((refused + 1))
+      echo "  orphan sweep: $dev ($mnt) is live but refused to detach (e.g. busy); left as-is" >&2
     fi
   done <<<"$pairs"
-  if [ "$swept" -gt 0 ] || [ "$stale" -gt 0 ]; then
-    echo "  orphan sweep: $swept detached, $stale unrecoverable stale entries reported above" >&2
+  if [ "$swept" -gt 0 ] || [ "$stale" -gt 0 ] || [ "$refused" -gt 0 ]; then
+    echo "  orphan sweep: $swept detached, $stale unrecoverable stale, $refused live-but-refused (all reported above)" >&2
   fi
 }
 
