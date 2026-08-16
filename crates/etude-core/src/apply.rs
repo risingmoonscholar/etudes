@@ -53,11 +53,23 @@ impl std::fmt::Display for ApplyError {
             // reading the message. Noted there as a secondary finding and
             // fixed here.
             //
-            // Verified this cannot leak a path: std::io::Error carries the
-            // errno and its text, never the path operated on, so the
-            // "errors never contain paths unless --explain" claim is
-            // unaffected. Checked directly against a filename designed to
-            // be obvious if it appeared.
+            // On paths: an io::Error raised BY THE OS carries the errno and
+            // its text, never the path operated on, so rendering it in full
+            // does not weaken the "errors never contain paths unless
+            // --explain" claim. Checked directly against a filename designed
+            // to be obvious if it appeared.
+            //
+            // That is a fact about OS-raised errors, not about the type. A
+            // review corrected an earlier version of this comment that said
+            // io::Error can never hold a path: io::Error::other(msg) takes
+            // arbitrary text and would happily carry one. Nothing in this
+            // crate does that today -- every custom payload here is a fixed
+            // string ("path contains a NUL byte", "cross-device copy size
+            // mismatch") -- but the guarantee lives in what we construct,
+            // not in what the type forbids. Anyone adding an
+            // io::Error::other with a formatted path is the one who breaks
+            // it, and an_io_error_names_the_os_reason_without_naming_the_path
+            // is what should catch them.
             ApplyError::Io(e) => write!(f, "io error: {e}"),
             ApplyError::Journal(e) => write!(f, "{e}"),
             ApplyError::DestinationExists(p) => {
