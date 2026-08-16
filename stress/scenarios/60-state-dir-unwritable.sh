@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
-# XDG_STATE_HOME points somewhere the tool cannot create a directory. The
+# ETUDE_STATE_DIR points somewhere the tool cannot create a directory. The
 # tool must refuse to proceed rather than applying without a journal --
 # silently losing undo is exactly the failure this tool must not have.
 #
-# This overrides the harness's own XDG_STATE_HOME (which lib.sh sets to a
-# fresh writable tempdir per scenario) via XDG_STATE_HOME_OVERRIDE, which
-# lib.sh reads before making its choice. The read-only parent directory is
-# restored to writable in the trap so the harness's own cleanup can still
-# remove it.
+# This overrides the harness's own ETUDE_STATE_DIR (which lib.sh sets to a
+# fresh writable tempdir per scenario) via ETUDE_STATE_DIR_OVERRIDE, which
+# lib.sh reads before making its choice. Was XDG_STATE_HOME_OVERRIDE before
+# issue #23 moved the harness's own isolation mechanism off that removed
+# fallback. The read-only parent directory is restored to writable in the
+# trap so the harness's own cleanup can still remove it.
 W_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-statedir-parent-XXXXXX")
-export XDG_STATE_HOME_OVERRIDE="$W_PARENT/state"
+export ETUDE_STATE_DIR_OVERRIDE="$W_PARENT/state"
 chmod 0500 "$W_PARENT"
 
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-# Chains onto lib.sh's own EXIT trap (which removes $XDG_STATE_HOME) rather
+# Chains onto lib.sh's own EXIT trap (which removes $ETUDE_STATE_DIR) rather
 # than replacing it -- that directory was never actually created here (the
 # whole point is that it can't be), but the parent must still be restored to
 # writable so removal doesn't fail.
-cleanup_extra() { chmod 0700 "$W_PARENT" 2>/dev/null; rm -rf "$XDG_STATE_HOME" "$W_PARENT" 2>/dev/null; }
+cleanup_extra() { chmod 0700 "$W_PARENT" 2>/dev/null; rm -rf "$ETUDE_STATE_DIR" "$W_PARENT" 2>/dev/null; }
 trap 'cleanup_extra' EXIT
 
 if [ ! -d "$W_PARENT" ] || [ -w "$W_PARENT" ]; then

@@ -49,6 +49,14 @@ Everything is reversible, and stash prints what it took.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // One-time move from the old XDG-style state directory to the correct
+    // macOS one (issue #23), before anything reads state_dir(). Journals in
+    // the shared state directory are namespaced by tool prefix within one
+    // directory, not split per tool, so stash's own history needs this same
+    // migration whether or not sweep has ever run on this machine.
+    etude_core::journal::migrate_legacy_state_dir();
+
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");

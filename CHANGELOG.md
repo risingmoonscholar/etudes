@@ -91,3 +91,17 @@ before anyone else could be.
   taking it as a group name or a depth and reporting the confusing result.
 - `unpack` refuses a leading flag rather than reading it as an archive name,
   which makes the exit-code contract uniform across the three tools.
+- The journal directory moved from `~/.local/state/etudes`, a Linux
+  convention on a macOS-only tool, to `~/Library/Application Support/etudes`,
+  the location Apple's own documentation specifies. Existing journals are
+  moved forward automatically the first time any tool runs.
+- The cross-device copy on macOS no longer relies on `fs::copy`'s
+  undocumented platform mapping, which also propagated a file's own
+  pre-existing extended attributes unnecessarily; it now requests only data
+  and POSIX stat via an explicit `copyfile()` call.
+- A same-device move on a filesystem without hard-link support (exFAT,
+  FAT32) no longer fails outright; the fallback now handles that error the
+  same way its sibling call site already did.
+- A camera's own sequence number is no longer mistaken for a tax-form or
+  identity marker when the filename is shaped the way a camera actually
+  names one (DCF, JEITA CP-3461B).

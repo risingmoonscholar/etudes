@@ -4,7 +4,7 @@
 # Journal ids were recently changed (nanos-pid-counter-hash) specifically to
 # avoid same-second collisions between processes. This attacks that directly:
 # two `sweep apply` runs, launched in the same instant against two different
-# directories, sharing one XDG_STATE_HOME. Two things are checked:
+# directories, sharing one ETUDE_STATE_DIR. Two things are checked:
 #
 #   1. Do the journals collide or cross-contaminate (directory A's moves
 #      showing up recorded against directory B, or one process's journal
@@ -57,7 +57,7 @@ else
 fi
 
 # --- Journal identity: two distinct, non-colliding journal files. ----------
-JCOUNT=$(find "$XDG_STATE_HOME/etudes" -maxdepth 1 -name 'sweep-*.journal' 2>/dev/null | wc -l | tr -d ' ')
+JCOUNT=$(find "$ETUDE_STATE_DIR" -maxdepth 1 -name 'sweep-*.journal' 2>/dev/null | wc -l | tr -d ' ')
 assert_eq 2 "$JCOUNT" "two concurrent applies produced two distinct journal files (no id collision clobbered one)"
 
 # --- The undo-reachability trap: both processes print "Undo with: sweep

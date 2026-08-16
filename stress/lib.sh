@@ -67,13 +67,21 @@ assert_intact() {
 
 # Journals go to a scratch state directory, never the real one.
 #
-# XDG_STATE_HOME redirects where journals are written while leaving HOME alone,
-# so the keychain still works. Without this, a scenario would write into the
-# user's own journal directory. `undo` picks the newest journal globally.
-# Two scenarios could undo each other's work. A stress run would leave real
-# state behind.
-export XDG_STATE_HOME="${XDG_STATE_HOME_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
-trap 'rm -rf "$XDG_STATE_HOME"' EXIT
+# ETUDE_STATE_DIR redirects where journals are written while leaving HOME
+# alone, so the keychain still works. Without this, a scenario would write
+# into the user's own journal directory. `undo` picks the newest journal
+# globally. Two scenarios could undo each other's work. A stress run would
+# leave real state behind.
+#
+# Was XDG_STATE_HOME before issue #23 moved the product default off that
+# Linux convention onto ~/Library/Application Support/etudes. ETUDE_STATE_DIR
+# was already the primary override the rest of the suite uses; this just
+# stops the harness being the one caller still depending on the removed
+# fallback. Unlike the old XDG_STATE_HOME (which had "etudes" joined onto it
+# by state_dir()), ETUDE_STATE_DIR is used exactly as given -- no /etudes
+# suffix needed when a scenario builds a path under it.
+export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
+trap 'rm -rf "$ETUDE_STATE_DIR"' EXIT
 
 # A scratch tree, unique per scenario, removed on exit.
 workdir() {
