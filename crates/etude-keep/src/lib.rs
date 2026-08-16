@@ -105,7 +105,7 @@ fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
     let out = security()?
         .args(["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"])
         .output()
-        .map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
+        .map_err(|e| KeepError::Keychain(e.to_string()))?;
     if !out.status.success() {
         return Ok(None); // not found is not an error; it means first run
     }
@@ -135,7 +135,7 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
+        .map_err(|e| KeepError::Keychain(e.to_string()))?;
 
     let encoded = hex(k);
     {
@@ -143,12 +143,12 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
             .stdin
             .as_mut()
             .ok_or(KeepError::Keychain("no stdin".into()))?;
-        writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
-        writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
+        writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.to_string()))?;
+        writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.to_string()))?;
     }
     let status = child
         .wait()
-        .map_err(|e| KeepError::Keychain(e.kind().to_string()))?;
+        .map_err(|e| KeepError::Keychain(e.to_string()))?;
     if !status.success() {
         return Err(KeepError::Keychain("could not store the key".into()));
     }
