@@ -865,7 +865,20 @@ fn refuse_scan(e: &etude_core::scan::ScanError) {
 fn refuse_apply(e: &etude_core::apply::ApplyError) {
     use etude_core::apply::ApplyError as E;
     match e {
-        E::Io(_) | E::Journal(_) => refuse("could not move the files", e),
+        E::Io(_) => refuse("could not move the files", e),
+        // Journal is NOT wrapped, and the reason is worth keeping: it is
+        // raised from record_done/record_undone/save_sealed, which run
+        // AFTER a move or restore has already succeeded. "could not move
+        // the files" in front of a journal write failure is simply false --
+        // the files moved, the record of them did not. A review caught the
+        // first version of this doing exactly that, which is the same
+        // overclaim as the "could not finish putting the files back" it was
+        // brought in to replace.
+        //
+        // JournalError already names its own subsystem: "journal io: ...",
+        // "journal malformed: ...", "no journal found". It needs no phrase
+        // in front of it, and the caller's own follow-up lines (about
+        // whether the journal is resumable) carry the consequence.
         _ => eprintln!("sweep: {e}"),
     }
 }
