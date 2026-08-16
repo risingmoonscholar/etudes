@@ -516,3 +516,55 @@ fn documented_scan_invocations_still_run() {
         );
     }
 }
+
+/// A refusal names the operation that failed, not only the reason.
+///
+/// The audit that produced this found nine sites forwarding an inner error
+/// with `eprintln!("sweep: {e}")`. "io error: Permission denied (os error
+/// 13)" is true and leaves the reader guessing whether sweep was reading
+/// their folder, writing a journal, or moving a file. rustc never does
+/// that: it names the operation, then the reason.
+///
+/// Triggers the real path rather than a synthetic one -- ScanError::Io comes
+/// from canonicalize(), so an unreadable PARENT is what reaches it. An
+/// unreadable target directory does not: those are counted and reported,
+/// which is issue #4's fix and a different code path entirely.
+#[test]
+fn a_refusal_names_the_operation_not_only_the_reason() {
+    let root = TestDir(unique_temp("refusal-context"));
+    let parent = root.0.join("parent");
+    let child = parent.join("child");
+    std::fs::create_dir_all(&child).expect("mkdir");
+    std::fs::write(child.join("a.png"), b"x").expect("write");
+
+    // Make the parent unreadable so canonicalize() on the child fails.
+    let mut perms = std::fs::metadata(&parent).expect("stat").permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&parent, perms).expect("chmod");
+
+    let out = sweep_bin().arg(&child).output().expect("run");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+    // Restore before asserting, so a failure here cannot leave an
+    // unreadable directory behind for the next test or the cleanup.
+    let mut restore = std::fs::metadata(&parent).expect("stat").permissions();
+    restore.set_mode(0o700);
+    std::fs::set_permissions(&parent, restore).expect("chmod back");
+
+    if stderr.is_empty() {
+        // Running as root, or a filesystem that ignores the mode bits: the
+        // condition could not be created, so there is nothing to assert.
+        // Saying so beats passing as though it had been checked.
+        eprintln!("could not make a directory unreadable on this host; not asserted");
+        return;
+    }
+    assert!(
+        stderr.contains("could not read that folder"),
+        "the refusal must name what sweep was attempting, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("os error"),
+        "and must still carry the OS's own reason, got: {stderr}"
+    );
+}

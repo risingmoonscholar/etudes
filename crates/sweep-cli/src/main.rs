@@ -516,7 +516,7 @@ fn scan_and_plan(
     let outcome = match scan::scan(path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not read that folder", &e);
             return Err(scan_exit_code(&e));
         }
     };
@@ -534,7 +534,7 @@ fn scan_and_plan(
             return Ok((plan::build(&outcome), None));
         }
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not read your answer to the consent prompt", &e);
             return Err(ExitCode::from(3));
         }
     }
@@ -743,7 +743,7 @@ fn sealer() -> Option<KeychainSeal> {
     match etude_keep::key() {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not get the journal key from the keychain", &e);
             eprintln!(
                 "Refusing to write an unencrypted journal.\n\
                  Re-run with --no-journal to proceed without undo."
@@ -781,7 +781,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let outcome = match scan::scan(&path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not read that folder", &e);
             return scan_exit_code(&e);
         }
     };
@@ -794,7 +794,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     match review::run(&mut p) {
         Ok(review::Outcome::Cancelled) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not finish the review", &e);
             ExitCode::from(3)
         }
         Ok(review::Outcome::Apply) => {
@@ -810,6 +810,31 @@ fn cmd_review(args: &[String]) -> ExitCode {
             run_apply(&p, sl)
         }
     }
+}
+
+/// Print a refusal the way rustc does: the operation that failed on the
+/// first line, the reason underneath.
+///
+/// The audit that produced this found nine sites doing `eprintln!("sweep:
+/// {e}")` -- forwarding an inner error that says what went wrong but never
+/// what sweep was attempting when it went wrong. "io error: Permission
+/// denied (os error 13)" is a true sentence that leaves the reader guessing
+/// whether sweep was reading their folder, writing a journal, or moving a
+/// file.
+///
+/// The context was never missing from the program, only from the message:
+/// every one of those call sites knows exactly what it was doing. So this
+/// takes the operation as a plain phrase rather than threading context down
+/// through the error types, which would have changed shared types that
+/// `stash` also renders.
+///
+/// Deliberately does NOT take a path. The reason a caller knows the
+/// operation but must not name its target is the same reason ScanError
+/// redacts: "errors never contain paths unless --explain". See
+/// THREAT-MODEL § T3.
+fn refuse(doing: &str, why: &impl std::fmt::Display) {
+    eprintln!("sweep: {doing}");
+    eprintln!("       {why}");
 }
 
 /// Refusals are policy stops (2); everything else is a genuine
@@ -860,7 +885,7 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not finish moving the files", &e);
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
             apply_exit_code(&e)
         }
@@ -908,7 +933,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let outcome = match scan::scan(&path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("sweep: {e}");
+            refuse("could not read that folder", &e);
             return scan_exit_code(&e);
         }
     };
@@ -1006,13 +1031,17 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let mut j = match etude_core::Journal::latest_sealed("sweep", &sl) {
         Ok(j) => j,
         Err(e) => {
-            eprintln!("sweep: {e}");
-            let code = if matches!(e, etude_core::journal::JournalError::NotFound) {
-                1
-            } else {
-                3
-            };
-            return ExitCode::from(code);
+            // NotFound is not a failure to open the journal, it is the
+            // absence of one -- "could not open the journal: no journal
+            // found" would be two sentences arguing with each other. It
+            // keeps its own plain rendering; everything else gets the
+            // operation named.
+            if matches!(e, etude_core::journal::JournalError::NotFound) {
+                eprintln!("sweep: {e}");
+                return ExitCode::from(1);
+            }
+            refuse("could not open the most recent journal", &e);
+            return ExitCode::from(3);
         }
     };
     if journal_is_fully_undone(&j) {
@@ -1083,7 +1112,7 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     // exists to remove, just moved one line later.
     let saved = j.save_sealed(sl);
     if let Some(err) = r.error {
-        eprintln!("sweep: {err}");
+        refuse("could not finish putting the files back", &err);
         match saved {
             Ok(()) => {
                 eprintln!(
