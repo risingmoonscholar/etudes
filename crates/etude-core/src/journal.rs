@@ -1246,16 +1246,44 @@ mod tests {
     /// binary still calls /usr/bin/security is a system-level operation, not
     /// a contained one. state_dir() only reads an env var; nothing here
     /// touches the keychain.
+    ///
+    /// Restores whatever HOME was before it, rather than blindly removing
+    /// it. A review pointed out that env vars are process-global and cargo
+    /// runs tests on multiple threads in one process; STATE_DIR_LOCK
+    /// serializes these tests against each other, but not against some
+    /// unrelated test elsewhere in the crate reading HOME at the exact
+    /// moment one of these had removed it. Restoring what was actually
+    /// there closes that gap instead of assuming HOME is unset to begin
+    /// with, which on a real machine it never is.
+    struct RestoreEnvVar {
+        name: &'static str,
+        prior: Option<std::ffi::OsString>,
+    }
+    impl RestoreEnvVar {
+        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prior = std::env::var_os(name);
+            unsafe { std::env::set_var(name, value) };
+            Self { name, prior }
+        }
+    }
+    impl Drop for RestoreEnvVar {
+        fn drop(&mut self) {
+            match self.prior.take() {
+                Some(v) => unsafe { std::env::set_var(self.name, v) },
+                None => unsafe { std::env::remove_var(self.name) },
+            }
+        }
+    }
+
     #[test]
     fn the_default_state_dir_is_application_support_not_xdg() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
         let fake_home = std::env::temp_dir().join(format!("etudes_home_{}", std::process::id()));
-        unsafe { std::env::set_var("HOME", &fake_home) };
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
 
         let got = state_dir();
 
-        unsafe { std::env::remove_var("HOME") };
         assert_eq!(
             got,
             fake_home.join("Library/Application Support/etudes"),
@@ -1272,13 +1300,11 @@ mod tests {
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
         let fake_home =
             std::env::temp_dir().join(format!("etudes_home_xdg_{}", std::process::id()));
-        unsafe { std::env::set_var("HOME", &fake_home) };
-        unsafe { std::env::set_var("XDG_STATE_HOME", "/somewhere/that/must/be/ignored") };
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
+        let _xdg = RestoreEnvVar::set("XDG_STATE_HOME", "/somewhere/that/must/be/ignored");
 
         let got = state_dir();
 
-        unsafe { std::env::remove_var("HOME") };
-        unsafe { std::env::remove_var("XDG_STATE_HOME") };
         assert_eq!(
             got,
             fake_home.join("Library/Application Support/etudes"),
@@ -1293,11 +1319,10 @@ mod tests {
     fn etude_state_dir_still_overrides_the_default() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
         let explicit = std::env::temp_dir().join(format!("etudes_explicit_{}", std::process::id()));
-        unsafe { std::env::set_var("ETUDE_STATE_DIR", &explicit) };
+        let _override = RestoreEnvVar::set("ETUDE_STATE_DIR", &explicit);
 
         let got = state_dir();
 
-        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
         assert_eq!(got, explicit, "an explicit override must still win");
     }
 
@@ -1316,7 +1341,7 @@ mod tests {
         let legacy = fake_home.join(".local/state/etudes");
         fs::create_dir_all(&legacy).expect("mkdir legacy");
         fs::write(legacy.join("sweep-old-id.journal"), b"legacy content").expect("write");
-        unsafe { std::env::set_var("HOME", &fake_home) };
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
 
         migrate_legacy_state_dir();
 
@@ -1324,7 +1349,6 @@ mod tests {
             .join("Library/Application Support/etudes")
             .join("sweep-old-id.journal");
         let content = fs::read(&new_path);
-        unsafe { std::env::remove_var("HOME") };
         let _ = fs::remove_dir_all(&fake_home);
 
         assert_eq!(
@@ -1346,15 +1370,13 @@ mod tests {
         let legacy = fake_home.join(".local/state/etudes");
         fs::create_dir_all(&legacy).expect("mkdir legacy");
         fs::write(legacy.join("sweep-old-id.journal"), b"legacy content").expect("write");
-        unsafe { std::env::set_var("HOME", &fake_home) };
+        let _home = RestoreEnvVar::set("HOME", &fake_home);
         let explicit = std::env::temp_dir().join(format!("etudes_override_{}", std::process::id()));
-        unsafe { std::env::set_var("ETUDE_STATE_DIR", &explicit) };
+        let _override = RestoreEnvVar::set("ETUDE_STATE_DIR", &explicit);
 
         migrate_legacy_state_dir();
 
         let legacy_still_there = legacy.join("sweep-old-id.journal").exists();
-        unsafe { std::env::remove_var("HOME") };
-        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
         let _ = fs::remove_dir_all(&fake_home);
 
         assert!(
