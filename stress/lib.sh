@@ -89,6 +89,122 @@ workdir() {
   echo "$d"
 }
 
+# Registers a mounted volume for cleanup, so every scenario that mounts one
+# gets the ordering right by construction instead of each getting its own
+# trap to write correctly. Issue #13.
+#
+# Nothing here defends against SIGKILL. A trap -- this one included -- never
+# runs at all for a process killed with -9; that is a POSIX guarantee, not a
+# bug in this harness. What a shared, correct helper DOES buy: every
+# scenario that mounts something detaches it before removing its own
+# directory on every path that CAN run a trap (normal exit, a caught signal
+# like SIGTERM/SIGINT), and no future scenario can get that ordering wrong
+# by copying an earlier one that already had it wrong. The actual defense
+# against SIGKILL is sweep_orphaned_volumes below, run once before a batch
+# starts, plus refusing to let two batches run at once -- see run.sh.
+#
+# Usage: after a successful `hdiutil attach ... -mountpoint "$MNT"`, call
+# `register_mount "$MNT"`. This only appends to a list -- it does not wire
+# anything into a trap by itself. The scenario's own `cleanup()` must call
+# `detach_registered_mounts` before removing its workdir, the same way it
+# already calls `rm -rf "$W"`; get that ordering right once, in cleanup(),
+# and every mount registered here is detached in the right order regardless
+# of how many times the scenario re-attaches under the same or different
+# paths.
+declare -a REGISTERED_MOUNTS=()
+register_mount() {
+  REGISTERED_MOUNTS+=("$1")
+}
+detach_registered_mounts() {
+  local m
+  for m in "${REGISTERED_MOUNTS[@]:-}"; do
+    [ -n "$m" ] && [ -d "$m" ] && hdiutil detach "$m" -force >/dev/null 2>&1
+  done
+}
+
+# Best-effort cleanup of volumes orphaned by a killed run, run once before a
+# batch starts (see run.sh), not per scenario. Issue #13: a scenario killed
+# with SIGKILL leaves its mount attached forever as far as this harness is
+# concerned, because nothing inside that process ever runs again to detach
+# it. This is the actual mitigation -- not preventing the leak (impossible
+# from inside a process that received SIGKILL) but sweeping it up before the
+# next batch compounds it.
+#
+# Only ever touches a device whose reported mount point contains
+# "etudes-stress-", this harness's own naming convention (workdir(), above).
+# Never touches anything else mounted on the machine.
+#
+# Some entries are unrecoverable from here: `diskutil list "$dev"` failing
+# after `hdiutil info` still lists the device means the kernel-level disk is
+# already gone and only diskimagesiod's own bookkeeping still thinks it is
+# attached (reproduced directly while building this: a process that died
+# via SIGKILL left exactly this state, `hdiutil detach` failing with "No
+# such file or directory" against a device diskutil could not find at all).
+# Fixing that needs restarting diskimagesiod, a system daemon whose restart
+# could affect disk images this harness has nothing to do with -- out of
+# proportion for a test suite to do on its own. Reported and skipped, not
+# silently ignored.
+sweep_orphaned_volumes() {
+  # Skipping silently is correct here -- failing the whole batch because an
+  # opportunistic cleaner lacks a tool would be worse than leaving an orphan
+  # for a human to find later, and every scenario that actually needs a
+  # volume already checks for hdiutil itself and goes unproven if it is
+  # missing. A one-line trace is still worth having so a silent skip is
+  # findable rather than invisible when someone is debugging why a leak
+  # from a prior run wasn't swept.
+  command -v hdiutil >/dev/null 2>&1 || {
+    echo "  orphan sweep: skipped, no hdiutil on this host" >&2
+    return 0
+  }
+  local plist json dev mnt
+  plist=$(hdiutil info -plist 2>/dev/null) || {
+    echo "  orphan sweep: skipped, hdiutil info failed" >&2
+    return 0
+  }
+  json=$(plutil -convert json -o - - <<<"$plist" 2>/dev/null) || {
+    echo "  orphan sweep: skipped, could not parse hdiutil's output" >&2
+    return 0
+  }
+  local pairs
+  pairs=$(python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for img in d.get("images", []):
+    for e in img.get("system-entities", []):
+        dev = e.get("dev-entry")
+        mnt = e.get("mount-point")
+        if dev and mnt and "etudes-stress-" in mnt:
+            print(f"{dev}\t{mnt}")
+' <<<"$json" 2>/dev/null)
+  [ -z "$pairs" ] && return 0
+  local swept=0 stale=0 refused=0
+  while IFS=$'\t' read -r dev mnt; do
+    [ -z "$dev" ] && continue
+    if ! diskutil list "$dev" >/dev/null 2>&1; then
+      stale=$((stale + 1))
+      echo "  orphan sweep: $dev ($mnt) is already gone at the kernel level; diskimagesiod's own bookkeeping is stale. Not fixable from here -- see sweep_orphaned_volumes' comment in stress/lib.sh." >&2
+      continue
+    fi
+    if hdiutil detach "$dev" -force >/dev/null 2>&1; then
+      swept=$((swept + 1))
+      echo "  orphan sweep: detached $dev, left mounted at $mnt by a previous killed run" >&2
+    else
+      # A review caught this branch missing: a live, diskutil-confirmed
+      # device whose detach itself fails (e.g. genuinely busy) was silently
+      # dropped, with no line distinguishing it from a clean sweep or the
+      # kernel-gone stale case above.
+      refused=$((refused + 1))
+      echo "  orphan sweep: $dev ($mnt) is live but refused to detach (e.g. busy); left as-is" >&2
+    fi
+  done <<<"$pairs"
+  if [ "$swept" -gt 0 ] || [ "$stale" -gt 0 ] || [ "$refused" -gt 0 ]; then
+    echo "  orphan sweep: $swept detached, $stale unrecoverable stale, $refused live-but-refused (all reported above)" >&2
+  fi
+}
+
 require() {  # require CMD REASON: mark unproven and return 1 if missing
   command -v "$1" >/dev/null 2>&1 && return 0
   unproven "$2" "$1 not available on this host"

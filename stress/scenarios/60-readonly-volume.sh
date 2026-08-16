@@ -10,7 +10,7 @@ require hdiutil "read-only-volume scenario needs a real disk image" || exit 0
 IMG=""
 MNT=""
 cleanup() {
-  [ -n "$MNT" ] && [ -d "$MNT" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1
+  detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
 trap cleanup EXIT
@@ -28,11 +28,15 @@ if ! hdiutil attach "$IMG" -mountpoint "$MNT" -nobrowse >/dev/null 2>&1; then
   unproven "read-only volume: apply refuses cleanly" "hdiutil attach failed on this host"
   exit 0
 fi
+register_mount "$MNT"
 
 for f in alpha beta gamma delta epsilon; do : > "$MNT/widget_$f.txt"; done
 BEFORE=$(find "$MNT" -maxdepth 1 -type f | wc -l | tr -d ' ')
 
-# Flip to read-only: detach, reattach with -readonly.
+# Flip to read-only: detach, reattach with -readonly. register_mount was
+# called once, after the first attach, for this same path -- the reattach
+# here does not need a second call. At exit, detach_registered_mounts tries
+# that one registered path once, which by then is the read-only mount.
 hdiutil detach "$MNT" -force >/dev/null 2>&1
 if ! hdiutil attach "$IMG" -mountpoint "$MNT" -nobrowse -readonly >/dev/null 2>&1; then
   unproven "read-only volume: apply refuses cleanly" "could not reattach the image read-only on this host"

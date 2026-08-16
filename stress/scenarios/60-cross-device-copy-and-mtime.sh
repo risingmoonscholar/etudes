@@ -36,7 +36,7 @@ require hdiutil "cross-device copy scenario needs a real disk image" || exit 0
 IMG=""
 INNER=""
 cleanup() {
-  [ -n "$INNER" ] && [ -d "$INNER" ] && hdiutil detach "$INNER" -force >/dev/null 2>&1
+  detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
 trap cleanup EXIT
@@ -55,6 +55,7 @@ if ! hdiutil attach "$IMG" -mountpoint "$INNER" -nobrowse >/dev/null 2>&1; then
   unproven "cross-device copy: content, mtime and no sidecar in-plan" "hdiutil attach failed on this host"
   exit 0
 fi
+register_mount "$INNER"
 
 DEV_OUTER=$(stat -f "%d" "$OUTER")
 DEV_INNER=$(stat -f "%d" "$INNER")

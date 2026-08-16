@@ -4,7 +4,8 @@
 #   stress/run.sh            all scenarios
 #   stress/run.sh scale      only scenarios whose name contains "scale"
 #
-# Exit: 0 all passed · 1 something failed · 2 nothing could be proven here.
+# Exit: 0 all passed · 1 something failed · 2 nothing could be proven here ·
+# 3 refused to start, another run is already in progress.
 #
 # Scenarios emulate deployed conditions: a real Desktop mid-project, a synced
 # folder, a card dump, an interrupted run. None of it is your data; every tree
@@ -12,9 +13,32 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# Refuse to start a second batch while one is already running. Issue #13's
+# own root cause: four concurrent interrupted runs each mounting volumes
+# nobody could then cleanly tell apart, which is what made the leak hard to
+# clean up rather than just present. A stale lock (holder no longer alive)
+# is reclaimed rather than trusted forever.
+LOCK="${TMPDIR:-/tmp}/etudes-stress.lock"
+if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+  echo "another stress run is already in progress (pid $(cat "$LOCK")): $LOCK"
+  # 3, not 2. A review pointed out that sharing 2 with "nothing could be
+  # proven here" is ambiguous to a caller: a script that retries
+  # automatically on "nothing proven" would not know a competing run was
+  # the actual reason.
+  exit 3
+fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
 echo "building release binaries"
 cargo build --release --quiet || { echo "build failed"; exit 1; }
 export BIN="$PWD/target/release"
+
+# Sweeps up whatever a previous SIGKILLed run left mounted. Nothing inside a
+# killed process can do this for itself -- see sweep_orphaned_volumes in
+# lib.sh for why -- so it runs once here, before any scenario, rather than
+# per scenario.
+SCENARIO=run BIN="$BIN" bash -c 'source stress/lib.sh; sweep_orphaned_volumes'
 
 filter="${1:-}"
 TOTAL_P=0; TOTAL_F=0; TOTAL_U=0
