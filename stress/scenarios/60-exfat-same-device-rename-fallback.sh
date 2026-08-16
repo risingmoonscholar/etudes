@@ -20,7 +20,7 @@ require hdiutil "same-device exFAT scenario needs a real disk image" || exit 0
 IMG=""
 MNT=""
 cleanup() {
-  [ -n "$MNT" ] && [ -d "$MNT" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1
+  detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
 trap cleanup EXIT
@@ -38,6 +38,7 @@ if ! hdiutil attach "$IMG" -mountpoint "$MNT" >/dev/null 2>&1; then
   unproven "exFAT disk image" "hdiutil attach failed on this machine"
   exit 0
 fi
+register_mount "$MNT"
 
 mkdir -p "$MNT/inbox"
 for n in 1 2 3; do

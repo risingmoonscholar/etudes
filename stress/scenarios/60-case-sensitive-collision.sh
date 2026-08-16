@@ -20,7 +20,7 @@ require hdiutil "case-sensitive-volume scenario needs a real disk image" || exit
 IMG=""
 MNT=""
 cleanup() {
-  [ -n "$MNT" ] && [ -d "$MNT" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1
+  detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
 trap cleanup EXIT
@@ -38,6 +38,7 @@ if ! hdiutil attach "$IMG" -mountpoint "$MNT" -nobrowse >/dev/null 2>&1; then
   unproven "case-sensitive volume: a legal case-differing pair is not refused" "hdiutil attach failed on this host"
   exit 0
 fi
+register_mount "$MNT"
 
 # Confirm the volume really is case-sensitive before trusting the rest of the
 # scenario -- if hdiutil silently gave us something else, the whole premise

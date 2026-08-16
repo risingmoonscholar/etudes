@@ -27,7 +27,7 @@ require hdiutil "this scenario needs a real disk image to remount read-only" || 
 IMG=""
 INNER=""
 cleanup() {
-  [ -n "$INNER" ] && [ -d "$INNER" ] && hdiutil detach "$INNER" -force >/dev/null 2>&1
+  detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
 trap cleanup EXIT
@@ -50,6 +50,7 @@ if ! hdiutil attach "$IMG" -mountpoint "$INNER" -nobrowse >/dev/null 2>&1; then
   unproven "undo does not silently drop partial-restore progress on error" "hdiutil attach failed on this host"
   exit 0
 fi
+register_mount "$INNER"
 
 for f in delta echo foxtrot; do : > "$OUTER/stuck_$f.txt"; done
 for f in alpha bravo; do : > "$INNER/stuck_$f.txt"; done

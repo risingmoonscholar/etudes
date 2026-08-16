@@ -26,7 +26,7 @@ require hdiutil "full-volume scenarios need a real disk image" || exit 0
 IMG=""
 MNT=""
 cleanup() {
-  [ -n "$MNT" ] && [ -d "$MNT" ] && hdiutil detach "$MNT" -force >/dev/null 2>&1
+  detach_registered_mounts
   [ -n "$IMG" ] && [ -f "$IMG" ] && rm -f "$IMG"
   [ -n "${W:-}" ] && rm -rf "$W"
 }
@@ -45,6 +45,7 @@ if ! hdiutil attach "$IMG" -mountpoint "$MNT" -nobrowse >/dev/null 2>&1; then
   unproven "full volume: apply refuses without partial state" "hdiutil attach failed on this host"
   exit 0
 fi
+register_mount "$MNT"
 
 # --- Part 1: the real ENOSPC floor. Deterministic. -------------------------
 PROJ="$MNT/proj"
