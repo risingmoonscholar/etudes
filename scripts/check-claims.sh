@@ -1,41 +1,74 @@
 #!/usr/bin/env bash
 # Verify the numbers this repo claims about itself are still true.
 #
-# The README and the demo page both state a test count. A count that drifts is
-# the exact failure this project exists to avoid, so it is checked rather than
-# maintained by hand. Run it in CI; run it before you publish.
-set -euo pipefail
+# Every claim here is CHECKED, never maintained by hand. Run it in CI; run it
+# before you publish.
+#
+# The rule that shapes this script: a claim it cannot find is a FAILURE, not a
+# skip. An earlier version had the scenario count baked into the pattern that
+# located the claim --
+#
+#     grep -oE '33 scenarios, [0-9]+ of them failing' README.md
+#
+# -- so when the count went from 33 to 36, the pattern stopped matching, the
+# result was empty, and an `if [ -n "$claimed" ]` guard skipped the check
+# without a word. The readme was wrong by three and this script reported green.
+# A checker that only finds the claim while the claim is already correct is
+# not a checker. Every lookup below fails loudly when it finds nothing.
+set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-actual=$(cargo test --all 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 status=0
+ok()   { printf "ok   %s\n" "$1"; }
+bad()  { printf "FAIL %s\n" "$1"; status=1; }
+
+# claim FILE PATTERN CAPTURE DESCRIPTION ACTUAL
+#
+# Finds a number in FILE, compares it to ACTUAL, and fails if the pattern
+# matches nothing at all -- the case that used to pass silently.
+claim() {
+  local file="$1" pattern="$2" capture="$3" desc="$4" actual="$5"
+  local found claimed
+  found=$(grep -oE "$pattern" "$file" | head -1 || true)
+  if [ -z "$found" ]; then
+    bad "$file states no $desc at all. Either it was reworded (fix this script) or it was dropped (fix the file). Not skipping."
+    return
+  fi
+  claimed=$(grep -oE "$capture" <<<"$found" | head -1)
+  if [ "$claimed" != "$actual" ]; then
+    bad "$file claims $claimed $desc; reality is $actual"
+  else
+    ok "$file claims $claimed $desc, and $actual is what runs"
+  fi
+}
+
+tests_actual=$(cargo test --all 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
+[ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
 for f in README.md demo/index.html; do
-  claimed=$(grep -oE '[0-9]+ tests' "$f" | head -1 | grep -oE '[0-9]+' || true)
-  if [ -z "$claimed" ]; then
-    echo "no test count claimed in $f, skipping"
-    continue
-  fi
-  if [ "$claimed" != "$actual" ]; then
-    echo "FAIL $f claims $claimed tests; the suite runs $actual"
-    status=1
-  else
-    echo "ok   $f claims $claimed tests, and $actual run"
-  fi
+  claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
 
-# The readme also states how many stress scenarios fail. That number drifted the
-# first time a fix landed, which is exactly the failure this script exists to
-# catch, so it is checked against the recorded baseline rather than trusted.
-known=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' stress/baseline.txt | tr -d ' ')
-claimed=$(grep -oE '33 scenarios, [0-9]+ of them failing' README.md | grep -oE '[0-9]+ of them' | grep -oE '[0-9]+' || true)
-if [ -n "$claimed" ]; then
-  if [ "$claimed" != "$known" ]; then
-    echo "FAIL README.md claims $claimed failing scenarios; the baseline lists $known"
-    status=1
-  else
-    echo "ok   README.md claims $claimed failing scenarios, matching the baseline"
-  fi
+# Scenario count, from the filesystem rather than from another document.
+scenarios_actual=$(find stress/scenarios -name '*.sh' | wc -l | tr -d ' ')
+claim README.md '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
+
+# How many of them are known to fail, from the baseline the ratchet uses.
+failing_known=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' stress/baseline.txt | tr -d ' ')
+claim README.md '[0-9]+ of them failing' '[0-9]+' "failing scenarios" "$failing_known"
+
+# The journal TTL, stated in prose in two places and defined once in code.
+ttl_actual=$(grep -oE 'TTL_DAYS: u64 = [0-9]+' crates/etude-core/src/journal.rs | grep -oE '[0-9]+$')
+[ -z "$ttl_actual" ] && { echo "FAIL could not read TTL_DAYS from journal.rs"; exit 1; }
+claim CHANGELOG.md 'pruned after [0-9]+ days' '[0-9]+' "TTL days" "$ttl_actual"
+
+# etude-core's zero dependencies, the claim the no-network argument rests on.
+# Checked against the manifest, not against the sentence in the readme.
+core_deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && NF && $0 !~ /^#/' crates/etude-core/Cargo.toml | wc -l | tr -d ' ')
+if [ "$core_deps" = "0" ]; then
+  ok "etude-core has zero dependencies, as the readme says"
+else
+  bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
 fi
 
 exit $status
