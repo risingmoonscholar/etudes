@@ -45,6 +45,63 @@ run_and_kill() {
   echo "killed"
 }
 
+# Keep the evidence from a failing trial, because this failure destroys its
+# own: the workdir and the journal are both deleted on the way out, so the one
+# artifact that would explain a stranding -- the journal the killed apply left
+# behind -- is gone at the moment it is produced. Two attempts at diagnosing
+# this failed for exactly that reason and had to theorise from the message
+# text instead of reading the journal.
+#
+# Only the FIRST failure in a run is kept. A bad run can strand a dozen files
+# across many trials, and 50 copies of a 220-file tree is a disk problem
+# rather than evidence.
+#
+# Nothing here is on the pass path, so a passing run leaves nothing behind.
+#
+# The "first only" latch is a FILE, not a variable. trial() is called as
+# `out=$(trial ...)`, which is a command substitution, which is a subshell:
+# a variable set in here never reaches the caller, so every trial would think
+# it was the first and a bad run would keep 50 copies. The first version of
+# this used a variable and did exactly that -- 12 directories from one run.
+keep_evidence() {
+  local d="$1" target="$2"
+  # Outside ETUDE_STATE_DIR on purpose: that directory gets copied into the
+  # evidence, and a latch file sitting in the copy reads like an artifact of
+  # the failure. $$ is the scenario shell's pid and is stable across the
+  # subshells trial() runs in, so it scopes the latch to this run.
+  local latch="${TMPDIR:-/tmp}/.etudes-evidence-latch-$$"
+  [ -e "$latch" ] && return 0
+  : > "$latch" 2>/dev/null
+
+  local dest="${TMPDIR:-/tmp}/etudes-stress-evidence/${SCENARIO}-$(date +%Y%m%d-%H%M%S)-target$target"
+  mkdir -p "$dest" || { echo "  (could not create $dest; evidence not kept)"; return 0; }
+
+  # The journal first: it is the small artifact and the one that matters.
+  # ETUDE_STATE_DIR is per-scenario and lib.sh deletes it on exit.
+  if [ -n "${ETUDE_STATE_DIR:-}" ] && [ -d "$ETUDE_STATE_DIR" ]; then
+    cp -R "$ETUDE_STATE_DIR" "$dest/state" 2>/dev/null
+  fi
+
+  # Names and sizes of the tree, not the files: 220 empty files prove nothing
+  # that a listing does not, and a copy invites someone to think the contents
+  # mattered. They are all empty by construction.
+  find "$d" -type f -exec ls -ld {} \; > "$dest/tree.txt" 2>/dev/null
+
+  # What undo actually said, verbatim, alongside the journal it said it about.
+  cp "/tmp/sigkill_trial_undo_out.$$" "$dest/undo-output.txt" 2>/dev/null
+
+  {
+    echo "scenario: $SCENARIO"
+    echo "kill target: $target"
+    echo "sweep binary: $SWEEP"
+    # Resolved from this script, not from $SWEEP: the binary can live
+    # anywhere (BIN is overridable), but the scenario is always in the repo.
+    echo "commit: $(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  } > "$dest/context.txt" 2>/dev/null
+
+  echo "  evidence kept: $dest"
+}
+
 # One full trial: build, apply+kill at TARGET, check the tree is duplicate-
 # and loss-free, undo, check the tree is back to exactly the baseline NAME
 # SET. Returns 0 if every property held, 1 and prints why otherwise.
@@ -83,6 +140,7 @@ trial() {
     fi
     echo "  sweep undo said:"
     sed 's/^/    /' "/tmp/sigkill_trial_undo_out.$$"
+    keep_evidence "$d" "$target"
     rm -f "/tmp/sigkill_trial_undo_out.$$"
     rm -rf "$(dirname "$d")"
     return 1
