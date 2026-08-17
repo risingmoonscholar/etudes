@@ -163,9 +163,12 @@ trial() {
   case "$outcome" in
     killed|finished-early) ;;
     *)
-      echo "FAIL target=$target the kill step produced no outcome (got '"'"'$outcome'"'"'). run_and_kill died, so this trial never applied anything and proves nothing"
+      echo "FAIL target=$target the kill step produced no outcome (got [$outcome]). run_and_kill died, so this trial never applied anything and proves nothing"
       rm -f "/tmp/sigkill_trial_undo_out.$$"
-      rm -rf "$(dirname "$d")" "$pre_undo"
+      # No $pre_undo here: it is created later in this function, so naming
+      # it would be an unbound variable under set -u -- the same class of
+      # bug this branch exists to report.
+      rm -rf "$(dirname "$d")"
       return 1
       ;;
   esac
@@ -210,8 +213,10 @@ trial() {
   fi
   rm -f "/tmp/sigkill_trial_undo_out.$$"
   rm -rf "$(dirname "$d")" "$pre_undo"
-  # A positive token, not silence. See run_bucket for why.
-  echo "TRIAL-OK"
+  # A positive token, not silence, and it carries the outcome: a run that
+  # never managed to kill anything proves nothing about crash safety, and
+  # "finished-early" every time would otherwise pass. See run_bucket.
+  echo "TRIAL-OK $outcome"
   return 0
 }
 
@@ -220,6 +225,7 @@ FIRST_FAILURE=""
 TOTAL=0
 BAD=0
 GOOD=0
+KILLED=0
 
 # A trial counts as passed only if it SAYS so and exits 0. It used to count as
 # passed by printing nothing, which meant any way of dying quietly read as
@@ -237,9 +243,11 @@ run_bucket() {
     TOTAL=$((TOTAL + 1))
     local out rc
     out=$(trial "$t" 220); rc=$?
-    if [ "$rc" -eq 0 ] && [ "$out" = "TRIAL-OK" ]; then
-      GOOD=$((GOOD + 1))
-      continue
+    if [ "$rc" -eq 0 ]; then
+      case "$out" in
+        "TRIAL-OK killed")         GOOD=$((GOOD + 1)); KILLED=$((KILLED + 1)); continue ;;
+        "TRIAL-OK finished-early") GOOD=$((GOOD + 1)); continue ;;
+      esac
     fi
     BAD=$((BAD + 1))
     # A trial that died without saying why: report the corpse rather than
@@ -265,15 +273,24 @@ for i in $(seq 1 30); do
 done
 run_bucket "scattered" "${SCATTERED[@]}"
 
-# The pass requires every trial to have reported success, not merely for none
-# of them to have reported failure. Without this, GOOD could be 0 and BAD 0 at
-# the same time -- fifty trials that all died silently -- and the line below
-# would still call it a pass.
-if [ "$GOOD" -ne "$TOTAL" ] && [ "$BAD" -eq 0 ]; then
-  fail "SIGKILL mid-apply: only $GOOD of $TOTAL trials reported success and none reported failure. The trials did not run"
-elif [ "$BAD" -eq 0 ]; then
-  pass "SIGKILL at $TOTAL points across an apply (early/late/scattered): every file was at exactly one place after the kill, and undo returned the full baseline name set every time"
-else
+# Order matters here. A real failure is the most specific thing that can have
+# happened, so it is reported first; the checks under it are about whether the
+# trials ran at all, and putting one of those first would mask a genuine
+# stranding behind "nothing was killed". That is exactly what happened when
+# these were written in the other order.
+if [ "$BAD" -gt 0 ]; then
   fail "SIGKILL mid-apply: $BAD/$TOTAL trials left the tree wrong after undo (duplicated, lost, or stranded file). First reproduction:
 $FIRST_FAILURE"
+elif [ "$GOOD" -ne "$TOTAL" ]; then
+  # No failures and not enough successes: the trials did not run. Silence is
+  # not success, one level down from run.sh's zero-assertion guard.
+  fail "SIGKILL mid-apply: only $GOOD of $TOTAL trials reported success and none reported failure. The trials did not run"
+elif [ "$KILLED" -eq 0 ]; then
+  # Every apply beat its kill target, so nothing was ever interrupted. The tree
+  # came back intact because it was never disturbed, which is not evidence
+  # about crash safety. On a fast enough host, or with a sweep that exits
+  # immediately, this is how the scenario would quietly stop testing anything.
+  fail "SIGKILL mid-apply: no trial managed to kill an apply in progress ($TOTAL trials, all finished before the kill point). This proves nothing about interruption"
+else
+  pass "SIGKILL at $TOTAL points across an apply (early/late/scattered), $KILLED of them killed mid-run: every file was at exactly one place after the kill, and undo returned the full baseline name set every time"
 fi
