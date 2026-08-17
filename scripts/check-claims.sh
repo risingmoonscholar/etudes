@@ -49,8 +49,12 @@ for f in README.md demo/index.html; do
   claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
 
-# Scenario count, from the filesystem rather than from another document.
-scenarios_actual=$(find stress/scenarios -name '*.sh' | wc -l | tr -d ' ')
+# Scenario count, from what git TRACKS rather than what happens to be sitting
+# in the working tree. A reader gets what a clone contains, so an untracked
+# scenario is not one the readme can claim. Counting the filesystem here was
+# a bug in the first version of this fix: it read 36 with one file untracked,
+# so the readme was corrected to a number no clone would ever see.
+scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
 claim README.md '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 
 # How many of them are known to fail, from the baseline the ratchet uses.
