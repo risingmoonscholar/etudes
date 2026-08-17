@@ -54,11 +54,6 @@ pub struct Fixture {
     pub escaping_symlink: PathBuf,
 }
 
-/// Build the full adversarial tree under `root`.
-///
-/// `root` must not exist or must be empty. The generator writes inside `root`
-/// except for `sweep_fixture_outside/secret_outside.txt` beside it, the target
-/// required by the escaping-symlink fixture.
 /// The escaping-symlink target, which has to sit BESIDE `root` rather than
 /// inside it, since its whole purpose is to be outside the tree sweep scans.
 ///
@@ -69,8 +64,9 @@ pub struct Fixture {
 /// delete the directory a test still running was building against, which
 /// surfaced as `fixture build: NotFound` on whichever test lost the race.
 ///
-/// It failed roughly one CI run in two while passing locally, which is the
-/// shape of a race rather than a bug in what is being tested.
+/// Rare enough to pass locally and survive many CI runs. The rate was never
+/// measured; what identifies it is the same commit passing in one run and
+/// failing in another, not a frequency.
 pub fn outside_dir(root: &Path) -> PathBuf {
     let tag = root
         .file_name()
@@ -81,6 +77,11 @@ pub fn outside_dir(root: &Path) -> PathBuf {
         .join(format!("sweep_fixture_outside_{tag}"))
 }
 
+/// Build the full adversarial tree under `root`.
+///
+/// `root` must not exist or must be empty. The generator writes inside `root`
+/// except for the `secret_outside.txt` under [`outside_dir`] beside it, the
+/// target required by the escaping-symlink fixture.
 pub fn build(root: &Path) -> io::Result<Fixture> {
     fs::create_dir_all(root)?;
 
