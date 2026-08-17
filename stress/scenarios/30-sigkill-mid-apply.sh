@@ -65,6 +65,7 @@ run_and_kill() {
 # this used a variable and did exactly that -- 12 directories from one run.
 keep_evidence() {
   local d="$1" target="$2" pre_undo="$3"
+  local DUMP_NOTE=""
   # Inside ETUDE_STATE_DIR, which lib.sh removes when the scenario exits, so
   # the latch cannot outlive the run. A latch in $TMPDIR keyed by pid was the
   # first version: it was never cleaned up, so the files accumulated, and a
@@ -105,10 +106,17 @@ keep_evidence() {
     local j
     for j in "$dest"/state-before-undo/*.journal "$dest"/state-after-undo/*.journal; do
       [ -e "$j" ] || continue
-      "$dump" "$j" > "${j%.journal}.plaintext.txt" 2>"${j%.journal}.plaintext.err" || true
+      if "$dump" "$j" > "${j%.journal}.plaintext.txt" 2>"${j%.journal}.plaintext.err"; then
+        rm -f "${j%.journal}.plaintext.err"
+      else
+        # Leave the .err, drop the empty .txt. An empty plaintext file beside
+        # a journal reads as "the journal was empty", which is a different and
+        # wrong conclusion from "it could not be opened".
+        rm -f "${j%.journal}.plaintext.txt"
+      fi
     done
   else
-    echo "  (journal-dump not built; the kept journals stay sealed and unreadable off this host)" >> "$dest/context.txt"
+    DUMP_NOTE="journal-dump was not built, so the kept journals are still sealed and cannot be read off this host"
   fi
 
   # Names and sizes of the tree, not the files: 220 empty files prove nothing
@@ -123,6 +131,7 @@ keep_evidence() {
     echo "scenario: $SCENARIO"
     echo "kill target: $target"
     echo "sweep binary: $SWEEP"
+    [ -n "${DUMP_NOTE:-}" ] && echo "note: $DUMP_NOTE"
     # Resolved from this script, not from $SWEEP: the binary can live
     # anywhere (BIN is overridable), but the scenario is always in the repo.
     echo "commit: $(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -142,6 +151,24 @@ trial() {
   local before_n; before_n=$(echo "$before_set" | grep -c .)
 
   local outcome; outcome=$(run_and_kill "$d" "$target")
+
+  # The trial checks its own instrument before trusting the result. run_and_kill
+  # runs inside a command substitution, so if it dies -- an unbound variable
+  # under set -u, a missing binary -- the death does not propagate here. It just
+  # returns nothing. The apply never ran, the tree is untouched, undo has nothing
+  # to reverse, before and after match, and the trial PASSES having tested
+  # nothing. That is the exact shape of the failure this scenario exists to
+  # catch, occurring inside the scenario itself; it happened while this file was
+  # being edited and reported ok across all 50 trials.
+  case "$outcome" in
+    killed|finished-early) ;;
+    *)
+      echo "FAIL target=$target the kill step produced no outcome (got '"'"'$outcome'"'"'). run_and_kill died, so this trial never applied anything and proves nothing"
+      rm -f "/tmp/sigkill_trial_undo_out.$$"
+      rm -rf "$(dirname "$d")" "$pre_undo"
+      return 1
+      ;;
+  esac
 
   # Note whether the raw kill (before undo gets a chance to reconcile
   # anything) already produced a duplicate, diagnostic, not itself a fail:
@@ -183,6 +210,8 @@ trial() {
   fi
   rm -f "/tmp/sigkill_trial_undo_out.$$"
   rm -rf "$(dirname "$d")" "$pre_undo"
+  # A positive token, not silence. See run_bucket for why.
+  echo "TRIAL-OK"
   return 0
 }
 
@@ -190,18 +219,34 @@ trial() {
 FIRST_FAILURE=""
 TOTAL=0
 BAD=0
+GOOD=0
 
+# A trial counts as passed only if it SAYS so and exits 0. It used to count as
+# passed by printing nothing, which meant any way of dying quietly read as
+# success: an edit to this file once added an unbound variable to a helper, so
+# under `set -u` every one of the 50 trials died before asserting anything, and
+# the scenario reported ok. Fifty crashed trials, one green line.
+#
+# run.sh already refuses a scenario that produced no assertions at all. This is
+# the same rule one level down, for a scenario that produces its assertion from
+# trials that never ran. Silence is not success here either.
 run_bucket() {
   local label="$1"; shift
   local targets=("$@")
   for t in "${targets[@]}"; do
     TOTAL=$((TOTAL + 1))
-    out=$(trial "$t" 220)
-    if [ -n "$out" ]; then
-      BAD=$((BAD + 1))
-      [ -z "$FIRST_FAILURE" ] && FIRST_FAILURE="[$label target=$t]
-$out"
+    local out rc
+    out=$(trial "$t" 220); rc=$?
+    if [ "$rc" -eq 0 ] && [ "$out" = "TRIAL-OK" ]; then
+      GOOD=$((GOOD + 1))
+      continue
     fi
+    BAD=$((BAD + 1))
+    # A trial that died without saying why: report the corpse rather than
+    # letting an empty message stand in for a diagnosis.
+    [ -z "$out" ] && out="the trial produced no output and exited $rc. It died before it could assert anything"
+    [ -z "$FIRST_FAILURE" ] && FIRST_FAILURE="[$label target=$t]
+$out"
   done
 }
 
@@ -209,19 +254,24 @@ $out"
 run_bucket "very-early" 1 1 2 2 3 3 1 2 3 1
 # Very late: kill with only a handful of files left to move (n=220).
 run_bucket "very-late" 214 215 216 217 214 215 216 217 215 216
-# Scattered across the middle of the run.
+# Scattered across the middle of the run. Built into a list and handed to
+# run_bucket rather than looping here: this block used to carry its own copy
+# of the pass/fail check, and when the check changed in one place it did not
+# change in the other -- 30 trials passing and being counted as failures.
+# One place decides what a passed trial looks like.
+SCATTERED=()
 for i in $(seq 1 30); do
-  t=$(( (i * 37) % 205 + 5 ))
-  TOTAL=$((TOTAL + 1))
-  out=$(trial "$t" 220)
-  if [ -n "$out" ]; then
-    BAD=$((BAD + 1))
-    [ -z "$FIRST_FAILURE" ] && FIRST_FAILURE="[scattered target=$t]
-$out"
-  fi
+  SCATTERED+=( $(( (i * 37) % 205 + 5 )) )
 done
+run_bucket "scattered" "${SCATTERED[@]}"
 
-if [ "$BAD" -eq 0 ]; then
+# The pass requires every trial to have reported success, not merely for none
+# of them to have reported failure. Without this, GOOD could be 0 and BAD 0 at
+# the same time -- fifty trials that all died silently -- and the line below
+# would still call it a pass.
+if [ "$GOOD" -ne "$TOTAL" ] && [ "$BAD" -eq 0 ]; then
+  fail "SIGKILL mid-apply: only $GOOD of $TOTAL trials reported success and none reported failure. The trials did not run"
+elif [ "$BAD" -eq 0 ]; then
   pass "SIGKILL at $TOTAL points across an apply (early/late/scattered): every file was at exactly one place after the kill, and undo returned the full baseline name set every time"
 else
   fail "SIGKILL mid-apply: $BAD/$TOTAL trials left the tree wrong after undo (duplicated, lost, or stranded file). First reproduction:

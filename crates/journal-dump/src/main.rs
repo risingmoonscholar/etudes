@@ -6,8 +6,12 @@
 //! runner that held the key is gone. The only moment a journal can be made
 //! readable is on the machine that wrote it, while it still has the key.
 //!
-//! Dev-only. Not installed by `cargo install`, because it prints the contents
-//! of a file the product deliberately encrypts.
+//! Dev-only: `publish = false`, and not a binary of any `*-cli` crate, so none
+//! of the documented install lines produce it. That is not the same as being
+//! uninstallable -- anyone with the source tree can build or `cargo install
+//! --path` it. The bar it raises is against a user who installed the tools,
+//! not against someone holding the repo, and the at-rest posture is unchanged
+//! either way: this still needs the login keychain key, exactly as `undo` does.
 //!
 //!     journal-dump <path-to-.journal>
 //!
