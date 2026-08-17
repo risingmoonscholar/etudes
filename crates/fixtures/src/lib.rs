@@ -59,6 +59,28 @@ pub struct Fixture {
 /// `root` must not exist or must be empty. The generator writes inside `root`
 /// except for `sweep_fixture_outside/secret_outside.txt` beside it, the target
 /// required by the escaping-symlink fixture.
+/// The escaping-symlink target, which has to sit BESIDE `root` rather than
+/// inside it, since its whole purpose is to be outside the tree sweep scans.
+///
+/// Derived from `root`'s own name so that two tests running at the same time
+/// never share it. They used to. Every fixture root was already unique (tag
+/// plus pid), but this sibling was the same path for every test in every test
+/// binary, and each one deleted it on cleanup. A test that finished could
+/// delete the directory a test still running was building against, which
+/// surfaced as `fixture build: NotFound` on whichever test lost the race.
+///
+/// It failed roughly one CI run in two while passing locally, which is the
+/// shape of a race rather than a bug in what is being tested.
+pub fn outside_dir(root: &Path) -> PathBuf {
+    let tag = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    root.parent()
+        .unwrap_or(root)
+        .join(format!("sweep_fixture_outside_{tag}"))
+}
+
 pub fn build(root: &Path) -> io::Result<Fixture> {
     fs::create_dir_all(root)?;
 
@@ -160,7 +182,7 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
     fs::write(deep.join("buried.txt"), b"synthetic\n")?;
 
     // Outside-the-root target for the escaping symlink.
-    let outside = root.parent().unwrap_or(root).join("sweep_fixture_outside");
+    let outside = outside_dir(root);
     fs::create_dir_all(&outside)?;
     fs::write(outside.join("secret_outside.txt"), b"SYNTHETIC\n")?;
 
@@ -198,4 +220,30 @@ pub fn all_names() -> Vec<String> {
         v.push(format!("IMG_{i}.HEIC"));
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_fixture_roots_never_share_an_outside_dir() {
+        // The regression this guards: the sibling used to be a fixed name, so
+        // every test in every test binary pointed at one directory and each
+        // deleted it on cleanup. Distinct roots must give distinct siblings,
+        // or concurrent tests can delete each other's fixtures mid-build.
+        let a = outside_dir(Path::new("/tmp/sweep_fx_sensitive_101"));
+        let b = outside_dir(Path::new("/tmp/sweep_content_traps_102"));
+        assert_ne!(a, b, "two roots produced the same outside dir");
+    }
+
+    #[test]
+    fn the_outside_dir_is_a_sibling_not_a_child() {
+        // It is the target of the escaping symlink. Inside the root it would
+        // not be outside anything and the escape test would prove nothing.
+        let root = Path::new("/tmp/sweep_fx_sensitive_101");
+        let out = outside_dir(root);
+        assert!(!out.starts_with(root), "outside dir landed inside the root");
+        assert_eq!(out.parent(), root.parent(), "outside dir is not a sibling");
+    }
 }
