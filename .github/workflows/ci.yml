@@ -89,4 +89,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run the stress suite against the recorded baseline
+        env:
+          # Somewhere the upload step can reach. The default is the runner's
+          # temp dir, which is destroyed with the runner.
+          ETUDES_EVIDENCE_DIR: ${{ github.workspace }}/stress-evidence
         run: bash scripts/stress-ratchet.sh
+
+      # if: always() because the evidence only exists when the suite FAILED.
+      # Running this only on success would upload nothing, every time.
+      - name: Keep the evidence from any failing scenario
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-evidence
+          path: stress-evidence/
+          if-no-files-found: ignore
+          retention-days: 30

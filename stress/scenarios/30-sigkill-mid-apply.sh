@@ -73,7 +73,12 @@ keep_evidence() {
   [ -e "$latch" ] && return 0
   : > "$latch" 2>/dev/null
 
-  local dest="${TMPDIR:-/tmp}/etudes-stress-evidence/${SCENARIO}-$(date +%Y%m%d-%H%M%S)-target$target"
+  # Overridable so CI can point it somewhere it can upload from. A runner is
+  # destroyed when the job ends, so evidence written to its temp dir is gone
+  # before anyone sees it -- which would make keeping it pointless in the one
+  # place the failure actually shows up.
+  local root="${ETUDES_EVIDENCE_DIR:-${TMPDIR:-/tmp}/etudes-stress-evidence}"
+  local dest="$root/${SCENARIO}-$(date +%Y%m%d-%H%M%S)-target$target"
   mkdir -p "$dest" || { echo "  (could not create $dest; evidence not kept)"; return 0; }
 
   # The journal first: it is the small artifact and the one that matters.
