@@ -55,13 +55,18 @@ done
 # a bug in the first version of this fix: it read 36 with one file untracked,
 # so the readme was corrected to a number no clone would ever see.
 scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
-claim README.md '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
+# Every file that states the number, not just the readme. demo/index.html is
+# the published site: it can be wrong in front of everyone while CI is green,
+# which is the exact failure this script exists to catch, one file over.
+for f in README.md demo/index.html; do
+  claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
+done
 
 # How many of them are known to fail, from the baseline the ratchet uses.
 failing_known=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' stress/baseline.txt | tr -d ' ')
 claim README.md '[0-9]+ of them failing' '[0-9]+' "failing scenarios" "$failing_known"
 
-# The journal TTL, stated in prose in two places and defined once in code.
+# The journal TTL: defined once in code, restated in the changelog.
 ttl_actual=$(grep -oE 'TTL_DAYS: u64 = [0-9]+' crates/etude-core/src/journal.rs | grep -oE '[0-9]+$')
 [ -z "$ttl_actual" ] && { echo "FAIL could not read TTL_DAYS from journal.rs"; exit 1; }
 claim CHANGELOG.md 'pruned after [0-9]+ days' '[0-9]+' "TTL days" "$ttl_actual"
@@ -70,7 +75,7 @@ claim CHANGELOG.md 'pruned after [0-9]+ days' '[0-9]+' "TTL days" "$ttl_actual"
 # Checked against the manifest, not against the sentence in the readme.
 core_deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && NF && $0 !~ /^#/' crates/etude-core/Cargo.toml | wc -l | tr -d ' ')
 if [ "$core_deps" = "0" ]; then
-  ok "etude-core has zero dependencies, as the readme says"
+  ok "etude-core declares zero dependencies in its manifest"
 else
   bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
 fi
