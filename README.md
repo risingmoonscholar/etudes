@@ -27,9 +27,8 @@ Nothing moved, because nothing has been confirmed yet. The tax documents, the
 medical records and the driver's licence are in that "left alone" count, and no
 flag moves them.
 
-These are tools built the same way: each removes
-one recurring friction, each is small enough to read in an afternoon, and each
-can prove its own claims rather than asking you to trust them.
+Each tool removes one recurring friction, is small enough to read in an
+afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
