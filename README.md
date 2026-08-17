@@ -27,9 +27,8 @@ Nothing moved, because nothing has been confirmed yet. The tax documents, the
 medical records and the driver's licence are in that "left alone" count, and no
 flag moves them.
 
-These are tools built the same way: each removes
-one recurring friction, each is small enough to read in an afternoon, and each
-can prove its own claims rather than asking you to trust them.
+Each tool removes one recurring friction, is small enough to read in an
+afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
@@ -135,13 +134,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 33 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 36 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 33 scenarios, 1 of them failing
+bash stress/run.sh        # 36 scenarios, 1 of them failing
 ```
 
 The one failing scenario is real and it is [filed](../../issues), with a
