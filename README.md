@@ -27,8 +27,7 @@ Nothing moved, because nothing has been confirmed yet. The tax documents, the
 medical records and the driver's licence are in that "left alone" count, and no
 flag moves them.
 
-An étude is a short piece written to master one technique, and in the right
-hands also worth performing. These are tools built the same way: each removes
+These are tools built the same way: each removes
 one recurring friction, each is small enough to read in an afternoon, and each
 can prove its own claims rather than asking you to trust them.
 
