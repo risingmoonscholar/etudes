@@ -25,7 +25,7 @@ fn fixture(tag: &str) -> PathBuf {
 
 fn cleanup(root: &Path) {
     let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(root.parent().unwrap().join("sweep_fixture_outside"));
+    let _ = fs::remove_dir_all(fixtures::outside_dir(root));
 }
 
 /// Refuses exactly the fixture files with sensitive contents, by reading them.

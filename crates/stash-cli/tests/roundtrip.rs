@@ -42,7 +42,7 @@ fn setup(tag: &str) -> PathBuf {
 
 fn cleanup(root: &Path) {
     let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(root.parent().unwrap().join("sweep_fixture_outside"));
+    let _ = fs::remove_dir_all(fixtures::outside_dir(root));
 }
 
 /// Mirrors what the binary builds: one group, everything in it.

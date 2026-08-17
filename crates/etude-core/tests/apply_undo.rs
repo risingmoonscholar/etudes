@@ -64,7 +64,7 @@ fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, Plan) {
 
 fn cleanup(root: &PathBuf) {
     let _ = fs::remove_dir_all(root);
-    let _ = fs::remove_dir_all(root.parent().unwrap().join("sweep_fixture_outside"));
+    let _ = fs::remove_dir_all(fixtures::outside_dir(root));
 }
 
 #[test]
