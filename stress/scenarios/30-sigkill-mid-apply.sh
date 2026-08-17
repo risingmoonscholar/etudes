@@ -64,12 +64,19 @@ run_and_kill() {
 # it was the first and a bad run would keep 50 copies. The first version of
 # this used a variable and did exactly that -- 12 directories from one run.
 keep_evidence() {
-  local d="$1" target="$2"
-  # Outside ETUDE_STATE_DIR on purpose: that directory gets copied into the
-  # evidence, and a latch file sitting in the copy reads like an artifact of
-  # the failure. $$ is the scenario shell's pid and is stable across the
-  # subshells trial() runs in, so it scopes the latch to this run.
-  local latch="${TMPDIR:-/tmp}/.etudes-evidence-latch-$$"
+  local d="$1" target="$2" pre_undo="$3"
+  # Inside ETUDE_STATE_DIR, which lib.sh removes when the scenario exits, so
+  # the latch cannot outlive the run. A latch in $TMPDIR keyed by pid was the
+  # first version: it was never cleaned up, so the files accumulated, and a
+  # reused pid would make the NEXT run silently skip keeping evidence -- a
+  # quiet failure in the thing built to stop quiet failures.
+  #
+  # It is a file rather than a variable because trial() is invoked inside a
+  # command substitution, which is a subshell, so a variable set there never
+  # reaches the caller. That version kept 12 directories from one run.
+  #
+  # Deleted from the evidence copy below, so it never reads as an artifact.
+  local latch="${ETUDE_STATE_DIR:-${TMPDIR:-/tmp}}/.evidence-kept"
   [ -e "$latch" ] && return 0
   : > "$latch" 2>/dev/null
 
@@ -81,10 +88,27 @@ keep_evidence() {
   local dest="$root/${SCENARIO}-$(date +%Y%m%d-%H%M%S)-target$target"
   mkdir -p "$dest" || { echo "  (could not create $dest; evidence not kept)"; return 0; }
 
-  # The journal first: it is the small artifact and the one that matters.
-  # ETUDE_STATE_DIR is per-scenario and lib.sh deletes it on exit.
+  # Both journals: as the kill left it, and as undo left it. The difference
+  # between them is often the finding.
+  [ -n "$pre_undo" ] && [ -d "$pre_undo" ] && cp -R "$pre_undo" "$dest/state-before-undo" 2>/dev/null
   if [ -n "${ETUDE_STATE_DIR:-}" ] && [ -d "$ETUDE_STATE_DIR" ]; then
-    cp -R "$ETUDE_STATE_DIR" "$dest/state" 2>/dev/null
+    cp -R "$ETUDE_STATE_DIR" "$dest/state-after-undo" 2>/dev/null
+    rm -f "$dest/state-after-undo/.evidence-kept"
+  fi
+
+  # A copied journal is SEALED with a key from the login keychain, so the file
+  # alone is unreadable anywhere but this machine -- and a CI runner is gone by
+  # the time anyone opens the artifact. Decrypt now, while the key is still
+  # reachable, or the upload preserves ciphertext and nothing else.
+  local dump="$(dirname "$SWEEP")/journal-dump"
+  if [ -x "$dump" ]; then
+    local j
+    for j in "$dest"/state-before-undo/*.journal "$dest"/state-after-undo/*.journal; do
+      [ -e "$j" ] || continue
+      "$dump" "$j" > "${j%.journal}.plaintext.txt" 2>"${j%.journal}.plaintext.err" || true
+    done
+  else
+    echo "  (journal-dump not built; the kept journals stay sealed and unreadable off this host)" >> "$dest/context.txt"
   fi
 
   # Names and sizes of the tree, not the files: 220 empty files prove nothing
@@ -126,6 +150,13 @@ trial() {
   local pre_undo_note=""
   [ "$after_kill_n" != "$before_n" ] && pre_undo_note=" (tree already had $after_kill_n files, not $before_n, right after the kill, before undo ran at all)"
 
+  # Copy the journal BEFORE undo, because undo rewrites it: it records each
+  # reversal as it goes and saves the whole journal at the end. Keeping it
+  # afterwards preserves undo's own edits, not the state the killed apply
+  # left behind -- which is the state that explains a stranding.
+  local pre_undo; pre_undo=$(mktemp -d)
+  [ -n "${ETUDE_STATE_DIR:-}" ] && [ -d "$ETUDE_STATE_DIR" ] && cp -R "$ETUDE_STATE_DIR"/. "$pre_undo/" 2>/dev/null
+
   "$SWEEP" undo >/tmp/sigkill_trial_undo_out.$$ 2>&1
   local after_set; after_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
   local after_n; after_n=$(find "$d" -type f | wc -l | tr -d ' ')
@@ -145,13 +176,13 @@ trial() {
     fi
     echo "  sweep undo said:"
     sed 's/^/    /' "/tmp/sigkill_trial_undo_out.$$"
-    keep_evidence "$d" "$target"
+    keep_evidence "$d" "$target" "$pre_undo"
     rm -f "/tmp/sigkill_trial_undo_out.$$"
-    rm -rf "$(dirname "$d")"
+    rm -rf "$(dirname "$d")" "$pre_undo"
     return 1
   fi
   rm -f "/tmp/sigkill_trial_undo_out.$$"
-  rm -rf "$(dirname "$d")"
+  rm -rf "$(dirname "$d")" "$pre_undo"
   return 0
 }
 

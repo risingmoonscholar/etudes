@@ -97,7 +97,10 @@ jobs:
 
       # if: always() because the evidence only exists when the suite FAILED.
       # Running this only on success would upload nothing, every time.
-      - name: Keep the evidence from any failing scenario
+      # Only 30-sigkill-mid-apply writes evidence today, so this uploads
+      # nothing for any other scenario's failure. Named for what it does
+      # rather than for what it looks like it does.
+      - name: Keep the evidence from a failing sigkill trial
         if: always()
         uses: actions/upload-artifact@v4
         with:

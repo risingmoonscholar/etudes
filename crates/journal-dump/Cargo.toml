@@ -1,0 +1,15 @@
+[package]
+name = "journal-dump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Dev-only, and deliberately NOT installed. `cargo install ... sweep-cli`
+# installs sweep-cli's binaries; a separate crate never reaches a user.
+publish = false
+
+# A journal on disk is sealed with a key from the login keychain, so a copy of
+# the file is unreadable anywhere but the machine that wrote it. This opens one
+# while that key is still reachable, which is the only moment it can be done.
+[dependencies]
+etude-core = { path = "../etude-core" }
+etude-keep = { path = "../etude-keep" }
