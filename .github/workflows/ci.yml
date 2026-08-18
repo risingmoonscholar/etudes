@@ -80,15 +80,83 @@ jobs:
   stress:
     name: adversarial stress suite (ratchet)
     runs-on: macos-latest
-    # Only on a schedule or by hand: the suite builds 50k-file trees and real
-    # disk images, so it is minutes, not seconds. Gating every push on it would
-    # make people wait for something that changes rarely.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # ALWAYS runs, and decides inside whether there is anything to attack.
+    #
+    # It used to be gated with `if:` to schedule and manual dispatch, because
+    # the suite builds 50k-file trees and real disk images and takes minutes.
+    # That made it impossible to require as a status check: GitHub leaves a
+    # required check that never reports PENDING FOREVER, so requiring a
+    # conditional job deadlocks every pull request. Required and conditional
+    # do not compose.
+    #
+    # The consequence was not theoretical. A pull request whose entire purpose
+    # was a red ratchet showed all-green on its own page throughout, because
+    # the job that would have caught the bug never ran against it. The rule
+    # "dispatch it by hand" existed and was forgotten within a day.
+    #
+    # So the job always reports, and skips the expensive part when the diff
+    # cannot affect it. The skip is announced in the log rather than silent:
+    # a green check that quietly checked nothing is the failure this repo
+    # keeps finding in itself.
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Two commits, so a pull request can be diffed against its base.
+          fetch-depth: 0
+
+      - name: Decide whether the suite can be affected by this change
+        id: scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Schedule and manual dispatch always run the full suite: they exist
+          # to catch what a diff-based rule cannot, like a flake that depends
+          # on timing rather than on code.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "reason=event is ${{ github.event_name }}, not a pull request" >> "$GITHUB_OUTPUT"
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base" "$head")
+          echo "files changed:"
+          printf '%s\n' "$changed" | sed 's/^/  /'
+
+          # Conservative on purpose. Anything that could reach the binaries or
+          # the harness runs the suite; only files that provably cannot are
+          # skipped. A wrong answer here is a green check that checked
+          # nothing, so the list of things it skips is short and explicit
+          # rather than a list of things it catches.
+          # `command grep`, not `grep`: a shell that wraps grep with something
+          # else can change what -qv means. Verified under bash, which is what
+          # `run:` uses.
+          if printf '%s\n' "$changed" | command grep -qvE '^(README\.md|CHANGELOG\.md|CONTRIBUTING\.md|LICENSE|demo/|docs/|\.gitignore)'; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+            echo "reason=the diff touches something outside documentation" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+            echo "reason=every changed path is documentation or demo output" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say what was decided
+        run: |
+          echo "run the suite: ${{ steps.scope.outputs.run }}"
+          echo "because: ${{ steps.scope.outputs.reason }}"
+          if [ "${{ steps.scope.outputs.run }}" = "no" ]; then
+            echo ""
+            echo "The adversarial suite did NOT run against this change."
+            echo "This check is green because nothing in the diff can reach the"
+            echo "tools or the harness, not because the suite passed."
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.run == 'yes'
       - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.run == 'yes
       - name: Run the stress suite against the recorded baseline
+        if: steps.scope.outputs.run == 'yes'
         env:
           # Somewhere the upload step can reach. The default is the runner's
           # temp dir, which is destroyed with the runner.
@@ -101,7 +169,7 @@ jobs:
       # nothing for any other scenario's failure. Named for what it does
       # rather than for what it looks like it does.
       - name: Keep the evidence from a failing sigkill trial
-        if: always()
+        if: always() && steps.scope.outputs.run == 'yes' 
         uses: actions/upload-artifact@v4
         with:
           name: stress-evidence
