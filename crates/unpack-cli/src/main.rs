@@ -38,9 +38,10 @@ USAGE
 Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz using the tools already
 on this machine. Nothing is parsed here.
 
-.dmg is recognised and refused. Extracting one means asking the kernel to
-mount a stranger's filesystem image, which is a different and larger risk
-than running unzip against a stream, and it is not implemented.
+.dmg is recognised and refused, by design rather than pending. Opening one
+means asking the kernel to mount a stranger's filesystem image, which is a
+much larger thing than running unzip against a stream, and no size check
+covers it. `hdiutil attach` does it if you decide to.
 
 Every archive is listed and judged BEFORE anything is written. Paths that
 escape the target, absolute paths and drive paths are refused outright.
@@ -178,12 +179,32 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     };
 
     if fmt == Format::Dmg {
+        // Refused by design, not pending. Every other format here is a stream
+        // handed to a userspace decompressor; a .dmg is a filesystem image
+        // handed to the kernel's own HFS+/APFS drivers by `hdiutil attach`.
+        // That is a qualitatively larger trust boundary and it is the one
+        // place this tool would ask the kernel to parse a stranger's data.
+        //
+        // The size check that works for archives does not cover it. Bounding
+        // bytes written says nothing about a malformed image reaching a
+        // filesystem driver, and there is no userspace path to fall back on:
+        // mounting is the only way to read one. So the honest answer is not
+        // to, and to say why rather than leave it looking like a gap somebody
+        // will helpfully fill in later.
+        //
+        // Exit 2, refused, not 3. This is a decision, not a failure.
         eprintln!(
-            "unpack: .dmg is not implemented yet.\n\
-             Mounting a disk image needs different handling from extracting an\n\
-             archive, and pretending otherwise would be worse than saying so."
+            "unpack: .dmg is refused, on purpose and permanently.\n\n\
+             Every other format here is handed to a decompressor as a stream.\n\
+             A disk image is handed to the kernel's own filesystem drivers to\n\
+             mount, which is a much larger thing to ask on behalf of a file\n\
+             someone sent you, and no size check covers it.\n\n\
+             To open one anyway:  hdiutil attach ARCHIVE.dmg\n\
+             That is the same command unpack would run. Running it yourself\n\
+             means the decision is yours rather than one this tool made\n\
+             quietly on your behalf."
         );
-        return ExitCode::from(3);
+        return ExitCode::from(2);
     }
 
     // --- 1. list -----------------------------------------------------------

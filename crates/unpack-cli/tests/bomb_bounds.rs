@@ -194,3 +194,41 @@ fn walk_size(dir: &Path) -> u64 {
     }
     n
 }
+
+/// `.dmg` is refused as a decision, not as an unimplemented case.
+///
+/// The distinction is the point. "Not implemented yet" invites someone to
+/// implement it; this records that mounting a stranger's filesystem image is
+/// a larger thing than streaming an archive through a decompressor, that no
+/// size check covers it, and that the refusal is the answer rather than a
+/// placeholder for one.
+#[test]
+fn a_disk_image_is_refused_by_design_and_says_why() {
+    let d = work("dmg");
+    let _g = TestDir(d.clone());
+
+    // Contents do not matter: the refusal happens on the extension, before
+    // anything reads the file. That is deliberate -- reading it would already
+    // be doing more than refusing requires.
+    let fake = d.join("whatever.dmg");
+    std::fs::write(&fake, b"not really a disk image").expect("write");
+
+    let r = unpack_bin().arg(&fake).output().expect("run unpack");
+
+    assert_eq!(
+        r.status.code(),
+        Some(2),
+        "a by-design refusal is exit 2 (refused), not 3 (error): stderr={}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&r.stderr);
+    assert!(
+        !stderr.contains("not implemented"),
+        "the message still reads as a gap someone should fill: {stderr}"
+    );
+    assert!(
+        stderr.contains("hdiutil"),
+        "a refusal should name what the user can run themselves, or it is just \
+         a closed door: {stderr}"
+    );
+}
