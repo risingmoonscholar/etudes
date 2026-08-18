@@ -14,7 +14,7 @@
 # rather than acting on a partial one." When this scenario was written,
 # `apply_progress` half-replayed a truncated tail on purpose (as far as it
 # verified and no further, silently), and this scenario is what caught that
-# quietly producing stranded files under a reported exit-0 success. That has
+# quietly producing stranded files under an exit code that reads as fine. That has
 # since been fixed: a torn trailing frame now refuses the whole journal
 # rather than being silently dropped. The scenario stays in place because the
 # property is what matters, not the implementation that used to violate it.

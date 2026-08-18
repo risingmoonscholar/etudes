@@ -400,12 +400,21 @@ impl Journal {
     /// written trailing frame is not "work that never happened". It is
     /// proof the write was interrupted after the real move, not evidence the
     /// move didn't occur. Silently discarding it would misreport a completed
-    /// move as pending, which is exactly the half-loaded state that strands
-    /// files: `undo` would see `done: false` and skip a file that is in fact
-    /// sitting at its destination. So a damaged tail refuses the whole load
-    /// loudly instead of guessing. A *clean* end of file (the boundary
-    /// between two intact frames, including "no progress written yet") is
-    /// not damage and loads normally.
+    /// move as pending, which strands a file: `undo` would see an entry that
+    /// is not moved and skip a file that is in fact sitting at its
+    /// destination.
+    ///
+    /// A damaged tail therefore stops the replay and sets
+    /// `progress_tail_damaged`, keeping every complete frame before it. It
+    /// used to refuse the whole load; that traded one stranding for a larger
+    /// one, since voiding 143 intact records over a 4-byte tail strands every
+    /// file they describe. The entry whose record was cut stays Planned, and
+    /// undo recovers it by looking at the filesystem.
+    ///
+    /// A *clean* end of file (the boundary between two intact frames,
+    /// including "no progress written yet") is not damage and loads normally
+    /// -- which is why undo cannot rely on this flag alone, and counts
+    /// moved-but-unrecorded entries on disk as well.
     ///
     /// Journals written before length-framing (a single unframed sealed blob)
     /// are still accepted. Framed parse is tried first; any failure falls back
@@ -441,11 +450,15 @@ impl Journal {
     /// Replay length-framed progress records that follow the base frame.
     ///
     /// Every record here was written by a completed move (ordering rule in
-    /// `apply`), so any frame that fails to read back whole and authentic is
-    /// refused rather than dropped: dropping it would silently downgrade a
-    /// finished move to "not done" and strand the file. Only a clean
-    /// boundary (`raw` fully consumed with no leftover bytes) is treated as
-    /// "nothing more was recorded"; anything else is reported as damage.
+    /// `apply`), so a frame that is COMPLETE but fails to authenticate is
+    /// refused rather than dropped: that is alteration, and dropping it would
+    /// silently downgrade a finished move to "not done" and strand the file.
+    ///
+    /// A frame that is merely CUT SHORT is different. It was never finished
+    /// being written, so it records nothing, and the entry it would have
+    /// described is left Planned for undo's successor-entry recovery. Replay
+    /// stops there and `progress_tail_damaged` is set; the complete frames
+    /// before it are each sealed independently and stay usable.
     fn apply_progress(&mut self, raw: &[u8], sealer: &dyn Sealer) -> Result<(), JournalError> {
         let mut offset = 0usize;
         // Two cursors, because two writers append here. Apply counts up from

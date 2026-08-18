@@ -540,8 +540,16 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         // Restored, and still an error exit. The items are back, but the
         // journal was damaged and a caller reading only the exit code has to
         // learn that something went wrong -- exit 0 here would tell a script
-        // this was an ordinary pop. Matches `sweep undo`, which has always
-        // treated a damaged journal as exit 3.
+        // this was an ordinary pop.
+        //
+        // NOT symmetrical with `sweep undo`, which prints its NOTE and can
+        // still exit 0 on the same condition. An earlier version of this
+        // comment claimed they matched; they do not. The pre-existing test in
+        // exit_codes.rs pins stash at 3 for a damaged journal, so stash keeps
+        // it, and which of the two is right is an open question rather than a
+        // settled one: exit 3 after a fully successful restore reads as
+        // failure to a script, and a torn tail is the ordinary outcome of any
+        // interrupted run.
         return ExitCode::from(3);
     }
     ExitCode::SUCCESS
