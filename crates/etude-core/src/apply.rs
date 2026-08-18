@@ -611,7 +611,17 @@ fn same_file(_a: &Path, _b: &Path) -> bool {
 pub fn unrecorded_moves(j: &Journal) -> usize {
     j.entries
         .iter()
-        .filter(|e| e.state == EntryState::Planned && e.to.exists() && !e.from.exists())
+        .filter(|e| {
+            // symlink_metadata, not exists(): exists() follows the last
+            // component, so a symlink at the destination reports on whatever
+            // it points at. A dangling one would read as absent and a live one
+            // as present, and neither says anything about whether sweep's file
+            // is there. What is being asked is "is something at this path",
+            // and the link itself is something.
+            e.state == EntryState::Planned
+                && e.to.symlink_metadata().is_ok()
+                && e.from.symlink_metadata().is_err()
+        })
         .count()
 }
 

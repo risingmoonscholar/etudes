@@ -89,7 +89,7 @@ fi
 # per-file progress frames is at risk of being cut short.
 DEEP_BAD=0
 DEEP_FIRST=""
-for pct in 60 75 85 95 99; do
+for pct in base 60 75 85 95 99; do
   # Reset to a clean fully-applied, fully-intact-journal state each time.
   # journal_wipe first: a stale (possibly still-truncated) journal from the
   # shallow-truncation pass or a prior loop iteration must not linger and be
@@ -100,7 +100,21 @@ for pct in 60 75 85 95 99; do
   JF=$(journal_file)
   cp "$JF" "$BACKUP"
   full=$(stat -f%z "$BACKUP" 2>/dev/null || stat -c%s "$BACKUP")
-  cutoff=$(( full * pct / 100 ))
+  # `base` means "cut exactly at the end of the base frame": every progress
+  # record gone, on a clean boundary. Added because the percentage cuts all
+  # land mid-frame, which leaves a torn tail the loader can notice -- and the
+  # case that actually shipped a lie was the one it CANNOT notice. With every
+  # record gone and no tear, each entry reads Planned and the journal looks
+  # exactly like an apply that never moved anything, while every file is at
+  # its destination. Only the filesystem can tell those apart.
+  if [ "$pct" = "base" ]; then
+    cutoff=$(( 4 + $(python3 -c "
+import struct,sys
+raw=open(sys.argv[1],'rb').read()
+print(struct.unpack('<I', raw[0:4])[0])" "$BACKUP") ))
+  else
+    cutoff=$(( full * pct / 100 ))
+  fi
   head -c "$cutoff" "$BACKUP" > "$JF"
 
   out=$("$SWEEP" undo 2>&1)
@@ -110,10 +124,18 @@ for pct in 60 75 85 95 99; do
 
   # Two acceptable outcomes for a damaged journal: (a) refuse outright
   # (nonzero exit, nothing touched), or (b) fully succeed with every file
-  # actually restored. What must NOT happen: exit 0 while files are still
-  # stranded at their destination. That is "success" lying about the
-  # state of the user's files.
-  if [ "$code" = "0" ] && [ "$stranded" != "0" ]; then
+  # actually restored.
+  #
+  # What must NOT happen is a reassuring exit while files are still stranded.
+  # That means exit 0 AND exit 1. This used to test exit 0 only, and the gap
+  # was not theoretical: a journal cut back to its base frame made undo report
+  # "Nothing to undo. The most recent recorded apply was already restored" and
+  # exit 1, with every file at its destination. Exit 1 means "nothing to do",
+  # which is the same lie as "success" told in a quieter voice, and this
+  # scenario passed the whole time.
+  #
+  # Exit 3 with files stranded is fine: that is a refusal saying so.
+  if { [ "$code" = "0" ] || [ "$code" = "1" ]; } && [ "$stranded" != "0" ]; then
     DEEP_BAD=$((DEEP_BAD + 1))
     if [ -z "$DEEP_FIRST" ]; then
       DEEP_FIRST="offset=${pct}% ($cutoff/$full bytes): exit 0 (\"success\") but $stranded file(s) left stranded at their destination, unrestored and unmentioned.
@@ -126,7 +148,7 @@ done
 if [ "$DEEP_BAD" -eq 0 ]; then
   pass "journal truncated past its base frame (trailing progress cut, as a real crash would leave it) is either refused or fully honoured. Never a silent partial success"
 else
-  fail "journal truncated past its base frame silently HALF-LOADS in $DEEP_BAD/5 cases: sweep undo exits 0 and prints no error, but leaves files stranded at their destination that it never mentions and will never retry. This is the exact 'half-load is worse than fail-to-load' failure the brief warns about. First reproduction:
+  fail "journal truncated past its base frame reports no problem in $DEEP_BAD/6 cases: sweep undo exits 0 or 1, so a caller reads success or nothing-to-do, while files sit stranded at their destination unmentioned and never retried. This is the exact 'half-load is worse than fail-to-load' failure the brief warns about. First reproduction:
 $DEEP_FIRST"
 fi
 

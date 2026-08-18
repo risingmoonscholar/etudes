@@ -70,8 +70,16 @@ before anyone else could be.
   both reversible. Previously only the newest journal was reachable.
 - A folder that cannot be read is reported instead of being silently dropped
   from a count that implied it was complete.
-- A truncated or torn journal is refused rather than half-loaded, in both
-  `sweep` and `stash`.
+- A journal whose final record was cut short keeps the records before it, and
+  says its tail was lost. Voiding the whole file over a partial frame stranded
+  every file the intact records described; one CI failure lost 130 that way
+  over a 4-byte tail. A frame that is complete but fails to authenticate is
+  alteration rather than an interrupted write, and is still refused.
+- A journal missing *several* records restores nothing and says so. One
+  unrecorded move is a crash between the move and its record and is
+  recoverable; several means records were lost, and reversing only the
+  reachable ones would strand the rest under a success exit. Both `sweep` and
+  `stash`, on every route that looks for a journal.
 - Two filenames macOS considers identical are caught at plan time, and the tool
   asks the filesystem whether it folds case instead of assuming.
 - `sweep` can reach an iCloud Desktop, and `--allow-sync` reaches apply rather
