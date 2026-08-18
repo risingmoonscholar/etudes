@@ -154,7 +154,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: steps.scope.outputs.run == 'yes'
       - uses: Swatinem/rust-cache@v2
-        if: steps.scope.outputs.run == 'yes
+        if: steps.scope.outputs.run == 'yes'
       - name: Run the stress suite against the recorded baseline
         if: steps.scope.outputs.run == 'yes'
         env:
