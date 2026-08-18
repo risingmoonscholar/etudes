@@ -53,14 +53,15 @@ fn zip_expanding_to(dir: &Path, mb: usize) -> Option<PathBuf> {
 }
 
 #[test]
-fn an_archive_that_writes_past_the_cap_is_stopped_and_leaves_nothing() {
+fn an_archive_that_writes_past_its_budget_is_stopped_and_leaves_nothing() {
     let d = work("over");
     let _g = TestDir(d.clone());
 
-    // 2100 MB > MAX_MEMBER_BYTES (2 GB). Building it takes a moment and a
-    // couple of GB of scratch; skipping beats asserting nothing on a host
-    // that cannot spare the room.
-    let Some(bomb) = zip_expanding_to(&d, 2100) else {
+    // The budget is half the volume's free space, so a fixture big enough to
+    // exceed it naturally would be enormous and would depend on the host. The
+    // bound is what is under test, not the number, so `--max-size` sets a
+    // small one and a 300 MB archive crosses it.
+    let Some(bomb) = zip_expanding_to(&d, 300) else {
         eprintln!("skipped: could not build the fixture (no zip, or no room)");
         return;
     };
@@ -70,6 +71,7 @@ fn an_archive_that_writes_past_the_cap_is_stopped_and_leaves_nothing() {
         .arg(&bomb)
         .arg("--into")
         .arg(&out)
+        .args(["--max-size", "64M"])
         .output()
         .expect("run unpack");
 
@@ -87,8 +89,46 @@ fn an_archive_that_writes_past_the_cap_is_stopped_and_leaves_nothing() {
     );
     let stderr = String::from_utf8_lossy(&r.stderr);
     assert!(
-        stderr.contains("cap"),
-        "the refusal should say a cap was hit, not just fail: {stderr}"
+        stderr.contains("--max-size"),
+        "a refusal must name the way past it, or it is a wall rather than a \
+         safety feature: {stderr}"
+    );
+}
+
+/// The default budget must not refuse an ordinary large archive.
+///
+/// The version this replaced used a fixed 4 GB total and 2 GB per member, so a
+/// 6 GB project extracted from a 4 GB zip was refused on a machine with 800 GB
+/// free -- and a big legitimate file was indistinguishable from a bomb by
+/// construction. It still is indistinguishable; the difference is that the
+/// bound now scales with the room available rather than with a guess.
+#[test]
+fn an_ordinary_large_archive_is_not_refused_by_default() {
+    let d = work("large");
+    let _g = TestDir(d.clone());
+
+    let Some(zip) = zip_expanding_to(&d, 300) else {
+        eprintln!("skipped: could not build the fixture");
+        return;
+    };
+
+    let out = d.join("out");
+    let r = unpack_bin()
+        .arg(&zip)
+        .arg("--into")
+        .arg(&out)
+        .output()
+        .expect("run unpack");
+
+    assert_eq!(
+        r.status.code(),
+        Some(0),
+        "a 300 MB archive was refused by the default budget: {}",
+        String::from_utf8_lossy(&r.stderr)
+    );
+    assert!(
+        walk_size(&out) > 200 * 1024 * 1024,
+        "the archive did not actually extract"
     );
 }
 

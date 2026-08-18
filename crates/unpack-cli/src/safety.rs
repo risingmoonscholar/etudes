@@ -37,20 +37,36 @@
 /// Most entries accepted, so a million-file archive cannot stall the run.
 pub const MAX_ENTRIES: usize = 200_000;
 
-/// Most bytes one archive may write before extraction is abandoned.
+/// Share of the volume's free space one archive may consume.
 ///
-/// Chosen to be larger than anything a person unpacks by hand and far smaller
-/// than a disk. A legitimate archive over this is refused, which is a real
-/// cost paid by a real user -- so the message says the number and how to
-/// raise it, rather than implying the archive was malicious.
-pub const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// The cap is a fraction of what is actually free rather than a constant,
+/// because the constant version got this wrong in both directions at once:
+/// 4 GB refuses an ordinary 6 GB project on a machine with 800 GB spare, and
+/// permits filling a laptop that has 5 GB left. Neither is the question a
+/// user cares about, which is whether this will fit.
+///
+/// This check cannot tell a bomb from a large file, and does not try. A 6 GB
+/// video and a 6 GB bomb are the same event to it. What it bounds is how far
+/// either gets before the machine is in trouble.
+pub const FREE_SPACE_FRACTION: u64 = 2;
 
-/// Most bytes any single member may write.
+/// Floor for that fraction, so a nearly-full volume still allows small work.
+pub const MIN_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Ceiling, so an enormous empty volume does not mean no bound at all.
+pub const MAX_BUDGET_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+
+/// How many bytes this extraction may write, given free space on the target.
 ///
-/// Separate from the total because the failure modes differ: one enormous
-/// member is a different thing from a million small ones, and a caller
-/// deserves to be told which happened.
-pub const MAX_MEMBER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Half of free, clamped. Returns the ceiling when free space is unknown --
+/// refusing to extract because `df` could not be read would fail closed on a
+/// question that has nothing to do with safety.
+pub fn budget(free: Option<u64>) -> u64 {
+    match free {
+        Some(f) => (f / FREE_SPACE_FRACTION).clamp(MIN_BUDGET_BYTES, MAX_BUDGET_BYTES),
+        None => MAX_BUDGET_BYTES,
+    }
+}
 
 /// Deepest nesting accepted in a member path.
 ///

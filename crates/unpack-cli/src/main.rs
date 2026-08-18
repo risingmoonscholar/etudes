@@ -30,6 +30,7 @@ unpack: stop thinking about archive formats
 USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
     unpack ARCHIVE --list          show what is inside, extract nothing
+    --max-size N[G|M]              allow this extraction to write more
     --json                         machine-readable output (for agents)
     --version                      print the version and exit
     unpack help
@@ -44,11 +45,15 @@ than running unzip against a stream, and it is not implemented.
 Every archive is listed and judged BEFORE anything is written. Paths that
 escape the target, absolute paths and drive paths are refused outright.
 
-Extraction stops if an archive writes more than its caps allow, and the
-target is removed. The limit is on bytes that land on disk, never on the
-size an archive claims for itself: those numbers are written by whoever
-built it and forging four bytes makes unzip, tar and gzip all understate a
-member by three orders of magnitude.";
+Extraction stops if it writes more than half the free space on the target
+volume, and the target is removed. The limit is on bytes that land on disk,
+never on the size an archive claims for itself: those numbers are written by
+whoever built it, and forging four bytes makes unzip, tar and gzip all
+understate a member by three orders of magnitude.
+
+A large legitimate archive and a decompression bomb are the same event to
+that check. It bounds damage, it does not detect intent -- so --max-size
+raises the bound when you know what you are unpacking.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -299,17 +304,23 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
 
     // --- 4. extract --------------------------------------------------------
-    // Will it fit? The one question no header can answer, and the reason a
-    // size cap alone is not enough: a machine with 200 MB free does not care
-    // that the cap is 4 GB. Checked against the parent, since dest does not
-    // exist yet.
-    if let Some(free) = dest.parent().and_then(free_bytes)
-        && free < MIN_FREE_BYTES
+    // How much room is there, and therefore how much may this write? Asked of
+    // the parent, since dest does not exist yet. This is the question no
+    // header can answer, and the reason the bound is not a constant: a fixed
+    // 4 GB refuses an ordinary project on a roomy disk and permits filling a
+    // full one.
+    let free = dest.parent().and_then(free_bytes);
+    let budget = match max_size_flag(args) {
+        Some(n) => n,
+        None => safety::budget(free),
+    };
+    if let Some(f) = free
+        && f < MIN_FREE_BYTES
     {
         eprintln!(
             "unpack: refused. Only {} free on this volume, and extracting needs room\n\
              to work. Nothing was written.",
-            human(free)
+            human(f)
         );
         return ExitCode::from(2);
     }
@@ -322,7 +333,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         eprintln!("unpack: cannot create the target ({e})");
         return ExitCode::from(3);
     }
-    match extract(archive, fmt, &dest) {
+    match extract(archive, fmt, &dest, budget) {
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dest);
             eprintln!("unpack: extraction failed ({e}). Nothing was left behind.");
@@ -333,21 +344,19 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             // left behind is the mess this tool exists to avoid, and it is
             // worse here than usual: the user did not choose to start it.
             let _ = std::fs::remove_dir_all(&dest);
-            match breach {
-                Breach::Total(n) => eprintln!(
-                    "unpack: refused. This archive wrote {} past the {} cap and was stopped.\n\
-                     Nothing was left behind. The archive's own listing does not have to\n\
-                     admit its size, so the limit is on what actually lands on disk.",
-                    human(n),
-                    human(safety::MAX_TOTAL_BYTES)
-                ),
-                Breach::Member(n) => eprintln!(
-                    "unpack: refused. One file in this archive reached {}, past the {} cap\n\
-                     for a single member, and extraction was stopped. Nothing was left behind.",
-                    human(n),
-                    human(safety::MAX_MEMBER_BYTES)
-                ),
-            }
+            let Breach::Total(n) = breach;
+            eprintln!(
+                "unpack: stopped at {}, which is more than this extraction was given.\n\
+                 Nothing was left behind.\n\n\
+                 The budget is half the free space on the target volume, so a large\n\
+                 archive on a roomy disk is fine and the same archive on a full one is\n\
+                 not. This says nothing about the archive being hostile: a big project\n\
+                 and a decompression bomb look identical from here, which is why the\n\
+                 limit is on damage rather than on intent.\n\n\
+                 To allow more:  unpack ARCHIVE --max-size {}G",
+                human(n),
+                (n / (1024 * 1024 * 1024)) + 2
+            );
             return ExitCode::from(2);
         }
         Ok(Ok(())) => {}
@@ -417,6 +426,23 @@ fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// `--max-size N[G|M]`: the caller's own bound, replacing the free-space one.
+///
+/// Exists because the default WILL refuse legitimate work -- a 6 GB project is
+/// indistinguishable from a 6 GB bomb from here. A refusal with no way past it
+/// is a wall rather than a safety feature, so the way past it is named in the
+/// refusal itself.
+fn max_size_flag(args: &[String]) -> Option<u64> {
+    let i = args.iter().position(|a| a == "--max-size")?;
+    let raw = args.get(i + 1)?;
+    let (digits, mult) = match raw.chars().last() {
+        Some('G' | 'g') => (&raw[..raw.len() - 1], 1024 * 1024 * 1024),
+        Some('M' | 'm') => (&raw[..raw.len() - 1], 1024 * 1024),
+        _ => (raw.as_str(), 1),
+    };
+    digits.parse::<u64>().ok().map(|n| n * mult)
+}
+
 /// Least free space extraction will start with.
 ///
 /// Not a guess at what the archive needs -- nothing can know that before
@@ -455,36 +481,39 @@ fn free_bytes(p: &Path) -> Option<u64> {
     Some(avail_kb * 1024)
 }
 
-/// Total bytes and largest single file under `dir`.
-fn written(dir: &Path) -> (u64, u64) {
-    fn walk(dir: &Path, total: &mut u64, largest: &mut u64) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            return;
+/// Total bytes written under `dir`.
+///
+/// One number, because there is one bound. An earlier version also tracked
+/// the largest single file for a separate per-member cap; the two answered
+/// the same question and disagreed about which one a user had hit.
+fn written(dir: &Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0;
+    for e in rd.flatten() {
+        // symlink_metadata, not metadata: a symlink's target is not what this
+        // extraction wrote, and following one could count something outside
+        // dest entirely.
+        let Ok(md) = e.path().symlink_metadata() else {
+            continue;
         };
-        for e in rd.flatten() {
-            // symlink_metadata: a symlink's target is not what this extraction
-            // wrote, and following one could count something outside dest.
-            let Ok(md) = e.metadata() else { continue };
-            if md.is_dir() {
-                walk(&e.path(), total, largest);
-            } else {
-                let n = md.len();
-                *total += n;
-                if n > *largest {
-                    *largest = n;
-                }
-            }
+        if md.is_dir() {
+            total += written(&e.path());
+        } else {
+            total += md.len();
         }
     }
-    let (mut t, mut l) = (0, 0);
-    walk(dir, &mut t, &mut l);
-    (t, l)
+    total
 }
 
 /// Why an extraction was abandoned partway.
+/// One bound, not two. A per-member cap and a per-archive cap answered the
+/// same question twice and disagreed about which one a user had hit; what
+/// matters is how much this extraction wrote, whether that was one file or a
+/// million.
 pub enum Breach {
     Total(u64),
-    Member(u64),
 }
 
 /// Run an extractor, watching what it writes and killing it if it goes past
@@ -500,7 +529,7 @@ pub enum Breach {
 /// are extracted by a child process that writes files directly. A poll can
 /// overshoot by whatever lands between two checks, so this is a bound on the
 /// order of the cap, not to the byte.
-fn run_bounded(mut cmd: Command, dest: &Path) -> Result<Result<(), Breach>, String> {
+fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), Breach>, String> {
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     loop {
         match child.try_wait().map_err(|e| e.to_string())? {
@@ -508,11 +537,8 @@ fn run_bounded(mut cmd: Command, dest: &Path) -> Result<Result<(), Breach>, Stri
                 // Check once more after exit: a fast extraction can finish
                 // between two polls, and an unchecked archive is the thing
                 // this function exists to prevent.
-                let (total, largest) = written(dest);
-                if largest > safety::MAX_MEMBER_BYTES {
-                    return Ok(Err(Breach::Member(largest)));
-                }
-                if total > safety::MAX_TOTAL_BYTES {
+                let total = written(dest);
+                if total > budget {
                     return Ok(Err(Breach::Total(total)));
                 }
                 return if status.success() {
@@ -522,15 +548,11 @@ fn run_bounded(mut cmd: Command, dest: &Path) -> Result<Result<(), Breach>, Stri
                 };
             }
             None => {
-                let (total, largest) = written(dest);
-                if total > safety::MAX_TOTAL_BYTES || largest > safety::MAX_MEMBER_BYTES {
+                let total = written(dest);
+                if total > budget {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Ok(Err(if largest > safety::MAX_MEMBER_BYTES {
-                        Breach::Member(largest)
-                    } else {
-                        Breach::Total(total)
-                    }));
+                    return Ok(Err(Breach::Total(total)));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
@@ -538,7 +560,12 @@ fn run_bounded(mut cmd: Command, dest: &Path) -> Result<Result<(), Breach>, Stri
     }
 }
 
-fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<Result<(), Breach>, String> {
+fn extract(
+    archive: &Path,
+    fmt: Format,
+    dest: &Path,
+    budget: u64,
+) -> Result<Result<(), Breach>, String> {
     let cmd = match fmt {
         // -o overwrite inside our own fresh dir, -q quiet.
         Format::Zip => {
@@ -566,7 +593,7 @@ fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<Result<(), Breach
             c
         }
     };
-    run_bounded(cmd, dest)
+    run_bounded(cmd, dest, budget)
 }
 
 fn remove_junk(dest: &Path) -> usize {
