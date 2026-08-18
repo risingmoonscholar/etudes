@@ -593,6 +593,28 @@ fn same_file(_a: &Path, _b: &Path) -> bool {
 /// Saving the whole journal afterwards is still worthwhile (it rewrites the
 /// base frame and drops the accumulated progress records), but it is no
 /// longer what makes the on-disk state correct.
+/// Entries that say "not moved" while the file sits at the destination.
+///
+/// The journal cannot answer this and the filesystem can. A file truncated on
+/// a frame boundary is byte-identical to one that stopped there, so a journal
+/// missing every record looks exactly like an apply that never moved anything
+/// -- and the difference is visible only on disk.
+///
+/// Exactly one is the signature of a crash between a move and its record:
+/// apply moves then appends, so only the entry in flight can be missing.
+/// Several means records were lost.
+///
+/// Public because the CLIs must ask BEFORE deciding there is nothing to
+/// reverse. Without it, a journal cut back to its base frame reports "already
+/// restored" while every file is still at its destination -- which is not a
+/// half-restore but a plain untruth, and it exits 1 as though all were well.
+pub fn unrecorded_moves(j: &Journal) -> usize {
+    j.entries
+        .iter()
+        .filter(|e| e.state == EntryState::Planned && e.to.exists() && !e.from.exists())
+        .count()
+}
+
 pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
     let mut r = UndoReport::default();
 
@@ -619,11 +641,7 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
     // Refuse before touching anything. Restoring the reachable ones and
     // leaving the rest is the half-restore this check exists to prevent; it
     // was measured at 3 restored and 17 stranded with exit 0.
-    let unrecorded = j
-        .entries
-        .iter()
-        .filter(|e| e.state == EntryState::Planned && e.to.exists() && !e.from.exists())
-        .count();
+    let unrecorded = unrecorded_moves(j);
     if unrecorded > 1 {
         r.unrecorded_moves = unrecorded;
         return r;

@@ -954,6 +954,14 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
     if j.progress_tail_damaged {
         return false;
     }
+    // Ask the disk, not just the entries. A journal cut back to its base frame
+    // has every entry reading Planned and no torn tail to notice, so the check
+    // above passes and the entries agree there is nothing to reverse -- while
+    // every file is still at its destination. Answering "already restored"
+    // there is not a partial job, it is untrue.
+    if etude_core::apply::unrecorded_moves(j) > 0 {
+        return false;
+    }
     !j.entries.iter().any(|e| e.is_moved())
 }
 
@@ -1063,7 +1071,12 @@ fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::J
     let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
-        .find(|j| j.entries.iter().any(|e| e.is_moved()))
+        // Same reason as journal_is_fully_undone: a journal whose records were
+        // lost has nothing marked Moved, yet its files are at their
+        // destinations. Skipping it here hides it from undo entirely.
+        .find(|j| {
+            j.entries.iter().any(|e| e.is_moved()) || etude_core::apply::unrecorded_moves(j) > 0
+        })
 }
 
 /// Find the newest sweep journal whose root is `target` and that still has
@@ -1083,7 +1096,11 @@ fn sweep_journal_for_root(
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
         .find(|j| {
-            j.entries.iter().any(|e| e.is_moved())
+            // Same filesystem question as the no-argument route. A journal
+            // whose records were lost has nothing marked Moved while its files
+            // are at their destinations; filtering on is_moved alone hides it
+            // and the caller is told no apply of this folder is reversible.
+            (j.entries.iter().any(|e| e.is_moved()) || etude_core::apply::unrecorded_moves(j) > 0)
                 && j.root.canonicalize().is_ok_and(|root| root == target)
         })
 }

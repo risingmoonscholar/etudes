@@ -325,6 +325,14 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
     if j.progress_tail_damaged {
         return false;
     }
+    // Ask the disk, not just the entries. A journal cut back to its base frame
+    // has every entry reading Planned and no torn tail to notice, so the check
+    // above passes and the entries agree there is nothing to reverse -- while
+    // every file is still at its destination. Answering "already restored"
+    // there is not a partial job, it is untrue.
+    if etude_core::apply::unrecorded_moves(j) > 0 {
+        return false;
+    }
     !j.entries.iter().any(|e| e.is_moved())
 }
 
