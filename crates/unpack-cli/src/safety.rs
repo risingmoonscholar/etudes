@@ -4,16 +4,76 @@
 //! Extracting first and cleaning up afterwards means a hostile archive has
 //! already written into the target and the user has to clean up after it.
 //!
-//! # What is NOT protected against
+//! # Decompression bombs
 //!
-//! **Decompression bombs.** A 42 KB zip expanding to petabytes will fill the
-//! disk. Catching it needs uncompressed sizes from the listing (`unzip -Z`,
-//! `tar -tvf`) and a ratio check, and that is not implemented. The entry-count
-//! cap below is the only size-shaped limit that exists. Said plainly here
-//! rather than implied by a constant nobody reads.
+//! Bounded by what gets WRITTEN, never by what the archive says about itself.
+//!
+//! The obvious check is to read uncompressed sizes from the listing
+//! (`unzip -Z`, `tar -tvf`, `gzip -l`) and refuse a suspicious ratio. Those
+//! numbers are written by whoever made the archive, and they were measured
+//! here rather than assumed:
+//!
+//! | format | truth | what the listing reports after four bytes are edited |
+//! |---|---|---|
+//! | `.zip` | 2,000,000 B | 4,096 |
+//! | `.tar` | 2,000,000 B | 4,096 |
+//! | `.gz` | 1,000,000 B | 4,096 |
+//!
+//! The forged zip then extracted all 2,000,000 bytes with `unzip` exiting 0
+//! and printing nothing. `gunzip` did notice its own trailer was wrong -- and
+//! said so *after* writing the full million bytes, which is too late to be a
+//! defence.
+//!
+//! So a ratio check is a claim the attacker gets to satisfy. The cap here is
+//! on bytes actually landing on disk, which no header can lie about, and it
+//! is the same shape ClamAV uses (`MaxScanSize` bounds data extracted, not
+//! data declared).
+//!
+//! What that buys, stated exactly: extraction stops and the target is removed
+//! once an archive writes more than the cap. It is not a promise that a
+//! hostile archive cannot inconvenience you -- it is a bound on how far it
+//! gets.
 
 /// Most entries accepted, so a million-file archive cannot stall the run.
 pub const MAX_ENTRIES: usize = 200_000;
+
+/// Share of the volume's free space one archive may consume.
+///
+/// The cap is a fraction of what is actually free rather than a constant,
+/// because the constant version got this wrong in both directions at once:
+/// 4 GB refuses an ordinary 6 GB project on a machine with 800 GB spare, and
+/// permits filling a laptop that has 5 GB left. Neither is the question a
+/// user cares about, which is whether this will fit.
+///
+/// This check cannot tell a bomb from a large file, and does not try. A 6 GB
+/// video and a 6 GB bomb are the same event to it. What it bounds is how far
+/// either gets before the machine is in trouble.
+pub const FREE_SPACE_FRACTION: u64 = 2;
+
+/// Floor for that fraction, so a nearly-full volume still allows small work.
+pub const MIN_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Ceiling, so an enormous empty volume does not mean no bound at all.
+pub const MAX_BUDGET_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+
+/// How many bytes this extraction may write, given free space on the target.
+///
+/// Half of free, clamped. Returns the ceiling when free space is unknown --
+/// refusing to extract because `df` could not be read would fail closed on a
+/// question that has nothing to do with safety.
+pub fn budget(free: Option<u64>) -> u64 {
+    match free {
+        Some(f) => (f / FREE_SPACE_FRACTION).clamp(MIN_BUDGET_BYTES, MAX_BUDGET_BYTES),
+        None => MAX_BUDGET_BYTES,
+    }
+}
+
+/// Deepest nesting accepted in a member path.
+///
+/// The other axis of a bomb: not size but structure. ClamAV bounds this too
+/// (`MaxRecursion`, default 17). A path deeper than this is refused before
+/// anything is written.
+pub const MAX_DEPTH: usize = 32;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Unsafe {
@@ -23,6 +83,10 @@ pub enum Unsafe {
     Escapes(String),
     /// Windows drive letters and UNC paths.
     DriveOrUnc(String),
+    /// Nested past `MAX_DEPTH`. The structural axis of a bomb: an archive can
+    /// be small and shallow in bytes while being pathological in shape, and
+    /// deep trees are slow to walk and slow to delete afterwards.
+    TooDeep(String),
 }
 
 impl std::fmt::Display for Unsafe {
@@ -31,6 +95,7 @@ impl std::fmt::Display for Unsafe {
             Unsafe::AbsolutePath(p) => write!(f, "absolute path: {p}"),
             Unsafe::Escapes(p) => write!(f, "escapes the target: {p}"),
             Unsafe::DriveOrUnc(p) => write!(f, "drive or UNC path: {p}"),
+            Unsafe::TooDeep(p) => write!(f, "nested deeper than {MAX_DEPTH}: {p}"),
         }
     }
 }
@@ -67,7 +132,12 @@ pub fn judge(path: &str) -> Option<Unsafe> {
                     return Some(Unsafe::Escapes(p.to_string()));
                 }
             }
-            _ => depth += 1,
+            _ => {
+                depth += 1;
+                if depth as usize > MAX_DEPTH {
+                    return Some(Unsafe::TooDeep(p.to_string()));
+                }
+            }
         }
     }
     None

@@ -75,25 +75,25 @@ dependencies = [
 
 [[package]]
 name = "etude-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "fixtures",
 ]
 
 [[package]]
 name = "etude-keep"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chacha20poly1305",
 ]
 
 [[package]]
 name = "etude-read"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "fixtures"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "generic-array"
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "stash-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "etude-core",
  "etude-keep",
@@ -174,7 +174,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sweep-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "etude-core",
  "etude-keep",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "unpack-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "etude-core",
 ]

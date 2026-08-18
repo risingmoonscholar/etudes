@@ -5,10 +5,50 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Nothing has been tagged or published yet, so everything below sits under the
-one version the workspace has ever carried. The Fixed list is long because the
-adversarial harness and two independent reviewers were pointed at the tools
-before anyone else could be.
+The Fixed lists are long because the adversarial harness and two independent
+reviewers were pointed at the tools before anyone else could be.
+
+## [0.4.0] - 2026-08-18
+
+Exit codes moved, so this is a minor bump rather than a patch. Anyone who
+installed from git during 0.3.0's long tail has a binary that behaves
+differently from one installed now, and both reported the same version -- which
+is the reason for tagging from here on.
+
+### Added
+
+- `unpack --max-size N[G|M]`: raise the bound on what one extraction may write.
+
+### Changed
+
+- `unpack` stops an extraction that writes more than half the free space on the
+  target volume, and removes what it wrote. The bound is on bytes landing on
+  disk, never on the size an archive declares: forging four bytes makes
+  `unzip -Z`, `tar -tvf` and `gzip -l` each understate a member by three orders
+  of magnitude, and the forged zip then extracts in full with `unzip` exiting 0.
+  A large legitimate archive and a decompression bomb are the same event to this
+  check; it bounds damage rather than detecting intent.
+- `unpack` refuses `.dmg` by design rather than as an unimplemented case, and
+  exits 2 (refused) rather than 3 (error). Opening one means asking the kernel
+  to mount a stranger's filesystem image, which no size check covers. The
+  message names `hdiutil attach` so the decision stays with the user.
+- `stash pop` exits 0 rather than 3 after successfully restoring from a journal
+  whose tail was cut. A cut tail is the ordinary outcome of any interrupted run,
+  so exiting non-zero made routine crash recovery read as failure to any script
+  checking the code. The damage is still disclosed on stderr.
+
+### Fixed
+
+- A journal whose final record was cut short keeps the records before it, and
+  says its tail was lost. Voiding the whole file over a partial frame stranded
+  every file the intact records described; one CI failure lost 130 that way over
+  a 4-byte tail. A frame that is complete but fails to authenticate is alteration
+  rather than an interrupted write, and is still refused.
+- A journal missing *several* records restores nothing and says so, on every
+  route that looks for one. One unrecorded move is a crash between the move and
+  its record and is recoverable; several means records were lost, and reversing
+  only the reachable ones would strand the rest under an exit code that reads as
+  success.
 
 ## [0.3.0] - 2026-08-10
 
