@@ -89,4 +89,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run the stress suite against the recorded baseline
+        env:
+          # Somewhere the upload step can reach. The default is the runner's
+          # temp dir, which is destroyed with the runner.
+          ETUDES_EVIDENCE_DIR: ${{ github.workspace }}/stress-evidence
         run: bash scripts/stress-ratchet.sh
+
+      # if: always() because the evidence only exists when the suite FAILED.
+      # Running this only on success would upload nothing, every time.
+      # Only 30-sigkill-mid-apply writes evidence today, so this uploads
+      # nothing for any other scenario's failure. Named for what it does
+      # rather than for what it looks like it does.
+      - name: Keep the evidence from a failing sigkill trial
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-evidence
+          path: stress-evidence/
+          if-no-files-found: ignore
+          retention-days: 30

@@ -126,6 +126,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "journal-dump"
+version = "0.4.0"
+dependencies = [
+ "etude-core",
+ "etude-keep",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
