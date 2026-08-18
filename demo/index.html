@@ -76,6 +76,10 @@ hr{border:0; border-top:1px solid var(--line); margin:3.4rem 0}
    scroll across a screen and a half. */
 .term.wraps{white-space:pre-wrap; overflow-wrap:anywhere}
 .term .cmd{color:var(--accent)}
+.term .t-str{color:#9bb06a}
+.term .t-path{color:#8fa9c4}
+.term .t-num{color:#c98a68}
+.term .t-flag{color:#b9926a}
 .term .cmd::before{content:"$ "; color:var(--term-dim)}
 .runline{display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; margin:.4rem 0 0}
 .runline button{
@@ -254,6 +258,23 @@ const API = {
 const EXITS = [["0","done"],["1","nothing to do"],["2","refused"],["3","error"]];
 const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+// Colour for already-escaped transcript text. The tools emit no ANSI; this is
+// the page rendering plain text the way an editor renders a file, not the
+// restoration of colour a capture stripped. Every rule below matches a token
+// the tools genuinely print as a distinct thing.
+//
+// Runs AFTER esc(). If it ran before, a hostile filename containing "<" would
+// become an element, and the fixture plants exactly those. Spans are then the
+// only markup that can reach the page.
+//
+// Quoted strings are matched BEFORE paths: the output contains many paths
+// inside quotes, and the path rule would otherwise split one and strand a span.
+const tint = s => s
+  .replace(/&quot;[^&]*?&quot;|"[^"\n]*"/g, m => `<span class="t-str">${m}</span>`)
+  .replace(/~\/[^\s",<]*/g, m => `<span class="t-path">${m}</span>`)
+  .replace(/(^|[\s(])(--[a-z][a-z-]*)/g, (m, p, f) => `${p}<span class="t-flag">${f}</span>`)
+  .replace(/\b\d+(\.\d+)?\b/g, m => `<span class="t-num">${m}</span>`);
+
 // Two sources for the same generated data. fetch() is the real path, used by
 // GitHub Pages and any real HTTP server. The inline <script> below it is a
 // fallback capture-demos.sh writes into this file at the same time it writes
@@ -291,7 +312,7 @@ function render(root, name, spec, byLabel, commit, version) {
 
   const demoHTML = demos.length ? demos.map(t => `
     <div class="term${t.label.endsWith("-json") ? " wraps" : ""}"><span class="cmd">${esc(t.command)}</span>
-${esc(t.stdout.replace(/\s+$/, ""))}</div>
+${tint(esc(t.stdout.replace(/\s+$/, "")))}</div>
     <p class="note">exit ${t.exit}</p>`).join("")
     : '<p class="note">No transcript captured for this tool yet.</p>';
 
