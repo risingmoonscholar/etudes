@@ -16,4 +16,4 @@ path = "src/main.rs"
 # No archive-parsing crates. The system tools are better tested than anything
 # this would add, and the value here is the safe uniform wrapper, not a parser.
 [dependencies]
-etude-core = { path = "../etude-core", version = "0.3.0" }
+etude-core = { path = "../etude-core", version = "0.4.0" }
