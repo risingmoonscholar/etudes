@@ -124,6 +124,8 @@ pub fn apply(
         tool: tool.to_string(),
         root: plan.root.clone(),
         entries: Vec::new(),
+        // A journal being written now has no tail to have lost.
+        progress_tail_damaged: false,
     };
 
     // Build the full entry list first, so the journal describes the whole
@@ -536,6 +538,22 @@ pub struct UndoReport {
     /// set, appended as it happened, so a caller that gives up here still
     /// leaves a journal that agrees with the filesystem.
     pub error: Option<ApplyError>,
+    /// Set when the journal lost more than its final in-flight record, and
+    /// undo therefore did nothing at all.
+    ///
+    /// A crash between a move and its record loses exactly one record: apply
+    /// moves then appends, so only the entry it was working on can be missing.
+    /// Undo's successor-entry recovery covers precisely that entry.
+    ///
+    /// A journal missing MORE than that was not left by a crash mid-write. Its
+    /// remaining entries read Planned while their files sit at their
+    /// destinations, and recovery reaches only the first of them -- so
+    /// proceeding would restore a few, strand the rest, and exit 0. That is a
+    /// silent half-restore, which is worse than the refusal it would replace.
+    ///
+    /// Holds how many entries look moved-but-unrecorded, because the number is
+    /// the evidence: one is a crash, several is a damaged file.
+    pub unrecorded_moves: usize,
 }
 
 /// Whether two paths are the same file on disk, by device AND inode.
@@ -575,6 +593,38 @@ fn same_file(_a: &Path, _b: &Path) -> bool {
 /// Saving the whole journal afterwards is still worthwhile (it rewrites the
 /// base frame and drops the accumulated progress records), but it is no
 /// longer what makes the on-disk state correct.
+/// Entries that say "not moved" while the file sits at the destination.
+///
+/// The journal cannot answer this and the filesystem can. A file truncated on
+/// a frame boundary is byte-identical to one that stopped there, so a journal
+/// missing every record looks exactly like an apply that never moved anything
+/// -- and the difference is visible only on disk.
+///
+/// Exactly one is the signature of a crash between a move and its record:
+/// apply moves then appends, so only the entry in flight can be missing.
+/// Several means records were lost.
+///
+/// Public because the CLIs must ask BEFORE deciding there is nothing to
+/// reverse. Without it, a journal cut back to its base frame reports "already
+/// restored" while every file is still at its destination -- which is not a
+/// half-restore but a plain untruth, and it exits 1 as though all were well.
+pub fn unrecorded_moves(j: &Journal) -> usize {
+    j.entries
+        .iter()
+        .filter(|e| {
+            // symlink_metadata, not exists(): exists() follows the last
+            // component, so a symlink at the destination reports on whatever
+            // it points at. A dangling one would read as absent and a live one
+            // as present, and neither says anything about whether sweep's file
+            // is there. What is being asked is "is something at this path",
+            // and the link itself is something.
+            e.state == EntryState::Planned
+                && e.to.symlink_metadata().is_ok()
+                && e.from.symlink_metadata().is_err()
+        })
+        .count()
+}
+
 pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
     let mut r = UndoReport::default();
 
@@ -590,6 +640,22 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
         .entries
         .iter()
         .position(|e| e.state == EntryState::Planned);
+
+    // How many entries say "not moved" while the file is sitting at the
+    // destination anyway? Exactly one is the signature of a crash between a
+    // move and its record, and recovery below handles it. More than one means
+    // the journal lost records it should have had, and the filesystem is the
+    // only thing that can say so -- the bytes cannot, since a file truncated
+    // on a frame boundary is indistinguishable from one that stopped there.
+    //
+    // Refuse before touching anything. Restoring the reachable ones and
+    // leaving the rest is the half-restore this check exists to prevent; it
+    // was measured at 3 restored and 17 stranded with exit 0.
+    let unrecorded = unrecorded_moves(j);
+    if unrecorded > 1 {
+        r.unrecorded_moves = unrecorded;
+        return r;
+    }
 
     // Reverse order, so nested destinations empty before their parents.
     for i in (0..j.entries.len()).rev() {

@@ -310,7 +310,29 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 }
 
 /// No done entries means pop already ran. Exit 1. Don't call undo again.
+/// Is there nothing left for pop to restore?
+///
+/// A journal whose tail was cut short cannot answer this from its entries
+/// alone. stash moves an item and only then records it, so a lost record is a
+/// move that happened and is not written down: every entry can read Planned
+/// while the items sit in the stash. Short-circuiting on that says "already
+/// popped" and leaves them there, which is the silent stranding this area
+/// exists to prevent.
+///
+/// When the tail is damaged the answer is no, so the restore runs and its
+/// successor-entry recovery checks the filesystem instead of the journal.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
+    if j.progress_tail_damaged {
+        return false;
+    }
+    // Ask the disk, not just the entries. A journal cut back to its base frame
+    // has every entry reading Planned and no torn tail to notice, so the check
+    // above passes and the entries agree there is nothing to reverse -- while
+    // every file is still at its destination. Answering "already restored"
+    // there is not a partial job, it is untrue.
+    if etude_core::apply::unrecorded_moves(j) > 0 {
+        return false;
+    }
     !j.entries.iter().any(|e| e.is_moved())
 }
 
@@ -424,7 +446,43 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         println!("\nNothing to restore. This stash was already popped.");
         return ExitCode::from(1);
     }
+    // Before the counts, because it changes what they mean. A journal cut
+    // short describes less than the stash actually did, so the count below is
+    // a floor. Restoring quietly from damaged state is the failure this
+    // disclosure exists to prevent -- the same reason `sweep undo` says it.
+    // Said, not signalled. A torn tail is the ordinary outcome of an
+    // interrupted run -- stash moves an item and only then records it, so any
+    // kill mid-run leaves one -- and the items are back. Exiting non-zero for
+    // that would make routine crash recovery read as failure to anything
+    // checking the code. The damage goes to stderr where a person sees it;
+    // the exit code stays the truth about whether the restore worked.
+    //
+    // This used to exit 3 while `sweep undo` exited 0 on the same condition.
+    // The asymmetry was an accident, not a design.
+    if j.progress_tail_damaged {
+        eprintln!(
+            "stash: this journal is damaged: a progress record was truncated, so the\n\
+             \x20      last move it began is not written down. Everything it did record is\n\
+             \x20      being restored, and the item whose record was lost is recovered by\n\
+             \x20      checking the filesystem rather than the journal."
+        );
+    }
+
     let r = etude_core::apply::undo(&mut j, &sl);
+    if r.unrecorded_moves > 1 {
+        eprintln!(
+            "stash: refused. This journal is missing more than one record: {n} items are\n\
+             at their destinations while the journal says they were never moved.\n\n\
+             A crash between a move and its record loses exactly one record, and that\n\
+             one is recoverable. Losing several means the journal itself was damaged,\n\
+             and pop can only reach the first of them -- so it would put a few back,\n\
+             leave the rest where they are, and report success. Nothing has been\n\
+             touched instead.\n\n\
+             The items are still at their destinations. Nothing is lost.",
+            n = r.unrecorded_moves
+        );
+        return ExitCode::from(3);
+    }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} items.", r.restored);
@@ -929,6 +987,7 @@ mod tests {
             tool: "stash".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(false)],
+            progress_tail_damaged: false,
         };
         assert!(journal_is_fully_undone(&undone));
 
@@ -937,6 +996,7 @@ mod tests {
             tool: "stash".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(true)],
+            progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));
     }

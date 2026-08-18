@@ -938,7 +938,30 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 }
 
 /// No done entries means undo already ran. Exit 1. Don't call undo again.
+/// Is there nothing left for undo to reverse?
+///
+/// A journal whose tail was cut short can NEVER answer this from its entries
+/// alone. Apply moves a file and only then records it, so a lost record means
+/// a move that happened and is not written down: every entry can read Planned
+/// while files sit at their destinations. Short-circuiting on that says
+/// "already restored" and strands them, which is the silent stranding this
+/// whole area exists to prevent -- and it is what the stress scenario was
+/// reporting as "Nothing to undo" on a run that had moved 130 files.
+///
+/// When the tail is damaged the answer is no, so undo runs and its
+/// successor-entry recovery checks the filesystem instead of the journal.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
+    if j.progress_tail_damaged {
+        return false;
+    }
+    // Ask the disk, not just the entries. A journal cut back to its base frame
+    // has every entry reading Planned and no torn tail to notice, so the check
+    // above passes and the entries agree there is nothing to reverse -- while
+    // every file is still at its destination. Answering "already restored"
+    // there is not a partial job, it is untrue.
+    if etude_core::apply::unrecorded_moves(j) > 0 {
+        return false;
+    }
     !j.entries.iter().any(|e| e.is_moved())
 }
 
@@ -1048,7 +1071,12 @@ fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::J
     let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
-        .find(|j| j.entries.iter().any(|e| e.is_moved()))
+        // Same reason as journal_is_fully_undone: a journal whose records were
+        // lost has nothing marked Moved, yet its files are at their
+        // destinations. Skipping it here hides it from undo entirely.
+        .find(|j| {
+            j.entries.iter().any(|e| e.is_moved()) || etude_core::apply::unrecorded_moves(j) > 0
+        })
 }
 
 /// Find the newest sweep journal whose root is `target` and that still has
@@ -1068,7 +1096,11 @@ fn sweep_journal_for_root(
     ids.into_iter()
         .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
         .find(|j| {
-            j.entries.iter().any(|e| e.is_moved())
+            // Same filesystem question as the no-argument route. A journal
+            // whose records were lost has nothing marked Moved while its files
+            // are at their destinations; filtering on is_moved alone hides it
+            // and the caller is told no apply of this folder is reversible.
+            (j.entries.iter().any(|e| e.is_moved()) || etude_core::apply::unrecorded_moves(j) > 0)
                 && j.root.canonicalize().is_ok_and(|root| root == target)
         })
 }
@@ -1141,7 +1173,35 @@ fn cmd_undo(args: &[String]) -> ExitCode {
 fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     // Pass the sealer: undo persists each reversal as it happens now, so a
     // kill partway through leaves a journal that agrees with the disk.
+    // Said before the counts, because it changes what they mean: a journal
+    // that lost its tail describes less than the apply actually did, so
+    // "Restored N files" is a floor rather than the whole story. Recovering
+    // quietly from damaged state would be its own version of the bug this
+    // reporting exists to prevent.
+    let tail_was_torn = j.progress_tail_damaged;
+    if tail_was_torn {
+        println!(
+            "\n  NOTE: this journal was cut short, so its last recorded move is missing.\n\
+             \x20       Everything it did record is being reversed, and the file whose\n\
+             \x20       record was lost is recovered by checking the filesystem."
+        );
+    }
+
     let r = etude_core::apply::undo(j, sl);
+    if r.unrecorded_moves > 1 {
+        eprintln!(
+            "sweep: refused. This journal is missing more than one record: {n} files are\n\
+             at their destinations while the journal says they were never moved.\n\n\
+             A crash between a move and its record loses exactly one record, and that\n\
+             one is recoverable. Losing several means the journal itself was damaged,\n\
+             and undo can only reach the first of them -- so it would put a few back,\n\
+             leave the rest where they are, and report success. Nothing has been\n\
+             touched instead.\n\n\
+             The files are still at their destinations. Nothing is lost.",
+            n = r.unrecorded_moves
+        );
+        return ExitCode::from(3);
+    }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} files.", r.restored);
@@ -1626,6 +1686,7 @@ mod tests {
             tool: "sweep".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(false)],
+            progress_tail_damaged: false,
         };
         assert!(journal_is_fully_undone(&undone));
 
@@ -1634,6 +1695,7 @@ mod tests {
             tool: "sweep".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(true)],
+            progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));
     }
