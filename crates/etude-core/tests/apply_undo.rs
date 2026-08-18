@@ -1145,3 +1145,64 @@ fn a_torn_final_frame_still_lets_undo_restore_everything() {
 
     cleanup(&root);
 }
+
+/// A journal missing more than one record does nothing, rather than restoring
+/// what it can reach and calling that success.
+///
+/// The distinction this pins: ONE entry that looks moved-but-unrecorded is a
+/// crash between a move and its record, and successor-entry recovery handles
+/// it. SEVERAL means the journal itself lost records, and recovery only ever
+/// reaches the first -- so proceeding restores a few, strands the rest, and
+/// exits 0.
+///
+/// That half-restore is what an earlier version of the torn-tail fix did:
+/// measured at 3 restored and 17 stranded, silently. Refusing is worse at
+/// recovering and better at not lying, and the files are all still at their
+/// destinations either way.
+#[test]
+fn a_journal_missing_several_records_restores_nothing() {
+    let _g = lock();
+    let (root, _fx, p) = setup("deep_trunc");
+
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let full = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("loads");
+    assert!(
+        full.entries.len() > 3,
+        "test setup: need several moves, got {}",
+        full.entries.len()
+    );
+
+    // Cut back to the base frame plus nothing: every entry reads Planned while
+    // every file is at its destination. A truncation on a frame boundary, so
+    // the tail does not even register as torn.
+    let jpath = full.path();
+    let raw = fs::read(&jpath).expect("read");
+    let base_len = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
+    fs::write(&jpath, &raw[..4 + base_len]).expect("truncate");
+
+    let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("still loads");
+    let before: Vec<PathBuf> = j.entries.iter().map(|e| e.to.clone()).collect();
+
+    let report = apply::undo(&mut j, &TestSeal);
+
+    assert!(
+        report.unrecorded_moves > 1,
+        "should have noticed several unrecorded moves, saw {}",
+        report.unrecorded_moves
+    );
+    assert_eq!(
+        report.restored, 0,
+        "restored {} files from a journal it could not fully reverse. Partial is \
+         the failure here: the rest are stranded and the exit code says success",
+        report.restored
+    );
+    for to in &before {
+        assert!(
+            to.exists(),
+            "{} was moved despite the refusal. Nothing should have been touched",
+            to.display()
+        );
+    }
+
+    cleanup(&root);
+}

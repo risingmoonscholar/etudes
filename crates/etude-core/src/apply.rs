@@ -538,6 +538,22 @@ pub struct UndoReport {
     /// set, appended as it happened, so a caller that gives up here still
     /// leaves a journal that agrees with the filesystem.
     pub error: Option<ApplyError>,
+    /// Set when the journal lost more than its final in-flight record, and
+    /// undo therefore did nothing at all.
+    ///
+    /// A crash between a move and its record loses exactly one record: apply
+    /// moves then appends, so only the entry it was working on can be missing.
+    /// Undo's successor-entry recovery covers precisely that entry.
+    ///
+    /// A journal missing MORE than that was not left by a crash mid-write. Its
+    /// remaining entries read Planned while their files sit at their
+    /// destinations, and recovery reaches only the first of them -- so
+    /// proceeding would restore a few, strand the rest, and exit 0. That is a
+    /// silent half-restore, which is worse than the refusal it would replace.
+    ///
+    /// Holds how many entries look moved-but-unrecorded, because the number is
+    /// the evidence: one is a crash, several is a damaged file.
+    pub unrecorded_moves: usize,
 }
 
 /// Whether two paths are the same file on disk, by device AND inode.
@@ -592,6 +608,26 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
         .entries
         .iter()
         .position(|e| e.state == EntryState::Planned);
+
+    // How many entries say "not moved" while the file is sitting at the
+    // destination anyway? Exactly one is the signature of a crash between a
+    // move and its record, and recovery below handles it. More than one means
+    // the journal lost records it should have had, and the filesystem is the
+    // only thing that can say so -- the bytes cannot, since a file truncated
+    // on a frame boundary is indistinguishable from one that stopped there.
+    //
+    // Refuse before touching anything. Restoring the reachable ones and
+    // leaving the rest is the half-restore this check exists to prevent; it
+    // was measured at 3 restored and 17 stranded with exit 0.
+    let unrecorded = j
+        .entries
+        .iter()
+        .filter(|e| e.state == EntryState::Planned && e.to.exists() && !e.from.exists())
+        .count();
+    if unrecorded > 1 {
+        r.unrecorded_moves = unrecorded;
+        return r;
+    }
 
     // Reverse order, so nested destinations empty before their parents.
     for i in (0..j.entries.len()).rev() {

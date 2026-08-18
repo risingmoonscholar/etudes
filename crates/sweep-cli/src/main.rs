@@ -1171,6 +1171,20 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
 
     let r = etude_core::apply::undo(j, sl);
+    if r.unrecorded_moves > 1 {
+        eprintln!(
+            "sweep: refused. This journal is missing more than one record: {n} files are\n\
+             at their destinations while the journal says they were never moved.\n\n\
+             A crash between a move and its record loses exactly one record, and that\n\
+             one is recoverable. Losing several means the journal itself was damaged,\n\
+             and undo can only reach the first of them -- so it would put a few back,\n\
+             leave the rest where they are, and report success. Nothing has been\n\
+             touched instead.\n\n\
+             The files are still at their destinations. Nothing is lost.",
+            n = r.unrecorded_moves
+        );
+        return ExitCode::from(3);
+    }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
     println!("\nRestored {} files.", r.restored);
