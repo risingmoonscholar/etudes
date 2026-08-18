@@ -3,3 +3,7 @@ docs/
 graphify-out/
 crates/graphify-out/
 .night-watch/
+
+# Evidence kept from a failing stress trial. Written into the workspace in
+# CI so the upload step can reach it; never intended to be committed.
+stress-evidence/
