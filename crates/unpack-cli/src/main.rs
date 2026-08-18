@@ -34,11 +34,21 @@ USAGE
     --version                      print the version and exit
     unpack help
 
-Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg using the tools
-already on this machine. Nothing is parsed here.
+Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz using the tools already
+on this machine. Nothing is parsed here.
+
+.dmg is recognised and refused. Extracting one means asking the kernel to
+mount a stranger's filesystem image, which is a different and larger risk
+than running unzip against a stream, and it is not implemented.
 
 Every archive is listed and judged BEFORE anything is written. Paths that
-escape the target, absolute paths and drive paths are refused outright.";
+escape the target, absolute paths and drive paths are refused outright.
+
+Extraction stops if an archive writes more than its caps allow, and the
+target is removed. The limit is on bytes that land on disk, never on the
+size an archive claims for itself: those numbers are written by whoever
+built it and forging four bytes makes unzip, tar and gzip all understate a
+member by three orders of magnitude.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -157,7 +167,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     let Some(fmt) = detect(archive) else {
         eprintln!(
             "unpack: unrecognised archive type.\n\
-             Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz .dmg"
+             Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz"
         );
         return ExitCode::from(3);
     };
@@ -289,6 +299,21 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
 
     // --- 4. extract --------------------------------------------------------
+    // Will it fit? The one question no header can answer, and the reason a
+    // size cap alone is not enough: a machine with 200 MB free does not care
+    // that the cap is 4 GB. Checked against the parent, since dest does not
+    // exist yet.
+    if let Some(free) = dest.parent().and_then(free_bytes)
+        && free < MIN_FREE_BYTES
+    {
+        eprintln!(
+            "unpack: refused. Only {} free on this volume, and extracting needs room\n\
+             to work. Nothing was written.",
+            human(free)
+        );
+        return ExitCode::from(2);
+    }
+
     if let Err(e) = std::fs::create_dir_all(&dest) {
         // The OS text, not the Rust category -- "Permission denied
         // (os error 13)" tells a user what to do; "permission denied"
@@ -297,10 +322,35 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         eprintln!("unpack: cannot create the target ({e})");
         return ExitCode::from(3);
     }
-    if let Err(e) = extract(archive, fmt, &dest) {
-        let _ = std::fs::remove_dir_all(&dest);
-        eprintln!("unpack: extraction failed ({e}). Nothing was left behind.");
-        return ExitCode::from(3);
+    match extract(archive, fmt, &dest) {
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dest);
+            eprintln!("unpack: extraction failed ({e}). Nothing was left behind.");
+            return ExitCode::from(3);
+        }
+        Ok(Err(breach)) => {
+            // Remove what landed before the cap was hit. A partial extraction
+            // left behind is the mess this tool exists to avoid, and it is
+            // worse here than usual: the user did not choose to start it.
+            let _ = std::fs::remove_dir_all(&dest);
+            match breach {
+                Breach::Total(n) => eprintln!(
+                    "unpack: refused. This archive wrote {} past the {} cap and was stopped.\n\
+                     Nothing was left behind. The archive's own listing does not have to\n\
+                     admit its size, so the limit is on what actually lands on disk.",
+                    human(n),
+                    human(safety::MAX_TOTAL_BYTES)
+                ),
+                Breach::Member(n) => eprintln!(
+                    "unpack: refused. One file in this archive reached {}, past the {} cap\n\
+                     for a single member, and extraction was stopped. Nothing was left behind.",
+                    human(n),
+                    human(safety::MAX_MEMBER_BYTES)
+                ),
+            }
+            return ExitCode::from(2);
+        }
+        Ok(Ok(())) => {}
     }
 
     // --- 5. tidy -----------------------------------------------------------
@@ -367,23 +417,141 @@ fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
         .collect())
 }
 
-fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<(), String> {
-    let status = match fmt {
+/// Least free space extraction will start with.
+///
+/// Not a guess at what the archive needs -- nothing can know that before
+/// writing it. It refuses the case where any extraction is a bad idea.
+const MIN_FREE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Bytes as something a person can read at a glance.
+fn human(n: u64) -> String {
+    const K: u64 = 1024;
+    match n {
+        n if n >= K * K * K => format!("{:.1} GB", n as f64 / (K * K * K) as f64),
+        n if n >= K * K => format!("{:.1} MB", n as f64 / (K * K) as f64),
+        n if n >= K => format!("{:.1} KB", n as f64 / K as f64),
+        n => format!("{n} bytes"),
+    }
+}
+
+/// Free bytes on the volume holding `p`, via `df`, or None if it cannot be read.
+///
+/// Asks the question a header cannot answer: will this fit. `df` rather than
+/// statvfs because unpack's whole design is to use what the machine already
+/// ships rather than take a dependency, and it is already shelling out to
+/// unzip and tar.
+fn free_bytes(p: &Path) -> Option<u64> {
+    let out = Command::new("df").arg("-Pk").arg(p).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // POSIX -P guarantees one line per filesystem, columns:
+    // Filesystem 1024-blocks Used Available Capacity Mounted-on
+    let avail_kb: u64 = text
+        .lines()
+        .nth(1)?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()?;
+    Some(avail_kb * 1024)
+}
+
+/// Total bytes and largest single file under `dir`.
+fn written(dir: &Path) -> (u64, u64) {
+    fn walk(dir: &Path, total: &mut u64, largest: &mut u64) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            // symlink_metadata: a symlink's target is not what this extraction
+            // wrote, and following one could count something outside dest.
+            let Ok(md) = e.metadata() else { continue };
+            if md.is_dir() {
+                walk(&e.path(), total, largest);
+            } else {
+                let n = md.len();
+                *total += n;
+                if n > *largest {
+                    *largest = n;
+                }
+            }
+        }
+    }
+    let (mut t, mut l) = (0, 0);
+    walk(dir, &mut t, &mut l);
+    (t, l)
+}
+
+/// Why an extraction was abandoned partway.
+pub enum Breach {
+    Total(u64),
+    Member(u64),
+}
+
+/// Run an extractor, watching what it writes and killing it if it goes past
+/// the caps.
+///
+/// The cap is enforced HERE rather than from the listing, because every
+/// declared size is written by whoever built the archive. Measured, not
+/// assumed: forging four bytes made `unzip -Z`, `tar -tvf` and `gzip -l` each
+/// report 4,096 for members that expand to millions of bytes, and the forged
+/// zip then extracted in full with unzip exiting 0.
+///
+/// Polling rather than a stream wrapper, because three of the four formats
+/// are extracted by a child process that writes files directly. A poll can
+/// overshoot by whatever lands between two checks, so this is a bound on the
+/// order of the cap, not to the byte.
+fn run_bounded(mut cmd: Command, dest: &Path) -> Result<Result<(), Breach>, String> {
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => {
+                // Check once more after exit: a fast extraction can finish
+                // between two polls, and an unchecked archive is the thing
+                // this function exists to prevent.
+                let (total, largest) = written(dest);
+                if largest > safety::MAX_MEMBER_BYTES {
+                    return Ok(Err(Breach::Member(largest)));
+                }
+                if total > safety::MAX_TOTAL_BYTES {
+                    return Ok(Err(Breach::Total(total)));
+                }
+                return if status.success() {
+                    Ok(Ok(()))
+                } else {
+                    Err("extractor reported failure".into())
+                };
+            }
+            None => {
+                let (total, largest) = written(dest);
+                if total > safety::MAX_TOTAL_BYTES || largest > safety::MAX_MEMBER_BYTES {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Ok(Err(if largest > safety::MAX_MEMBER_BYTES {
+                        Breach::Member(largest)
+                    } else {
+                        Breach::Total(total)
+                    }));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<Result<(), Breach>, String> {
+    let cmd = match fmt {
         // -o overwrite inside our own fresh dir, -q quiet.
-        Format::Zip => Command::new("unzip")
-            .args(["-oq"])
-            .arg(archive)
-            .arg("-d")
-            .arg(dest)
-            .status(),
+        Format::Zip => {
+            let mut c = Command::new("unzip");
+            c.args(["-oq"]).arg(archive).arg("-d").arg(dest);
+            c
+        }
         Format::Gz => {
             let out_path = dest.join(stem(archive));
             let f = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
-            Command::new("gunzip")
-                .arg("-c")
-                .arg(archive)
-                .stdout(f)
-                .status()
+            let mut c = Command::new("gunzip");
+            c.arg("-c").arg(archive).stdout(f);
+            c
         }
         _ => {
             let flag = match fmt {
@@ -393,21 +561,12 @@ fn extract(archive: &Path, fmt: Format, dest: &Path) -> Result<(), String> {
                 Format::TarXz => "-xJf",
                 _ => unreachable!("dmg and zip handled above"),
             };
-            Command::new("tar")
-                .arg(flag)
-                .arg(archive)
-                .arg("-C")
-                .arg(dest)
-                .status()
+            let mut c = Command::new("tar");
+            c.arg(flag).arg(archive).arg("-C").arg(dest);
+            c
         }
-    }
-    .map_err(|e| e.to_string())?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("extractor reported failure".into())
-    }
+    };
+    run_bounded(cmd, dest)
 }
 
 fn remove_junk(dest: &Path) -> usize {
