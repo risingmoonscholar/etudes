@@ -450,8 +450,16 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     // short describes less than the stash actually did, so the count below is
     // a floor. Restoring quietly from damaged state is the failure this
     // disclosure exists to prevent -- the same reason `sweep undo` says it.
-    let tail_was_torn = j.progress_tail_damaged;
-    if tail_was_torn {
+    // Said, not signalled. A torn tail is the ordinary outcome of an
+    // interrupted run -- stash moves an item and only then records it, so any
+    // kill mid-run leaves one -- and the items are back. Exiting non-zero for
+    // that would make routine crash recovery read as failure to anything
+    // checking the code. The damage goes to stderr where a person sees it;
+    // the exit code stays the truth about whether the restore worked.
+    //
+    // This used to exit 3 while `sweep undo` exited 0 on the same condition.
+    // The asymmetry was an accident, not a design.
+    if j.progress_tail_damaged {
         eprintln!(
             "stash: this journal is damaged: a progress record was truncated, so the\n\
              \x20      last move it began is not written down. Everything it did record is\n\
@@ -534,22 +542,6 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if let Err(save_err) = saved {
         eprintln!("stash: pop finished, but the journal could not be saved: {save_err}");
-        return ExitCode::from(3);
-    }
-    if tail_was_torn {
-        // Restored, and still an error exit. The items are back, but the
-        // journal was damaged and a caller reading only the exit code has to
-        // learn that something went wrong -- exit 0 here would tell a script
-        // this was an ordinary pop.
-        //
-        // NOT symmetrical with `sweep undo`, which prints its NOTE and can
-        // still exit 0 on the same condition. An earlier version of this
-        // comment claimed they matched; they do not. The pre-existing test in
-        // exit_codes.rs pins stash at 3 for a damaged journal, so stash keeps
-        // it, and which of the two is right is an open question rather than a
-        // settled one: exit 3 after a fully successful restore reads as
-        // failure to a script, and a torn tail is the ordinary outcome of any
-        // interrupted run.
         return ExitCode::from(3);
     }
     ExitCode::SUCCESS

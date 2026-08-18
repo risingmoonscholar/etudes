@@ -209,17 +209,30 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
         "the damage report should name a torn progress frame, not some other \
          load failure, or this isn't actually witnessing issue #3's shape: stderr={stderr}"
     );
-    // Exit class matters as much as the message: a caller that only checks
-    // the exit code (not stderr text) must not see the same code a folder
-    // that was simply never stashed would produce. sweep's parallel path
-    // (cmd_undo) already treats any non-NotFound load failure as exit 3;
-    // stash must match that severity, not silently fall back to the
-    // "nothing to do" exit 1 it uses for a genuine miss.
+    // The exit code answers "did the restore work", and here it did: the
+    // items are back. What must never happen is the code a folder that was
+    // never stashed produces -- exit 1, "nothing to do" -- because that is a
+    // damaged journal reading as an ordinary miss.
+    //
+    // This asserted exit 3 when a torn journal was refused outright and
+    // nothing was restored, and 3 was right for that. It is wrong now. A cut
+    // tail is the ordinary outcome of any interrupted run, since stash moves
+    // an item and only then records it, so exiting non-zero would make
+    // routine crash recovery read as failure to every script that checks. The
+    // damage is disclosed on stderr, which is asserted above and is where a
+    // person sees it.
+    assert_ne!(
+        pop.status.code(),
+        Some(1),
+        "a damaged journal exited 1, the same code a plain 'nothing stashed \
+         here' miss produces: stderr={stderr} stdout={}",
+        String::from_utf8_lossy(&pop.stdout)
+    );
     assert_eq!(
         pop.status.code(),
-        Some(3),
-        "a damaged journal must exit 3 (a real failure), not the same exit 1 \
-         a plain 'nothing stashed here' miss produces: stderr={stderr} stdout={}",
+        Some(0),
+        "the items were restored, so the exit code should say the operation \
+         worked and let stderr carry the damage: stderr={stderr} stdout={}",
         String::from_utf8_lossy(&pop.stdout)
     );
     // The file is BACK, and that is the change. This used to assert the
