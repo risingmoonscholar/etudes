@@ -71,6 +71,20 @@ ttl_actual=$(grep -oE 'TTL_DAYS: u64 = [0-9]+' crates/etude-core/src/journal.rs 
 [ -z "$ttl_actual" ] && { echo "FAIL could not read TTL_DAYS from journal.rs"; exit 1; }
 claim CHANGELOG.md 'pruned after [0-9]+ days' '[0-9]+' "TTL days" "$ttl_actual"
 
+# The version the readme tells people to install, against the newest tag.
+# A release that moves without this line moving sends every new user to the
+# previous version, and nothing else would notice: the command still works,
+# it just installs something older than the docs describe.
+readme_tag=$(grep -oE '\-\-tag v[0-9]+\.[0-9]+\.[0-9]+' README.md | head -1 | grep -oE 'v[0-9.]+')
+newest_tag=$(git tag --sort=-v:refname | head -1)
+if [ -z "$newest_tag" ]; then
+  ok "no tags yet, so the readme pins nothing"
+elif [ "$readme_tag" = "$newest_tag" ]; then
+  ok "README.md installs $readme_tag, the newest tag"
+else
+  bad "README.md installs ${readme_tag:-nothing}; the newest tag is $newest_tag"
+fi
+
 # etude-core's zero dependencies, the claim the no-network argument rests on.
 # Checked against the manifest, not against the sentence in the readme.
 core_deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && NF && $0 !~ /^#/' crates/etude-core/Cargo.toml | wc -l | tr -d ' ')

@@ -39,13 +39,19 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 ## Install
 
 ```sh
-cargo install --git https://github.com/risingmoonscholar/etudes sweep-cli
-cargo install --git https://github.com/risingmoonscholar/etudes stash-cli
-cargo install --git https://github.com/risingmoonscholar/etudes unpack-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.4.0 sweep-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.4.0 stash-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.4.0 unpack-cli
 ```
 
 The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
 `unpack`, in `~/.cargo/bin`.
+
+`--tag` pins the install to a released version. Without it `cargo install` takes
+whatever `main` is at that moment, so two people running the same command on the
+same day can get binaries that behave differently -- which is how three exit
+codes changed under a version number that never moved. Drop the flag to track
+`main` deliberately.
 
 ## Check the claims in a minute
 
