@@ -57,10 +57,17 @@ cp -R "$home/Desktop" "$home/Stashable"
 capture stash-put     'stash ~/Desktop --for 3d'       "$bin/stash" "$home/Stashable" --for 3d
 
 mkdir -p demo
-python3 - "$caps" "$home" "$work" demo/transcripts.json <<'PY'
+python3 - "$caps" "$home" "$work" demo/transcripts.json "$bin" <<'PY'
 import json, os, subprocess, sys
 
 caps, home, work, out = sys.argv[1:5]
+# The version the captured binaries actually reported, asked of a binary
+# rather than read from a manifest. The page used to hardcode "v0.3" in its
+# template, so it went on saying 0.3 through the whole of 0.4 and nothing
+# noticed -- a version is a claim like any other here.
+version = subprocess.run([os.path.join(sys.argv[5], "sweep"), "--version"],
+                         capture_output=True, text=True).stdout.strip().split()[-1]
+
 rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                      capture_output=True, text=True).stdout.strip() or "unknown"
 
@@ -90,6 +97,7 @@ for name in sorted(os.listdir(caps)):
 payload = {
     "generated_by": "scripts/capture-demos.sh",
     "commit": rev,
+    "version": version,
     "note": ("Real stdout from binaries built out of this tree, run against the "
              "synthetic mkfx fixture. Not hand-written."),
     "substitution_rule": ("The temporary directory the fixture was built in is "

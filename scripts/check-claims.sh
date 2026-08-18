@@ -85,6 +85,27 @@ else
   bad "README.md installs ${readme_tag:-nothing}; the newest tag is $newest_tag"
 fi
 
+# The version the site shows, against the version the binaries report.
+# It was hardcoded in the page template as "v0.3" and stayed there through the
+# whole of 0.4, on the most public surface this project has. A version is a
+# claim like any other.
+site_version=$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('demo/transcripts.json'))
+    print(d.get('version',''))
+except Exception:
+    print('')
+")
+real_version=$(grep -m1 '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+if [ -z "$site_version" ]; then
+  bad "demo/transcripts.json records no version; the site cannot show one. Re-run scripts/capture-demos.sh"
+elif [ "$site_version" = "$real_version" ]; then
+  ok "the site shows v$site_version, which is what the binaries report"
+else
+  bad "the site shows v$site_version; the workspace is $real_version"
+fi
+
 # etude-core's zero dependencies, the claim the no-network argument rests on.
 # Checked against the manifest, not against the sentence in the readme.
 core_deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && NF && $0 !~ /^#/' crates/etude-core/Cargo.toml | wc -l | tr -d ' ')
