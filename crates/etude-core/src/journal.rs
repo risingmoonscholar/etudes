@@ -111,6 +111,15 @@ pub struct Journal {
     pub tool: String,
     pub root: PathBuf,
     pub entries: Vec<Entry>,
+    /// Set at load time when the progress records end mid-frame: a crash
+    /// between a length prefix and its body leaves bytes describing a record
+    /// that was never written. The frames before it are individually sealed
+    /// and stay usable; this lets a caller say the tail was lost rather than
+    /// imply the journal was whole.
+    ///
+    /// Not encoded: it describes the bytes that were on disk at load time,
+    /// and `encode` writes a fresh base frame with no progress records.
+    pub progress_tail_damaged: bool,
 }
 
 /// Supplied by the caller so `etude-core` need not depend on a cipher.
@@ -448,16 +457,42 @@ impl Journal {
         let mut expected_undone: Option<usize> = None;
         while offset < raw.len() {
             if offset + 4 > raw.len() {
-                return Err(JournalError::Malformed(
-                    "journal truncated: progress record length prefix cut short",
-                ));
+                // A partial length prefix: nothing readable, and nothing
+                // before it is affected. See the note on the body check.
+                self.progress_tail_damaged = true;
+                return Ok(());
             }
             let len = u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
             offset += 4;
             if offset + len > raw.len() {
-                return Err(JournalError::Malformed(
-                    "journal truncated: progress record body cut short",
-                ));
+                // TRUNCATION, which is not the same as damage. This
+                // distinction is the fix.
+                //
+                // Refusing the whole journal here was deliberate, and the
+                // reasoning went: dropping a frame downgrades a finished
+                // move to "not done", so undo skips the file and strands it
+                // without a word.
+                //
+                // But a truncated tail is not a finished move being dropped.
+                // It is a record that never finished being written. Apply
+                // appends one sealed frame per completed move, so a partial
+                // frame means the crash landed inside that write: the entry
+                // it would have described is still Planned, and undo's
+                // successor-entry recovery covers exactly that entry.
+                //
+                // Every earlier frame was sealed and authenticated on its
+                // own, so a whole, authentic frame is trustworthy whatever
+                // follows it. Voiding 143 of them over 4 trailing bytes
+                // strands every file they describe. A CI artifact showed
+                // exactly that, and a controlled repeat confirmed it: the
+                // same journal restored 100 files with the 4 bytes removed
+                // and stranded all 100 with them present.
+                //
+                // A COMPLETE frame that fails to authenticate is a different
+                // fact -- alteration, not an interrupted write -- and is
+                // still refused, below.
+                self.progress_tail_damaged = true;
+                return Ok(());
             }
             let sealed = &raw[offset..offset + len];
             offset += len;
@@ -842,6 +877,7 @@ mod tests {
             tool: "test".into(),
             root: PathBuf::from("/tmp/root"),
             entries: vec![],
+            progress_tail_damaged: false,
         };
         #[cfg(unix)]
         let before = SYNC_DIR_CALLS.load(std::sync::atomic::Ordering::SeqCst);
@@ -878,6 +914,7 @@ mod tests {
                 edge_hash: 1234,
                 state: EntryState::Moved,
             }],
+            progress_tail_damaged: false,
         };
         let back = Journal::decode(&j.encode()).expect("decode");
         assert_eq!(back.entries[0].from, j.entries[0].from);
@@ -921,6 +958,7 @@ mod tests {
                 edge_hash: 0,
                 state: EntryState::Planned,
             }],
+            progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
         j.record_done(0, Method::CopyUnlink, &Identity)
@@ -977,6 +1015,7 @@ mod tests {
                 edge_hash: 0,
                 state: EntryState::Planned,
             }],
+            progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base");
         j.record_done(0, Method::Rename, &Identity)
@@ -1006,7 +1045,7 @@ mod tests {
     /// than a refusal: `undo` would see `done: false`, skip the file, and
     /// leave it stranded at its destination without a word.
     #[test]
-    fn truncated_trailing_progress_frame_is_refused_not_silently_dropped() {
+    fn a_torn_tail_keeps_the_complete_frames_and_says_it_was_torn() {
         let _guard = STATE_DIR_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("sweep_progress_trunc_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -1049,6 +1088,7 @@ mod tests {
                     state: EntryState::Planned,
                 },
             ],
+            progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
         // Both moves genuinely completed on disk. record_done is only ever
@@ -1071,33 +1111,45 @@ mod tests {
         let truncated = &full[..full.len() - 3];
         fs::write(j.path(), truncated).expect("write truncated journal");
 
-        // Assert the property, not one specific implementation of it: what
-        // strands a file is an entry reading back as `done: false` when its
-        // move already happened, not the particular error type a refusal
-        // uses. Two outcomes are acceptable here: refuse the load
-        // outright, or load it with entry 1 correctly marked done. Only
-        // the third outcome is the bug: loaded, but silently downgraded to
-        // not-done.
-        // A test that only checked `result.is_err()` would keep passing even
-        // if a future change swapped in some other error, or accidentally
-        // returned `Ok` with the entry correctly marked done; neither of
-        // those is the defect, so neither should be able to fail this test.
-        match Journal::load_sealed("test", "trunc", &Identity) {
-            Err(e) => {
-                assert!(
-                    matches!(e, JournalError::Malformed(_)),
-                    "expected a Malformed refusal, got {e:?}"
-                );
-            }
-            Ok(loaded) => {
-                assert!(
-                    loaded.entries[1].is_moved(),
-                    "loaded a torn journal with entry 1 marked not-done. Its move \
-                     already happened on disk. undo would skip it and strand it \
-                     without a word. That is exactly the defect this test exists to catch"
-                );
-            }
-        }
+        // The property: no move that completed on disk may end up invisible
+        // to undo. There are two ways to honour it, and the code changed
+        // from the first to the second.
+        //
+        // Refusing the whole journal honours it loudly and expensively: no
+        // entry is downgraded, but nothing is recovered either, and every
+        // file the complete frames describe stays at its destination. A CI
+        // artifact showed 143 complete frames voided by a 4-byte tail.
+        //
+        // Replaying the complete frames and stopping at the tear honours it
+        // too, and this is why: apply moves a file and only then appends its
+        // frame, so a partial frame means that entry's move happened and was
+        // not recorded. That entry is left Planned -- and it is necessarily
+        // the FIRST Planned entry, since every earlier one has a complete
+        // frame. undo's successor-entry recovery covers exactly the first
+        // Planned entry. So the file is not skipped; it is recovered by the
+        // path built for it. `apply_undo.rs` proves that end to end against
+        // real files, because this test has no filesystem to check.
+        //
+        // What must never happen is a silent downgrade, so the loss of the
+        // tail has to be visible on the journal itself.
+        let loaded = Journal::load_sealed("test", "trunc", &Identity)
+            .expect("a torn tail must not void the whole journal");
+
+        assert!(
+            loaded.entries[0].is_moved(),
+            "entry 0's frame was complete and sealed. Dropping it strands a file \
+             that undo could have restored, which is what voiding the journal did"
+        );
+        assert_eq!(
+            loaded.entries[1].state,
+            EntryState::Planned,
+            "entry 1's frame was cut mid-write, so nothing durable says it moved"
+        );
+        assert!(
+            loaded.progress_tail_damaged,
+            "a journal that lost its tail must say so. Loading it as though it \
+             were whole is the silent downgrade this test exists to prevent"
+        );
 
         let _ = fs::remove_dir_all(&dir);
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
@@ -1152,6 +1204,7 @@ mod tests {
                     state: EntryState::Planned,
                 },
             ],
+            progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
         j.record_done(0, Method::Rename, &Identity)
@@ -1220,6 +1273,7 @@ mod tests {
                     state: EntryState::Planned,
                 },
             ],
+            progress_tail_damaged: false,
         };
         // Pre-framing write_bytes: sealed blob only, no length prefix.
         let sealed = Identity.seal(j.encode().as_bytes()).expect("seal legacy");

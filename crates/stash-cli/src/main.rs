@@ -310,7 +310,21 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 }
 
 /// No done entries means pop already ran. Exit 1. Don't call undo again.
+/// Is there nothing left for pop to restore?
+///
+/// A journal whose tail was cut short cannot answer this from its entries
+/// alone. stash moves an item and only then records it, so a lost record is a
+/// move that happened and is not written down: every entry can read Planned
+/// while the items sit in the stash. Short-circuiting on that says "already
+/// popped" and leaves them there, which is the silent stranding this area
+/// exists to prevent.
+///
+/// When the tail is damaged the answer is no, so the restore runs and its
+/// successor-entry recovery checks the filesystem instead of the journal.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
+    if j.progress_tail_damaged {
+        return false;
+    }
     !j.entries.iter().any(|e| e.is_moved())
 }
 
@@ -424,6 +438,20 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         println!("\nNothing to restore. This stash was already popped.");
         return ExitCode::from(1);
     }
+    // Before the counts, because it changes what they mean. A journal cut
+    // short describes less than the stash actually did, so the count below is
+    // a floor. Restoring quietly from damaged state is the failure this
+    // disclosure exists to prevent -- the same reason `sweep undo` says it.
+    let tail_was_torn = j.progress_tail_damaged;
+    if tail_was_torn {
+        eprintln!(
+            "stash: this journal is damaged: a progress record was truncated, so the\n\
+             \x20      last move it began is not written down. Everything it did record is\n\
+             \x20      being restored, and the item whose record was lost is recovered by\n\
+             \x20      checking the filesystem rather than the journal."
+        );
+    }
+
     let r = etude_core::apply::undo(&mut j, &sl);
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
@@ -484,6 +512,14 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if let Err(save_err) = saved {
         eprintln!("stash: pop finished, but the journal could not be saved: {save_err}");
+        return ExitCode::from(3);
+    }
+    if tail_was_torn {
+        // Restored, and still an error exit. The items are back, but the
+        // journal was damaged and a caller reading only the exit code has to
+        // learn that something went wrong -- exit 0 here would tell a script
+        // this was an ordinary pop. Matches `sweep undo`, which has always
+        // treated a damaged journal as exit 3.
         return ExitCode::from(3);
     }
     ExitCode::SUCCESS
@@ -929,6 +965,7 @@ mod tests {
             tool: "stash".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(false)],
+            progress_tail_damaged: false,
         };
         assert!(journal_is_fully_undone(&undone));
 
@@ -937,6 +974,7 @@ mod tests {
             tool: "stash".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(true)],
+            progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));
     }

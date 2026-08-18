@@ -938,7 +938,22 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 }
 
 /// No done entries means undo already ran. Exit 1. Don't call undo again.
+/// Is there nothing left for undo to reverse?
+///
+/// A journal whose tail was cut short can NEVER answer this from its entries
+/// alone. Apply moves a file and only then records it, so a lost record means
+/// a move that happened and is not written down: every entry can read Planned
+/// while files sit at their destinations. Short-circuiting on that says
+/// "already restored" and strands them, which is the silent stranding this
+/// whole area exists to prevent -- and it is what the stress scenario was
+/// reporting as "Nothing to undo" on a run that had moved 130 files.
+///
+/// When the tail is damaged the answer is no, so undo runs and its
+/// successor-entry recovery checks the filesystem instead of the journal.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
+    if j.progress_tail_damaged {
+        return false;
+    }
     !j.entries.iter().any(|e| e.is_moved())
 }
 
@@ -1141,6 +1156,20 @@ fn cmd_undo(args: &[String]) -> ExitCode {
 fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     // Pass the sealer: undo persists each reversal as it happens now, so a
     // kill partway through leaves a journal that agrees with the disk.
+    // Said before the counts, because it changes what they mean: a journal
+    // that lost its tail describes less than the apply actually did, so
+    // "Restored N files" is a floor rather than the whole story. Recovering
+    // quietly from damaged state would be its own version of the bug this
+    // reporting exists to prevent.
+    let tail_was_torn = j.progress_tail_damaged;
+    if tail_was_torn {
+        println!(
+            "\n  NOTE: this journal was cut short, so its last recorded move is missing.\n\
+             \x20       Everything it did record is being reversed, and the file whose\n\
+             \x20       record was lost is recovered by checking the filesystem."
+        );
+    }
+
     let r = etude_core::apply::undo(j, sl);
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
@@ -1626,6 +1655,7 @@ mod tests {
             tool: "sweep".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(false)],
+            progress_tail_damaged: false,
         };
         assert!(journal_is_fully_undone(&undone));
 
@@ -1634,6 +1664,7 @@ mod tests {
             tool: "sweep".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(true)],
+            progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));
     }

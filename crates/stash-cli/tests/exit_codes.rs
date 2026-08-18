@@ -179,6 +179,14 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
     // frame survives intact, but the trailing progress frame recording
     // memo.txt's completed move is torn mid-write, exactly what a crash
     // leaves behind.
+    //
+    // What "reported" means changed, and the property did not. This used to
+    // refuse the whole journal, which said "damaged" and restored nothing.
+    // A torn tail now stops the replay instead: the complete frames are
+    // replayed, the entry whose frame was cut is the first Planned one and
+    // is recovered by successor-entry recovery, and the damage is still
+    // disclosed. Silently treating a torn journal as absent remains the
+    // defect; refusing it was only ever one way of avoiding that.
     let full = std::fs::read(&journal_path).unwrap();
     let cutoff = full.len() * 85 / 100;
     std::fs::write(&journal_path, &full[..cutoff]).unwrap();
@@ -214,9 +222,24 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
          a plain 'nothing stashed here' miss produces: stderr={stderr} stdout={}",
         String::from_utf8_lossy(&pop.stdout)
     );
-    // Nothing was half-restored: the holding directory pop refused to touch
-    // must still exist with the file inside it, not partially unpacked.
-    let holding = std::fs::read_dir(&root)
+    // The file is BACK, and that is the change. This used to assert the
+    // opposite -- that the holding directory survived with memo.txt still
+    // inside it -- because a torn journal was refused outright and nothing
+    // was restored. Refusing did keep the report honest, but it also left
+    // the item stashed with no way to get it out, and the same shape on
+    // sweep's side left 130 files at their destinations in one CI run.
+    //
+    // A truncated tail now stops the replay instead of voiding the journal:
+    // the complete frames are replayed, and the item whose record was cut is
+    // the first Planned entry, which successor-entry recovery restores by
+    // checking the filesystem. The exit code stays 3 and the message still
+    // names the damage, so nothing about the disclosure got quieter.
+    assert!(
+        root.join("memo.txt").exists(),
+        "memo.txt was not restored. A torn journal must not leave an item \
+         stashed with no way to get it back"
+    );
+    let holding_left = std::fs::read_dir(&root)
         .unwrap()
         .flatten()
         .find(|e| {
@@ -224,12 +247,10 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
                 .to_str()
                 .is_some_and(|n| n.starts_with(".stash-"))
         })
-        .expect("holding directory must survive a refused pop");
+        .map(|e| std::fs::read_dir(e.path()).unwrap().flatten().count());
     assert!(
-        std::fs::read_dir(holding.path())
-            .unwrap()
-            .flatten()
-            .any(|e| e.file_name() == "memo.txt"),
-        "the stashed file must still be inside the holding directory, not stranded elsewhere"
+        holding_left.is_none_or(|n| n == 0),
+        "the holding directory still has {holding_left:?} items in it, so the \
+         restore was partial"
     );
 }

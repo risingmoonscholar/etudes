@@ -124,6 +124,8 @@ pub fn apply(
         tool: tool.to_string(),
         root: plan.root.clone(),
         entries: Vec::new(),
+        // A journal being written now has no tail to have lost.
+        progress_tail_damaged: false,
     };
 
     // Build the full entry list first, so the journal describes the whole

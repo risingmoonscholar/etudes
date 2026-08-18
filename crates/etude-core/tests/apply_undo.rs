@@ -720,6 +720,7 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
             // the user-hard-linked-something case and not this bug at all.
             state: etude_core::journal::EntryState::Planned,
         }],
+        progress_tail_damaged: false,
     };
 
     let r = apply::undo(&mut j, &TestSeal);
@@ -797,6 +798,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
                 state: etude_core::journal::EntryState::Planned,
             },
         ],
+        progress_tail_damaged: false,
     };
 
     let r = apply::undo(&mut j, &TestSeal);
@@ -891,6 +893,7 @@ fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
         tool: "test".into(),
         root: root.clone(),
         entries,
+        progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
 
@@ -970,6 +973,7 @@ fn a_reversal_survives_being_saved_and_reloaded() {
             edge_hash: edge,
             state: etude_core::journal::EntryState::Reversed,
         }],
+        progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
 
@@ -1035,6 +1039,7 @@ fn a_skip_between_two_reversals_still_reloads() {
         tool: "test".into(),
         root: root.clone(),
         entries,
+        progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
 
@@ -1063,4 +1068,80 @@ fn a_skip_between_two_reversals_still_reloads() {
 
     let _ = fs::remove_dir_all(&root);
     unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+}
+
+/// A journal whose last progress frame was cut mid-write still restores every
+/// file, including the one whose frame never landed.
+///
+/// This is the end-to-end half of `a_torn_tail_keeps_the_complete_frames_and_says_it_was_torn`
+/// in `journal.rs`, which can assert what the journal says but has no
+/// filesystem to check it against.
+///
+/// The failure it pins: CI produced a journal with 143 complete frames and a
+/// 4-byte tail -- a length prefix whose body the crash beat. Refusing the whole
+/// journal over those 4 bytes left every file the 143 frames described sitting
+/// at its destination, and `undo` reported only that it could not open the
+/// journal. Replaying the complete frames and stopping at the tear recovers
+/// them; the entry whose frame was cut is the first `Planned` one, which is
+/// exactly what successor-entry recovery is for.
+#[test]
+fn a_torn_final_frame_still_lets_undo_restore_everything() {
+    let _g = lock();
+    let (root, _fx, p) = setup("torn_tail");
+
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let moved: Vec<PathBuf> = Journal::load_sealed("test", &rep.journal_id, &TestSeal)
+        .expect("journal loads")
+        .entries
+        .iter()
+        .map(|e| e.to.clone())
+        .collect();
+    assert!(
+        moved.len() > 2,
+        "test setup: need several moves for a tear to matter, got {}",
+        moved.len()
+    );
+    for to in &moved {
+        assert!(
+            to.exists(),
+            "test setup: {} should be at its destination",
+            to.display()
+        );
+    }
+
+    // Cut the file the way the crash did: append a length prefix announcing a
+    // record whose body never arrives. Four bytes, exactly what CI showed.
+    let jpath = Journal::load_sealed("test", &rep.journal_id, &TestSeal)
+        .expect("journal loads")
+        .path();
+    let mut raw = fs::read(&jpath).expect("read journal");
+    raw.extend_from_slice(&4144u32.to_le_bytes());
+    fs::write(&jpath, &raw).expect("write torn journal");
+
+    let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal)
+        .expect("a torn tail must not void the journal");
+    assert!(
+        j.progress_tail_damaged,
+        "the tear has to be visible on the journal, or the loss is silent"
+    );
+
+    let report = apply::undo(&mut j, &TestSeal);
+    assert!(report.error.is_none(), "undo errored: {:?}", report.error);
+
+    for to in &moved {
+        assert!(
+            !to.exists(),
+            "{} was still at its destination after undo. A 4-byte tail stranded it",
+            to.display()
+        );
+    }
+    for e in &j.entries {
+        assert!(
+            e.from.exists(),
+            "{} never came home after undo",
+            e.from.display()
+        );
+    }
+
+    cleanup(&root);
 }
