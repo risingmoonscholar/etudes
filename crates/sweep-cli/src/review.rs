@@ -177,7 +177,9 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         println!("    {}/  ({} files)", g.name, g.members.len());
     }
     let personal: usize = plan.sensitive_counts().values().sum();
-    if personal > 0 {
+    if personal == 1 {
+        println!("\n  1 file that looks like a personal record stays where it is.");
+    } else if personal > 1 {
         println!("\n  {personal} files that look like personal records stay where they are.");
     }
 

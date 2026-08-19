@@ -134,9 +134,9 @@ const LESSON: &[(&str, &str)] = &[
          Open the folder in Finder and leave the window visible. Every step\n\
          after this is worth watching happen.\n\
          \n\
-         Read the `Left alone` block. Some files are refused because they look\n\
-         like personal records. Open one. That is the file this tool exists to\n\
-         not touch.\n\
+         Find the line saying some files look like personal records and were\n\
+         not touched. Open one. That is the file this tool exists to not\n\
+         touch.\n\
          \n\
          `mkfx` builds throwaway fixtures and ships with the etudes source. Any\n\
          folder of junk works as well.",
@@ -692,26 +692,35 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     let counts = p.sensitive_counts();
     let personal: usize = counts.values().sum();
     let unclear = p.no_clear_group();
+    // Two separate outcomes, reported separately. They shared a "Left alone"
+    // heading, privacy line first, and a real user read "Left alone 32" plus
+    // the only sentence with words in it and concluded the tool had refused
+    // 32 files for privacy. One file had been. A count and its reason must
+    // not come from different lines.
     if personal + unclear > 0 {
-        println!(
-            "\n  {:<width$}  {:>3} files",
-            "Left alone",
-            personal + unclear,
-            width = width
-        );
-        if personal > 0 {
-            // One short line. The per-category breakdown is available under
-            // --explain; the summary must stay glanceable and must not read
-            // like an inventory of the user's private life.
-            println!("    {personal} look like personal records. sweep does not touch these");
-            if explain {
-                for (cat, n) in &counts {
-                    println!("      {n:>3}  {}", cat.describe());
-                }
+        println!();
+    }
+    if personal > 0 {
+        // Singular agreement matters here: "1 look like" reads straight past
+        // the 1 as if it were a plural count. The per-category breakdown
+        // stays behind --explain; the summary must not read like an
+        // inventory of the user's private life.
+        if personal == 1 {
+            println!("  1 file looks like a personal record and was not touched");
+        } else {
+            println!("  {personal} files look like personal records and were not touched");
+        }
+        if explain {
+            for (cat, n) in &counts {
+                println!("      {n:>3}  {}", cat.describe());
             }
         }
-        if unclear > 0 {
-            println!("    {unclear} no clear group");
+    }
+    if unclear > 0 {
+        if unclear == 1 {
+            println!("  1 file matched no group and was left where it is");
+        } else {
+            println!("  {unclear} files matched no group and were left where they are");
         }
     }
 

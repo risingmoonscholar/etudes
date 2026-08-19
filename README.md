@@ -14,9 +14,8 @@ Scanned 100 items  ·  names, sizes and dates only  ·  no contents read
   notes             7 files   7 filenames contain "notes"
   acme              5 files   5 filenames contain "acme"
 
-  Left alone       24 files
-    14 look like personal records. sweep does not touch these
-    10 no clear group
+  14 files look like personal records and were not touched
+  10 files matched no group and were left where they are
 
   skipped 1 hidden item and 3 symlinks
 
@@ -24,8 +23,8 @@ Nothing has been moved.  Nothing left this machine.
 ```
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
-medical records and the driver's licence are in that "left alone" count, and no
-flag moves them.
+medical records and the driver's licence are the files reported as personal
+records, and no flag moves them.
 
 Each tool removes one recurring friction, is small enough to read in an
 afternoon, and can prove its own claims rather than asking you to trust them.
