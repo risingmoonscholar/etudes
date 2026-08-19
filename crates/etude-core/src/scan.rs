@@ -87,7 +87,7 @@ const PROJECT_MARKERS: &[&str] = &[
     // the first version of this list, which is how that project came within
     // one `sweep ~/Documents/dev-projects/ad-astra` of losing its layout.
     "project.godot",
-    ".uproject",  // Unreal: sits beside Content/ Config/ Source/ Saved/
+    ".uproject", // Unreal: sits beside Content/ Config/ Source/ Saved/
     ".unity",
     // --- Audio ------------------------------------------------------------
     // A session references its bounces, stems and samples by path.
@@ -95,7 +95,7 @@ const PROJECT_MARKERS: &[&str] = &[
     ".logicx",
     ".ptx",
     ".sesx",
-    ".flp",  // FL Studio, beside its rendered audio and sample references
+    ".flp", // FL Studio, beside its rendered audio and sample references
     ".rpp",
     ".band",
     // --- Video ------------------------------------------------------------
