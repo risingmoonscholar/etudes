@@ -1,207 +1,164 @@
 #!/usr/bin/env bash
-# Real project layouts, from five engines people actually use.
+# Five real project types, and the one promise this guard makes: a user's
+# project data is never auto-sorted along with their loose files.
 #
-# Every tree here is modelled on a real one. The Godot case is measured from
-# an 18,724-file project on the author's machine: its .tscn files reference
-# siblings as `res://scripts/main.gd`, absolute from the project root, and it
-# keeps a `.import` sidecar beside every imported asset. The rest follow the
-# layouts their vendors document -- Unreal's Content/Config/Saved/Intermediate,
-# Premiere's Auto-Save and Preview Files, FL Studio's rendered audio beside the
-# .flp, Blender's `//textures/` paths relative to the .blend.
+# Every layout here is MEASURED, not imagined. An earlier version of this
+# scenario included Unreal and Premiere shapes built from vendor docs; they
+# were dropped because researched-not-measured is exactly the mistake that let
+# project.godot go missing from the guard in the first place. These five were
+# each read off a real disk:
 #
-# The point is not that these five are special. It is that a project folder is
-# ALWAYS the same shape: one marker file, many file types, subdirectories, and
-# references between them that a type-sorter would sever. A user who downloads
-# an asset pack, clones a repo, or opens a client's project has one of these in
-# their Downloads folder within a week.
+#   godot    -- an 18,724-file project on this machine. .tscn files reference
+#               siblings as res://scripts/main.gd, absolute from the root, and
+#               a .import sidecar sits beside every imported asset.
+#   blender  -- a downloaded asset pack in Downloads. // paths relative to the
+#               .blend, plus a .blend1 backup written beside it.
+#   flp      -- FL Studio, folder-per-project, with a Backup/ of timestamped
+#               autosaves: "NAME (autosaved at 16h00).flp". That is crash
+#               recovery -- version history -- and sorting it is the worst
+#               thing a tool could do to it.
+#   song     -- Studio One, folder-per-song, with Media/ Cache/ History/
+#               Bounces/ Stems/ subdirectories. Media/ is a name THIS tool
+#               would create, so a project that already has one is a direct
+#               collision hazard.
+#   ptx      -- Pro Tools, where ONE folder can hold several .ptx sessions,
+#               beside Audio Files/ and Session File Backups/, each session
+#               shadowed by an AppleDouble ._ twin.
 #
-# This scenario exists because the marker list was written from imagination and
-# missed project.godot. A real Godot project on this machine was one
-# `sweep` away from having its top-level PNGs and Markdown sorted away from the
-# project.godot that indexes them. Blender was caught; Godot was not. Nothing
-# in the suite would have noticed.
-#
-# Checks, for each engine:
-#   - the project is refused as a scan root, naming its marker
-#   - a folder CONTAINING projects is still sweepable, and the projects inside
-#     it are not descended into
-#   - no file anywhere inside any project moves
+# The guard does not know what any of these programs are. It refuses a folder
+# that holds a project marker, promptly, and says which file made it refuse.
+# That is the whole mechanism. Format-specific cleverness belongs in a fork.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 
-# --- Godot ---------------------------------------------------------------
-# Measured shape: project.godot at the root, top-level captures with .import
-# sidecars, scenes and scripts in subdirectories, a .godot/ cache.
-build_godot() {  # $1 = dir
+build_godot() {
   local d="$1"
   mkdir -p "$d/scenes" "$d/scripts" "$d/assets/textures" "$d/.godot/imported"
-  cat > "$d/project.godot" <<'EOF'
-config_version=5
-[application]
-config/name="StressFixture"
-run/main_scene="res://scenes/main.tscn"
-EOF
-  # A scene that references its siblings by res:// -- absolute from the root,
-  # so ANY move inside the project breaks it.
-  cat > "$d/scenes/main.tscn" <<'EOF'
-[gd_scene format=4]
-[ext_resource type="Script" path="res://scripts/main.gd" id="1"]
-[ext_resource type="Texture2D" path="res://assets/textures/ground.png" id="2"]
-EOF
-  : > "$d/scenes/player.tscn"
-  : > "$d/scripts/main.gd"
-  : > "$d/scripts/player.gd"
-  : > "$d/scripts/enemy.gd"
-  # Imported assets carry a sidecar. Moving the asset without it orphans the
-  # metadata; moving the sidecar without the asset orphans the reference.
-  local t
-  for t in ground rock sky; do
-    : > "$d/assets/textures/$t.png"
-    : > "$d/assets/textures/$t.png.import"
-  done
-  # Top-level captures, exactly as the real project has them.
+  printf 'config_version=5\n[application]\nrun/main_scene="res://scenes/main.tscn"\n' > "$d/project.godot"
+  printf '[gd_scene format=4]\n[ext_resource path="res://scripts/main.gd"]\n' > "$d/scenes/main.tscn"
+  : > "$d/scripts/main.gd"; : > "$d/scripts/player.gd"
   local c
-  for c in 06 12 17; do
-    : > "$d/capture_t$c.png"
-    : > "$d/capture_t$c.png.import"
-  done
-  : > "$d/README.md"; : > "$d/CHANGELOG.md"; : > "$d/AGENTS.md"; : > "$d/CLAUDE.md"
-  : > "$d/.godot/imported/cache.md5"
+  for c in ground rock sky; do : > "$d/assets/textures/$c.png"; : > "$d/assets/textures/$c.png.import"; done
+  for c in 06 12 17; do : > "$d/capture_t$c.png"; : > "$d/capture_t$c.png.import"; done
+  : > "$d/README.md"; : > "$d/CHANGELOG.md"
 }
 
-# --- Unreal --------------------------------------------------------------
-# Content/ Config/ Source/ Saved/ Intermediate/, per Epic's documented layout.
-build_unreal() {
-  local d="$1"
-  mkdir -p "$d/Content/Maps" "$d/Content/Meshes" "$d/Config" "$d/Source/Game" "$d/Saved/Logs" "$d/Intermediate/Build"
-  : > "$d/StressFixture.uproject"
-  : > "$d/Content/Maps/Level01.umap"
-  : > "$d/Content/Meshes/rock.uasset"
-  : > "$d/Content/Meshes/tree.uasset"
-  : > "$d/Config/DefaultEngine.ini"
-  : > "$d/Config/DefaultGame.ini"
-  : > "$d/Source/Game/GameMode.cpp"
-  : > "$d/Source/Game/GameMode.h"
-  : > "$d/Saved/Logs/Game.log"
-  : > "$d/Intermediate/Build/manifest.xml"
-  : > "$d/README.md"
-}
-
-# --- Premiere ------------------------------------------------------------
-# The .prproj beside its footage, plus the two folders Premiere writes itself.
-build_premiere() {
-  local d="$1"
-  mkdir -p "$d/Footage" "$d/Audio" "$d/Adobe Premiere Pro Auto-Save" "$d/Adobe Premiere Pro Preview Files"
-  : > "$d/ClientEdit.prproj"
-  local c
-  for c in 01 02 03 04; do : > "$d/Footage/A00$c.mp4"; done
-  : > "$d/Audio/vo_take3.wav"; : > "$d/Audio/music_bed.wav"
-  : > "$d/Adobe Premiere Pro Auto-Save/ClientEdit-1.prproj"
-  : > "$d/notes.pdf"
-}
-
-# --- FL Studio -----------------------------------------------------------
-build_flstudio() {
-  local d="$1"
-  mkdir -p "$d/Rendered" "$d/Samples"
-  : > "$d/Track.flp"
-  local c
-  for c in 1 2 3; do : > "$d/Rendered/bounce_v$c.wav"; done
-  for c in kick snare hat; do : > "$d/Samples/$c.wav"; done
-  : > "$d/reference.mp3"
-}
-
-# --- Blender -------------------------------------------------------------
-# // paths are relative to the .blend, so a texture that moves is a texture
-# the file cannot find. Modelled on a real downloaded asset pack.
 build_blender() {
-  local d="$1"
+  local d="$1" c
   mkdir -p "$d/textures"
-  : > "$d/Scene.blend"
-  : > "$d/Scene.blend1"   # Blender's own backup, written beside the file
-  local c
+  : > "$d/Scene.blend"; : > "$d/Scene.blend1"
   for c in Color Normal Roughness Displacement; do : > "$d/textures/Ground_$c.png"; done
-  : > "$d/render_final.png"
-  : > "$d/notes.txt"
+  : > "$d/render_final.png"; : > "$d/notes.txt"
 }
 
-declare -a NAMES=(godot unreal premiere flstudio blender)
-declare -a MARKERS=("project.godot" ".uproject" ".prproj" ".flp" ".blend")
+build_flp() {
+  # Folder-per-project with a Backup/ of timestamped autosaves -- the version
+  # history. Note: Backup/ ALSO holds .flp, so it is refused too, which is
+  # correct: it is the crash-recovery record for this project.
+  local d="$1" c
+  mkdir -p "$d/Backup" "$d/Audio"
+  : > "$d/anthem.flp"
+  for c in "16h00" "15h42" "14h30"; do : > "$d/Backup/anthem (autosaved at $c).flp"; done
+  : > "$d/Audio/render.wav"; : > "$d/reference.mp3"
+}
 
-# --- each project is refused as a root ------------------------------------
+build_song() {
+  # Studio One. Media/ Cache/ History/ Bounces/ Stems/ -- and Media/ is a
+  # folder name THIS tool creates. A project holding one must still be refused
+  # whole; the collision must never happen because the project is never
+  # entered.
+  local d="$1" c
+  mkdir -p "$d/Media" "$d/Cache" "$d/History" "$d/Bounces" "$d/Stems"
+  : > "$d/closer.song"
+  : > "$d/Media/vocal.wav"; : > "$d/Media/guitar.wav"
+  for c in 1 2 3; do : > "$d/History/closer-$c.song"; done
+  : > "$d/Bounces/mixdown.wav"; : > "$d/Stems/drums.wav"
+}
+
+build_ptx() {
+  # Pro Tools. TWO sessions in one folder, so folder name != session name --
+  # the marker still fires on either. Each session shadowed by an AppleDouble
+  # ._ twin, which is hidden and must never be treated as a loose file.
+  local d="$1"
+  mkdir -p "$d/Audio Files" "$d/Bounced Files" "$d/Session File Backups"
+  : > "$d/Ever Green.ptx"; : > "$d/._Ever Green.ptx"
+  : > "$d/Song 2.ptx"; : > "$d/._Song 2.ptx"
+  : > "$d/Audio Files/kick.wav"; : > "$d/Audio Files/._kick.wav"
+  : > "$d/WaveCache.wfm"
+}
+
+declare -a NAMES=(godot blender flp song ptx)
+declare -a MARKERS=("project.godot" ".blend" ".flp" ".song" ".ptx")
+
 REFUSED=0
 for i in "${!NAMES[@]}"; do
-  eng="${NAMES[$i]}"
-  d="$W/roots/$eng"
-  "build_$eng" "$d"
+  eng="${NAMES[$i]}"; d="$W/roots/$eng"; "build_$eng" "$d"
   BEFORE=$(find "$d" -type f | wc -l | tr -d ' ')
-
   OUT=$("$SWEEP" "$d" 2>&1); CODE=$?
   AFTER=$(find "$d" -type f | wc -l | tr -d ' ')
-
   if [ "$CODE" = "2" ] && grep -qi "looks like a project" <<<"$OUT"; then
     REFUSED=$((REFUSED + 1))
   else
-    fail "$eng: a project root was not refused (exit $CODE). Its ${MARKERS[$i]} is right there: $OUT"
+    fail "$eng: a real project layout was not refused as a root (exit $CODE). Marker ${MARKERS[$i]}: $OUT"
   fi
-  assert_eq "$BEFORE" "$AFTER" "$eng: nothing moved when the project was scanned as a root"
+  assert_eq "$BEFORE" "$AFTER" "$eng: nothing inside the project moved when it was scanned as a root"
 done
-assert_eq 5 "$REFUSED" "all five real project layouts are refused as scan roots"
+assert_eq 5 "$REFUSED" "all five measured project layouts (godot, blender, flp, song, ptx) are refused as scan roots"
 
-# --- the marker is named, so a user knows WHY ----------------------------
-GODOT_OUT=$("$SWEEP" "$W/roots/godot" 2>&1)
-if grep -q "project.godot" <<<"$GODOT_OUT"; then
-  pass "the refusal names the file that made it a project, rather than refusing opaquely"
+# The refusal names the file, so a user knows why rather than being stonewalled.
+if grep -q "closer.song" <<<"$("$SWEEP" "$W/roots/song" 2>&1)"; then
+  pass "the refusal names the marker file, so the user can see why their folder was left alone"
 else
-  fail "the refusal did not name project.godot, so a user cannot tell why their folder was refused: $GODOT_OUT"
+  fail "the Studio One refusal did not name closer.song"
 fi
 
-# --- a folder CONTAINING projects is still sweepable ---------------------
-# The case this guard must not break: someone's Downloads folder with a
-# cloned repo, a client project and an asset pack in it, plus loose files.
-DL="$W/Downloads"
-mkdir -p "$DL"
-build_godot    "$DL/ad-astra"
-build_premiere "$DL/ClientEdit"
-build_blender  "$DL/Ground031_4K-PNG"
+# Studio One's Media/ is a name sweep itself uses. The project must be refused
+# BEFORE any grouping, so the collision cannot arise.
+SONG_OUT=$("$SWEEP" "$W/roots/song" 2>&1)
+if grep -qE '^  Media' <<<"$SONG_OUT"; then
+  fail "sweep tried to build a Media group inside a Studio One project that already has a Media/ folder: $SONG_OUT"
+else
+  pass "a project with its own Media/ folder is refused whole; no group is built to collide with it"
+fi
+
+# AppleDouble ._ twins are hidden and must never be filed as loose files. Test
+# it on a plain folder that DOES group -- a refused project would prove nothing
+# because it forms no groups at all. Six .wav that group, each shadowed by a
+# ._ twin: the twins must be skipped, the reals grouped. Grace off, or the
+# fresh files would be held back and nothing would group.
+TW="$W/twins"; mkdir -p "$TW"
+for c in 1 2 3 4 5 6; do : > "$TW/take_$c.wav"; : > "$TW/._take_$c.wav"; done
+TWIN_GROUPED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$TW" --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(any('._' in f for g in d['groups'] for f in g.get('members',[])))
+")
+assert_eq "False" "$TWIN_GROUPED" "no AppleDouble ._ twin is placed in a group (they are hidden)"
+REAL_GROUPED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$TW" --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(sum(g['count'] for g in d['groups']))
+")
+assert_eq 6 "$REAL_GROUPED" "the six real .wav files still group; only the twins are skipped"
+
+# --- the case the guard exists for: a Downloads folder AROUND projects ------
+DL="$W/Downloads"; mkdir -p "$DL"
+build_godot "$DL/ad-astra"
+build_flp   "$DL/anthem-project"
+build_song  "$DL/closer"
+build_blender "$DL/Ground031_4K-PNG"
 for n in 1 2 3 4; do : > "$DL/invoice_$n.pdf"; done
-for n in 1 2 3; do : > "$DL/script_$n.sh"; done
 
-INSIDE_BEFORE=$(find "$DL/ad-astra" "$DL/ClientEdit" "$DL/Ground031_4K-PNG" -type f | wc -l | tr -d ' ')
-DL_OUT=$("$SWEEP" "$DL" 2>&1); DL_CODE=$?
+INSIDE_BEFORE=$(find "$DL/ad-astra" "$DL/anthem-project" "$DL/closer" "$DL/Ground031_4K-PNG" -type f | wc -l | tr -d ' ')
+assert_exit 0 "a Downloads folder that merely CONTAINS four projects is sweepable" -- "$SWEEP" "$DL"
 
-assert_eq 0 "$DL_CODE" "a Downloads folder that merely CONTAINS projects is still sweepable"
-if grep -qE '^  Documents' <<<"$DL_OUT"; then
-  pass "the loose files in it still form groups"
-else
-  fail "the loose invoices formed no group, so this arm proves nothing about the guard: $DL_OUT"
-fi
+APPLY=$("$SWEEP" apply "$DL" --yes 2>&1); assert_eq 0 "$?" "apply succeeds on a folder full of projects"
 
-APPLY_OUT=$("$SWEEP" apply "$DL" --yes 2>&1); APPLY_CODE=$?
-assert_eq 0 "$APPLY_CODE" "apply succeeds on a folder containing projects"
+INSIDE_AFTER=$(find "$DL/ad-astra" "$DL/anthem-project" "$DL/closer" "$DL/Ground031_4K-PNG" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside any of the four projects moved during an apply of the folder around them"
 
-INSIDE_AFTER=$(find "$DL/ad-astra" "$DL/ClientEdit" "$DL/Ground031_4K-PNG" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside any of the three projects moved during an apply of the folder around them"
-
-# The projects' own top-level files are the dangerous ones: a Godot project's
-# capture_t06.png is a .png sitting where sweep can see it.
-for f in "$DL/ad-astra/capture_t06.png" "$DL/ad-astra/project.godot" \
-         "$DL/ad-astra/README.md" "$DL/Ground031_4K-PNG/render_final.png" \
-         "$DL/ClientEdit/notes.pdf"; do
-  if [ -f "$f" ]; then
-    pass "still in place: ${f#$DL/}"
-  else
-    fail "a file inside a project moved during an apply of the folder around it: ${f#$DL/}"
-  fi
+for f in "$DL/ad-astra/capture_t06.png" "$DL/anthem-project/Backup/anthem (autosaved at 16h00).flp" \
+         "$DL/closer/Media/vocal.wav" "$DL/Ground031_4K-PNG/render_final.png"; do
+  [ -f "$f" ] && pass "untouched: ${f#$DL/}" || fail "a project's internal file moved: ${f#$DL/}"
 done
-
-# --- companion files travel together or not at all -----------------------
-# Godot writes a .import beside every asset. If one moved without the other,
-# the pair is broken even though both files still exist.
-ORPHANS=0
-for c in 06 12 17; do
-  a="$DL/ad-astra/capture_t$c.png"; b="$DL/ad-astra/capture_t$c.png.import"
-  if [ -f "$a" ] != [ -f "$b" ]; then ORPHANS=$((ORPHANS + 1)); fi
-done
-assert_eq 0 "$ORPHANS" "no asset was separated from its .import sidecar"

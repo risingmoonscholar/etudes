@@ -89,6 +89,7 @@ const PROJECT_MARKERS: &[&str] = &[
     "project.godot",
     ".uproject", // Unreal: sits beside Content/ Config/ Source/ Saved/
     ".unity",
+    ".song", // Studio One: folder per song
     // --- Audio ------------------------------------------------------------
     // A session references its bounces, stems and samples by path.
     ".als",
