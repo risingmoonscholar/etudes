@@ -1206,3 +1206,52 @@ fn a_journal_missing_several_records_restores_nothing() {
 
     cleanup(&root);
 }
+
+/// Files sharing a word are separated by what they are, not collected by the
+/// word they mention.
+///
+/// The fixture's five acme_* files span five extensions -- psd, fig, pdf, md,
+/// sketch -- and share nothing else. A shared-token rule grouped all five and
+/// named the folder "acme"; on the first real Downloads folder that rule met
+/// it made a folder called "apple" out of a receipt, an agreement, a script
+/// and an export. Frequency is not category.
+///
+/// Two things are pinned. No group may be NAMED from a word in the filenames,
+/// and the five acme files may never all land in one group again -- they are
+/// five different kinds of file and belong wherever their kind belongs, which
+/// for most of them is nowhere, since one .psd does not make a group.
+#[test]
+fn files_sharing_a_word_are_split_by_what_they_are() {
+    let _g = lock();
+    let (root, _fx, p) = setup("no_token");
+
+    for g in &p.groups {
+        assert!(
+            !g.name.eq_ignore_ascii_case("acme") && !g.name.eq_ignore_ascii_case("notes"),
+            "a group named {:?} exists. Something is naming groups from words \
+             in filenames again",
+            g.name
+        );
+    }
+
+    let acme_in = |g: &etude_core::plan::Group| {
+        g.members
+            .iter()
+            .filter(|m| m.to_string_lossy().to_lowercase().contains("acme_"))
+            .count()
+    };
+    let total: usize = p.groups.iter().map(acme_in).sum();
+    let biggest = p.groups.iter().map(acme_in).max().unwrap_or(0);
+    assert!(
+        biggest < 5,
+        "all five acme_* files landed in one group again ({biggest} of them). \
+         They are five different kinds of file; only a rule reading the word \
+         they share could put them together"
+    );
+    assert!(
+        total < 5 || biggest < total,
+        "the acme files were collected rather than separated"
+    );
+
+    cleanup(&root);
+}

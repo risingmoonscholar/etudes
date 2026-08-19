@@ -61,10 +61,7 @@ fn stash_plan(root: &Path) -> (Plan, usize) {
             root: out.root.clone(),
             groups: vec![Group {
                 name: ".stash-0".into(),
-                signal: Signal::SharedToken {
-                    token: "stash".into(),
-                    count,
-                },
+                signal: Signal::Collected { count },
                 members,
                 accepted: true,
             }],

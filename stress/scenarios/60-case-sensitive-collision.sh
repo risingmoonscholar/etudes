@@ -52,7 +52,7 @@ pass "case-sensitive volume: confirmed case-sensitive before testing ($FS_PERSON
 
 PROJ="$MNT/proj"
 mkdir -p "$PROJ"
-# Five files share the "photoset" token -- enough to clear sweep's minimum
+# Five files share the "Documents" token -- enough to clear sweep's minimum
 # group size. Two of them are the SAME name except for case: a legal pair on
 # this filesystem, and a real collision on the default case-insensitive one.
 for f in alpha beta gamma delta; do : > "$PROJ/photoset_$f.txt"; done
@@ -62,7 +62,7 @@ BEFORE=$(find "$PROJ" -type f | wc -l | tr -d ' ')
 assert_eq 6 "$BEFORE" "case-sensitive volume: both differently-cased files coexist on disk (fixture sanity check)"
 
 PLAN_OUT=$("$SWEEP" "$PROJ" 2>&1)
-if echo "$PLAN_OUT" | grep -q "photoset"; then
+if echo "$PLAN_OUT" | grep -q "Documents"; then
   pass "case-sensitive volume: plan groups all 6 files under one shared token"
 else
   fail "case-sensitive volume: plan did not form the expected group: $PLAN_OUT"

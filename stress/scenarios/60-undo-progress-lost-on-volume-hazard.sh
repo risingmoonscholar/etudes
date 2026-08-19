@@ -56,7 +56,7 @@ for f in delta echo foxtrot; do : > "$OUTER/stuck_$f.txt"; done
 for f in alpha bravo; do : > "$INNER/stuck_$f.txt"; done
 
 assert_exit 0 "setup: apply succeeds while both halves are writable" -- "$SWEEP" apply "$OUTER" --yes --depth 2
-if [ ! -f "$OUTER/stuck/stuck_alpha.txt" ] || [ ! -f "$OUTER/stuck/stuck_delta.txt" ]; then
+if [ ! -f "$OUTER/Documents/stuck_alpha.txt" ] || [ ! -f "$OUTER/Documents/stuck_delta.txt" ]; then
   fail "setup: apply did not produce the expected group layout -- cannot continue this scenario"
   exit 0
 fi
@@ -75,7 +75,7 @@ UNDO1_CODE=$?
 RESTORED_TO_OUTER=0
 for f in delta echo foxtrot; do [ -f "$OUTER/stuck_$f.txt" ] && RESTORED_TO_OUTER=$((RESTORED_TO_OUTER+1)); done
 STILL_STUCK=0
-for f in alpha bravo; do [ -f "$OUTER/stuck/stuck_$f.txt" ] && STILL_STUCK=$((STILL_STUCK+1)); done
+for f in alpha bravo; do [ -f "$OUTER/Documents/stuck_$f.txt" ] && STILL_STUCK=$((STILL_STUCK+1)); done
 
 if [ "$RESTORED_TO_OUTER" != 3 ] || [ "$STILL_STUCK" != 2 ]; then
   # The engineered split didn't land the way it was designed to -- report

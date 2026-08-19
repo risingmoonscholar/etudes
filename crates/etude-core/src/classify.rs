@@ -158,6 +158,37 @@ pub fn is_screenshot(e: &Entry) -> bool {
 }
 
 /// Camera-style stems that indicate an unedited capture.
+/// The folder a file's extension files it under, or None to leave it alone.
+///
+/// Seven families, from the taxonomy spec. The names are the folders users
+/// see, so they are Finder words rather than jargon. The list is extensions
+/// rather than words because extensions are what a file IS: the rule this
+/// replaced grouped files by words they mentioned, and on its first real
+/// Downloads folder it made a folder called "apple" out of a receipt, an
+/// agreement, a script and an export. Frequency is not category.
+///
+/// An extension the OS would shrug at -- a dynamic UTI, an app's private
+/// format -- returns None and the file stays put. When an app registers its
+/// format properly, the answer changes at the OS level, not here. Deciding
+/// for the app would mean maintaining a list of every app's private
+/// extensions forever, which is the stoplist problem as a whitelist.
+pub fn type_family(ext: &str) -> Option<&'static str> {
+    Some(match ext.to_ascii_lowercase().as_str() {
+        "png" | "jpg" | "jpeg" | "heic" | "dng" | "gif" | "tiff" | "tif" | "webp" | "bmp"
+        | "svg" | "raw" => "Images",
+        "pdf" | "md" | "docx" | "doc" | "pages" | "txt" | "rtf" | "html" | "htm" | "epub" => {
+            "Documents"
+        }
+        "sh" | "py" | "js" | "ts" | "rb" | "pl" | "zsh" | "bash" | "swift" | "rs" => "Scripts",
+        // dmg and pkg stay with the existing Installers detector; listing
+        // them here too would race it for the same files.
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => "Archives",
+        "mp4" | "mov" | "mp3" | "wav" | "aiff" | "m4a" | "mkv" | "avi" | "flac" | "aac" => "Media",
+        "csv" | "json" | "xlsx" | "xls" | "sqlite" | "plist" | "parquet" | "numbers" => "Data",
+        _ => return None,
+    })
+}
+
 pub fn is_camera(e: &Entry) -> bool {
     let l = e.name.to_ascii_lowercase();
     let camera_stem = l.starts_with("img_")
@@ -178,55 +209,6 @@ pub fn is_installer(e: &Entry) -> bool {
         "dmg" | "pkg" | "msi" | "deb" | "rpm" | "appimage"
     )
 }
-
-/// Split a filename into lowercase tokens usable as group names.
-///
-/// Tokens are what the *user* already wrote. The naming rule depends on this:
-/// sweep may only name a group with a string that already exists in the
-/// filenames it contains.
-pub fn tokens(name: &str) -> Vec<String> {
-    let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
-    stem.split(|c: char| !c.is_alphanumeric())
-        .filter(|t| t.len() >= 3)
-        .filter(|t| !t.chars().all(|c| c.is_ascii_digit()))
-        .filter(|t| !STOP_TOKENS.contains(&t.to_ascii_lowercase().as_str()))
-        .map(|t| t.to_ascii_lowercase())
-        .collect()
-}
-
-/// Tokens too generic to name a group after.
-const STOP_TOKENS: &[&str] = &[
-    "final",
-    "draft",
-    "copy",
-    "new",
-    "old",
-    "untitled",
-    "document",
-    "file",
-    "version",
-    "temp",
-    "tmp",
-    "backup",
-    "export",
-    "download",
-    "downloads",
-    "desktop",
-    "screen",
-    "shot",
-    "image",
-    "photo",
-    "scan",
-    "pdf",
-    "doc",
-    "docx",
-    "png",
-    "jpg",
-    "the",
-    "and",
-    "for",
-    "with",
-];
 
 #[cfg(test)]
 mod tests {
@@ -290,20 +272,6 @@ mod tests {
         assert!(!is_camera(&entry(
             "Screenshot 2026-07-12 at 9.14.22 AM.png"
         )));
-    }
-
-    #[test]
-    fn tokens_drop_generic_words_so_groups_are_never_named_untitled() {
-        let t = tokens("final_FINAL_v2.docx");
-        assert!(
-            !t.contains(&"final".to_string()),
-            "generic token survived: {t:?}"
-        );
-        let t = tokens("acme_logo_v3.psd");
-        assert!(
-            t.contains(&"acme".to_string()),
-            "distinctive token lost: {t:?}"
-        );
     }
 
     /// Files a device actually produces. Shapes drawn from the DCF standard

@@ -26,7 +26,7 @@ require python3 "builds fixture trees fast" || exit 0
 
 # --- Variant A: deterministic ---------------------------------------------
 
-# Letter-suffixed names so exactly one token repeats across the set ("widget")
+# Letter-suffixed names so exactly one token repeats across the set ("Documents")
 # and none of the per-file unique suffixes accidentally forms a second
 # same-sized candidate group that could win the tie-break instead.
 letters() {  # letters N -> deterministic short letter code, distinct per N
@@ -43,14 +43,14 @@ W=$(workdir); trap 'rm -rf "$W"' EXIT
 DA="$W/a/Desktop"; mkdir -p "$DA"
 for i in $(seq 1 8); do : > "$DA/widget_$(letters "$i").dat"; done
 BLOCKER_CONTENT="I-AM-A-FILE-NOT-A-DIRECTORY-$$"
-printf '%s' "$BLOCKER_CONTENT" > "$DA/widget"
+printf '%s' "$BLOCKER_CONTENT" > "$DA/Documents"
 BEFORE_A=$(find "$DA" -type f | wc -l | tr -d ' ')
 
 CODE_A=0
 OUT_A=$("$SWEEP" apply "$DA" --yes 2>&1) || CODE_A=$?
 
 assert_eq 1 "$([ "$CODE_A" != "0" ] && echo 1 || echo 0)" "[A] apply refused rather than crashing or misbehaving (exit $CODE_A)"
-assert_eq "$BLOCKER_CONTENT" "$(cat "$DA/widget" 2>/dev/null)" "[A] the blocking file's content is untouched. sweep did not write into it or replace it"
+assert_eq "$BLOCKER_CONTENT" "$(cat "$DA/Documents" 2>/dev/null)" "[A] the blocking file's content is untouched. sweep did not write into it or replace it"
 assert_eq "$BEFORE_A" "$(find "$DA" -type f | wc -l | tr -d ' ')" "[A] every source file is still present. Nothing was lost trying to reach a broken destination"
 if echo "$OUT_A" | grep -qi "sweep:"; then
   pass "[A] the refusal was printed, not swallowed"
@@ -77,12 +77,13 @@ def letters(i, width=5):
 # the group that buys real wall-clock time before group 2 is even reached.
 for i in range(450):
     open(os.path.join(d, f"IMG_{i:04d}.jpg"), "w").close()
-# Group 2: a small shared-token group ("widget"). This is the one whose
-# destination directory we're about to block with a file. Letter suffixes
-# keep each file's own suffix from forming a second same-sized candidate
-# group that could out-rank "widget" in the tie-break.
+# Group 2: a small Documents group, whose destination directory is the one
+# about to be blocked with a file. These were .dat files grouped by a shared
+# "widget" token; that rule is gone, and .dat is deliberately not in any type
+# family -- a generic container many apps use privately, which sweep leaves
+# alone. .txt is a Document, which is what these are.
 for i in range(8):
-    open(os.path.join(d, f"widget_{letters(i)}.dat"), "w").close()
+    open(os.path.join(d, f"widget_{letters(i)}.txt"), "w").close()
 PY
 }
 
@@ -103,14 +104,14 @@ else
   DELAY_MS=$((T0 * 50 / 100))
   python3 -c "import time; time.sleep($DELAY_MS/1000)"
   BLOCKER_B="RACE-BLOCKER-$$"
-  printf '%s' "$BLOCKER_B" > "$DB/widget"
+  printf '%s' "$BLOCKER_B" > "$DB/Documents"
   wait "$PID"
   CODE_B=$?
 
-  if [ -f "$DB/widget" ] && [ "$(cat "$DB/widget" 2>/dev/null)" = "$BLOCKER_B" ] && [ ! -d "$DB/widget" ]; then
+  if [ -f "$DB/Documents" ] && [ "$(cat "$DB/Documents" 2>/dev/null)" = "$BLOCKER_B" ] && [ ! -d "$DB/Documents" ]; then
     echo "    (blocker planted at ~${DELAY_MS}ms into a ~${T0}ms baseline run)"
     assert_eq 1 "$([ "$CODE_B" != "0" ] && echo 1 || echo 0)" "[B] apply refused rather than succeeding over the blocked destination (exit $CODE_B)"
-    assert_eq "$BLOCKER_B" "$(cat "$DB/widget" 2>/dev/null)" "[B] the mid-run blocking file's content is untouched"
+    assert_eq "$BLOCKER_B" "$(cat "$DB/Documents" 2>/dev/null)" "[B] the mid-run blocking file's content is untouched"
 
     MOVED_PHOTOS=$(find "$DB" -mindepth 2 -name 'IMG_*.jpg' 2>/dev/null | wc -l | tr -d ' ')
     echo "    ($MOVED_PHOTOS of the first group's files had already landed before the collision)"

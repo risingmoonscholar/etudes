@@ -189,8 +189,11 @@ fn steps_5_and_6_are_true_undo_walks_back_then_stops() {
         )
         .expect("write");
     }
+    // A second structural group, so there are two applies to stack. This was
+    // six invoice-acme-*.pdf files grouped by their shared token; that rule
+    // is gone, and camera names group by what the files are instead.
     for n in 0..6 {
-        std::fs::write(work.join(format!("invoice-acme-{n}.pdf")), b"x").expect("write");
+        std::fs::write(work.join(format!("IMG_880{n}.HEIC")), b"x").expect("write");
     }
 
     // The group name comes from the plan rather than being written in here.

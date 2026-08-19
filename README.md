@@ -6,16 +6,18 @@ Three small command-line tools that tidy a folder without reading your private f
 ```console
 $ sweep ~/Desktop
 
-Scanned 100 items  ·  names, sizes and dates only  ·  no contents read
+Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
 
   Screenshots      34 files   named "Screenshot ..."
-  Photos, Aug 10   27 files   camera names, taken within 3 days
+  Photos, Aug 19   27 files   camera names, taken within 3 days
   Installers        3 files   .dmg and .pkg
-  notes             7 files   7 filenames contain "notes"
-  acme              5 files   5 filenames contain "acme"
+  Archives          3 files   .tar, .zip
+  Documents        17 files   .docx, .md, .pdf, .txt
+  Images            3 files   .jpg
+  Scripts           3 files   .sh
 
   14 files look like personal records and were not touched
-  10 files matched no group and were left where they are
+  4 files matched no group and were left where they are
 
   skipped 1 hidden item and 3 symlinks
 

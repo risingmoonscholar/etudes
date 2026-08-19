@@ -84,7 +84,7 @@ fn assert_refused_for_want_of_a_keychain(out: &std::process::Output) {
 fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
     let root = unique_temp("root");
     let _ = std::fs::remove_dir_all(&root);
-    let locked_src = root.join("aaa_locked_source");
+    let locked_src = root.join("Burst");
     std::fs::create_dir_all(&locked_src).unwrap();
     let _root = TestDir(root.clone());
     let state = unique_temp("state");
@@ -92,13 +92,21 @@ fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
     std::fs::create_dir_all(&state).unwrap();
     let _state = TestDir(state.clone());
 
-    // 5 filenames share the "stuck" token (MIN_TOKEN_GROUP): 3 live directly
-    // in root (writable origin), 2 live in the subdirectory that will be
-    // locked down before undo runs.
-    for name in ["stuck_delta.txt", "stuck_echo.txt", "stuck_foxtrot.txt"] {
+    // Five screenshot-named files, a structural group: 3 live directly in
+    // root (writable origin), 2 live in the subdirectory that will be locked
+    // down before undo runs. This used to build its group from a shared
+    // "stuck" token; that rule is gone.
+    for name in [
+        "Screenshot 2026-03-04 at 9.00.00 AM.png",
+        "Screenshot 2026-03-05 at 9.00.00 AM.png",
+        "Screenshot 2026-03-03 at 9.00.00 AM.png",
+    ] {
         std::fs::write(root.join(name), name.as_bytes()).unwrap();
     }
-    for name in ["stuck_alpha.txt", "stuck_bravo.txt"] {
+    for name in [
+        "Screenshot 2026-03-01 at 9.00.00 AM.png",
+        "Screenshot 2026-03-02 at 9.00.00 AM.png",
+    ] {
         std::fs::write(locked_src.join(name), name.as_bytes()).unwrap();
     }
 
@@ -114,7 +122,13 @@ fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
         return;
     }
     assert!(
-        root.join("stuck/stuck_alpha.txt").exists() && root.join("stuck/stuck_delta.txt").exists(),
+        root.join("Screenshots")
+            .join("Screenshot 2026-03-01 at 9.00.00 AM.png")
+            .exists()
+            && root
+                .join("Screenshots")
+                .join("Screenshot 2026-03-04 at 9.00.00 AM.png")
+                .exists(),
         "setup: apply did not produce the expected grouped layout, cannot continue"
     );
 
@@ -135,14 +149,21 @@ fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
     // Physical proof this is a genuine partial restore, not a fluke: the 3
     // writable-origin files are back, the 2 locked-origin ones are still
     // sitting in the holding directory.
-    let restored_to_root = ["stuck_delta.txt", "stuck_echo.txt", "stuck_foxtrot.txt"]
-        .iter()
-        .filter(|n| root.join(n).exists())
-        .count();
-    let still_stuck = ["stuck_alpha.txt", "stuck_bravo.txt"]
-        .iter()
-        .filter(|n| root.join("stuck").join(n).exists())
-        .count();
+    let restored_to_root = [
+        "Screenshot 2026-03-04 at 9.00.00 AM.png",
+        "Screenshot 2026-03-05 at 9.00.00 AM.png",
+        "Screenshot 2026-03-03 at 9.00.00 AM.png",
+    ]
+    .iter()
+    .filter(|n| root.join(n).exists())
+    .count();
+    let still_stuck = [
+        "Screenshot 2026-03-01 at 9.00.00 AM.png",
+        "Screenshot 2026-03-02 at 9.00.00 AM.png",
+    ]
+    .iter()
+    .filter(|n| root.join("Screenshots").join(n).exists())
+    .count();
     assert_eq!(
         (restored_to_root, still_stuck),
         (3, 2),
@@ -190,11 +211,11 @@ fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
     );
 
     for name in [
-        "stuck_delta.txt",
-        "stuck_echo.txt",
-        "stuck_foxtrot.txt",
-        "stuck_alpha.txt",
-        "stuck_bravo.txt",
+        "Screenshot 2026-03-04 at 9.00.00 AM.png",
+        "Screenshot 2026-03-05 at 9.00.00 AM.png",
+        "Screenshot 2026-03-03 at 9.00.00 AM.png",
+        "Screenshot 2026-03-01 at 9.00.00 AM.png",
+        "Screenshot 2026-03-02 at 9.00.00 AM.png",
     ] {
         assert!(
             root.join(name).exists() || locked_src.join(name).exists(),

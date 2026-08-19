@@ -29,17 +29,36 @@ pub const SENSITIVE_NAMES: &[&str] = &[
 ];
 
 pub const ORDINARY_NAMES: &[&str] = &[
+    // Five files sharing the word "acme" and nothing else -- five different
+    // kinds of thing. They stay in the fixture on purpose, but their job
+    // reversed: they used to demonstrate the shared-token rule grouping them
+    // into a folder called "acme", and they now demonstrate that nothing
+    // does. Each lands wherever its kind lands, which for the psd, fig and
+    // sketch is nowhere, because one of a kind is not a group.
     "acme_logo_v3.psd",
     "acme_homepage_mock.fig",
     "acme_brand_guide.pdf",
     "acme_palette.sketch",
     "acme_nav_spec.md",
+    // Images, and enough of them to form a group.
     "bali_beach_01.jpg",
     "bali_beach_02.jpg",
     "bali_temple.jpg",
+    // Documents. Enough .pdf/.docx/.txt/.md across this list to group, which
+    // is what an ordinary folder actually looks like.
     "notes.txt",
     "Untitled 3.pdf",
     "final_FINAL_v2.docx",
+    "quarterly_review.docx",
+    "meeting_notes.md",
+    // Scripts and archives, so the fixture exercises more than one family and
+    // a test can tell a type group from a coincidence.
+    "backup_runner.sh",
+    "deploy_staging.sh",
+    "rotate_logs.sh",
+    "site_export.zip",
+    "photos_2025.zip",
+    "old_project.tar",
 ];
 
 /// A generated tree plus the facts a test needs to make assertions about it.

@@ -22,9 +22,9 @@ D="$W/Desktop"
 mkdir -p "$D"
 
 # --- Trap 1: innocent name, personal-record content, in a format sweep never
-#     inspects (.jpg). Name says holiday photo; body is a fabricated 1099.
+#     inspects (.jpg). Name says camera photo; body is a fabricated 1099.
 #     Correct behaviour: grouped with the other photos, by name.
-cat > "$D/bali_sunset_07.jpg" <<'TRAP'
+cat > "$D/IMG_7705.JPG" <<'TRAP'
 First Fictional Bank N.A.  --  Annual Statement
 Statement period: 01 Jan 2025 to 31 Dec 2025
 Account number: 0000-FICTIONAL-0000
@@ -34,7 +34,11 @@ Taxable income reported: $1,234.56
 Withholding: $0.00
 Fabricated facsimile for a test fixture. Not a real record.
 TRAP
-for i in 1 2 3 4; do : > "$D/bali_sunset_0$i.jpg"; done
+# Camera-named siblings: a STRUCTURAL group. This used to use bali_sunset_*
+# names, which grouped through the shared-token rule; that rule is gone --
+# frequency is not category -- and the trap re-anchors to the camera
+# detector, which still routes purely by name.
+for i in 1 2 3 4; do : > "$D/IMG_770$i.JPG"; done
 
 # --- Trap 2: the inverse. Personal-record name, junk content.
 #     Correct behaviour: refused by name regardless of what is inside.
@@ -57,10 +61,9 @@ Taxable income reported: $4,321.00
 Withholding: $0.00
 Fabricated facsimile for a test fixture. Not a real record.
 TRAP
-# Siblings, so the trap file has a name-group to belong to. Without them it
-# lands in "no clear group" and the blind arm proves nothing about routing.
-# Five siblings: a group needs five members to form.
-for i in 1 2 3 4 5; do : > "$D/team_offsite_notes_$i.txt"; done
+# No siblings needed any more: no rule groups text files by name, so the
+# blind claim is no longer "grouped with its siblings" but the sharper one
+# below -- an unread file cannot be flagged for what it contains.
 
 for i in 1 2 3 4 5; do : > "$D/Screenshot 2026-08-1$i at 09.00.00.png"; done
 
@@ -77,10 +80,10 @@ print(any('$1' in f for f in m))
 personal_count=$(python3 -c "
 import json,sys; print(json.load(sys.stdin)['left_alone']['looks_personal'])" <<<"$json")
 
-assert_eq "True" "$(grouped_by_name bali_sunset_07)" \
+assert_eq "True" "$(grouped_by_name IMG_7705)" \
   "TRAP 1: 1099 content inside a .jpg name is grouped BY NAME with the photos"
-assert_eq "True" "$(grouped_by_name team_offsite_agenda)" \
-  "TRAP 4 (blind arm): 1099 content inside a .txt name is grouped BY NAME with its siblings, not refused"
+assert_eq "False" "$(grouped_by_name team_offsite_agenda)" \
+  "TRAP 4 (blind arm): the sensitive-content .txt joins no group; nothing groups text by name"
 assert_eq 2 "$personal_count" \
   "TRAP 2+3: only the two personal-NAMED files are refused; neither content-contradicting file is"
 
@@ -123,19 +126,24 @@ if command -v script >/dev/null 2>&1; then
          | script -q /dev/null "$SWEEP" "$I" --inspect-content --json 2>/dev/null \
          | tr -d '\r' | grep -o '{.*}' | tail -1)
   if [ -n "$insp" ]; then
-    still_grouped=$(python3 -c "
+    # The old oracle asked whether the trap file left its group. With the
+    # shared-token rule deleted no text file is in a group in either arm, so
+    # that oracle passes vacuously -- the quiet green this scenario exists to
+    # refuse. The oracle is now the outcome inspection actually produces:
+    # the file is FLAGGED AS PERSONAL, observable in looks_personal, and the
+    # blind arm's count above already proves it is 0 without consent.
+    flagged=$(python3 -c "
 import json,sys
 try:
     d=json.loads(sys.stdin.read())
-    m=[f for g in d['groups'] for f in g.get('members',[])]
-    print(any('team_offsite_agenda' in f for f in m))
+    print(d['left_alone']['looks_personal'])
 except Exception:
     print('PARSE-FAIL')
 " <<<"$insp")
-    case "$still_grouped" in
-      False) pass "INSTRUMENT 1: under --inspect-content the .txt trap FIRES (leaves its group). The name-routing traps can detect a content read" ;;
-      True)  fail "INSTRUMENT 1: consent given but the .txt trap did not fire. These traps cannot detect a content read, so their green proves nothing" ;;
-      *)     unproven "INSTRUMENT 1" "could not parse the --inspect-content plan" ;;
+    case "$flagged" in
+      1) pass "INSTRUMENT 1: under --inspect-content the .txt trap FIRES (flagged as a personal record). The blind arm's zero is therefore evidence" ;;
+      0) fail "INSTRUMENT 1: consent given but the .txt trap was not flagged. These traps cannot detect a content read, so their green proves nothing" ;;
+      *) unproven "INSTRUMENT 1" "could not parse the --inspect-content plan (looks_personal=$flagged)" ;;
     esac
   else
     unproven "INSTRUMENT 1" "could not drive consent through script(1)"

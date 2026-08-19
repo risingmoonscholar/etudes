@@ -12,9 +12,23 @@ use crate::{Category, Untouched};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signal {
     Screenshot,
-    CameraBurst { days: u32 },
+    CameraBurst {
+        days: u32,
+    },
     Installer,
-    SharedToken { token: String, count: usize },
+    /// Files grouped by what they are: a type family from the extension.
+    /// Carries the extensions actually present so the explanation names them
+    /// rather than asserting a category the user has to take on trust.
+    TypeFamily {
+        exts: Vec<String>,
+    },
+    /// Not a detector. A caller-supplied set already decided elsewhere --
+    /// stash's holding folder is one group by definition. Was called
+    /// SharedToken, back when a rule grouped files by words they contained;
+    /// that rule is gone and the name described nothing.
+    Collected {
+        count: usize,
+    },
 }
 
 impl Signal {
@@ -26,9 +40,13 @@ impl Signal {
                 format!("camera names, taken within {days} days")
             }
             Signal::Installer => ".dmg and .pkg".to_string(),
-            Signal::SharedToken { token, count } => {
-                format!("{count} filenames contain \"{token}\"")
+            Signal::TypeFamily { exts } => {
+                let mut e: Vec<&str> = exts.iter().map(String::as_str).collect();
+                e.sort_unstable();
+                e.dedup();
+                format!(".{}", e.join(", ."))
             }
+            Signal::Collected { count } => format!("{count} items"),
         }
     }
 }
@@ -191,7 +209,6 @@ impl Plan {
 
 /// Minimum members before a shared token justifies a group. Below this, the
 /// grouping is noise and the honest answer is "no clear group".
-const MIN_TOKEN_GROUP: usize = 5;
 const MIN_STRUCTURAL_GROUP: usize = 3;
 /// Window within which camera files count as one burst.
 const BURST_DAYS: u32 = 3;
@@ -301,37 +318,50 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         });
     }
 
-    // Pass 3: shared tokens. The only detector that names a group from user
-    // text, which is exactly why the naming rule permits it.
-    let mut by_token: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
-        for t in classify::tokens(&e.name) {
-            by_token.entry(t).or_default().push(e.path.clone());
-        }
-    }
-    // Largest groups first, and a file joins only one group.
-    let mut candidates: Vec<(String, Vec<PathBuf>)> = by_token
-        .into_iter()
-        .filter(|(_, v)| v.len() >= MIN_TOKEN_GROUP)
-        .collect();
-    candidates.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+    // There is deliberately no pass grouping by shared words. One existed:
+    // any token in five or more filenames became a folder named after that
+    // token, guarded by a hand-written stoplist. On the first real Downloads
+    // folder it met, it made a folder called "apple" out of a receipt, an
+    // agreement, a script and an export that shared a word, and the stoplist
+    // could never have saved it -- the set of words that are not categories
+    // is the whole vocabulary minus a few dozen. Frequency is not category.
+    //
+    // Its lifetime record on data this repo did not author: zero true
+    // positives, one false positive. Both showcase groups in the fixture were
+    // planted to demonstrate it. The one thing it was right about -- a
+    // project cluster spanning extensions -- is caught by a better,
+    // observable signal: a project file marks its folder as one unit.
+    //
+    // Two independent reviews converged here: one flagged the stoplist as
+    // limited, the other watched the rule produce "apple". Do not
+    // reintroduce a token pass; extend the structural detectors instead.
 
-    for (token, members) in candidates {
-        let fresh: Vec<PathBuf> = members
-            .into_iter()
-            .filter(|p| !claimed.contains(p))
-            .collect();
-        if fresh.len() < MIN_TOKEN_GROUP {
-            continue;
+    // Pass 3: type families. A file's extension says what it IS, which is the
+    // question a folder name should answer. Extensions the map does not know
+    // are left alone rather than swept into an "Other" drawer -- an unknown
+    // format is the OS declining to identify it, and inventing a home for it
+    // would mean maintaining a list of every app's private extension forever.
+    {
+        let mut by_family: BTreeMap<&'static str, Vec<&Entry>> = BTreeMap::new();
+        for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
+            if let Some(fam) = classify::type_family(&e.ext) {
+                by_family.entry(fam).or_default().push(e);
+            }
         }
-        claimed.extend(fresh.iter().cloned());
-        let count = fresh.len();
-        groups.push(Group {
-            name: token.clone(),
-            signal: Signal::SharedToken { token, count },
-            members: fresh,
-            accepted: false,
-        });
+        for (family, members) in by_family {
+            if members.len() < MIN_STRUCTURAL_GROUP {
+                continue;
+            }
+            claimed.extend(members.iter().map(|e| e.path.clone()));
+            groups.push(Group {
+                name: family.to_string(),
+                signal: Signal::TypeFamily {
+                    exts: members.iter().map(|e| e.ext.to_lowercase()).collect(),
+                },
+                members: members.iter().map(|e| e.path.clone()).collect(),
+                accepted: false,
+            });
+        }
     }
 
     // Everything still unclaimed is honestly reported as ungrouped.

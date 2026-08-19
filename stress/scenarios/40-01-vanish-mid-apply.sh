@@ -23,7 +23,7 @@ require python3 "builds fixture trees fast and reads the --json plan" || exit 0
 N=500
 
 # Letter-only stems so no filename accidentally collides with a sensitive
-# marker (a plain zero-padded number can: "batch_1099.dat" reads as a 1099).
+# marker (a plain zero-padded number can: "batch_1099.csv" reads as a 1099).
 build_tree() {
   mkdir -p "$1"
   python3 - "$1" "$N" <<'PY'
@@ -36,7 +36,7 @@ def letters(i, width=5):
         i //= 26
     return s
 for i in range(n):
-    open(os.path.join(d, f"batch_{letters(i)}.dat"), "w").close()
+    open(os.path.join(d, f"batch_{letters(i)}.csv"), "w").close()
 PY
 }
 
@@ -47,7 +47,7 @@ pick_target() {
   "$SWEEP" "$1" --json 2>/dev/null | python3 -c '
 import json, sys
 p = json.load(sys.stdin)
-g = next(g for g in p["groups"] if g["name"] == "batch")
+g = next(g for g in p["groups"] if g["name"] == "Data")
 m = g["members"]
 idx = int(len(m) * 0.75)
 print(idx)

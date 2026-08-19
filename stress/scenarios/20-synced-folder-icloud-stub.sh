@@ -28,7 +28,7 @@ done
 SYNCED="$W/Dropbox/ClientWork"
 mkdir -p "$SYNCED"
 for i in 0 1 2 3 4; do echo "REAL-CONTENT-$i" > "$SYNCED/deck_notes_$i.pdf"; done
-# The 6th "deck" file has been evicted: its actual bytes are gone from this
+# The 6th "Documents" file has been evicted: its actual bytes are gone from this
 # machine, replaced by a zero-byte placeholder Finder shows with a cloud
 # icon. The placeholder's name is dot-prefixed and carries the original
 # name plus .icloud, per Apple's on-disk convention for this state.
@@ -58,9 +58,9 @@ for i in 0 1 2 3 4; do echo "REAL-CONTENT-$i" > "$PLAIN/deck_notes_$i.pdf"; done
 assert_exit 0 "apply proceeds on a plain root with the same stub shape" \
   -- "$SWEEP" apply "$PLAIN" --yes
 
-moved_dir=$(find "$PLAIN" -maxdepth 1 -type d -name deck)
+moved_dir=$(find "$PLAIN" -maxdepth 1 -type d -name Documents)
 if [ -z "$moved_dir" ]; then
-  fail "expected a 'deck' group directory after apply; none found"
+  fail "expected a 'Documents' group directory after apply; none found"
 else
   moved_count=$(find "$moved_dir" -type f | wc -l | tr -d ' ')
   assert_eq 5 "$moved_count" "exactly the 5 real files moved. the stub did not tag along"

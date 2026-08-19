@@ -228,10 +228,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         root: outcome.root.clone(),
         groups: vec![Group {
             name: holding_name(deadline),
-            signal: Signal::SharedToken {
-                token: "stash".into(),
-                count,
-            },
+            signal: Signal::Collected { count },
             members,
             accepted: true,
         }],
@@ -743,8 +740,7 @@ mod tests {
             root,
             groups: vec![Group {
                 name: ".stash-0".into(),
-                signal: Signal::SharedToken {
-                    token: "stash".into(),
+                signal: Signal::Collected {
                     count: members.len(),
                 },
                 members,

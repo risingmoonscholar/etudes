@@ -129,9 +129,26 @@ fn inspection_never_creates_or_renames_a_group() {
 
     // And prove the narrowing actually happened, so this test cannot pass by
     // the inspector doing nothing at all.
+    //
+    // Counted by CLASSIFICATION, not by list length. When the token pass
+    // existed, inspected files left a group and untouched grew, so a length
+    // comparison could see it. With no text-bearing group, inspection moves a
+    // file between untouched variants -- NoClearGroup to LooksPersonal -- and
+    // the length stays identical while the outcome the user sees changes
+    // completely. The length proxy went quietly blind; this counts the thing
+    // itself.
+    let personal = |pl: &plan::Plan| {
+        pl.untouched
+            .iter()
+            .filter(|(_, u)| matches!(u, Untouched::LooksPersonal(_)))
+            .count()
+    };
     assert!(
-        names_with.len() < names_without.len() || with.untouched.len() > without.untouched.len(),
-        "inspection changed nothing; the test proves nothing"
+        personal(&with) > personal(&without),
+        "inspection flagged nothing as personal; the test proves nothing \
+         (with={}, without={})",
+        personal(&with),
+        personal(&without)
     );
     cleanup(&root);
 }
