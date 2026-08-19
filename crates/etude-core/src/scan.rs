@@ -639,6 +639,82 @@ unsafe extern "C" {
 mod tests {
     use super::*;
 
+    // Every entry in both lists is tested by DERIVING the test from the list,
+    // not by restating it. The project-file-extension space is large and
+    // diverse -- one person's machine holds a fraction of it -- so the list is
+    // the source of truth and these tests iterate it. Add a marker and it is
+    // tested automatically; nobody has to remember. A marker that stops
+    // working fails here, which is the failure the scenarios (only five types)
+    // cannot see.
+
+    #[test]
+    fn every_project_marker_is_recognised_as_one() {
+        use std::io::Write;
+        for m in PROJECT_MARKERS {
+            let dir = std::env::temp_dir().join(format!(
+                "sweep_marker_{}_{}",
+                m.trim_start_matches('.').replace(['.', '/'], "_"),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("mkdir");
+            // A dotted marker (.flp) is an extension; a bare one (cargo.toml)
+            // is a whole filename. Build whichever this is.
+            let fname = if m.starts_with('.') {
+                format!("thing{m}")
+            } else {
+                (*m).to_string()
+            };
+            let mut f = fs::File::create(dir.join(&fname)).expect("write marker");
+            let _ = f.write_all(b"x");
+
+            assert_eq!(
+                project_marker_in(&dir).as_deref(),
+                Some(fname.as_str()),
+                "PROJECT_MARKERS lists {m:?} but a folder holding {fname:?} was \
+                 not recognised as a project. The list and the matcher have drifted"
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn every_package_suffix_is_recognised_as_one() {
+        for suffix in PACKAGE_SUFFIXES {
+            let name = format!("Thing{suffix}");
+            assert!(
+                is_package(&name),
+                "PACKAGE_SUFFIXES lists {suffix:?} but is_package({name:?}) was false"
+            );
+            // Case-insensitively, since a real .APP or .App exists on disk.
+            assert!(
+                is_package(&name.to_uppercase()),
+                "is_package is case-sensitive; {:?} was not recognised",
+                name.to_uppercase()
+            );
+        }
+    }
+
+    #[test]
+    fn a_marker_matches_only_as_a_whole_component() {
+        // "makefile" must not match "notmakefile.txt", and ".flp" must not
+        // match "flourish.flpng" -- the matcher checks the extension or the
+        // whole filename, never a substring. Without this, a marker could
+        // refuse folders it has no business refusing.
+        let dir = std::env::temp_dir().join(format!("sweep_nomatch_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        for innocent in ["notmakefile.txt", "cargo.tomlx", "my.flp.backup.zip"] {
+            fs::write(dir.join(innocent), b"x").expect("write");
+        }
+        assert_eq!(
+            project_marker_in(&dir),
+            None,
+            "a filename that merely contains a marker string triggered a refusal"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn is_refusal_separates_policy_from_io() {
         assert!(ScanError::RefusedRunningAsRoot.is_refusal());
