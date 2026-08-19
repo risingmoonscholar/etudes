@@ -42,6 +42,73 @@ const PACKAGE_SUFFIXES: &[&str] = &[
     ".playground",
 ];
 
+/// Files whose presence makes the folder holding them a project.
+///
+/// A project file references its siblings by relative path: an .als expects
+/// its bounces beside it, a .prproj expects its footage. Sorting those into
+/// Media/ opens the project with everything offline.
+///
+/// This list is incomplete and always will be, and unlike the stoplist it
+/// replaced that is safe: a missing entry fails to add a protection, leaving
+/// the behaviour exactly as it was before the list existed. It never causes a
+/// wrong grouping. Add freely.
+///
+/// What is deliberately NOT here: single-document formats that happen to be
+/// authored in a creative app. A .sketch, .psd or .fig is a document, not a
+/// project. People keep them in Downloads beside unrelated files, and one of
+/// them freezing a whole folder is worse than the thing this guards against.
+/// Found by the test fixture, which holds an .fig and a .sketch among a
+/// hundred unrelated files and was refused wholesale.
+///
+/// The test is whether the format OWNS a directory layout. An .als expects
+/// Samples/ beside it; a .sketch is one file that expects nothing.
+const PROJECT_MARKERS: &[&str] = &[
+    // Audio and video projects: these reference media by relative path.
+    ".als",
+    ".logicx",
+    ".ptx",
+    ".sesx",
+    ".flp",
+    ".rpp",
+    ".band",
+    ".prproj",
+    ".aep",
+    ".drp",
+    ".veg",
+    // 3D and compositing, same relationship with their assets.
+    ".blend",
+    ".c4d",
+    // Code projects, by their manifest. A manifest names a directory layout,
+    // so the directory is the unit.
+    "cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "gemfile",
+];
+
+/// Does this folder hold a project file at its top level?
+///
+/// Top level only, deliberately. A project file three directories down says
+/// something about that directory, not about the one being scanned.
+fn project_marker_in(dir: &Path) -> Option<String> {
+    let rd = fs::read_dir(dir).ok()?;
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+        for m in PROJECT_MARKERS {
+            let hit = if m.starts_with('.') {
+                name.ends_with(m)
+            } else {
+                name == *m
+            };
+            if hit {
+                return Some(e.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
 /// Roots under which cloud sync agents operate. Presence triggers a refusal
 /// unless the caller opts in.
 const SYNC_MARKERS: &[&str] = &[
@@ -105,8 +172,18 @@ pub enum ScanError {
     NotADirectory(PathBuf),
     RefusedSystemLocation(PathBuf),
     RefusedSyncRoot(PathBuf),
+    /// The root is a project: a package directory, or a folder holding a
+    /// project file at its top level. Its contents belong to one piece of
+    /// work and reference each other by relative path.
+    RefusedProjectRoot {
+        root: PathBuf,
+        marker: String,
+    },
     RefusedRunningAsRoot,
-    TooManyEntries { found: usize, cap: usize },
+    TooManyEntries {
+        found: usize,
+        cap: usize,
+    },
     Io(io::Error),
 }
 
@@ -119,6 +196,7 @@ impl ScanError {
         matches!(
             self,
             ScanError::RefusedSystemLocation(_)
+                | ScanError::RefusedProjectRoot { .. }
                 | ScanError::RefusedSyncRoot(_)
                 | ScanError::RefusedRunningAsRoot
                 | ScanError::TooManyEntries { .. }
@@ -141,6 +219,13 @@ impl std::fmt::Display for ScanError {
                     crate::redact::path(p)
                 )
             }
+            ScanError::RefusedProjectRoot { root, marker } => write!(
+                f,
+                "refused: {} looks like a project ({marker} is in it). Its files \
+                 reference each other by relative path, so sorting them into type \
+                 folders would break it. Sweep the folder that contains it instead",
+                crate::redact::path(root)
+            ),
             ScanError::RefusedSyncRoot(p) => write!(
                 f,
                 "refused: {} is inside a cloud-synced folder; pass --allow-sync to override",
@@ -197,6 +282,35 @@ pub fn is_synced(path: &Path) -> bool {
 fn is_package(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     PACKAGE_SUFFIXES.iter().any(|s| lower.ends_with(s))
+}
+
+/// Is this directory a package, asked of the OS?
+///
+/// macOS answers generically: a `.logicx` reports a content-type tree
+/// containing `com.apple.package`, with no list involved. Measured, including
+/// its limit -- a `.fcpbundle` reports a plain folder on a machine where Final
+/// Cut is not installed, because the OS only knows formats some app
+/// registered.
+///
+/// ADDITIVE, never a replacement. The suffix list is the machine-independent
+/// floor; this widens coverage on machines that have the apps. Swapping the
+/// list for this would fail open exactly where the user is least likely to
+/// notice: a video project on a machine without the editor.
+#[cfg(target_os = "macos")]
+fn os_says_package(path: &Path) -> bool {
+    use std::process::Command;
+    Command::new("mdls")
+        .args(["-name", "kMDItemContentTypeTree", "-raw"])
+        .arg(path)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("com.apple.package"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_says_package(_path: &Path) -> bool {
+    false
 }
 
 fn is_hidden(name: &str) -> bool {
@@ -290,6 +404,29 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
 
     // Refuse system locations outright, by absolute position. See
     // `is_refused_system_location`.
+    // A project as the SCAN ROOT is the case depth alone cannot cover. Not
+    // descending protects a project that sits inside the folder being swept;
+    // it does nothing when the project IS that folder, which is what happens
+    // when someone cd's into their track and runs the tidy tool. Its bounces
+    // and renders are the immediate children then, and they would move.
+    let root_name = root
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    if is_package(&root_name) || os_says_package(&root) {
+        return Err(ScanError::RefusedProjectRoot {
+            root: root.clone(),
+            marker: "a package directory".to_string(),
+        });
+    }
+    if let Some(marker) = project_marker_in(&root) {
+        return Err(ScanError::RefusedProjectRoot {
+            root: root.clone(),
+            marker,
+        });
+    }
+
     if is_refused_system_location(&root) {
         return Err(ScanError::RefusedSystemLocation(root.clone()));
     }

@@ -244,3 +244,63 @@ fn the_screenshot_group_is_found_and_correctly_sized() {
     assert_eq!(shots.members.len(), 34, "screenshot count wrong");
     cleanup(&root);
 }
+
+/// A project folder is refused as a scan root, not sorted into type folders.
+///
+/// The case depth cannot cover. Not descending protects a project that sits
+/// INSIDE the folder being swept; it does nothing when the project IS that
+/// folder, which is what happens when someone changes into their track and
+/// runs the tidy tool. Its bounces and renders are the immediate children
+/// then, and without this they move: measured at eight files into Media/,
+/// away from the .als that references them by relative path.
+#[test]
+fn a_project_folder_is_refused_as_a_scan_root() {
+    let root = std::env::temp_dir().join(format!("sweep_proj_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    fs::write(root.join("MyTrack.als"), b"synthetic").expect("write");
+    for i in 0..5 {
+        fs::write(root.join(format!("bounce_{i}.wav")), b"synthetic").expect("write");
+    }
+
+    match scan::scan(&root, &ScanConfig::default()) {
+        Err(scan::ScanError::RefusedProjectRoot { marker, .. }) => {
+            assert!(
+                marker.to_lowercase().contains("als"),
+                "the refusal should name the file that made this a project, got {marker:?}"
+            );
+        }
+        Err(other) => panic!("refused for the wrong reason: {other:?}"),
+        Ok(out) => panic!(
+            "a folder holding MyTrack.als was scanned anyway: {} entries would be grouped",
+            out.entries.len()
+        ),
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The refusal is about the ROOT, not about projects existing anywhere.
+///
+/// A folder that merely contains project folders is ordinary and must still
+/// be sweepable -- refusing it would make the guard useless for the case it
+/// was built for, someone tidying the folder their projects live in.
+#[test]
+fn a_folder_containing_projects_is_still_sweepable() {
+    let root = std::env::temp_dir().join(format!("sweep_projparent_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("TrackOne")).expect("mkdir");
+    fs::write(root.join("TrackOne/TrackOne.als"), b"synthetic").expect("write");
+    for i in 0..4 {
+        fs::write(root.join(format!("note_{i}.pdf")), b"synthetic").expect("write");
+    }
+
+    let out = scan::scan(&root, &ScanConfig::default())
+        .expect("a folder that merely contains a project is ordinary");
+    assert!(
+        out.entries.iter().any(|e| e.ext == "pdf"),
+        "the parent folder's own files should still be considered"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
