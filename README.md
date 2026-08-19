@@ -23,8 +23,8 @@ Nothing has been moved.  Nothing left this machine.
 ```
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
-medical records and the driver's licence are in that "left alone" count, and no
-flag moves them.
+medical records and the driver's licence are the files reported as personal
+records, and no flag moves them.
 
 Each tool removes one recurring friction, is small enough to read in an
 afternoon, and can prove its own claims rather than asking you to trust them.
