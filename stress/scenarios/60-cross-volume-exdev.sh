@@ -62,7 +62,7 @@ for f in alpha delta; do echo "inner-$f-content" > "$INNER/cargo_$f.txt"; done
 echo "inner-echo-content" > "$INNER/cargo_echo.txt"
 
 PLAN_OUT=$("$SWEEP" "$OUTER" --depth 2 2>&1)
-if echo "$PLAN_OUT" | grep -q "cargo"; then
+if echo "$PLAN_OUT" | grep -q "Documents"; then
   pass "cross-volume: plan groups files from both volumes under one shared token"
 else
   fail "cross-volume: plan did not group the cross-device files: $PLAN_OUT"
@@ -75,7 +75,7 @@ for pair in "cargo_bravo.txt:outer-bravo-content" "cargo_charlie.txt:outer-charl
             "cargo_alpha.txt:inner-alpha-content" "cargo_delta.txt:inner-delta-content" \
             "cargo_echo.txt:inner-echo-content"; do
   name="${pair%%:*}"; want="${pair##*:}"
-  got=$(cat "$OUTER/cargo/$name" 2>/dev/null || echo "<missing>")
+  got=$(cat "$OUTER/Documents/$name" 2>/dev/null || echo "<missing>")
   [ "$got" = "$want" ] || CONTENT_OK=0
 done
 if [ "$CONTENT_OK" = 1 ]; then

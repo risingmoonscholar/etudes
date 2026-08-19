@@ -93,13 +93,13 @@ fn a_destination_collision_on_apply_exits_2_not_3() {
     std::fs::create_dir_all(&state).unwrap();
     let _state = TestDir(state.clone());
 
-    // Five files share the "notes" token; two same basenames collide once
-    // grouped under root/notes/.
-    std::fs::write(root.join("a/notes-shared.txt"), b"a").unwrap();
-    std::fs::write(root.join("b/notes-shared.txt"), b"b").unwrap();
-    std::fs::write(root.join("notes-one.txt"), b"1").unwrap();
-    std::fs::write(root.join("notes-two.txt"), b"2").unwrap();
-    std::fs::write(root.join("notes-three.txt"), b"3").unwrap();
+    // Screenshot-named files form a structural group; the two same basenames
+    // in a/ and b/ collide once grouped under root/Screenshots/. This used to
+    // build its group from a shared "notes" token; that rule is gone.
+    std::fs::write(root.join("a/Screenshot 2026-07-01 at 9.00.00 AM.png"), b"a").unwrap();
+    std::fs::write(root.join("b/Screenshot 2026-07-01 at 9.00.00 AM.png"), b"b").unwrap();
+    std::fs::write(root.join("Screenshot 2026-07-02 at 9.00.00 AM.png"), b"1").unwrap();
+    std::fs::write(root.join("Screenshot 2026-07-03 at 9.00.00 AM.png"), b"2").unwrap();
 
     let out = sweep_bin()
         .env("ETUDE_STATE_DIR", &state)
@@ -130,11 +130,11 @@ fn an_exhausted_undo_exits_1_not_0() {
 
     // Five distinct filenames sharing a token. apply succeeds, no collision.
     for name in [
-        "notes-one.txt",
-        "notes-two.txt",
-        "notes-three.txt",
-        "notes-four.txt",
-        "notes-five.txt",
+        "Screenshot 2026-07-01 at 9.00.00 AM.png",
+        "Screenshot 2026-07-02 at 9.00.00 AM.png",
+        "Screenshot 2026-07-03 at 9.00.00 AM.png",
+        "Screenshot 2026-07-04 at 9.00.00 AM.png",
+        "Screenshot 2026-07-05 at 9.00.00 AM.png",
     ] {
         std::fs::write(root.join(name), name.as_bytes()).unwrap();
     }

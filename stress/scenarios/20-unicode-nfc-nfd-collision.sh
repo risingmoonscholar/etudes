@@ -40,13 +40,14 @@ assert_eq 5 "$BEFORE" "fixture built: 5 files, two of them the same visible name
 
 assert_exit 0 "planning a tree with an NFC/NFD name pair succeeds" -- "$SWEEP" "$D" --depth 2
 
-# Both land in one group by their shared ASCII "invoice" token. This part
-# is correct and expected: they are genuinely two different directory
-# entries (different subdirectories), so scanning both is right.
+# Both land in the Documents group: they are .pdf files, and that is what
+# they are. This used to key on a shared "invoice" token; that rule is gone.
+# Scanning both is right -- they are genuinely two different directory
+# entries, in different subdirectories.
 group_count=$("$SWEEP" "$D" --depth 2 --json | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-g = [g for g in d['groups'] if g['name'] == 'invoice']
+g = [g for g in d['groups'] if g['name'] == 'Documents']
 print(g[0]['count'] if g else 0)
 ")
 assert_eq 5 "$group_count" "both NFC and NFD entries were scanned and grouped (not double-counted, not silently merged)"

@@ -28,7 +28,7 @@ def letters(i, width=5):
         i //= 26
     return s
 for i in range(n):
-    open(os.path.join(d, f"batch_{letters(i)}.dat"), "w").close()
+    open(os.path.join(d, f"batch_{letters(i)}.csv"), "w").close()
 PY
 }
 
@@ -39,7 +39,7 @@ pick_target() {
   "$SWEEP" "$1" --json 2>/dev/null | python3 -c '
 import json, sys
 p = json.load(sys.stdin)
-g = next(g for g in p["groups"] if g["name"] == "batch")
+g = next(g for g in p["groups"] if g["name"] == "Data")
 m = g["members"]
 idx = int(len(m) * 0.75)
 print(idx)
@@ -151,7 +151,7 @@ def letters(i, width=5):
         i //= 26
     return s
 for i in range($N):
-    print(f'batch_{letters(i)}.dat')
+    print(f'batch_{letters(i)}.csv')
 ")
 # The intruder occupies the blocked entry's destination name, so that one
 # source file is expected to be exactly where it started (checked above);

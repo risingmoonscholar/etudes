@@ -47,7 +47,7 @@ fi
 PLAN_OUT=$("$SWEEP" "$MNT" 2>&1)
 PLAN_CODE=$?
 assert_eq 0 "$PLAN_CODE" "read-only volume: plan succeeds (it only reads)"
-if echo "$PLAN_OUT" | grep -q "widget"; then
+if echo "$PLAN_OUT" | grep -q "Documents"; then
   pass "read-only volume: plan still finds the group"
 else
   fail "read-only volume: plan did not find the expected group on a read-only volume: $PLAN_OUT"

@@ -86,10 +86,10 @@ else
   fail "the level-3 file vanished from its original location even though --depth 3 should never have read that directory"
 fi
 
-if [ -d "$D2/deeptok" ] && [ -f "$D2/deeptok/shared_h_deeptok.txt" ]; then
+if [ -d "$D2/Documents" ] && [ -f "$D2/Documents/shared_h_deeptok.txt" ]; then
   pass "the level-2 group member (within --depth 3) was correctly moved into the group"
 else
-  fail "expected level-0..2 group 'deeptok' to exist at the root with the level-2 member inside it"
+  fail "expected level-0..2 group 'Documents' to exist at the root with the level-2 member inside it"
 fi
 
 rm -f /tmp/deepapply_$$.txt

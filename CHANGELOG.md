@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The Fixed lists are long because the adversarial harness and two independent
 reviewers were pointed at the tools before anyone else could be.
 
+## [Unreleased]
+
+### Changed
+
+- Groups are named for what files **are**, not for words they mention. Seven
+  type families -- `Images` `Documents` `Scripts` `Installers` `Archives`
+  `Media` `Data` -- decided by extension.
+
+  `Data` is tabular only: csv, tsv, xlsx, xls, parquet, numbers. json and
+  plist are configuration more often than data, and `sqlite` travels with
+  companion files, so all three are left alone. `Scripts` is interpreted
+  files only, and is named that rather than `Code` because the name marks
+  the boundary: compiled-language source is not a script and does not
+  belong in an automatic move.
+
+  The rule this replaces grouped any word appearing in five or more filenames
+  and named the folder after it, guarded by a hand-written stoplist. On the
+  first real Downloads folder it met it produced a folder called `apple`, out
+  of a receipt, an agreement, a script and an export that shared a word.
+  Frequency is not category, and the stoplist could not have saved it: the set
+  of words that are not categories is the whole vocabulary minus a few dozen.
+
+  Its lifetime record on data this project did not author was zero true
+  positives and one false positive; both groups it produced in the fixture had
+  been planted to demonstrate it.
+
+  Group names are the tool's public vocabulary, so `--only acme` and anything
+  else scripted against a coined name stops working.
+
+- Extensions the table does not know are left where they are rather than swept
+  into a catch-all. The table is the whole mechanism -- the OS is not
+  consulted -- and unknown means untouched: filing formats sweep cannot name
+  would mean maintaining a list of every app's private extension forever.
+- `.app` bundles are left untouched. An application in Downloads is not an
+  installer, and moving one under a folder named `Installers` would be an
+  inference about intent rather than a fact about type.
+
 ## [0.4.0] - 2026-08-18
 
 Exit codes moved, so this is a minor bump rather than a patch. Anyone who
