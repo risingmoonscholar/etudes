@@ -79,28 +79,47 @@ pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
 /// The test is whether the format OWNS a directory layout. An .als expects
 /// Samples/ beside it; a .sketch is one file that expects nothing.
 const PROJECT_MARKERS: &[&str] = &[
-    // Audio and video projects: these reference media by relative path.
+    // --- Game engines -----------------------------------------------------
+    // Verified against a real 18,724-file Godot project on the author's
+    // machine. Its .tscn files reference siblings as res://scripts/main.gd --
+    // absolute from the project root -- so moving ANY file inside a Godot
+    // project breaks every reference to it. project.godot was missing from
+    // the first version of this list, which is how that project came within
+    // one `sweep ~/Documents/dev-projects/ad-astra` of losing its layout.
+    "project.godot",
+    ".uproject",  // Unreal: sits beside Content/ Config/ Source/ Saved/
+    ".unity",
+    // --- Audio ------------------------------------------------------------
+    // A session references its bounces, stems and samples by path.
     ".als",
     ".logicx",
     ".ptx",
     ".sesx",
-    ".flp",
+    ".flp",  // FL Studio, beside its rendered audio and sample references
     ".rpp",
     ".band",
+    // --- Video ------------------------------------------------------------
+    // A timeline references footage by path; sorting the footage takes every
+    // clip offline.
     ".prproj",
     ".aep",
     ".drp",
     ".veg",
-    // 3D and compositing, same relationship with their assets.
+    ".fcpbundle",
+    // --- 3D and compositing -----------------------------------------------
+    // Blender's // paths are relative to the .blend, so a texture moved out
+    // of its folder is a texture the file cannot find.
     ".blend",
     ".c4d",
-    // Code projects, by their manifest. A manifest names a directory layout,
-    // so the directory is the unit.
+    // --- Code projects, by their manifest ---------------------------------
+    // A manifest names a directory layout, so the directory is the unit.
     "cargo.toml",
     "package.json",
     "pyproject.toml",
     "go.mod",
     "gemfile",
+    "cmakelists.txt",
+    "makefile",
 ];
 
 /// Does this folder hold a project file at its top level?
