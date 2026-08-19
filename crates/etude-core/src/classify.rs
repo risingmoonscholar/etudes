@@ -180,6 +180,11 @@ pub fn type_family(ext: &str) -> Option<&'static str> {
         "pdf" | "md" | "docx" | "doc" | "pages" | "txt" | "rtf" | "html" | "htm" | "epub" => {
             "Documents"
         }
+        // "Scripts", not "Code", and the name is doing work: it is accurate
+        // for interpreted files and it makes the boundary obvious to whoever
+        // edits this list next. "Code" would licence putting compiled-language
+        // source back, which is exactly what was just removed.
+        //
         // Interpreted scripts only. rs, swift and ts were here and are gone:
         // compiled-language source is not a script, and with --depth a source
         // tree could be flattened into Scripts/ before any project guard
@@ -191,10 +196,18 @@ pub fn type_family(ext: &str) -> Option<&'static str> {
         // them here too would race it for the same files.
         "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => "Archives",
         "mp4" | "mov" | "mp3" | "wav" | "aiff" | "m4a" | "mkv" | "avi" | "flac" | "aac" => "Media",
-        // sqlite was here and is gone: a database travels with -wal and -shm
-        // sidecars, and moving the file without its companions can corrupt
-        // it. It comes back when companion-file handling exists, not before.
-        "csv" | "json" | "xlsx" | "xls" | "plist" | "parquet" | "numbers" => "Data",
+        // Tabular only, on purpose.
+        //
+        // json and plist were here and are gone: both are configuration far
+        // more often than they are data, and moving an app's config out from
+        // under it is the workflow break this family exists to avoid. A
+        // config file is not something a person went looking for in their
+        // Downloads folder.
+        //
+        // sqlite is gone too: a database travels with -wal and -shm sidecars,
+        // and moving the file without its companions can corrupt it. It comes
+        // back when companion-file handling exists, not before.
+        "csv" | "xlsx" | "xls" | "parquet" | "numbers" | "tsv" => "Data",
         _ => return None,
     })
 }

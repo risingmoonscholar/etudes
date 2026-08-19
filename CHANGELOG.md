@@ -16,6 +16,13 @@ reviewers were pointed at the tools before anyone else could be.
   type families -- `Images` `Documents` `Scripts` `Installers` `Archives`
   `Media` `Data` -- decided by extension.
 
+  `Data` is tabular only: csv, tsv, xlsx, xls, parquet, numbers. json and
+  plist are configuration more often than data, and `sqlite` travels with
+  companion files, so all three are left alone. `Scripts` is interpreted
+  files only, and is named that rather than `Code` because the name marks
+  the boundary: compiled-language source is not a script and does not
+  belong in an automatic move.
+
   The rule this replaces grouped any word appearing in five or more filenames
   and named the folder after it, guarded by a hand-written stoplist. On the
   first real Downloads folder it met it produced a folder called `apple`, out
