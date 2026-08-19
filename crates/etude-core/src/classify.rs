@@ -167,11 +167,12 @@ pub fn is_screenshot(e: &Entry) -> bool {
 /// Downloads folder it made a folder called "apple" out of a receipt, an
 /// agreement, a script and an export. Frequency is not category.
 ///
-/// An extension the OS would shrug at -- a dynamic UTI, an app's private
-/// format -- returns None and the file stays put. When an app registers its
-/// format properly, the answer changes at the OS level, not here. Deciding
-/// for the app would mean maintaining a list of every app's private
-/// extensions forever, which is the stoplist problem as a whitelist.
+/// An extension not in this table returns None and the file stays put. The
+/// table is the whole mechanism -- nothing here consults the OS, and an app
+/// registering its format with macOS changes nothing. Unknown-means-untouched
+/// is the decision: filing a format sweep cannot name would mean maintaining
+/// a list of every app's private extension forever, which is the stoplist
+/// problem as a whitelist.
 pub fn type_family(ext: &str) -> Option<&'static str> {
     Some(match ext.to_ascii_lowercase().as_str() {
         "png" | "jpg" | "jpeg" | "heic" | "dng" | "gif" | "tiff" | "tif" | "webp" | "bmp"
@@ -179,12 +180,21 @@ pub fn type_family(ext: &str) -> Option<&'static str> {
         "pdf" | "md" | "docx" | "doc" | "pages" | "txt" | "rtf" | "html" | "htm" | "epub" => {
             "Documents"
         }
-        "sh" | "py" | "js" | "ts" | "rb" | "pl" | "zsh" | "bash" | "swift" | "rs" => "Scripts",
+        // Interpreted scripts only. rs, swift and ts were here and are gone:
+        // compiled-language source is not a script, and with --depth a source
+        // tree could be flattened into Scripts/ before any project guard
+        // exists. js stays -- it is at least as often a script as source, and
+        // a lone .js in Downloads is far likelier to be a download artifact
+        // than a project file. Revisit when the project guard lands.
+        "sh" | "py" | "js" | "rb" | "pl" | "zsh" | "bash" => "Scripts",
         // dmg and pkg stay with the existing Installers detector; listing
         // them here too would race it for the same files.
         "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => "Archives",
         "mp4" | "mov" | "mp3" | "wav" | "aiff" | "m4a" | "mkv" | "avi" | "flac" | "aac" => "Media",
-        "csv" | "json" | "xlsx" | "xls" | "sqlite" | "plist" | "parquet" | "numbers" => "Data",
+        // sqlite was here and is gone: a database travels with -wal and -shm
+        // sidecars, and moving the file without its companions can corrupt
+        // it. It comes back when companion-file handling exists, not before.
+        "csv" | "json" | "xlsx" | "xls" | "plist" | "parquet" | "numbers" => "Data",
         _ => return None,
     })
 }

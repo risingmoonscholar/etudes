@@ -41,7 +41,7 @@ print(s)"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 DA="$W/a/Desktop"; mkdir -p "$DA"
-for i in $(seq 1 8); do : > "$DA/widget_$(letters "$i").dat"; done
+for i in $(seq 1 8); do : > "$DA/widget_$(letters "$i").txt"; done
 BLOCKER_CONTENT="I-AM-A-FILE-NOT-A-DIRECTORY-$$"
 printf '%s' "$BLOCKER_CONTENT" > "$DA/Documents"
 BEFORE_A=$(find "$DA" -type f | wc -l | tr -d ' ')
@@ -78,8 +78,8 @@ def letters(i, width=5):
 for i in range(450):
     open(os.path.join(d, f"IMG_{i:04d}.jpg"), "w").close()
 # Group 2: a small Documents group, whose destination directory is the one
-# about to be blocked with a file. These were .dat files grouped by a shared
-# "widget" token; that rule is gone, and .dat is deliberately not in any type
+# about to be blocked with a file. These were .txt files grouped by a shared
+# "widget" token; that rule is gone, and .txt is deliberately not in any type
 # family -- a generic container many apps use privately, which sweep leaves
 # alone. .txt is a Document, which is what these are.
 for i in range(8):

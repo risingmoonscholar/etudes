@@ -30,10 +30,13 @@ reviewers were pointed at the tools before anyone else could be.
   Group names are the tool's public vocabulary, so `--only acme` and anything
   else scripted against a coined name stops working.
 
-- Extensions the map does not know are left where they are rather than swept
-  into a catch-all. An unidentifiable format is the OS declining to name it,
-  and inventing a home would mean maintaining a list of every app's private
-  extension forever.
+- Extensions the table does not know are left where they are rather than swept
+  into a catch-all. The table is the whole mechanism -- the OS is not
+  consulted -- and unknown means untouched: filing formats sweep cannot name
+  would mean maintaining a list of every app's private extension forever.
+- `.app` bundles are left untouched. An application in Downloads is not an
+  installer, and moving one under a folder named `Installers` would be an
+  inference about intent rather than a fact about type.
 
 ## [0.4.0] - 2026-08-18
 

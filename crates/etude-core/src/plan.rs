@@ -337,10 +337,11 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
     // reintroduce a token pass; extend the structural detectors instead.
 
     // Pass 3: type families. A file's extension says what it IS, which is the
-    // question a folder name should answer. Extensions the map does not know
-    // are left alone rather than swept into an "Other" drawer -- an unknown
-    // format is the OS declining to identify it, and inventing a home for it
-    // would mean maintaining a list of every app's private extension forever.
+    // question a folder name should answer. Extensions the table does not
+    // know are left alone rather than swept into an "Other" drawer. The table
+    // is the whole mechanism -- the OS is not consulted -- and unknown means
+    // untouched, because filing formats sweep cannot name would mean
+    // maintaining a list of every app's private extension forever.
     {
         let mut by_family: BTreeMap<&'static str, Vec<&Entry>> = BTreeMap::new();
         for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
