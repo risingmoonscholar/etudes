@@ -29,7 +29,7 @@ def letters(i, width=5):
         i //= 26
     return s
 for i in range(n):
-    open(os.path.join(d, f"batch_{letters(i)}.dat"), "w").close()
+    open(os.path.join(d, f"batch_{letters(i)}.csv"), "w").close()
 PY
 }
 
@@ -37,7 +37,7 @@ W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"
 build_filler "$D"
 
-TARGET="$D/batch_growing.dat"
+TARGET="$D/batch_growing.csv"
 : > "$TARGET"
 RESULT="$W/writer-result.txt"
 
@@ -86,7 +86,7 @@ if [ "$APPLY_CODE" != "0" ]; then
   echo "    (apply exited $APPLY_CODE: $(cat "$W/apply.err")). Checking the file survived regardless"
 fi
 
-FOUND="$(find "$D" -name "batch_growing.dat" 2>/dev/null | head -1)"
+FOUND="$(find "$D" -name "batch_growing.csv" 2>/dev/null | head -1)"
 if [ -z "$FOUND" ]; then
   fail "the growing file cannot be found anywhere in the tree after apply. It was lost"
   exit 0
@@ -98,8 +98,13 @@ ACTUAL_HASH=$(shasum -a 256 "$FOUND" | awk '{print $1}')
 assert_eq "$EXPECT_SIZE" "$ACTUAL_SIZE" "final file size matches every byte the writer actually wrote (no truncation)"
 assert_eq "$EXPECT_HASH" "$ACTUAL_HASH" "final file content is byte-identical to what the writer wrote (no corruption, no interleaving damage)"
 
-if [ "$FOUND" != "$TARGET" ]; then
-  echo "    (moved to $FOUND while $((EXPECT_SIZE)) bytes were being written)"
+# The file must actually have MOVED. Accepting "still at the original path"
+# made this a clean green over "nothing to apply": the fixture used .dat,
+# which is in no type family, so no group formed, apply exited 1, and the
+# size and hash below were measured on a file nothing had touched. A race
+# scenario that passes when the race never started proves nothing.
+if [ "$FOUND" = "$TARGET" ]; then
+  fail "the growing file never moved (still at $TARGET). Either no group formed or apply did not reach it -- either way the mid-move race this scenario exists for did not happen, and the size and hash below would be measuring a stationary file"
 else
-  echo "    (still at the original path, apply did not reach it before this check; content checked in place)"
+  pass "the growing file was moved to $FOUND while $((EXPECT_SIZE)) bytes were being written"
 fi
