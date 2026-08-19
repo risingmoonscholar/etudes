@@ -14,9 +14,8 @@ Scanned 100 items  ·  names, sizes and dates only  ·  no contents read
   notes             7 files   7 filenames contain "notes"
   acme              5 files   5 filenames contain "acme"
 
-  Left alone       24 files
-    14 look like personal records. sweep does not touch these
-    10 no clear group
+  14 files look like personal records and were not touched
+  10 files matched no group and were left where they are
 
   skipped 1 hidden item and 3 symlinks
 
