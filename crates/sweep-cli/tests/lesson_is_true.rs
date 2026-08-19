@@ -159,7 +159,7 @@ fn step_4_is_true_a_personal_record_survives_apply_everything() {
     std::fs::write(&private, b"tax").expect("write");
 
     let out = sweep(&state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&work)
         .arg("--yes")
         .output()
@@ -223,7 +223,7 @@ fn steps_5_and_6_are_true_undo_walks_back_then_stops() {
 
     // Two applies, so there is a stack to walk.
     let first = sweep(&state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&work)
         .args(["--only", &group, "--yes"])
         .output()
@@ -240,7 +240,7 @@ fn steps_5_and_6_are_true_undo_walks_back_then_stops() {
         "first apply did not move anything"
     );
     let second = sweep(&state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&work)
         .arg("--yes")
         .output()

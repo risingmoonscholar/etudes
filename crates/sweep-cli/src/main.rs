@@ -302,6 +302,40 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
 ///
 /// An empty set is not a special case. The rule is that a flag nobody reads
 /// is an error, and `undo` and `verify` read none.
+/// `--since N[h|d]`: replace the grace window. `--since 0` disables it.
+///
+/// The default holds back anything changed in the last day. Someone who knows
+/// their folder is idle can say so; someone tidying right after a download
+/// session can widen it. Returns None when the flag is absent, meaning "use
+/// the default", which is distinct from Some(ZERO), meaning "no window".
+fn since_flag(args: &[String]) -> Option<std::time::Duration> {
+    // SWEEP_GRACE_SECS exists for the stress harness, which builds a tree and
+    // sweeps it in the same second. Every one of its 35 scenarios is inside
+    // the default window by construction, and none of them is about the
+    // window -- they are about collisions, interruptions, volumes. Threading
+    // --since 0 through each would put a flag in 35 places that nobody meant
+    // to test, and the next scenario would forget it.
+    //
+    // Not documented in --help on purpose: a user has --since, which is
+    // discoverable and says what it does. This is a harness affordance.
+    if let Ok(v) = std::env::var("SWEEP_GRACE_SECS")
+        && let Ok(n) = v.parse::<u64>()
+    {
+        return Some(std::time::Duration::from_secs(n));
+    }
+    let i = args.iter().position(|a| a == "--since")?;
+    let raw = args.get(i + 1)?;
+    let (digits, unit) = match raw.chars().last() {
+        Some('h' | 'H') => (&raw[..raw.len() - 1], 60 * 60),
+        Some('d' | 'D') => (&raw[..raw.len() - 1], 24 * 60 * 60),
+        _ => (raw.as_str(), 24 * 60 * 60),
+    };
+    digits
+        .parse::<u64>()
+        .ok()
+        .map(|n| std::time::Duration::from_secs(n * unit))
+}
+
 const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
     (
         // The bare `sweep [PATH]` scan.
@@ -313,6 +347,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--explain", false),
             ("--allow-sync", false),
             ("--inspect-content", false),
+            ("--since", true),
         ],
     ),
     (
@@ -323,6 +358,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--no-journal", false),
             ("--depth", true),
             ("--allow-sync", false),
+            ("--since", true),
         ],
     ),
     (
@@ -331,6 +367,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--allow-sync", false),
             ("--no-journal", false),
             ("--depth", true),
+            ("--since", true),
         ],
     ),
     ("forget", &[("--yes", false)]),
@@ -545,6 +582,7 @@ fn scan_and_plan(
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        grace: since_flag(args).or(ScanConfig::default().grace),
         ..Default::default()
     };
     let outcome = match scan::scan(path, &cfg) {
@@ -598,10 +636,36 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         );
         print_refused_by_policy_note(&plan);
         print_unreadable_warning(&plan);
-        println!(
-            "\nNothing here needs organising.\n\n\
-             Nothing has been moved.  Nothing left this machine."
-        );
+        // "Nothing here needs organising" is only true when nothing was held
+        // back. Files inside the grace window or still downloading DO need
+        // organising -- just not yet -- and saying otherwise sends someone
+        // away believing their folder was looked at and found tidy.
+        let held = plan.too_recent() + plan.in_flight();
+        if held > 0 {
+            println!();
+            let recent = plan.too_recent();
+            if recent == 1 {
+                println!("  1 file changed too recently to judge and was left alone");
+            } else if recent > 1 {
+                println!("  {recent} files changed too recently to judge and were left alone");
+            }
+            let downloading = plan.in_flight();
+            if downloading == 1 {
+                println!("  1 download is still in progress and was left alone");
+            } else if downloading > 1 {
+                println!("  {downloading} downloads are still in progress and were left alone");
+            }
+            println!(
+                "\nNothing else here needs organising. Run again later, or pass\n\
+                 --since 0 to include everything.\n\n\
+                 Nothing has been moved.  Nothing left this machine."
+            );
+        } else {
+            println!(
+                "\nNothing here needs organising.\n\n\
+                 Nothing has been moved.  Nothing left this machine."
+            );
+        }
         return ExitCode::from(1);
     }
 
@@ -697,7 +761,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     // the only sentence with words in it and concluded the tool had refused
     // 32 files for privacy. One file had been. A count and its reason must
     // not come from different lines.
-    if personal + unclear > 0 {
+    if personal + unclear + p.too_recent() + p.in_flight() > 0 {
         println!();
     }
     if personal > 0 {
@@ -714,6 +778,25 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
             for (cat, n) in &counts {
                 println!("      {n:>3}  {}", cat.describe());
             }
+        }
+    }
+    // Each reason says why on its own line, for the same reason the personal
+    // and ungrouped counts were split this morning: a number whose reason
+    // lives on a different line gets attached to the wrong reason.
+    let recent = p.too_recent();
+    if recent > 0 {
+        if recent == 1 {
+            println!("  1 file changed too recently to judge and was left alone");
+        } else {
+            println!("  {recent} files changed too recently to judge and were left alone");
+        }
+    }
+    let downloading = p.in_flight();
+    if downloading > 0 {
+        if downloading == 1 {
+            println!("  1 download is still in progress and was left alone");
+        } else {
+            println!("  {downloading} downloads are still in progress and were left alone");
         }
     }
     if unclear > 0 {
@@ -819,6 +902,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        grace: since_flag(args).or(ScanConfig::default().grace),
         ..Default::default()
     };
     let outcome = match scan::scan(&path, &cfg) {
@@ -1038,6 +1122,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        grace: since_flag(args).or(ScanConfig::default().grace),
         ..Default::default()
     };
     let outcome = match scan::scan(&path, &cfg) {

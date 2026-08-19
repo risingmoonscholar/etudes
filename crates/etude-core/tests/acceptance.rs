@@ -304,3 +304,91 @@ fn a_folder_containing_projects_is_still_sweepable() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A file changed inside the grace window is left alone.
+///
+/// The case: someone downloads something, starts using it, and runs the tidy
+/// tool an hour later. Moving it then is moving something out from under a
+/// person mid-task. The window is on mtime, never atime -- Spotlight and any
+/// backup agent touch atime just by looking, so an atime window would protect
+/// a whole folder forever after one reindex.
+#[test]
+fn a_file_changed_within_the_grace_window_is_not_grouped() {
+    let root = std::env::temp_dir().join(format!("sweep_grace_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    // Four fresh .pdf files: enough to form a Documents group if nothing held
+    // them back.
+    for i in 0..4 {
+        fs::write(root.join(format!("paper_{i}.pdf")), b"synthetic").expect("write");
+    }
+
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
+    let p = plan::build(&out);
+    assert_eq!(
+        p.too_recent(),
+        4,
+        "four just-written files should all be inside the window"
+    );
+    assert!(
+        p.groups.is_empty(),
+        "a group formed from files written seconds ago: {:?}",
+        p.groups.iter().map(|g| &g.name).collect::<Vec<_>>()
+    );
+
+    // And the window is not a wall: with it off, the same files group.
+    let no_grace = ScanConfig {
+        grace: None,
+        ..Default::default()
+    };
+    let out2 = scan::scan(&root, &no_grace).expect("scan");
+    let p2 = plan::build(&out2);
+    assert_eq!(
+        p2.groups.len(),
+        1,
+        "with the window off the same four files should form one group"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A download still in flight is left alone regardless of age.
+///
+/// Moving one leaves a partial file at a destination the downloader is not
+/// writing to, and it never completes. Checked independently of the grace
+/// window because a stalled download from last week is still in flight.
+#[test]
+fn a_download_in_flight_is_never_grouped() {
+    let root = std::env::temp_dir().join(format!("sweep_inflight_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    for name in ["movie.mp4.part", "album.zip.crdownload", "iso.dmg.download"] {
+        fs::write(root.join(name), b"partial").expect("write");
+    }
+
+    // Grace off, so age cannot be what protects them.
+    let cfg = ScanConfig {
+        grace: None,
+        ..Default::default()
+    };
+    let out = scan::scan(&root, &cfg).expect("scan");
+    let p = plan::build(&out);
+
+    assert_eq!(
+        p.in_flight(),
+        3,
+        "all three in-flight downloads should be recognised as such"
+    );
+    for g in &p.groups {
+        for m in &g.members {
+            let n = m.to_string_lossy();
+            assert!(
+                !n.contains(".part") && !n.contains(".crdownload") && !n.contains(".download"),
+                "an in-flight download was grouped into {:?}: {n}",
+                g.name
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}

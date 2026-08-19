@@ -104,6 +104,22 @@ impl Plan {
         m
     }
 
+    /// Held back by the grace window.
+    pub fn too_recent(&self) -> usize {
+        self.untouched
+            .iter()
+            .filter(|(_, u)| *u == Untouched::TooRecent)
+            .count()
+    }
+
+    /// Downloads still in flight.
+    pub fn in_flight(&self) -> usize {
+        self.untouched
+            .iter()
+            .filter(|(_, u)| *u == Untouched::InFlight)
+            .count()
+    }
+
     pub fn no_clear_group(&self) -> usize {
         self.untouched
             .iter()
@@ -182,6 +198,8 @@ impl Plan {
                 j::obj(&[
                     ("looks_personal", j::num(personal)),
                     ("by_category", by_category),
+                    ("too_recent", j::num(self.too_recent())),
+                    ("in_flight", j::num(self.in_flight())),
                     ("no_clear_group", j::num(self.no_clear_group())),
                     ("no_clear_group_paths", no_group),
                 ]),
@@ -238,6 +256,31 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
             && let Some(cat) = insp.inspect(&e.path, &e.ext)
         {
             untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
+            continue;
+        }
+        // A download still running. Moving one leaves a partial file at a
+        // destination the downloader is not writing to, and it never
+        // finishes. Checked before the grace window because it is true
+        // regardless of age -- a stalled download from last week is still in
+        // flight.
+        let lower = e.name.to_ascii_lowercase();
+        if crate::scan::IN_FLIGHT_SUFFIXES
+            .iter()
+            .any(|s| lower.ends_with(s))
+        {
+            untouched.push((e.path.clone(), Untouched::InFlight));
+            continue;
+        }
+        // Too recent to judge. See ScanConfig::grace for why this is mtime
+        // and never atime.
+        if let Some(window) = scan.grace
+            && let Some(modified) = e.modified
+            && modified
+                .elapsed()
+                .map(|since| since < window)
+                .unwrap_or(true)
+        {
+            untouched.push((e.path.clone(), Untouched::TooRecent));
             continue;
         }
         remaining.push(e);
@@ -452,6 +495,7 @@ mod tests {
 
     fn scan_outcome(entries: Vec<Entry>) -> ScanOutcome {
         ScanOutcome {
+            grace: None,
             root: PathBuf::from("/fixture"),
             entries,
             skipped_hidden: 0,

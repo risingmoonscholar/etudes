@@ -28,6 +28,14 @@ pub enum Untouched {
     LooksPersonal(Category),
     /// No detector claimed it with enough confidence.
     NoClearGroup,
+    /// Changed within the grace window. Too recent to judge: a file someone
+    /// touched an hour ago is one they are using, and a file that arrived an
+    /// hour ago has not been dealt with yet. Either way, moving it now is
+    /// moving something out from under a person mid-task.
+    TooRecent,
+    /// A download still in flight. Moving one produces a partial file at a
+    /// destination the downloader is not writing to, and it never completes.
+    InFlight,
 }
 
 /// Categories of personal record sweep recognises well enough to refuse.

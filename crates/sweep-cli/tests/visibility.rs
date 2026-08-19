@@ -156,8 +156,13 @@ fn the_no_groups_branch_still_discloses_an_unreadable_directory() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
 
+    // Either wording is the no-groups branch. It says "Nothing here needs
+    // organising" when nothing was held back, and "Nothing else here needs
+    // organising" when the grace window kept something -- because claiming a
+    // folder is tidy while holding files back would be the same untruth the
+    // summary split fixed. What this test is about is the disclosure below.
     assert!(
-        stdout.contains("Nothing here needs organising"),
+        stdout.contains("needs organising"),
         "expected the no-groups branch to fire (lonefile.dat forms no group): {stdout}"
     );
     assert!(

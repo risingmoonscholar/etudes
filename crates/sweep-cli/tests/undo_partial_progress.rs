@@ -112,7 +112,7 @@ fn undo_reports_and_persists_progress_made_before_a_mid_walk_failure() {
 
     let apply = sweep_bin()
         .env("ETUDE_STATE_DIR", &state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&root)
         .args(["--depth", "2", "--yes"])
         .output()

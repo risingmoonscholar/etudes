@@ -42,6 +42,22 @@ const PACKAGE_SUFFIXES: &[&str] = &[
     ".playground",
 ];
 
+/// Suffixes a downloader writes while a transfer is still running.
+///
+/// These are already safe by accident -- none is in any type family, so
+/// nothing groups them. Naming them explicitly means a future addition to the
+/// extension table cannot silently start moving half-finished downloads, and
+/// the plan can say WHY the file was left rather than reporting it as
+/// unrecognised.
+pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
+    ".part",
+    ".crdownload",
+    ".download",
+    ".partial",
+    ".opdownload",
+    ".!ut",
+];
+
 /// Files whose presence makes the folder holding them a project.
 ///
 /// A project file references its siblings by relative path: an .als expects
@@ -123,6 +139,14 @@ const SYNC_MARKERS: &[&str] = &[
 
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
+    /// Leave files modified within this window alone. `None` disables it.
+    ///
+    /// Modified time, never accessed time. Spotlight, Time Machine and any
+    /// backup agent touch atime just by looking, so a grace window keyed on
+    /// atime would protect an entire folder forever after one reindex -- a
+    /// guard that silently stops guarding. mtime changes when the person
+    /// changes the file, which is the question being asked.
+    pub grace: Option<std::time::Duration>,
     /// Recursion depth. 1 means the directory itself only.
     pub depth: u8,
     /// Refuse rather than warn when the root is inside a sync root.
@@ -144,6 +168,10 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             depth: 1,
+            // A day. Long enough to cover "I downloaded this this morning
+            // and I am still using it", short enough that yesterday's clutter
+            // is fair game.
+            grace: Some(std::time::Duration::from_secs(24 * 60 * 60)),
             allow_sync: false,
             max_entries: 20_000,
             whole_units: false,
@@ -246,6 +274,11 @@ impl std::fmt::Display for ScanError {
 #[derive(Debug)]
 pub struct ScanOutcome {
     pub root: PathBuf,
+    /// The grace window this scan ran with, carried so the plan applies the
+    /// same one. The scan reports what is there; deciding a file is too
+    /// recent to move is a planning decision, and it belongs where the other
+    /// leave-it-alone decisions are made.
+    pub grace: Option<std::time::Duration>,
     pub entries: Vec<Entry>,
     /// Paths refused during the walk, for the "what was inspected" report.
     pub skipped_hidden: usize,
@@ -438,6 +471,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
 
     let mut out = ScanOutcome {
         root: root.clone(),
+        grace: cfg.grace,
         entries: Vec::new(),
         skipped_hidden: 0,
         skipped_symlink: 0,
