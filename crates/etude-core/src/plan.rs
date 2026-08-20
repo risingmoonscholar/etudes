@@ -276,7 +276,20 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         }
         // Too recent to judge. See ScanConfig::grace for why this is mtime
         // and never atime.
+        // `--since 0` means no window, and it has to mean that for every
+        // file. elapsed() returns Err for a timestamp in the future, and
+        // unwrap_or(true) turned that error into "too recent" even when the
+        // window was zero -- so three PDFs dated 2030 were held back by a
+        // scan that had been told to hold nothing back. Future mtimes are
+        // ordinary: clock skew, restored backups, unpacked archives, network
+        // volumes.
+        //
+        // With a real window a future mtime still counts as too recent. That
+        // is the conservative reading of a file whose clock disagrees with
+        // this one, and it is now a decision rather than the fallback of an
+        // unwrap.
         if let Some(window) = scan.grace
+            && !window.is_zero()
             && let Some(modified) = e.modified
             && modified
                 .elapsed()

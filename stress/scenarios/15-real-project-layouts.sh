@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# Five real project types, and the one promise this guard makes: a user's
-# project data is never auto-sorted along with their loose files.
+# Five real project types, and the promise this guard makes: pointed AT a
+# project, or at a folder holding one, sweep steps over the project rather
+# than sorting its files in with the loose ones.
+#
+# That promise has a known hole, and stating it wider than it is would be the
+# same kind of untruth this repo keeps fixing. A project DOCUMENT (.blend,
+# .flp, .als, .song, .ptx) references its assets upward, out of its own
+# folder, so stepping over that folder does not save assets sitting beside it.
+# Issue #49 carries the four reproductions. Nothing in this scenario asserts
+# the current behaviour is correct there.
 #
 # Every layout here is MEASURED, not imagined. An earlier version of this
 # scenario included Unreal and Premiere shapes built from vendor docs; they
@@ -172,17 +180,12 @@ assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside the Godot projec
 # With --depth, sweep does descend -- and before the nested-project guard it
 # grouped a Godot project's captures into Images while project.godot sat
 # listed as ungrouped. Applying that plan would have reorganised the project.
-# The three project kinds behave differently at depth, and they have to.
-#
 # A project.godot marks the project ROOT, so the project is exactly that
-# folder: step over it and sort the invoices beside it.
+# folder: step over it and sort the invoices beside it. That is what this arm
+# proves at depth.
 #
-# A .flp or a .song is a DOCUMENT. It references its samples relative to
-# itself and freely upward, so finding one below the scan root does not say
-# where the project ends. Measured on a real Blender layout: scenes/main.blend
-# beside textures/*.png, swept at depth 4, moved all three textures. Stepping
-# over scenes/ alone would not have saved them. So a document marker refuses
-# the whole scan.
+# Document markers (.blend, .flp, .als) behave the same way today, and that is
+# knowingly incomplete -- see issue #49. Nothing here asserts it is correct.
 DL2="$W/Downloads2"; mkdir -p "$DL2"
 build_godot "$DL2/ad-astra"
 for n in 1 2 3 4; do : > "$DL2/invoice_$n.pdf"; done
@@ -242,7 +245,6 @@ fi
 FCP="$W/Movies"; mkdir -p "$FCP/MyMovie.fcpbundle/Original Media"
 for c in 1 2 3; do : > "$FCP/MyMovie.fcpbundle/Original Media/clip$c.mov"; done
 for n in 1 2 3; do : > "$FCP/invoice_$n.pdf"; done
-FCP_BEFORE=$(find "$FCP/MyMovie.fcpbundle" -type f | wc -l | tr -d ' ')
 FCP_OUT=$("$SWEEP" "$FCP" --depth 4 2>&1)
 
 if grep -qE '^  Documents' <<<"$FCP_OUT"; then

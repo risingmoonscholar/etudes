@@ -290,8 +290,9 @@ fn a_project_folder_is_refused_as_a_scan_root() {
 /// project.godot marks the project ROOT, so the project is exactly that
 /// folder and this parent really is ordinary. An .als does not: it
 /// references its samples relative to itself and freely upward, so a folder
-/// holding one is NOT safe to sweep, and the companion test below pins that.
-/// Using .als here made this test assert something untrue.
+/// holding one is not actually safe to sweep. Sweeping it is what happens
+/// today, and issue #49 carries that gap -- using .als here made this test
+/// read like a guarantee it never gave.
 #[test]
 fn a_folder_containing_projects_is_still_sweepable() {
     let root = std::env::temp_dir().join(format!("sweep_projparent_{}", std::process::id()));

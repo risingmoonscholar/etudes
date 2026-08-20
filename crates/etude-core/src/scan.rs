@@ -901,21 +901,31 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("scenes")).expect("mkdir");
         fs::write(base.join("scenes").join("main.blend"), b"x").expect("write");
-        fs::write(base.join("wood.png"), b"x").expect("write");
+        // Three, not one. A single file forms no group, so a one-file fixture
+        // could not show the move it claims to describe.
+        for n in ["wood_1.png", "wood_2.png", "wood_3.png"] {
+            fs::write(base.join(n), b"x").expect("write");
+        }
 
         let cfg = ScanConfig {
             grace: None,
             ..ScanConfig::default()
         };
         let got = scan(&base, &cfg).expect("today this is swept, not refused");
-        assert!(
-            got.entries.iter().any(|e| e.path.ends_with("wood.png")),
-            "the known gap in #49 has closed. That is good -- update this test \
-             to assert the refusal instead of the gap"
-        );
         assert_eq!(
             got.skipped_project, 1,
             "the folder holding main.blend should still be stepped over"
+        );
+
+        // Build the plan, so the claim is about what would actually happen to
+        // the textures rather than about what the scan collected.
+        let plan = crate::plan::build(&got);
+        let grouped: usize = plan.groups.iter().map(|g| g.members.len()).sum();
+        assert_eq!(
+            grouped, 3,
+            "the known gap in #49 has closed -- the textures beside main.blend \
+             are no longer grouped. That is good: update this test to assert \
+             the refusal instead of the gap"
         );
 
         let _ = fs::remove_dir_all(&base);

@@ -74,3 +74,28 @@ d=json.load(sys.stdin)
 print(any('.part' in f for g in d['groups'] for f in g.get('members',[])))
 ")
 assert_eq "False" "$MOVED" "the in-flight download is in no group"
+
+# --- a file dated in the future, with the window off -------------------------
+# elapsed() returns Err for a timestamp ahead of now, and the old code turned
+# that error into "too recent" via unwrap_or(true). So `--since 0`, which means
+# hold nothing back, held back every future-dated file. Future mtimes are
+# ordinary: clock skew, restored backups, unpacked archives, network volumes.
+FUT="$W/future"; mkdir -p "$FUT"
+for n in 1 2 3; do : > "$FUT/report_$n.pdf"; done
+touch -t 203001010900 "$FUT"/report_*.pdf
+FUT_OUT=$("$SWEEP" "$FUT" --since 0 2>&1)
+if grep -qE '^  Documents' <<<"$FUT_OUT"; then
+  pass "--since 0 means zero for a file dated in the future too"
+else
+  fail "three PDFs dated 2030 were held back by a scan told to hold nothing back: $FUT_OUT"
+fi
+
+# With a real window, a future mtime IS held back. That is the conservative
+# reading of a clock that disagrees with this one, and it is a decision now
+# rather than the fallback of an unwrap.
+FUT_OUT2=$("$SWEEP" "$FUT" --since 1d 2>&1)
+if grep -q "changed too recently" <<<"$FUT_OUT2"; then
+  pass "with a real window, a future-dated file is still held back deliberately"
+else
+  fail "a future-dated file was swept with a 1d window: $FUT_OUT2"
+fi

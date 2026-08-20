@@ -334,8 +334,15 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
         // which files are held back. Unchecked, this panicked in debug and
         // wrapped in release -- the release build accepted a nonsense value
         // and swept with a window nobody chose.
+        // The limit is per unit, so state the one that applies. Naming a
+        // single number was wrong twice over: it said 213503d when 213504d is
+        // accepted, and it said days to someone who typed hours.
         let secs = n.checked_mul(unit).ok_or_else(|| {
-            format!("--since {raw:?} is too large. The longest window is 213503d")
+            let (most, sym) = match unit {
+                3600 => (u64::MAX / 3600, "h"),
+                _ => (u64::MAX / (24 * 60 * 60), "d"),
+            };
+            format!("--since {raw:?} is too large. The longest window is {most}{sym}")
         })?;
         return Ok(Some(std::time::Duration::from_secs(secs)));
     }
@@ -1700,6 +1707,13 @@ mod tests {
         // Release builds wrapped this and swept with a window nobody chose.
         assert!(s("18446744073709551615d").is_err());
         assert!(s("999999999999999999999").is_err());
+        // The boundary the message names must be the boundary enforced.
+        let most_days = u64::MAX / (24 * 60 * 60);
+        assert!(s(&format!("{most_days}d")).is_ok());
+        assert!(s(&format!("{}d", most_days + 1)).is_err());
+        let most_hours = u64::MAX / 3600;
+        assert!(s(&format!("{most_hours}h")).is_ok());
+        assert!(s(&format!("{}h", most_hours + 1)).is_err());
     }
 
     /// What someone typed beats what their shell exported.
