@@ -10,6 +10,79 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-20
+
+Sweep refuses more than it used to, and group names changed, so scripts
+written against 0.4.0 need reading before upgrading. See **Migrating** at the
+end of this entry.
+
+### Added
+
+- **Sweep steps over your projects.** A folder holding a project file --
+  `project.godot`, `Cargo.toml`, `package.json`, `.flp`, `.blend`, `.ptx`,
+  `.als`, 25 markers in all -- is left alone rather than sorted. A Godot
+  `.tscn` references its siblings as `res://scripts/main.gd`, absolute from
+  the project root, so moving any file inside one breaks every reference to
+  it. The list was read off real projects on a real disk; an earlier version
+  assembled from vendor documentation was missing `project.godot`, and a real
+  18,724-file Godot project produced a plan.
+- **Bundles are stepped over as a unit.** `.fcpbundle`, `.band`, `.logicx`,
+  and anything macOS reports as a package including a Pages document. The
+  folder holding one is ordinary and still gets swept -- a year of invoices
+  beside a video library is not made unsweepable by the library.
+- **Downloads still arriving are held back**, as files (`.part`,
+  `.crdownload`, `.download`) and as directories -- Safari writes
+  `movie.mp4.download/` with the partial data inside it.
+- **A grace window.** Anything changed in the last day is left alone: a file
+  you are working on right now is not a file to be filed. Keyed on mtime and
+  never atime, because Spotlight and Time Machine touch atime just by looking,
+  which would freeze a folder permanently.
+- `sweep --since N[h|d]` sets that window. `--since 0` turns it off. An
+  unreadable value is an error rather than a silent fallback to the default:
+  a wrong window changes which files are held back, so `--since 6hh` must not
+  quietly produce the ordinary 24h result.
+- Three counts in `--json`: `projects_skipped`, `downloads_skipped`,
+  `packages_skipped`. Additive; nothing was removed.
+
+### Fixed
+
+- `sweep apply` and `sweep review` say what they left behind. `apply` reported
+  "Moved 4 files." over a six-file folder with nothing explaining the other
+  two, so the only available reading was that sweep tried them and failed.
+  The plain scan and `--json` were already correct, which meant the
+  agent-facing output was honest and the human-facing one was not.
+- A flag before the path no longer sends the scan somewhere else.
+  `sweep --depth 2 ~/Downloads` scanned the *current* directory, never looked
+  at the path, and exited 0 with no warning -- a confident report about a
+  folder the user did not name. `sweep review --depth 2 DIR` took `2`, the
+  value of `--depth`, as the path. `apply` was correct, and the fix that made
+  it correct had never reached the other two.
+
+### Migrating from 0.4.0
+
+- **Group names changed** in the same cycle. `--only acme` and anything else
+  scripted against a coined name stops working; groups are now the seven type
+  families listed under Unreleased above.
+- **Some applies that used to move files now move fewer, or none.** A folder
+  of fresh downloads can produce exit 1 where 0.4.0 would have sorted it. Pass
+  `--since 0` for the old behaviour.
+- **A scan pointed at a project folder now exits 2** rather than proposing a
+  plan. That is the point of the release, but a script that treated exit 2 as
+  a crash needs updating: 2 has always meant refused, distinct from 3 for
+  error.
+
+### Known limits
+
+- A project *document* -- `.blend`, `.flp`, `.als` -- references its assets
+  relative to itself and freely upward. Stepping over the folder holding one
+  is right for a `project.godot` that marks a project root by definition, and
+  not enough for a `.blend` in `scenes/` pointing at `../textures/`. Filed as
+  #49 with four reproductions. The complete rule was built and rejected: one
+  `.flp` made an entire Downloads folder unsweepable.
+- A Final Cut library configured to keep media outside the bundle cannot be
+  protected without reading the library's own database, which sweep does not
+  do.
+
 ### Changed
 
 - Groups are named for what files **are**, not for words they mention. Seven
