@@ -181,7 +181,14 @@ fn project_marker_in(dir: &Path) -> Option<String> {
         if name_matches(&name, BUNDLE_MARKERS) {
             continue;
         }
-        if name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS) {
+        // A marker has to BE a file. Matching the name alone refused a whole
+        // Downloads folder because an ordinary directory in it happened to be
+        // called ordinary.flp -- no FL Studio project anywhere, and the loose
+        // files went unswept. Only BUNDLE markers name directories, and they
+        // are handled above.
+        if (name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS))
+            && fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_file())
+        {
             return Some(name);
         }
     }
@@ -939,15 +946,29 @@ mod tests {
                 grace: None,
                 ..ScanConfig::default()
             };
-            let got = scan(&dir, &cfg);
+            // Scan the PARENT. Scanning `dir` itself never reaches the
+            // parent-marker detection, which is where the bug was: this test
+            // passed while `sweep Downloads` refused because a directory in
+            // it was named ordinary.flp.
+            fs::write(base.join("loose.pdf"), b"x").expect("write");
+            let got = scan(&base, &cfg);
             assert!(
                 got.is_ok(),
-                "a plain folder named ordinary{m} was refused as a project: {got:?}"
+                "a folder holding a plain directory named ordinary{m} was refused: {got:?}"
             );
-            assert_eq!(
-                got.unwrap().entries.len(),
-                3,
-                "the receipts in a folder named ordinary{m} were not swept"
+            assert!(
+                got.unwrap()
+                    .entries
+                    .iter()
+                    .any(|e| e.path.ends_with("loose.pdf")),
+                "the loose file beside a directory named ordinary{m} was not swept"
+            );
+
+            // And the folder itself is still ordinary.
+            let inner = scan(&dir, &cfg);
+            assert!(
+                inner.is_ok(),
+                "a plain folder named ordinary{m} was refused as a project: {inner:?}"
             );
             let _ = fs::remove_dir_all(&base);
         }

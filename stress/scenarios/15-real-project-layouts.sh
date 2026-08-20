@@ -275,7 +275,10 @@ assert_eq "$HZ_BEFORE" "$HZ_AFTER" "not one texture moved when the marker was be
 # --- a folder named like a project file is not a project ---------------------
 NP="$W/NotAProject/ordinary.flp"; mkdir -p "$NP"
 for n in 1 2 3; do : > "$NP/receipt_$n.pdf"; done
-NP_OUT=$("$SWEEP" "$NP" 2>&1)
+for n in 1 2 3; do : > "$W/NotAProject/loose_$n.pdf"; done
+# Scan the PARENT. Scanning ordinary.flp itself never reaches the
+# parent-marker detection, which is where the bug lived.
+NP_OUT=$("$SWEEP" "$W/NotAProject" 2>&1)
 if grep -qE '^  Documents' <<<"$NP_OUT"; then
   pass "a plain folder named ordinary.flp sweeps normally; over-refusal is a cost too"
 else
