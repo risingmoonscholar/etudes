@@ -115,4 +115,29 @@ else
   bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
 fi
 
+# The page carries the transcripts twice: fetched from demo/transcripts.json
+# when hosted, and inline when the file is opened locally. The generator says
+# it writes "the same data, same step" -- and they had drifted anyway, so the
+# hosted page witnessed one output contract and a double-clicked copy
+# witnessed an older one. Nobody would ever notice by reading.
+inline_check=$(python3 - <<'PY_INNER'
+import json, re, sys
+try:
+    ext = json.load(open("demo/transcripts.json"))
+    html = open("demo/index.html").read()
+    m = re.search(r'<script type="application/json" id="transcripts-inline">(.*?)</script>', html, re.S)
+    if not m:
+        print("MISSING"); sys.exit(0)
+    print("SAME" if json.loads(m.group(1)) == ext else "DRIFTED")
+except Exception as e:
+    print("ERROR " + str(e))
+PY_INNER
+)
+case "$inline_check" in
+  SAME) ok "the page's inline transcripts are byte-identical to demo/transcripts.json" ;;
+  MISSING) bad "demo/index.html has no inline transcript block; a local copy of the page would show nothing" ;;
+  DRIFTED) bad "demo/index.html's inline transcripts differ from demo/transcripts.json. A hosted page and a local one would witness different output. Re-run scripts/capture-demos.sh" ;;
+  *) bad "could not compare the inline transcripts with demo/transcripts.json: $inline_check" ;;
+esac
+
 exit $status

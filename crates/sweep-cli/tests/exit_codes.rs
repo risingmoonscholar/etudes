@@ -103,7 +103,7 @@ fn a_destination_collision_on_apply_exits_2_not_3() {
 
     let out = sweep_bin()
         .env("ETUDE_STATE_DIR", &state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&root)
         .args(["--depth", "2", "--yes", "--no-journal"])
         .output()
@@ -141,7 +141,7 @@ fn an_exhausted_undo_exits_1_not_0() {
 
     let apply = sweep_bin()
         .env("ETUDE_STATE_DIR", &state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&root)
         .args(["--yes"])
         .output()
@@ -208,7 +208,7 @@ fn undo_does_not_imply_it_reversed_an_unjournalled_apply() {
 
     let apply = sweep_bin()
         .env("ETUDE_STATE_DIR", &state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&root)
         .args(["--yes"])
         .output()
@@ -226,7 +226,7 @@ fn undo_does_not_imply_it_reversed_an_unjournalled_apply() {
     // Now an apply with no record at all.
     let _ = sweep_bin()
         .env("ETUDE_STATE_DIR", &state)
-        .args(["apply"])
+        .args(["apply", "--since", "0"])
         .arg(&root)
         .args(["--yes", "--no-journal"])
         .output()
@@ -392,7 +392,7 @@ fn undo_can_reach_an_apply_that_is_not_the_most_recent() {
     let apply = |dir: &std::path::Path| {
         sweep_bin()
             .env("ETUDE_STATE_DIR", &state)
-            .args(["apply"])
+            .args(["apply", "--since", "0"])
             .arg(dir)
             .args(["--yes"])
             .output()

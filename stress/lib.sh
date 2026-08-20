@@ -80,6 +80,18 @@ assert_intact() {
 # fallback. Unlike the old XDG_STATE_HOME (which had "etudes" joined onto it
 # by state_dir()), ETUDE_STATE_DIR is used exactly as given -- no /etudes
 # suffix needed when a scenario builds a path under it.
+# Every scenario builds a tree and sweeps it in the same second, so all of
+# them sit inside sweep's default 24h grace window. None of them is about that
+# window -- they are about collisions, interruptions, volumes and signals -- so
+# the harness turns it off globally rather than making 35 scenarios remember a
+# flag. A scenario that wants to TEST the window sets its own value.
+# Unconditional, not ${VAR:-0}: a caller with the variable already exported
+# would otherwise silently run the whole suite under a live grace window, and
+# most scenarios would fail or go unproven for a reason nothing explains. A
+# scenario that wants the window sets it per-invocation, as 25-grace-window
+# does.
+export SWEEP_GRACE_SECS=0
+
 export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
 trap 'rm -rf "$ETUDE_STATE_DIR"' EXIT
 

@@ -285,12 +285,20 @@ fn a_project_folder_is_refused_as_a_scan_root() {
 /// A folder that merely contains project folders is ordinary and must still
 /// be sweepable -- refusing it would make the guard useless for the case it
 /// was built for, someone tidying the folder their projects live in.
+///
+/// The fixture holds a Godot project, not the Ableton one it used to. A
+/// project.godot marks the project ROOT, so the project is exactly that
+/// folder and this parent really is ordinary. An .als does not: it
+/// references its samples relative to itself and freely upward, so a folder
+/// holding one is not actually safe to sweep. Sweeping it is what happens
+/// today, and issue #49 carries that gap -- using .als here made this test
+/// read like a guarantee it never gave.
 #[test]
 fn a_folder_containing_projects_is_still_sweepable() {
     let root = std::env::temp_dir().join(format!("sweep_projparent_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("TrackOne")).expect("mkdir");
-    fs::write(root.join("TrackOne/TrackOne.als"), b"synthetic").expect("write");
+    fs::write(root.join("TrackOne/project.godot"), b"synthetic").expect("write");
     for i in 0..4 {
         fs::write(root.join(format!("note_{i}.pdf")), b"synthetic").expect("write");
     }
@@ -301,6 +309,156 @@ fn a_folder_containing_projects_is_still_sweepable() {
         out.entries.iter().any(|e| e.ext == "pdf"),
         "the parent folder's own files should still be considered"
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A file changed inside the grace window is left alone.
+///
+/// The case: someone downloads something, starts using it, and runs the tidy
+/// tool an hour later. Moving it then is moving something out from under a
+/// person mid-task. The window is on mtime, never atime -- Spotlight and any
+/// backup agent touch atime just by looking, so an atime window would protect
+/// a whole folder forever after one reindex.
+#[test]
+fn a_file_changed_within_the_grace_window_is_not_grouped() {
+    let root = std::env::temp_dir().join(format!("sweep_grace_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    // Four fresh .pdf files: enough to form a Documents group if nothing held
+    // them back.
+    for i in 0..4 {
+        fs::write(root.join(format!("paper_{i}.pdf")), b"synthetic").expect("write");
+    }
+
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
+    let p = plan::build(&out);
+    assert_eq!(
+        p.too_recent(),
+        4,
+        "four just-written files should all be inside the window"
+    );
+    assert!(
+        p.groups.is_empty(),
+        "a group formed from files written seconds ago: {:?}",
+        p.groups.iter().map(|g| &g.name).collect::<Vec<_>>()
+    );
+
+    // And the window is not a wall: with it off, the same files group.
+    let no_grace = ScanConfig {
+        grace: None,
+        ..Default::default()
+    };
+    let out2 = scan::scan(&root, &no_grace).expect("scan");
+    let p2 = plan::build(&out2);
+    assert_eq!(
+        p2.groups.len(),
+        1,
+        "with the window off the same four files should form one group"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A download still in flight is left alone regardless of age.
+///
+/// Moving one leaves a partial file at a destination the downloader is not
+/// writing to, and it never completes. Checked independently of the grace
+/// window because a stalled download from last week is still in flight.
+#[test]
+fn a_download_in_flight_is_never_grouped() {
+    let root = std::env::temp_dir().join(format!("sweep_inflight_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    for name in ["movie.mp4.part", "album.zip.crdownload", "iso.dmg.download"] {
+        fs::write(root.join(name), b"partial").expect("write");
+    }
+
+    // Grace off, so age cannot be what protects them.
+    let cfg = ScanConfig {
+        grace: None,
+        ..Default::default()
+    };
+    let out = scan::scan(&root, &cfg).expect("scan");
+    let p = plan::build(&out);
+
+    assert_eq!(
+        p.in_flight(),
+        3,
+        "all three in-flight downloads should be recognised as such"
+    );
+    for g in &p.groups {
+        for m in &g.members {
+            let n = m.to_string_lossy();
+            assert!(
+                !n.contains(".part") && !n.contains(".crdownload") && !n.contains(".download"),
+                "an in-flight download was grouped into {:?}: {n}",
+                g.name
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A project nested inside a swept folder is stepped over, not descended into.
+///
+/// The root check alone was not enough. It protects someone standing IN their
+/// project; it does nothing for someone sweeping the folder their projects
+/// live in. Verified before this guard existed: a Downloads folder holding a
+/// Godot project, scanned at depth 2, produced an Images group of that
+/// project's captures while its project.godot sat listed as ungrouped.
+/// Applying that plan would have reorganised the project.
+///
+/// The folder AROUND the project stays ordinary -- its own loose files still
+/// group. Only the project is off limits.
+#[test]
+fn a_project_nested_in_a_swept_folder_is_not_descended_into() {
+    let root = std::env::temp_dir().join(format!("sweep_nested_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("ad-astra")).expect("mkdir");
+    fs::write(root.join("ad-astra/project.godot"), b"synthetic").expect("write");
+    for i in 0..4 {
+        fs::write(root.join(format!("ad-astra/capture_{i}.png")), b"x").expect("write");
+    }
+    for i in 0..3 {
+        fs::write(root.join(format!("invoice_{i}.pdf")), b"x").expect("write");
+    }
+
+    let cfg = ScanConfig {
+        depth: 3,
+        grace: None,
+        ..Default::default()
+    };
+    let out = scan::scan(&root, &cfg).expect("the folder AROUND a project is ordinary");
+
+    assert_eq!(
+        out.skipped_project, 1,
+        "the nested project was not counted as skipped, so nothing would tell \
+         the user their project was deliberately left alone"
+    );
+    for e in &out.entries {
+        assert!(
+            !e.path.to_string_lossy().contains("ad-astra"),
+            "a file from inside the project was scanned at depth 3: {}",
+            e.path.display()
+        );
+    }
+
+    let p = plan::build(&out);
+    assert!(
+        p.groups.iter().any(|g| g.name == "Documents"),
+        "the folder's own loose invoices should still group; only the project is off limits"
+    );
+    for g in &p.groups {
+        for m in &g.members {
+            assert!(
+                !m.to_string_lossy().contains("capture_"),
+                "a project's internal file was grouped into {:?}",
+                g.name
+            );
+        }
+    }
 
     let _ = fs::remove_dir_all(&root);
 }

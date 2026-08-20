@@ -21,12 +21,15 @@ D="$W/tree"; mkdir -p "$D"
 for i in 1 2 3 4 5; do : > "$D/empty_${i}_zerotok.txt"; done
 
 # --- one large sparse file, grouped with small siblings ------------------
-BIGFILE="$D/huge_bigtok.bin"
+BIGFILE="$D/huge_recording.mp4"
 SIZE_MB=500
 if ! truncate -s "${SIZE_MB}M" "$BIGFILE" 2>/dev/null; then
   unproven "large sparse file is moved (not copied) and its content is never read" "\`truncate\` is not available on this host to build a sparse file"
 else
-  for i in 1 2 3 4; do : > "$D/small_${i}_bigtok.txt"; done
+  # Siblings in the SAME family as the big file. They were .txt, which groups
+  # as Documents while the .mp4 groups as Media, so the big file would have
+  # been alone in its family and no group would have formed.
+  for i in 1 2 3 4; do : > "$D/small_${i}_clip.mp4"; done
 
   APPARENT_SIZE=$(stat -f%z "$BIGFILE")
   assert_eq "$((SIZE_MB * 1024 * 1024))" "$APPARENT_SIZE" "the sparse file reports the full $SIZE_MB MB apparent size"
@@ -56,9 +59,15 @@ else
   printf '    apply (includes fingerprinting + moving the %s MB file): %ss\n' "$SIZE_MB" "$APPLY_S" >&2
   assert_eq 0 "$APPLY_EC" "apply succeeds on a tree containing a $SIZE_MB MB file and five 0-byte files"
 
-  NEWPATH=$(find "$D" -name "huge_bigtok.bin" 2>/dev/null | head -1)
+  NEWPATH=$(find "$D" -name "huge_recording.mp4" 2>/dev/null | head -1)
+  # It must have MOVED, not merely still exist. The fixture used a .bin
+  # extension that is in no type family, so no group formed, and every check
+  # below was measuring a file that had never been touched -- the inode was
+  # unchanged because nothing moved it.
   if [ -z "$NEWPATH" ]; then
     fail "the large file cannot be found anywhere after apply"
+  elif [ "$NEWPATH" = "$BIGFILE" ]; then
+    fail "the large file is still at its original path. No group formed, so the move this scenario measures never happened and the inode and size checks below would prove nothing"
   else
     INODE_AFTER=$(stat -f%i "$NEWPATH")
     if [ "$INODE_BEFORE" = "$INODE_AFTER" ]; then

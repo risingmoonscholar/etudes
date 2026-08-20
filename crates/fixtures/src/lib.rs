@@ -101,6 +101,59 @@ pub fn outside_dir(root: &Path) -> PathBuf {
 /// `root` must not exist or must be empty. The generator writes inside `root`
 /// except for the `secret_outside.txt` under [`outside_dir`] beside it, the
 /// target required by the escaping-symlink fixture.
+/// Push a file's mtime a week into the past.
+///
+/// The fixture is a Desktop that has been accumulating, and every file in it
+/// being seconds old was the one way it was obviously synthetic. That stopped
+/// being cosmetic when the grace window arrived: a folder of brand-new files
+/// is correctly left entirely alone, so the fixture would have exercised the
+/// guard and nothing else. Backdating makes the tree what it always claimed
+/// to be.
+///
+/// utimes(2) directly. The first version shelled out to `touch` once per
+/// file, which turned a fixture build into a hundred process spawns and did
+/// not finish inside six minutes.
+#[cfg(unix)]
+fn backdate(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    // A fixed instant, not "now minus a week": a fixture that moves with the
+    // clock produces failures that depend on when they were run.
+    const WHEN: i64 = 1_768_460_400; // 2026-01-15T09:00:00Z
+    let times = [
+        libc_timeval {
+            tv_sec: WHEN,
+            tv_usec: 0,
+        },
+        libc_timeval {
+            tv_sec: WHEN,
+            tv_usec: 0,
+        },
+    ];
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    // SAFETY: `c` is a valid NUL-terminated path for the duration of the
+    // call, and `times` is a two-element array as utimes(2) requires.
+    unsafe {
+        utimes(c.as_ptr(), times.as_ptr());
+    }
+}
+
+#[repr(C)]
+#[allow(non_camel_case_types)]
+struct libc_timeval {
+    tv_sec: i64,
+    tv_usec: i64,
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn utimes(path: *const std::ffi::c_char, times: *const libc_timeval) -> i32;
+}
+
+#[cfg(not(unix))]
+fn backdate(_path: &Path) {}
+
 pub fn build(root: &Path) -> io::Result<Fixture> {
     fs::create_dir_all(root)?;
 
@@ -215,6 +268,38 @@ pub fn build(root: &Path) -> io::Result<Fixture> {
         // A symlink cycle.
         let _ = std::os::unix::fs::symlink(root, root.join("self_link"));
     }
+
+    // Every ordinary file moves into the past. Walk the tree rather than
+
+    // listing names, so a file added to the fixture later cannot silently
+
+    // stay fresh and fall inside the grace window.
+
+    fn backdate_tree(dir: &Path) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+
+        for e in rd.flatten() {
+            let p = e.path();
+
+            // symlink_metadata, not is_dir(): is_dir follows the link, and
+            // this fixture plants an escaping symlink on purpose. Following
+            // it walks out of the tree -- and into whatever is on the other
+            // side, which is how a fixture build stopped terminating.
+            let Ok(md) = e.path().symlink_metadata() else {
+                continue;
+            };
+            if md.file_type().is_symlink() {
+                continue;
+            }
+            if md.is_dir() {
+                backdate_tree(&p);
+            } else {
+                backdate(&p);
+            }
+        }
+    }
+
+    backdate_tree(root);
 
     Ok(Fixture {
         root: root.to_path_buf(),

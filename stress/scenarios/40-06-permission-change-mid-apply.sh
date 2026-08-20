@@ -32,7 +32,7 @@ def letters(i, width=5):
         i //= 26
     return s
 for i in range(n):
-    open(os.path.join(d, f"batch_{letters(i)}.dat"), "w").close()
+    open(os.path.join(d, f"batch_{letters(i)}.csv"), "w").close()
 PY
 }
 
@@ -146,6 +146,6 @@ def letters(i, width=5):
         i //= 26
     return s
 for i in range($N):
-    print(f'batch_{letters(i)}.dat')
+    print(f'batch_{letters(i)}.csv')
 ")
 assert_eq 0 "$MISSING" "no file went missing outright (duplication is possible, disappearance is not)"

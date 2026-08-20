@@ -42,7 +42,30 @@ const PACKAGE_SUFFIXES: &[&str] = &[
     ".playground",
 ];
 
-/// Files whose presence makes the folder holding them a project.
+/// Suffixes a downloader writes while a transfer is still running.
+///
+/// These are already safe by accident -- none is in any type family, so
+/// nothing groups them. Naming them explicitly means a future addition to the
+/// extension table cannot silently start moving half-finished downloads, and
+/// the plan can say WHY the file was left rather than reporting it as
+/// unrecognised.
+pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
+    ".part",
+    ".crdownload",
+    ".download",
+    ".partial",
+    ".opdownload",
+    ".!ut",
+];
+
+/// Does this folder hold a project file at its top level?
+///
+/// Top level only, deliberately. A project file three directories down says
+/// something about that directory, not about the one being scanned.
+/// Files and directories whose presence marks a project.
+///
+/// Split into three kinds below, because they do not all mean the same thing
+/// and treating them alike moved a Blender project's textures.
 ///
 /// A project file references its siblings by relative path: an .als expects
 /// its bounces beside it, a .prproj expects its footage. Sorting those into
@@ -62,51 +85,149 @@ const PACKAGE_SUFFIXES: &[&str] = &[
 ///
 /// The test is whether the format OWNS a directory layout. An .als expects
 /// Samples/ beside it; a .sketch is one file that expects nothing.
-const PROJECT_MARKERS: &[&str] = &[
-    // Audio and video projects: these reference media by relative path.
-    ".als",
-    ".logicx",
-    ".ptx",
-    ".sesx",
-    ".flp",
-    ".rpp",
-    ".band",
-    ".prproj",
-    ".aep",
-    ".drp",
-    ".veg",
-    // 3D and compositing, same relationship with their assets.
-    ".blend",
-    ".c4d",
-    // Code projects, by their manifest. A manifest names a directory layout,
-    // so the directory is the unit.
+///
+/// Verified against a real 18,724-file Godot project on the author's machine.
+/// Its .tscn files reference siblings as res://scripts/main.gd -- absolute
+/// from the project root -- so moving ANY file inside a Godot project breaks
+/// every reference to it. project.godot was missing from the first version of
+/// this list, which is how that project came within one
+/// `sweep ~/Documents/dev-projects/ad-astra` of losing its layout.
+/// A marker directory that IS the project, whole and self-contained.
+///
+/// A Final Cut library, a GarageBand song, a Logic project: the bundle is a
+/// directory and everything the project owns lives inside it. Nothing outside
+/// it belongs to it, so the folder holding one is ordinary and sweepable --
+/// step over the bundle and sort the invoices sitting beside it.
+///
+/// KNOWN LIMIT, inherent rather than unfinished: Final Cut can be told to keep
+/// media OUTSIDE its library. An externally stored clip carries no
+/// filesystem-level mark saying which library owns it -- that relationship
+/// lives in the library's own database. Sweep does not read files, so a folder
+/// of external media beside a .fcpbundle is indistinguishable from a folder of
+/// unrelated video. The same holds for any format with external assets by
+/// configuration. Sweep protects managed layouts; it cannot protect an
+/// arrangement only the application knows about.
+const BUNDLE_MARKERS: &[&str] = &[".fcpbundle", ".band", ".logicx"];
+
+/// A marker file that marks the project ROOT.
+///
+/// `project.godot`, `Cargo.toml`, `package.json` sit at the top of their
+/// project by definition, so the directory holding one is the entire project
+/// and its parent is ordinary. Step over that directory, sweep the rest.
+const ROOT_MARKERS: &[&str] = &[
+    "project.godot",
+    ".uproject",
+    ".unity",
     "cargo.toml",
     "package.json",
     "pyproject.toml",
     "go.mod",
     "gemfile",
+    "cmakelists.txt",
+    "makefile",
 ];
 
-/// Does this folder hold a project file at its top level?
+/// A marker file that is a DOCUMENT, and says nothing about where the project
+/// ends.
 ///
-/// Top level only, deliberately. A project file three directories down says
-/// something about that directory, not about the one being scanned.
-fn project_marker_in(dir: &Path) -> Option<String> {
-    let rd = fs::read_dir(dir).ok()?;
-    for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
-        for m in PROJECT_MARKERS {
-            let hit = if m.starts_with('.') {
-                name.ends_with(m)
-            } else {
-                name == *m
-            };
-            if hit {
-                return Some(e.file_name().to_string_lossy().into_owned());
-            }
+/// This is the distinction that cost a Blender project its textures. A .blend
+/// references assets as //../textures/wood.png -- relative to the .blend, and
+/// freely upward. So scenes/main.blend does NOT mean scenes/ is the project;
+/// it means the project is scenes/ AND some unknown set of its siblings.
+/// Measured: project/scenes/main.blend beside project/textures/*.png, swept at
+/// depth 4, moved all three textures and broke every reference to them.
+///
+/// NOT YET ACTED ON. Today a DOCUMENT marker behaves exactly like a ROOT one:
+/// the folder holding it is stepped over, and the scan around it continues.
+/// That is knowingly incomplete -- it loses assets a document references
+/// upward, out of its own folder.
+///
+/// The complete rule costs more than it is worth so far. Refusing the whole
+/// scan whenever a document marker appears anywhere below the root means one
+/// .flp in Downloads makes Downloads unsweepable, which removes the tool from
+/// the folder it exists for. Reviewed and rejected on those grounds. The list
+/// stays because the distinction is real and the fix needs it; see the issue
+/// linked from the guard's tests for the four reproductions.
+const DOCUMENT_MARKERS: &[&str] = &[
+    ".song", ".als", ".ptx", ".sesx", ".flp", ".rpp", ".prproj", ".aep", ".drp", ".veg", ".blend",
+    ".c4d",
+];
+
+fn name_matches(name: &str, list: &[&str]) -> bool {
+    let lower = name.to_ascii_lowercase();
+    list.iter().any(|m| {
+        if m.starts_with('.') {
+            lower.ends_with(m)
+        } else {
+            lower == *m
+        }
+    })
+}
+
+/// A directory whose entries could not be listed. Distinct from "no marker".
+#[derive(Debug)]
+struct Unreadable;
+
+/// Whether this folder holds a project marker, or could not be asked.
+///
+fn project_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
+    //
+    // Marker detection and the main walk are separate reads of the same
+    // directory. A transient failure here answered "no marker", and the walk
+    // that followed succeeded and grouped the project's files. Persistent
+    // failures were already safe, because the walk records the directory as
+    // unreadable; the transient case was the hole. Unknown is not "no".
+    //
+    // Unknown is not "yes" either. Answering "marker" would fold a folder
+    // sweep could not read into the project count, and an unreadable folder
+    // has to stay visible as unreadable -- that was issue #4, and a test has
+    // guarded it ever since.
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Err(Unreadable);
+    };
+    for entry in rd {
+        // flatten() dropped per-entry errors, which is the same fail-open one
+        // level down: a partial enumeration could miss the marker entirely.
+        let Ok(e) = entry else {
+            return Err(Unreadable);
+        };
+        let name = e.file_name().to_string_lossy().into_owned();
+        // A bundle sitting in a folder does not make that folder a project.
+        // Refusing a Documents folder outright because one .fcpbundle lives
+        // in it means the user cannot sweep the invoices beside it, and the
+        // bundle was never at risk -- it is stepped over as a unit.
+        if name_matches(&name, BUNDLE_MARKERS) {
+            continue;
+        }
+        // A marker has to BE a file. Matching the name alone refused a whole
+        // Downloads folder because an ordinary directory in it happened to be
+        // called ordinary.flp -- no FL Studio project anywhere, and the loose
+        // files went unswept. Only BUNDLE markers name directories, and they
+        // are handled above.
+        // Ask "is this a directory", not "is this a file", and ask it without
+        // following the link.
+        //
+        // The check exists to stop a DIRECTORY named ordinary.flp freezing the
+        // folder it sits in. Phrasing it as is_file() with symlink_metadata
+        // dropped symlinked markers, because a link is neither; phrasing it as
+        // is_file() with metadata fixed that by following the link out of the
+        // tree, which contradicts this scanner's own rule about never
+        // resolving a target that escapes the root.
+        //
+        // !is_dir() on the link itself needs neither. Anything that is not a
+        // directory counts: a regular file, a symlink whatever it points at,
+        // and also a FIFO, socket or device node carrying a marker name. That
+        // last group is a real over-refusal, measured, and it fails closed --
+        // filed rather than fixed here. No path outside the root is resolved.
+        if (name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS))
+            && fs::symlink_metadata(e.path())
+                .map(|m| !m.is_dir())
+                .unwrap_or(true)
+        {
+            return Ok(Some(name));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Roots under which cloud sync agents operate. Presence triggers a refusal
@@ -123,6 +244,14 @@ const SYNC_MARKERS: &[&str] = &[
 
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
+    /// Leave files modified within this window alone. `None` disables it.
+    ///
+    /// Modified time, never accessed time. Spotlight, Time Machine and any
+    /// backup agent touch atime just by looking, so a grace window keyed on
+    /// atime would protect an entire folder forever after one reindex -- a
+    /// guard that silently stops guarding. mtime changes when the person
+    /// changes the file, which is the question being asked.
+    pub grace: Option<std::time::Duration>,
     /// Recursion depth. 1 means the directory itself only.
     pub depth: u8,
     /// Refuse rather than warn when the root is inside a sync root.
@@ -144,6 +273,10 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             depth: 1,
+            // A day. Long enough to cover "I downloaded this this morning
+            // and I am still using it", short enough that yesterday's clutter
+            // is fair game.
+            grace: Some(std::time::Duration::from_secs(24 * 60 * 60)),
             allow_sync: false,
             max_entries: 20_000,
             whole_units: false,
@@ -175,6 +308,11 @@ pub enum ScanError {
     /// The root is a project: a package directory, or a folder holding a
     /// project file at its top level. Its contents belong to one piece of
     /// work and reference each other by relative path.
+    /// The root is itself a download in progress: `movie.mp4.part`, or
+    /// Safari's `movie.mp4.download/`. Refused for the same reason the file
+    /// form is held back -- it is not finished arriving.
+    RefusedInFlightRoot(PathBuf),
+
     RefusedProjectRoot {
         root: PathBuf,
         marker: String,
@@ -197,6 +335,7 @@ impl ScanError {
             self,
             ScanError::RefusedSystemLocation(_)
                 | ScanError::RefusedProjectRoot { .. }
+                | ScanError::RefusedInFlightRoot(_)
                 | ScanError::RefusedSyncRoot(_)
                 | ScanError::RefusedRunningAsRoot
                 | ScanError::TooManyEntries { .. }
@@ -219,13 +358,47 @@ impl std::fmt::Display for ScanError {
                     crate::redact::path(p)
                 )
             }
-            ScanError::RefusedProjectRoot { root, marker } => write!(
+            ScanError::RefusedInFlightRoot(root) => write!(
                 f,
-                "refused: {} looks like a project ({marker} is in it). Its files \
-                 reference each other by relative path, so sorting them into type \
-                 folders would break it. Sweep the folder that contains it instead",
+                "refused: {} is a download still in progress. Sweep it once it \
+                 has finished arriving",
                 crate::redact::path(root)
             ),
+            ScanError::RefusedProjectRoot { root, marker } => {
+                // "X is in it" is false when the folder IS X. A refusal that
+                // misdescribes what it saw teaches the user the wrong shape of
+                // the rule, and they go looking for a stray file that is not
+                // there.
+                let itself = root
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().as_ref() == marker.as_str());
+                let because = if itself {
+                    "it is a project bundle".to_string()
+                } else {
+                    format!("{marker} is in it")
+                };
+                // The advice has to be true for the marker that triggered it.
+                // "Sweep the folder that contains it instead" is safe for a
+                // bundle and for a project root, whose project stops at its
+                // own boundary. It is NOT safe for a document: an .als or a
+                // .blend references assets relative to itself and freely
+                // upward, so the containing folder may hold files the project
+                // needs. Sending someone there is sending them at the one
+                // case sweep does not yet handle.
+                let advice = if name_matches(marker, DOCUMENT_MARKERS) {
+                    "Sweep a folder that does not hold this project -- the one \
+                     around it may hold files this project references"
+                } else {
+                    "Sweep the folder that contains it instead"
+                };
+                write!(
+                    f,
+                    "refused: {} looks like a project ({because}). Its files \
+                     reference each other by relative path, so sorting them into type \
+                     folders would break it. {advice}",
+                    crate::redact::path(root)
+                )
+            }
             ScanError::RefusedSyncRoot(p) => write!(
                 f,
                 "refused: {} is inside a cloud-synced folder; pass --allow-sync to override",
@@ -246,6 +419,11 @@ impl std::fmt::Display for ScanError {
 #[derive(Debug)]
 pub struct ScanOutcome {
     pub root: PathBuf,
+    /// The grace window this scan ran with, carried so the plan applies the
+    /// same one. The scan reports what is there; deciding a file is too
+    /// recent to move is a planning decision, and it belongs where the other
+    /// leave-it-alone decisions are made.
+    pub grace: Option<std::time::Duration>,
     pub entries: Vec<Entry>,
     /// Paths refused during the walk, for the "what was inspected" report.
     pub skipped_hidden: usize,
@@ -262,6 +440,31 @@ pub struct ScanOutcome {
     /// unaccounted for and MUST be disclosed, or "Scanned N items" silently
     /// claims completeness it does not have.
     pub skipped_unreadable: usize,
+    /// Directories not entered because they hold a project marker.
+    ///
+    /// Distinct from `skipped_system`: this is not policy about WHERE the
+    /// directory is, it is a fact about what is in it. A folder holding a
+    /// project file is one unit of work whose files reference each other, so
+    /// sweep steps over it rather than into it.
+    pub skipped_project: usize,
+
+    /// Directories that are themselves a download in progress, like Safari's
+    /// `movie.mp4.download/`. Counted apart from `skipped_project` because
+    /// "left alone because it holds a project file" is not true of them, and
+    /// a count under a reason that does not apply to it is the defect this
+    /// repo keeps finding.
+    pub skipped_in_flight: usize,
+
+    /// Directories macOS treats as one item: `Song.band`, `MyMovie.fcpbundle`,
+    /// a nested `.app`, and anything Spotlight reports as `com.apple.package`
+    /// including a Pages document.
+    ///
+    /// Counted apart from `skipped_project` because "it holds a project file"
+    /// is false of them. Named for `package`, not `bundle`, because the two
+    /// paths that increment it are project bundles AND generic OS packages --
+    /// and a Pages document is not a project bundle. Package is the term that
+    /// is true of both.
+    pub skipped_package: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
@@ -414,13 +617,37 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
+    // Before the package check: on this Mac a movie.mp4.download/ is reported
+    // as a package and would be refused under "it is a project bundle", which
+    // is false. On any other platform os_says_package is always false and the
+    // same root sweeps its own partial members into a Media group.
+    let lower_root = root_name.to_ascii_lowercase();
+    if IN_FLIGHT_SUFFIXES
+        .iter()
+        .any(|suffix| lower_root.ends_with(suffix))
+    {
+        return Err(ScanError::RefusedInFlightRoot(root.clone()));
+    }
     if is_package(&root_name) || os_says_package(&root) {
+        // The root's own name, not a synthetic label. The message decides
+        // between "X is in it" and "it is a project bundle" by comparing the
+        // marker against the root's name, and a synthetic string never
+        // matched -- so a .band root was told a package directory was inside
+        // it when the directory WAS the package.
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
-            marker: "a package directory".to_string(),
+            marker: root_name.clone(),
         });
     }
-    if let Some(marker) = project_marker_in(&root) {
+    // The root is itself a project bundle. Being inside a project is being
+    // inside a project regardless of which argument the user typed.
+    if name_matches(&root_name, BUNDLE_MARKERS) {
+        return Err(ScanError::RefusedProjectRoot {
+            root: root.clone(),
+            marker: root_name.clone(),
+        });
+    }
+    if let Ok(Some(marker)) = project_marker_in(&root) {
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
             marker,
@@ -438,10 +665,14 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
 
     let mut out = ScanOutcome {
         root: root.clone(),
+        grace: cfg.grace,
         entries: Vec::new(),
         skipped_hidden: 0,
         skipped_symlink: 0,
         skipped_system: 0,
+        skipped_project: 0,
+        skipped_in_flight: 0,
+        skipped_package: 0,
         skipped_unreadable: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
@@ -546,6 +777,53 @@ fn walk(
         let pkg = is_dir && (is_package(&name) || cfg.whole_units);
 
         if is_dir && !pkg {
+            // A child directory holding a project marker is not entered. The
+            // root check alone was not enough: it protects someone standing
+            // IN their project, and does nothing for someone sweeping the
+            // folder their projects live in with --depth. Verified before
+            // this existed -- a Downloads folder holding a Godot project,
+            // scanned at depth 2, produced an Images group of that project's
+            // captures while its project.godot sat listed as ungrouped.
+            //
+            // Stepping over it, rather than refusing the whole scan, is the
+            // difference between the root case and this one: the folder being
+            // swept is ordinary and its own loose files are fair game. Only
+            // the project inside it is off limits.
+            // A download in progress can be a DIRECTORY. Safari writes
+            // movie.mp4.download/ with the partial data inside it, and macOS
+            // reports it as a package. Descending into one proposed its three
+            // partial members as a Media group -- the plan's in-flight check
+            // only ever sees files, so nothing else was going to catch it.
+            let lower_name = name.to_ascii_lowercase();
+            if IN_FLIGHT_SUFFIXES
+                .iter()
+                .any(|suffix| lower_name.ends_with(suffix))
+            {
+                out.skipped_in_flight += 1;
+                continue;
+            }
+            if os_says_package(&path) {
+                out.skipped_package += 1;
+                continue;
+            }
+            // A bundle is a unit: step over it, never into it.
+            if name_matches(&name, BUNDLE_MARKERS) {
+                out.skipped_package += 1;
+                continue;
+            }
+            match project_marker_in(&path) {
+                Ok(Some(_)) => {
+                    out.skipped_project += 1;
+                    continue;
+                }
+                // Could not be asked. Step over it and count it for what it
+                // is, rather than guessing either way.
+                Err(Unreadable) => {
+                    out.skipped_unreadable += 1;
+                    continue;
+                }
+                Ok(None) => {}
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -584,6 +862,317 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Every entry in both lists is tested by DERIVING the test from the list,
+    // not by restating it. The project-file-extension space is large and
+    // diverse -- one person's machine holds a fraction of it -- so the list is
+    // the source of truth and these tests iterate it. Add a marker and it is
+    // tested automatically; nobody has to remember. A marker that stops
+    // working fails here, which is the failure the scenarios (only five types)
+    // cannot see.
+
+    #[test]
+    fn every_project_marker_is_recognised_as_one() {
+        use std::io::Write;
+        // Bundles are excluded on purpose: a bundle in a folder does not make
+        // that folder a project, and `a_bundle_is_the_project_and_the_folder_
+        // holding_it_is_not` covers them instead.
+        for m in ROOT_MARKERS.iter().chain(DOCUMENT_MARKERS) {
+            let dir = std::env::temp_dir().join(format!(
+                "sweep_marker_{}_{}",
+                m.trim_start_matches('.').replace(['.', '/'], "_"),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("mkdir");
+            // A dotted marker (.flp) is an extension; a bare one (cargo.toml)
+            // is a whole filename. Build whichever this is.
+            let fname = if m.starts_with('.') {
+                format!("thing{m}")
+            } else {
+                (*m).to_string()
+            };
+            let mut f = fs::File::create(dir.join(&fname)).expect("write marker");
+            let _ = f.write_all(b"x");
+
+            assert_eq!(
+                project_marker_in(&dir).expect("readable").as_deref(),
+                Some(fname.as_str()),
+                "{m:?} is a ROOT or DOCUMENT marker but a folder holding {fname:?} was \
+                 not recognised as a project. The list and the matcher have drifted"
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A bundle is the project; the folder holding one is ordinary.
+    ///
+    /// The first version of this test asserted that a folder containing a
+    /// .fcpbundle was refused outright. That was wrong and the test pinned it:
+    /// a Documents folder holding one video library plus a year of invoices
+    /// would refuse to sweep the invoices, and the library was never at risk
+    /// because a bundle is stepped over as a unit.
+    #[test]
+    fn a_bundle_is_the_project_and_the_folder_holding_it_is_not() {
+        for m in BUNDLE_MARKERS {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_bundle_{}_{}",
+                m.trim_start_matches('.'),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            let bundle = base.join(format!("thing{m}"));
+            fs::create_dir_all(bundle.join("Media")).expect("mkdir bundle");
+            fs::write(bundle.join("Media").join("a.mov"), b"x").expect("write");
+            fs::write(base.join("invoice.pdf"), b"x").expect("write");
+
+            // Pointed straight at the bundle: it is the project.
+            let inside = scan(&bundle, &ScanConfig::default());
+            assert!(
+                matches!(inside, Err(ScanError::RefusedProjectRoot { .. })),
+                "scanning into a {m} bundle was not refused: {inside:?}"
+            );
+
+            // Pointed at the folder holding it: sweep it, step over the bundle.
+            let cfg = ScanConfig {
+                depth: 3,
+                grace: None,
+                ..ScanConfig::default()
+            };
+            let outside = scan(&base, &cfg).expect("the folder holding a bundle is ordinary");
+            assert_eq!(
+                outside.skipped_package, 1,
+                "the {m} bundle was not stepped over"
+            );
+            assert_eq!(
+                outside.skipped_project, 0,
+                "a bundle counted as a folder that HOLDS a project file, which \
+                 would put its count under a reason that is not its own"
+            );
+            assert!(
+                outside.entries.iter().all(|e| !e.path.starts_with(&bundle)),
+                "a file from inside the {m} bundle was collected"
+            );
+            assert!(
+                outside
+                    .entries
+                    .iter()
+                    .any(|e| e.path.ends_with("invoice.pdf")),
+                "the invoice beside the {m} bundle was not swept"
+            );
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// A folder named like a project file is not a project.
+    ///
+    /// Only BUNDLE markers name directories. Matching every dotted marker
+    /// against directory names refused an ordinary folder called
+    /// `ordinary.flp` holding three receipts -- over-refusal is a real cost,
+    /// not the safe side of the trade.
+    #[test]
+    fn a_folder_named_like_a_document_marker_is_still_ordinary() {
+        for m in DOCUMENT_MARKERS {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_notproj_{}_{}",
+                m.trim_start_matches('.'),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            let dir = base.join(format!("ordinary{m}"));
+            fs::create_dir_all(&dir).expect("mkdir");
+            for n in ["r1.pdf", "r2.pdf", "r3.pdf"] {
+                fs::write(dir.join(n), b"x").expect("write");
+            }
+            let cfg = ScanConfig {
+                grace: None,
+                ..ScanConfig::default()
+            };
+            // Scan the PARENT. Scanning `dir` itself never reaches the
+            // parent-marker detection, which is where the bug was: this test
+            // passed while `sweep Downloads` refused because a directory in
+            // it was named ordinary.flp.
+            fs::write(base.join("loose.pdf"), b"x").expect("write");
+            let got = scan(&base, &cfg);
+            assert!(
+                got.is_ok(),
+                "a folder holding a plain directory named ordinary{m} was refused: {got:?}"
+            );
+            assert!(
+                got.unwrap()
+                    .entries
+                    .iter()
+                    .any(|e| e.path.ends_with("loose.pdf")),
+                "the loose file beside a directory named ordinary{m} was not swept"
+            );
+
+            // And the folder itself is still ordinary.
+            let inner = scan(&dir, &cfg);
+            assert!(
+                inner.is_ok(),
+                "a plain folder named ordinary{m} was refused as a project: {inner:?}"
+            );
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// A document marker below the root does NOT refuse the scan, and that
+    /// is a known gap -- see issue #49.
+    ///
+    /// This pins behaviour the project knows is incomplete, so that changing
+    /// it is a deliberate act. A .blend references //../textures/wood.png, so
+    /// stepping over scenes/ leaves wood.png collected and moved. Measured
+    /// four ways, all reproducing.
+    ///
+    /// The complete rule -- refuse any scan with a document marker anywhere
+    /// below it -- was built, reviewed and rejected: one .flp made a whole
+    /// Downloads folder unsweepable, which removes the tool from the folder it
+    /// exists for. When #49 lands, this test flips.
+    #[test]
+    fn a_document_marker_below_the_root_does_not_yet_refuse_the_scan() {
+        let base = std::env::temp_dir().join(format!("sweep_doc_gap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("scenes")).expect("mkdir");
+        fs::write(base.join("scenes").join("main.blend"), b"x").expect("write");
+        // Three, not one. A single file forms no group, so a one-file fixture
+        // could not show the move it claims to describe.
+        for n in ["wood_1.png", "wood_2.png", "wood_3.png"] {
+            fs::write(base.join(n), b"x").expect("write");
+        }
+
+        let cfg = ScanConfig {
+            grace: None,
+            ..ScanConfig::default()
+        };
+        let got = scan(&base, &cfg).expect("today this is swept, not refused");
+        assert_eq!(
+            got.skipped_project, 1,
+            "the folder holding main.blend should still be stepped over"
+        );
+
+        // Build the plan, so the claim is about what would actually happen to
+        // the textures rather than about what the scan collected.
+        let plan = crate::plan::build(&got);
+        let grouped: usize = plan.groups.iter().map(|g| g.members.len()).sum();
+        assert_eq!(
+            grouped, 3,
+            "the known gap in #49 has closed -- the textures beside main.blend \
+             are no longer grouped. That is good: update this test to assert \
+             the refusal instead of the gap"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A root marker bounds its project, so the folder above it is ordinary.
+    ///
+    /// This is the Downloads case, and it must keep working: someone with a
+    /// Godot project in Downloads still gets their loose files sorted.
+    #[test]
+    fn a_root_marker_bounds_its_project_and_the_folder_above_stays_sweepable() {
+        for m in ROOT_MARKERS {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_rootm_{}_{}",
+                m.trim_start_matches('.').replace('.', "_"),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            let proj = base.join("TheProject");
+            fs::create_dir_all(&proj).expect("mkdir");
+            let fname = if m.starts_with('.') {
+                format!("thing{m}")
+            } else {
+                (*m).to_string()
+            };
+            fs::write(proj.join(&fname), b"x").expect("write");
+            fs::write(proj.join("icon.png"), b"x").expect("write");
+            fs::write(base.join("loose.pdf"), b"x").expect("write");
+
+            let cfg = ScanConfig {
+                depth: 3,
+                grace: None,
+                ..ScanConfig::default()
+            };
+            let got = scan(&base, &cfg).expect("a folder holding a project is ordinary");
+            assert_eq!(
+                got.skipped_project, 1,
+                "the {m} project was not stepped over"
+            );
+            assert!(
+                got.entries.iter().all(|e| !e.path.starts_with(&proj)),
+                "a file from inside the {m} project was collected"
+            );
+            assert!(
+                got.entries.iter().any(|e| e.path.ends_with("loose.pdf")),
+                "the loose file beside the {m} project was not swept"
+            );
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// No marker appears in two kinds.
+    ///
+    /// Named for what it can actually prove. It cannot tell that a marker is
+    /// in the RIGHT kind -- there is no oracle for that short of knowing the
+    /// format -- and because its universe is the three lists concatenated, it
+    /// cannot notice a marker deleted outright. What it does catch is the
+    /// ambiguous case: a marker in two kinds has no defined behaviour, since
+    /// whichever check runs first wins.
+    #[test]
+    fn no_marker_appears_in_two_kinds() {
+        let all: Vec<&&str> = BUNDLE_MARKERS
+            .iter()
+            .chain(ROOT_MARKERS)
+            .chain(DOCUMENT_MARKERS)
+            .collect();
+        for m in &all {
+            let n = all.iter().filter(|o| o == &m).count();
+            assert_eq!(
+                n, 1,
+                "{m:?} appears in {n} of the three marker kinds. A marker in \
+                 two kinds has no defined behaviour"
+            );
+        }
+    }
+
+    #[test]
+    fn every_package_suffix_is_recognised_as_one() {
+        for suffix in PACKAGE_SUFFIXES {
+            let name = format!("Thing{suffix}");
+            assert!(
+                is_package(&name),
+                "PACKAGE_SUFFIXES lists {suffix:?} but is_package({name:?}) was false"
+            );
+            // Case-insensitively, since a real .APP or .App exists on disk.
+            assert!(
+                is_package(&name.to_uppercase()),
+                "is_package is case-sensitive; {:?} was not recognised",
+                name.to_uppercase()
+            );
+        }
+    }
+
+    #[test]
+    fn a_marker_matches_only_as_a_whole_component() {
+        // "makefile" must not match "notmakefile.txt", and ".flp" must not
+        // match "flourish.flpng" -- the matcher checks the extension or the
+        // whole filename, never a substring. Without this, a marker could
+        // refuse folders it has no business refusing.
+        let dir = std::env::temp_dir().join(format!("sweep_nomatch_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        for innocent in ["notmakefile.txt", "cargo.tomlx", "my.flp.backup.zip"] {
+            fs::write(dir.join(innocent), b"x").expect("write");
+        }
+        assert_eq!(
+            project_marker_in(&dir).expect("readable"),
+            None,
+            "a filename that merely contains a marker string triggered a refusal"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn is_refusal_separates_policy_from_io() {

@@ -29,6 +29,7 @@ USAGE
 
 FLAGS
     --depth N       recursion depth (default 1, max 8)
+    --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
     --json          machine-readable plan on stdout (for agents)
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
@@ -302,6 +303,67 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
 ///
 /// An empty set is not a special case. The rule is that a flag nobody reads
 /// is an error, and `undo` and `verify` read none.
+/// `--since N[h|d]`: replace the grace window. `--since 0` disables it.
+///
+/// The default holds back anything changed in the last day. Someone who knows
+/// their folder is idle can say so; someone tidying right after a download
+/// session can widen it. Returns None when the flag is absent, meaning "use
+/// the default", which is distinct from Some(ZERO), meaning "no window".
+fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
+    // The flag is read before the environment variable on purpose. Someone who
+    // types --since means it, and a stale SWEEP_GRACE_SECS exported into a
+    // shell hours ago should not quietly outrank what they just typed.
+    if let Some(i) = args.iter().position(|a| a == "--since") {
+        let raw = args.get(i + 1).ok_or_else(|| {
+            "--since needs a value, like --since 6h. Run `sweep help`.".to_string()
+        })?;
+        let (digits, unit) = match raw.chars().last() {
+            Some('h' | 'H') => (&raw[..raw.len() - 1], 60 * 60),
+            Some('d' | 'D') => (&raw[..raw.len() - 1], 24 * 60 * 60),
+            _ => (raw.as_str(), 24 * 60 * 60),
+        };
+        // Wrong window, loud. This mirrors parse_depth, and for the same
+        // reason: --since decides which files are held back, so a value the
+        // parser could not read must never become the default silently. A user
+        // who typos --since 6hh and is shown the ordinary 24h result has been
+        // told their instruction was obeyed when it was discarded.
+        let n: u64 = digits.parse().map_err(|_| {
+            format!("--since must be a number, optionally with h or d, got {raw:?}")
+        })?;
+        // Overflow is a wrong window, and a wrong window silently changes
+        // which files are held back. Unchecked, this panicked in debug and
+        // wrapped in release -- the release build accepted a nonsense value
+        // and swept with a window nobody chose.
+        // The limit is per unit, so state the one that applies. Naming a
+        // single number was wrong twice over: it said 213503d when 213504d is
+        // accepted, and it said days to someone who typed hours.
+        let secs = n.checked_mul(unit).ok_or_else(|| {
+            let (most, sym) = match unit {
+                3600 => (u64::MAX / 3600, "h"),
+                _ => (u64::MAX / (24 * 60 * 60), "d"),
+            };
+            format!("--since {raw:?} is too large. The longest window is {most}{sym}")
+        })?;
+        return Ok(Some(std::time::Duration::from_secs(secs)));
+    }
+
+    // SWEEP_GRACE_SECS exists for the stress harness, which builds a tree and
+    // sweeps it in the same second. Every one of its 35 scenarios is inside
+    // the default window by construction, and none of them is about the
+    // window -- they are about collisions, interruptions, volumes. Threading
+    // --since 0 through each would put a flag in 35 places that nobody meant
+    // to test, and the next scenario would forget it.
+    //
+    // Not documented in --help on purpose: a user has --since, which is
+    // discoverable and says what it does. This is a harness affordance.
+    if let Ok(v) = std::env::var("SWEEP_GRACE_SECS")
+        && let Ok(n) = v.parse::<u64>()
+    {
+        return Ok(Some(std::time::Duration::from_secs(n)));
+    }
+    Ok(None)
+}
+
 const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
     (
         // The bare `sweep [PATH]` scan.
@@ -313,6 +375,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--explain", false),
             ("--allow-sync", false),
             ("--inspect-content", false),
+            ("--since", true),
         ],
     ),
     (
@@ -323,6 +386,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--no-journal", false),
             ("--depth", true),
             ("--allow-sync", false),
+            ("--since", true),
         ],
     ),
     (
@@ -331,6 +395,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--allow-sync", false),
             ("--no-journal", false),
             ("--depth", true),
+            ("--since", true),
         ],
     ),
     ("forget", &[("--yes", false)]),
@@ -545,6 +610,13 @@ fn scan_and_plan(
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        grace: match since_flag(args) {
+            Ok(g) => g.or(ScanConfig::default().grace),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return Err(ExitCode::from(2));
+            }
+        },
         ..Default::default()
     };
     let outcome = match scan::scan(path, &cfg) {
@@ -597,11 +669,66 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             plan.scanned
         );
         print_refused_by_policy_note(&plan);
+        print_projects_skipped_note(&plan);
         print_unreadable_warning(&plan);
-        println!(
-            "\nNothing here needs organising.\n\n\
-             Nothing has been moved.  Nothing left this machine."
-        );
+        // "Nothing here needs organising" is only true when nothing was held
+        // back. Files inside the grace window or still downloading DO need
+        // organising -- just not yet -- and saying otherwise sends someone
+        // away believing their folder was looked at and found tidy.
+        // skipped_in_flight belongs here too. A folder holding only
+        // movie.mp4.download/ disclosed the folder and then concluded
+        // "Nothing here needs organising", which denies what it just said.
+        // A download in progress is something to organise later, whether it
+        // arrived as a file or as a directory.
+        let held = plan.too_recent() + plan.in_flight() + plan.skipped_in_flight;
+        if held > 0 {
+            println!();
+            let recent = plan.too_recent();
+            if recent == 1 {
+                println!("  1 file changed too recently to judge and was left alone");
+            } else if recent > 1 {
+                println!("  {recent} files changed too recently to judge and were left alone");
+            }
+            let downloading = plan.in_flight();
+            if downloading == 1 {
+                println!("  1 download is still in progress and was left alone");
+            } else if downloading > 1 {
+                println!("  {downloading} downloads are still in progress and were left alone");
+            }
+            // --since 0 only helps if the grace window is what held things
+            // back. An in-flight download is refused regardless of the
+            // window, so telling someone to pass --since 0 for a folder of
+            // .part files sends them to run a command that changes nothing
+            // and prints the same refusal.
+            // Not re-printed here: print_projects_skipped_note above already
+            // disclosed the directory-form downloads. This branch only needs
+            // to count them so the conclusion does not contradict it.
+            // Three cases, because "--since 0 includes everything" is only
+            // true when the grace window is the ONLY thing holding anything
+            // back. With one recent file and one .part beside it, that
+            // sentence promised to include a download the flag cannot reach.
+            let still_arriving = downloading + plan.skipped_in_flight;
+            match (recent > 0, still_arriving > 0) {
+                (true, false) => println!(
+                    "\nNothing else here needs organising. Run again later, or pass\n\
+                     --since 0 to include everything."
+                ),
+                (false, true) => println!(
+                    "\nNothing else here needs organising. These finish downloading on\n\
+                     their own; run again once they have."
+                ),
+                _ => println!(
+                    "\nNothing else here needs organising. --since 0 would include the\n\
+                     recent ones; the downloads have to finish first either way."
+                ),
+            }
+            println!("\nNothing has been moved.  Nothing left this machine.");
+        } else {
+            println!(
+                "\nNothing here needs organising.\n\n\
+                 Nothing has been moved.  Nothing left this machine."
+            );
+        }
         return ExitCode::from(1);
     }
 
@@ -649,6 +776,45 @@ fn print_unreadable_warning(p: &plan::Plan) {
 /// mode should get the same disclosure. Worded without "system" alone,
 /// since `NEVER_ENTER` also covers plain noise directories like
 /// `node_modules`, not just credential or OS locations.
+/// Say which project folders were stepped over.
+///
+/// Silence here would be the grace window's mistake again: a folder that
+/// looks tidied while a project inside it was deliberately skipped, with
+/// nothing saying so. A user who wonders why their project is untouched
+/// should not have to guess.
+fn print_projects_skipped_note(p: &plan::Plan) {
+    if p.skipped_project == 1 {
+        println!("\n  1 folder was left alone because it holds a project file");
+    } else if p.skipped_project > 1 {
+        println!(
+            "\n  {} folders were left alone because they hold project files",
+            p.skipped_project
+        );
+    }
+    // Counted and worded apart from projects. A movie.mp4.download/ is not a
+    // folder that holds a project file, and putting its count under that
+    // sentence would attach a number to a reason that is not its own.
+    if p.skipped_in_flight == 1 {
+        println!("\n  1 folder is a download still in progress and was left alone");
+    } else if p.skipped_in_flight > 1 {
+        println!(
+            "\n  {} folders are downloads still in progress and were left alone",
+            p.skipped_in_flight
+        );
+    }
+    // A Song.band does not HOLD a project file. It is one. And the same
+    // counter carries generic OS packages -- a Pages document is not a
+    // project bundle, so the sentence says package, which is true of both.
+    if p.skipped_package == 1 {
+        println!("\n  1 folder was left alone because macOS treats it as a single item");
+    } else if p.skipped_package > 1 {
+        println!(
+            "\n  {} folders were left alone because macOS treats each as a single item",
+            p.skipped_package
+        );
+    }
+}
+
 fn print_refused_by_policy_note(p: &plan::Plan) {
     if p.skipped_system > 0 {
         println!(
@@ -697,7 +863,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     // the only sentence with words in it and concluded the tool had refused
     // 32 files for privacy. One file had been. A count and its reason must
     // not come from different lines.
-    if personal + unclear > 0 {
+    if personal + unclear + p.too_recent() + p.in_flight() > 0 {
         println!();
     }
     if personal > 0 {
@@ -714,6 +880,25 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
             for (cat, n) in &counts {
                 println!("      {n:>3}  {}", cat.describe());
             }
+        }
+    }
+    // Each reason says why on its own line, for the same reason the personal
+    // and ungrouped counts were split this morning: a number whose reason
+    // lives on a different line gets attached to the wrong reason.
+    let recent = p.too_recent();
+    if recent > 0 {
+        if recent == 1 {
+            println!("  1 file changed too recently to judge and was left alone");
+        } else {
+            println!("  {recent} files changed too recently to judge and were left alone");
+        }
+    }
+    let downloading = p.in_flight();
+    if downloading > 0 {
+        if downloading == 1 {
+            println!("  1 download is still in progress and was left alone");
+        } else {
+            println!("  {downloading} downloads are still in progress and were left alone");
         }
     }
     if unclear > 0 {
@@ -743,6 +928,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     }
     print_refused_by_policy_note(p);
     print_unreadable_warning(p);
+    print_projects_skipped_note(p);
     if p.root_is_synced {
         println!("\n  warning: this folder is inside a cloud-synced tree");
     }
@@ -819,6 +1005,13 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        grace: match since_flag(args) {
+            Ok(g) => g.or(ScanConfig::default().grace),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return ExitCode::from(2);
+            }
+        },
         ..Default::default()
     };
     let outcome = match scan::scan(&path, &cfg) {
@@ -1038,6 +1231,13 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        grace: match since_flag(args) {
+            Ok(g) => g.or(ScanConfig::default().grace),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return ExitCode::from(2);
+            }
+        },
         ..Default::default()
     };
     let outcome = match scan::scan(&path, &cfg) {
@@ -1527,6 +1727,65 @@ mod tests {
         assert!(parse_depth(&["--depth".to_string(), "999".to_string()]).is_err());
         assert!(parse_depth(&["--depth".to_string(), "0".to_string()]).is_err());
         assert!(parse_depth(&["--depth".to_string(), "banana".to_string()]).is_err());
+    }
+
+    /// A grace window the parser could not read must not become the default.
+    ///
+    /// `--since` decides which files are held back, so silently substituting
+    /// 24h for a value someone typed tells them their instruction was obeyed
+    /// when it was discarded. Same rule as parse_depth above.
+    #[test]
+    fn since_rejects_garbage_rather_than_falling_back_to_the_default() {
+        let s = |v: &str| since_flag(&["--since".to_string(), v.to_string()]);
+        assert_eq!(s("0"), Ok(Some(std::time::Duration::ZERO)));
+        assert_eq!(
+            s("6h"),
+            Ok(Some(std::time::Duration::from_secs(6 * 60 * 60)))
+        );
+        assert_eq!(
+            s("2d"),
+            Ok(Some(std::time::Duration::from_secs(2 * 24 * 60 * 60)))
+        );
+        assert!(s("banana").is_err());
+        assert!(s("6hh").is_err());
+        assert!(s("").is_err());
+        // present but with nothing after it
+        assert!(since_flag(&["--since".to_string()]).is_err());
+        // Release builds wrapped this and swept with a window nobody chose.
+        assert!(s("18446744073709551615d").is_err());
+        assert!(s("999999999999999999999").is_err());
+        // The boundary the message names must be the boundary enforced.
+        let most_days = u64::MAX / (24 * 60 * 60);
+        assert!(s(&format!("{most_days}d")).is_ok());
+        assert!(s(&format!("{}d", most_days + 1)).is_err());
+        let most_hours = u64::MAX / 3600;
+        assert!(s(&format!("{most_hours}h")).is_ok());
+        assert!(s(&format!("{}h", most_hours + 1)).is_err());
+    }
+
+    /// What someone typed beats what their shell exported.
+    #[test]
+    fn an_explicit_since_outranks_the_harness_environment_variable() {
+        // SAFETY: single-threaded test, variable removed before returning.
+        unsafe { std::env::set_var("SWEEP_GRACE_SECS", "0") };
+        let typed = since_flag(&["--since".to_string(), "6h".to_string()]);
+        let untyped = since_flag(&[]);
+        unsafe { std::env::remove_var("SWEEP_GRACE_SECS") };
+        assert_eq!(typed, Ok(Some(std::time::Duration::from_secs(6 * 60 * 60))));
+        assert_eq!(untyped, Ok(Some(std::time::Duration::ZERO)));
+    }
+
+    /// The flag a user can type has to be in the help they can read.
+    #[test]
+    fn every_user_facing_flag_appears_in_usage() {
+        for (_, flags) in COMMAND_FLAGS {
+            for (name, _) in *flags {
+                assert!(
+                    USAGE.contains(name),
+                    "{name} is accepted but undocumented in `sweep help`"
+                );
+            }
+        }
     }
 
     // a value consumed by a flag is not a positional path.

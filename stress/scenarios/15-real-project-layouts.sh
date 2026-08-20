@@ -1,0 +1,436 @@
+#!/usr/bin/env bash
+# Five real project types, and the promise this guard makes: pointed AT a
+# project, or at a folder holding one, sweep steps over the project rather
+# than sorting its files in with the loose ones.
+#
+# That promise has a known hole, and stating it wider than it is would be the
+# same kind of untruth this repo keeps fixing. A project DOCUMENT (.blend,
+# .flp, .als, .song, .ptx) references its assets upward, out of its own
+# folder, so stepping over that folder does not save assets sitting beside it.
+# Issue #49 carries the four reproductions. Nothing in this scenario asserts
+# the current behaviour is correct there.
+#
+# Every layout here is MEASURED, not imagined. An earlier version of this
+# scenario included Unreal and Premiere shapes built from vendor docs; they
+# were dropped because researched-not-measured is exactly the mistake that let
+# project.godot go missing from the guard in the first place. These five were
+# each read off a real disk:
+#
+#   godot    -- an 18,724-file project on this machine. .tscn files reference
+#               siblings as res://scripts/main.gd, absolute from the root, and
+#               a .import sidecar sits beside every imported asset.
+#   blender  -- a downloaded asset pack in Downloads. // paths relative to the
+#               .blend, plus a .blend1 backup written beside it.
+#   flp      -- FL Studio, folder-per-project, with a Backup/ of timestamped
+#               autosaves: "NAME (autosaved at 16h00).flp". That is crash
+#               recovery -- version history -- and sorting it is the worst
+#               thing a tool could do to it.
+#   song     -- Studio One, folder-per-song, with Media/ Cache/ History/
+#               Bounces/ Stems/ subdirectories. Media/ is a name THIS tool
+#               would create, so a project that already has one is a direct
+#               collision hazard.
+#   ptx      -- Pro Tools, where ONE folder can hold several .ptx sessions,
+#               beside Audio Files/ and Session File Backups/, each session
+#               shadowed by an AppleDouble ._ twin.
+#
+# The guard does not know what any of these programs are. It refuses a folder
+# that holds a project marker, promptly, and says which file made it refuse.
+# That is the whole mechanism. Format-specific cleverness belongs in a fork.
+source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+
+W=$(workdir); trap 'rm -rf "$W"' EXIT
+
+build_godot() {
+  local d="$1"
+  mkdir -p "$d/scenes" "$d/scripts" "$d/assets/textures" "$d/.godot/imported"
+  printf 'config_version=5\n[application]\nrun/main_scene="res://scenes/main.tscn"\n' > "$d/project.godot"
+  printf '[gd_scene format=4]\n[ext_resource path="res://scripts/main.gd"]\n' > "$d/scenes/main.tscn"
+  : > "$d/scripts/main.gd"; : > "$d/scripts/player.gd"
+  local c
+  for c in ground rock sky; do : > "$d/assets/textures/$c.png"; : > "$d/assets/textures/$c.png.import"; done
+  for c in 06 12 17; do : > "$d/capture_t$c.png"; : > "$d/capture_t$c.png.import"; done
+  : > "$d/README.md"; : > "$d/CHANGELOG.md"
+}
+
+build_blender() {
+  local d="$1" c
+  mkdir -p "$d/textures"
+  : > "$d/Scene.blend"; : > "$d/Scene.blend1"
+  for c in Color Normal Roughness Displacement; do : > "$d/textures/Ground_$c.png"; done
+  : > "$d/render_final.png"; : > "$d/notes.txt"
+}
+
+build_flp() {
+  # Folder-per-project with a Backup/ of timestamped autosaves -- the version
+  # history. Note: Backup/ ALSO holds .flp, so it is refused too, which is
+  # correct: it is the crash-recovery record for this project.
+  local d="$1" c
+  mkdir -p "$d/Backup" "$d/Audio"
+  : > "$d/anthem.flp"
+  for c in "16h00" "15h42" "14h30"; do : > "$d/Backup/anthem (autosaved at $c).flp"; done
+  : > "$d/Audio/render.wav"; : > "$d/reference.mp3"
+}
+
+build_song() {
+  # Studio One. Media/ Cache/ History/ Bounces/ Stems/ -- and Media/ is a
+  # folder name THIS tool creates. A project holding one must still be refused
+  # whole; the collision must never happen because the project is never
+  # entered.
+  local d="$1" c
+  mkdir -p "$d/Media" "$d/Cache" "$d/History" "$d/Bounces" "$d/Stems"
+  : > "$d/closer.song"
+  : > "$d/Media/vocal.wav"; : > "$d/Media/guitar.wav"
+  for c in 1 2 3; do : > "$d/History/closer-$c.song"; done
+  : > "$d/Bounces/mixdown.wav"; : > "$d/Stems/drums.wav"
+}
+
+build_ptx() {
+  # Pro Tools. TWO sessions in one folder, so folder name != session name --
+  # the marker still fires on either. Each session shadowed by an AppleDouble
+  # ._ twin, which is hidden and must never be treated as a loose file.
+  local d="$1"
+  mkdir -p "$d/Audio Files" "$d/Bounced Files" "$d/Session File Backups"
+  : > "$d/Ever Green.ptx"; : > "$d/._Ever Green.ptx"
+  : > "$d/Song 2.ptx"; : > "$d/._Song 2.ptx"
+  : > "$d/Audio Files/kick.wav"; : > "$d/Audio Files/._kick.wav"
+  : > "$d/WaveCache.wfm"
+}
+
+declare -a NAMES=(godot blender flp song ptx)
+declare -a MARKERS=("project.godot" ".blend" ".flp" ".song" ".ptx")
+
+REFUSED=0
+for i in "${!NAMES[@]}"; do
+  eng="${NAMES[$i]}"; d="$W/roots/$eng"; "build_$eng" "$d"
+  BEFORE=$(find "$d" -type f | wc -l | tr -d ' ')
+  OUT=$("$SWEEP" "$d" 2>&1); CODE=$?
+  AFTER=$(find "$d" -type f | wc -l | tr -d ' ')
+  if [ "$CODE" = "2" ] && grep -qi "looks like a project" <<<"$OUT"; then
+    REFUSED=$((REFUSED + 1))
+  else
+    fail "$eng: a real project layout was not refused as a root (exit $CODE). Marker ${MARKERS[$i]}: $OUT"
+  fi
+  assert_eq "$BEFORE" "$AFTER" "$eng: nothing inside the project moved when it was scanned as a root"
+done
+assert_eq 5 "$REFUSED" "all five measured project layouts (godot, blender, flp, song, ptx) are refused as scan roots"
+
+# The refusal names the file, so a user knows why rather than being stonewalled.
+if grep -q "closer.song" <<<"$("$SWEEP" "$W/roots/song" 2>&1)"; then
+  pass "the refusal names the marker file, so the user can see why their folder was left alone"
+else
+  fail "the Studio One refusal did not name closer.song"
+fi
+
+# Studio One's Media/ is a name sweep itself uses. The project must be refused
+# BEFORE any grouping, so the collision cannot arise.
+SONG_OUT=$("$SWEEP" "$W/roots/song" 2>&1)
+if grep -qE '^  Media' <<<"$SONG_OUT"; then
+  fail "sweep tried to build a Media group inside a Studio One project that already has a Media/ folder: $SONG_OUT"
+else
+  pass "a project with its own Media/ folder is refused whole; no group is built to collide with it"
+fi
+
+# AppleDouble ._ twins are hidden and must never be filed as loose files. Test
+# it on a plain folder that DOES group -- a refused project would prove nothing
+# because it forms no groups at all. Six .wav that group, each shadowed by a
+# ._ twin: the twins must be skipped, the reals grouped. Grace off, or the
+# fresh files would be held back and nothing would group.
+TW="$W/twins"; mkdir -p "$TW"
+for c in 1 2 3 4 5 6; do : > "$TW/take_$c.wav"; : > "$TW/._take_$c.wav"; done
+TWIN_GROUPED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$TW" --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(any('._' in f for g in d['groups'] for f in g.get('members',[])))
+")
+assert_eq "False" "$TWIN_GROUPED" "no AppleDouble ._ twin is placed in a group (they are hidden)"
+REAL_GROUPED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$TW" --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(sum(g['count'] for g in d['groups']))
+")
+assert_eq 6 "$REAL_GROUPED" "the six real .wav files still group; only the twins are skipped"
+
+# --- the case the guard exists for: a Downloads folder AROUND projects ------
+#
+# Split by marker kind, because the two halves are genuinely different and
+# asserting one behaviour for both asserted something untrue.
+#
+# A project.godot marks its project's ROOT, so the project is exactly that
+# folder and the Downloads around it is ordinary: sweep the invoices, step
+# over the project.
+DL="$W/Downloads"; mkdir -p "$DL"
+build_godot "$DL/ad-astra"
+for n in 1 2 3 4; do : > "$DL/invoice_$n.pdf"; done
+
+INSIDE_BEFORE=$(find "$DL/ad-astra" -type f | wc -l | tr -d ' ')
+assert_exit 0 "a Downloads folder containing a ROOT-marked project is sweepable" -- "$SWEEP" "$DL"
+
+APPLY=$("$SWEEP" apply "$DL" --yes 2>&1); assert_eq 0 "$?" "apply succeeds on a folder holding a root-marked project"
+
+INSIDE_AFTER=$(find "$DL/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside the Godot project moved during an apply of the folder around it"
+[ -f "$DL/ad-astra/capture_t06.png" ] && pass "untouched: ad-astra/capture_t06.png" \
+  || fail "a project's internal file moved: ad-astra/capture_t06.png"
+
+
+# --- the same folder, WITH --depth ---------------------------------------
+# The arm above runs at the default depth of 1, where sweep never descends
+# into anything and the projects are safe for a reason that has nothing to do
+# with the guard. That made it a weak test of exactly the thing it claims.
+# With --depth, sweep does descend -- and before the nested-project guard it
+# grouped a Godot project's captures into Images while project.godot sat
+# listed as ungrouped. Applying that plan would have reorganised the project.
+# A project.godot marks the project ROOT, so the project is exactly that
+# folder: step over it and sort the invoices beside it. That is what this arm
+# proves at depth.
+#
+# Document markers (.blend, .flp, .als) behave the same way today, and that is
+# knowingly incomplete -- see issue #49. Nothing here asserts it is correct.
+DL2="$W/Downloads2"; mkdir -p "$DL2"
+build_godot "$DL2/ad-astra"
+for n in 1 2 3 4; do : > "$DL2/invoice_$n.pdf"; done
+
+D2_BEFORE=$(find "$DL2/ad-astra" -type f | wc -l | tr -d ' ')
+D2_OUT=$("$SWEEP" "$DL2" --depth 4 2>&1)
+
+# Nothing from inside the project may appear in any proposed group.
+LEAKED=$("$SWEEP" "$DL2" --depth 4 --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+mem=[f for g in d['groups'] for f in g.get('members',[])]
+print(sum(1 for f in mem if '/ad-astra/' in f))
+")
+assert_eq 0 "$LEAKED" "at --depth 4, not one file from inside the Godot project appears in any proposed group"
+
+if grep -qE '^  Documents' <<<"$D2_OUT"; then
+  pass "the folder's own loose invoices still group at --depth 4; only the project is off limits"
+else
+  fail "the loose invoices formed no group at depth, so this arm proves nothing: $D2_OUT"
+fi
+
+if grep -qE "holds? a project file|hold project files" <<<"$D2_OUT"; then
+  pass "the output says the project folder was left alone, rather than skipping it silently"
+else
+  fail "the project folder was stepped over with nothing in the output saying so: $D2_OUT"
+fi
+
+assert_exit 0 "apply at depth succeeds on a folder containing a root-marked project" -- "$SWEEP" apply "$DL2" --yes --depth 4
+D2_AFTER=$(find "$DL2/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$D2_BEFORE" "$D2_AFTER" "at --depth 4, an APPLY moved nothing inside the Godot project"
+
+
+
+
+# --- a folder named like a project file is not a project ---------------------
+NP="$W/NotAProject/ordinary.flp"; mkdir -p "$NP"
+for n in 1 2 3; do : > "$NP/receipt_$n.pdf"; done
+for n in 1 2 3; do : > "$W/NotAProject/loose_$n.pdf"; done
+# Scan the PARENT. Scanning ordinary.flp itself never reaches the
+# parent-marker detection, which is where the bug lived.
+NP_OUT=$("$SWEEP" "$W/NotAProject" 2>&1)
+if grep -qE '^  Documents' <<<"$NP_OUT"; then
+  pass "a plain folder named ordinary.flp sweeps normally; over-refusal is a cost too"
+else
+  fail "a plain folder named ordinary.flp was refused or grouped nothing: $NP_OUT"
+fi
+
+# KNOWN GAP, issue #49: a project DOCUMENT (.blend, .flp, .als, .song, .ptx)
+# references its assets upward, so stepping over the folder holding one still
+# loses assets sitting beside it. The complete rule -- refuse any scan with a
+# document marker below it -- was built and rejected: one .flp made a whole
+# Downloads folder unsweepable. Nothing here asserts the incomplete behaviour
+# is correct; the unit test pins it so changing it is deliberate.
+
+# --- a bundle is stepped over, its neighbours are not ------------------------
+FCP="$W/Movies"; mkdir -p "$FCP/MyMovie.fcpbundle/Original Media"
+for c in 1 2 3; do : > "$FCP/MyMovie.fcpbundle/Original Media/clip$c.mov"; done
+for n in 1 2 3; do : > "$FCP/invoice_$n.pdf"; done
+FCP_OUT=$("$SWEEP" "$FCP" --depth 4 2>&1)
+
+if grep -qE '^  Documents' <<<"$FCP_OUT"; then
+  pass "invoices beside a Final Cut library still group; the library is not contagious"
+else
+  fail "a folder holding a .fcpbundle refused to sweep its own invoices: $FCP_OUT"
+fi
+FCP_MANIFEST_BEFORE=$(find "$FCP/MyMovie.fcpbundle" -type f | sort)
+assert_exit 0 "apply beside a Final Cut library succeeds" -- "$SWEEP" apply "$FCP" --yes --depth 4
+FCP_MANIFEST_AFTER=$(find "$FCP/MyMovie.fcpbundle" -type f 2>/dev/null | sort)
+# Paths, not counts. Equal counts would also hold if a file moved WITHIN the
+# bundle, which is exactly the damage this is meant to rule out.
+if [ "$FCP_MANIFEST_BEFORE" = "$FCP_MANIFEST_AFTER" ]; then
+  pass "every file inside the Final Cut library is at the same path it started at"
+else
+  fail "the Final Cut library's contents changed path:
+$(diff <(echo "$FCP_MANIFEST_BEFORE") <(echo "$FCP_MANIFEST_AFTER") || true)"
+fi
+
+
+# --- a symlinked project marker still marks the project ----------------------
+# Requiring the marker to be a regular file (to stop a DIRECTORY named
+# ordinary.flp freezing its parent) made a symlinked Cargo.toml invisible,
+# because symlink_metadata reports a link as neither file nor directory. The
+# Cargo project it marked was reorganised.
+SYM="$W/SymProj"; mkdir -p "$SYM/real"
+: > "$SYM/real/Cargo.toml"; ln -s "$SYM/real/Cargo.toml" "$SYM/Cargo.toml"
+for n in 1 2 3; do : > "$SYM/doc_$n.pdf"; done
+SYM_BEFORE=$(find "$SYM" -type f -o -type l | sort)
+assert_exit 2 "a symlinked Cargo.toml still marks the project" -- "$SWEEP" "$SYM"
+SYM_AFTER=$(find "$SYM" -type f -o -type l | sort)
+assert_eq "$SYM_BEFORE" "$SYM_AFTER" "the refused scan moved nothing"
+
+# --- a download that is a DIRECTORY ------------------------------------------
+# Safari writes movie.mp4.download/ with the partial data inside it. The plan's
+# in-flight check only ever sees files, so nothing caught the directory form:
+# sweep descended into one and proposed its three partial members as a group.
+DLD="$W/DirDownload"; mkdir -p "$DLD/movie.mp4.download"
+for n in 1 2 3; do : > "$DLD/movie.mp4.download/part_$n.mp4"; done
+for n in 1 2 3; do : > "$DLD/keep_$n.pdf"; done
+DLD_OUT=$("$SWEEP" "$DLD" --depth 2 2>&1)
+if grep -qE '^  Media' <<<"$DLD_OUT"; then
+  fail "sweep descended into movie.mp4.download/ and grouped its partial members: $DLD_OUT"
+else
+  pass "a directory-form download is stepped over, not descended into"
+fi
+if grep -q "download still in progress" <<<"$DLD_OUT"; then
+  pass "and it is disclosed as a download, not as a folder holding a project file"
+else
+  fail "the directory-form download was skipped silently, or under the wrong reason: $DLD_OUT"
+fi
+if grep -qE '^  Documents' <<<"$DLD_OUT"; then
+  pass "the folder's own loose files still group"
+else
+  fail "nothing grouped, so this arm proves nothing: $DLD_OUT"
+fi
+
+# --- the refusal advice has to be true for the marker that triggered it -------
+# "Sweep the folder that contains it instead" is safe for a bundle and for a
+# project root. It is NOT safe for a document, whose assets can sit in that
+# very folder -- issue #49. Sending someone there points them at the one case
+# sweep does not handle.
+ADV="$W/Advice"; mkdir -p "$ADV"; : > "$ADV/track.als"
+ADV_OUT=$("$SWEEP" "$ADV" 2>&1 || true)
+if grep -q "does not hold this project" <<<"$ADV_OUT"; then
+  pass "a document refusal does not tell the user to sweep the folder around it"
+else
+  fail "a .als refusal gave the containing-folder advice, which is the #49 gap: $ADV_OUT"
+fi
+BND="$W/BandRoot/Song.band"; mkdir -p "$BND"; : > "$BND/track.wav"
+BND_OUT=$("$SWEEP" "$BND" 2>&1 || true)
+if grep -q "it is a project bundle" <<<"$BND_OUT"; then
+  pass "a package root is told it IS the package, not that one is inside it"
+else
+  fail "a .band root was told a package directory is in it: $BND_OUT"
+fi
+
+# --- a folder that holds ONLY a directory-form download ----------------------
+# The disclosure and the conclusion have to agree. This printed "1 folder is a
+# download still in progress" and then "Nothing here needs organising", which
+# denies what it just said. The earlier arm missed it by adding loose PDFs,
+# which made the plan non-empty.
+ONLY="$W/OnlyDownload"; mkdir -p "$ONLY/movie.mp4.download"
+for n in 1 2 3; do : > "$ONLY/movie.mp4.download/part_$n.mp4"; done
+ONLY_OUT=$("$SWEEP" "$ONLY" --depth 2 2>&1 || true)
+if grep -q "Nothing here needs organising" <<<"$ONLY_OUT"; then
+  fail "a folder of nothing but an in-flight download was called tidy: $ONLY_OUT"
+else
+  pass "a folder holding only a directory-form download is not called tidy"
+fi
+if grep -q "finish downloading on" <<<"$ONLY_OUT"; then
+  pass "and it is told to run again later rather than to pass --since 0"
+else
+  fail "the guidance for a directory-form download was wrong or missing: $ONLY_OUT"
+fi
+
+# --- a bundle is not a folder that HOLDS a project file ----------------------
+BP="$W/BundleParent"; mkdir -p "$BP/Song.band"
+for n in 1 2 3; do : > "$BP/Song.band/track_$n.wav"; done
+for n in 1 2 3; do : > "$BP/loose_$n.pdf"; done
+BP_OUT=$("$SWEEP" "$BP" --depth 2 2>&1 || true)
+if grep -q "single item" <<<"$BP_OUT"; then
+  pass "a nested bundle is disclosed as being a package, not as holding a project file"
+else
+  fail "Song.band was reported as a folder that holds a project file: $BP_OUT"
+fi
+
+# --- a marker symlink is a marker, and its target is never resolved ----------
+# is_file() via symlink_metadata dropped symlinked markers; is_file() via
+# metadata fixed that by resolving a path outside the scan root, which this
+# scanner promises never to do. !is_dir() on the link needs neither.
+# The link must point at a DIRECTORY outside the root. Pointing it at a
+# regular file proves nothing: the old follow-the-target code sees a
+# non-directory and recognises the marker, and so does the new code looking at
+# the link itself. Both pass, so that arm could not detect a restoration of
+# the escape. A link to a directory separates them --
+#   metadata():          follows, sees a directory, NOT a marker, sweeps
+#   symlink_metadata():  sees a link, not a directory, marker, refuses
+OUT_T="$W/OutsideTarget"; mkdir -p "$OUT_T/somedir"
+SL="$W/SymOutside"; mkdir -p "$SL"
+ln -s "$OUT_T/somedir" "$SL/Cargo.toml"
+for n in 1 2 3; do : > "$SL/doc_$n.pdf"; done
+assert_exit 2 "a Cargo.toml symlinked to a directory outside the root is still a marker, and its target is never resolved" -- "$SWEEP" "$SL"
+
+# And the ordinary case: a link to a regular file outside the root.
+OUT_F="$W/OutsideFile"; mkdir -p "$OUT_F"
+: > "$OUT_F/Cargo.toml"
+SLF="$W/SymOutsideFile"; mkdir -p "$SLF"
+ln -s "$OUT_F/Cargo.toml" "$SLF/Cargo.toml"
+for n in 1 2 3; do : > "$SLF/doc_$n.pdf"; done
+assert_exit 2 "a symlinked Cargo.toml still marks the project" -- "$SWEEP" "$SLF"
+
+# And a plain directory named like a document marker is still ordinary.
+OD="$W/OrdinaryDir"; mkdir -p "$OD/ordinary.flp"
+: > "$OD/ordinary.flp/receipt.pdf"
+for n in 1 2 3; do : > "$OD/loose_$n.pdf"; done
+OD_OUT=$("$SWEEP" "$OD" 2>&1 || true)
+if grep -qE '^  Documents' <<<"$OD_OUT"; then
+  pass "a plain directory named ordinary.flp still does not freeze its parent"
+else
+  fail "the !is_dir() form reintroduced the ordinary.flp over-refusal: $OD_OUT"
+fi
+
+# --- a download that IS the scan root ----------------------------------------
+# The directory check only ran for children, so pointing sweep straight at
+# movie.mp4.part sorted its own partial members into a Media group. A
+# .download/ happened to fail closed on this Mac because Spotlight calls it a
+# package -- under a false "project bundle" reason -- and would fail open
+# anywhere else.
+for suffix in .part .download .crdownload; do
+  RT="$W/RootDl$suffix/movie.mp4$suffix"; mkdir -p "$RT"
+  for n in 1 2 3; do : > "$RT/part_$n.mp4"; done
+  RT_BEFORE=$(find "$RT" -type f | sort)
+  assert_exit 2 "a $suffix directory as the scan root is refused as a download, not swept" -- "$SWEEP" "$RT" --since 0
+  RT_OUT=$("$SWEEP" "$RT" --since 0 2>&1 || true)
+  if grep -q "download still in progress" <<<"$RT_OUT"; then
+    pass "$suffix: refused for being a download, not for being a project bundle"
+  else
+    fail "$suffix root refused under the wrong reason: $RT_OUT"
+  fi
+  RT_AFTER=$(find "$RT" -type f | sort)
+  assert_eq "$RT_BEFORE" "$RT_AFTER" "$suffix: nothing inside the download moved"
+done
+
+# --- mixed held-back reasons give guidance true of both ----------------------
+# --since 0 cannot include a download. With one recent file and one .part
+# beside it, the advice promised something the flag could not do.
+MX="$W/Mixed"; mkdir -p "$MX/b.part"
+: > "$MX/recent.pdf"
+: > "$MX/a.crdownload"
+# --since 1d, because the harness exports SWEEP_GRACE_SECS=0 and a mixed case
+# needs a live window. The flag beats the environment variable by design.
+MX_OUT=$("$SWEEP" "$MX" --depth 2 --since 1d 2>&1 || true)
+if grep -q "downloads have to finish first" <<<"$MX_OUT"; then
+  pass "mixed recent and in-flight gets guidance that is true of both"
+else
+  fail "mixed held-back reasons were told --since 0 includes everything: $MX_OUT"
+fi
+
+# --- a generic OS package is not a project bundle ----------------------------
+PG="$W/PagesDoc"; mkdir -p "$PG/Example.pages"
+: > "$PG/Example.pages/index.xml"
+for n in 1 2 3; do : > "$PG/loose_$n.pdf"; done
+PG_OUT=$("$SWEEP" "$PG" --depth 2 2>&1 || true)
+if grep -q "project bundle" <<<"$PG_OUT"; then
+  fail "a Pages document was called a project bundle: $PG_OUT"
+else
+  pass "a generic OS package is not described as a project bundle"
+fi

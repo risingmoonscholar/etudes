@@ -60,7 +60,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 210 tests
+cargo test --all                # 225 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -141,13 +141,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 36 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 38 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 36 scenarios, 1 of them failing
+bash stress/run.sh        # 38 scenarios, 1 of them failing
 ```
 
 The one failing scenario is real and it is [filed](../../issues), with a
