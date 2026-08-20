@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/capture-demos.sh",
-  "commit": "f7c27ef",
+  "commit": "64974f1",
   "version": "0.4.0",
   "note": "Real stdout from binaries built out of this tree, run against the synthetic mkfx fixture. Not hand-written.",
   "substitution_rule": "The temporary directory the fixture was built in is rendered as ~/Desktop. No other edit is made to captured output. The real path is a mktemp name and is not recorded.",
