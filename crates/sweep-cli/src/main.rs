@@ -108,14 +108,19 @@ fn main() -> ExitCode {
         Some("undo") => cmd_undo(&args),
         Some("forget") => cmd_forget(&args),
         Some("review") => cmd_review(&args),
-        Some("--") => match args.get(1) {
-            Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
-            None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
+        // Every remaining shape -- a bare path, a path behind flags, `--`
+        // -- goes through the one finder. The arm this replaces matched any
+        // leading flag and scanned the current directory, so
+        // `sweep --depth 2 ~/Downloads` reported on wherever the user
+        // happened to be standing and never looked at the path they typed.
+        _ => match path_arg("", &args) {
+            Ok(Some(p)) => run_scan(&p, &args),
+            Ok(None) => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                ExitCode::from(2)
+            }
         },
-        Some(p) if p.starts_with('-') => {
-            run_scan(&std::env::current_dir().unwrap_or_default(), &args)
-        }
-        Some(p) => run_scan(&PathBuf::from(expand_tilde(p)), &args),
     }
 }
 
@@ -553,7 +558,25 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_path(args: &[String]) -> Result<PathBuf, String> {
+/// The positional PATH for `cmd`, skipping any flag's value while it looks.
+///
+/// This was `apply_path`, hardcoded to "apply", and the bug it fixed was
+/// present in every other command that takes a path:
+///
+///   sweep --depth 2 DIR          scanned the CURRENT directory and never
+///                                looked at DIR. Exit 0, no warning.
+///   sweep review --depth 2 DIR   took "2" as the path and failed to read it.
+///
+/// Both hand-rolled the search as "the first argument not starting with -",
+/// which is the value of `--depth`. `apply` alone consulted COMMAND_FLAGS to
+/// step over a flag's value, and had a test named
+/// `apply_depth_value_is_not_mistaken_for_the_path` guarding it.
+///
+/// So this is the same lesson as COMMAND_FLAGS itself, whose comment says a
+/// per-command list "left the next command exposed" five times running. One
+/// finder, parameterised by command, means a command cannot pick the path
+/// wrongly rather than merely being unlikely to.
+fn path_arg(cmd: &str, args: &[String]) -> Result<Option<PathBuf>, String> {
     let mut path = None;
     let mut i = 0;
     while i < args.len() {
@@ -564,9 +587,7 @@ fn apply_path(args: &[String]) -> Result<PathBuf, String> {
             }
             break;
         }
-        // Only to skip a flag's value while hunting for the path. Whether the
-        // flag is allowed at all is decided at dispatch now.
-        if let Some((_, allowed)) = COMMAND_FLAGS.iter().find(|(c, _)| *c == "apply")
+        if let Some((_, allowed)) = COMMAND_FLAGS.iter().find(|(c, _)| *c == cmd)
             && let Some((_, takes_value)) = allowed.iter().find(|(name, _)| *name == a)
         {
             i += if *takes_value { 2 } else { 1 };
@@ -580,8 +601,12 @@ fn apply_path(args: &[String]) -> Result<PathBuf, String> {
         }
         i += 1;
     }
+    Ok(path)
+}
 
-    path.ok_or_else(|| "apply requires an explicit PATH. Run `sweep help`.".to_string())
+fn apply_path(args: &[String]) -> Result<PathBuf, String> {
+    path_arg("apply", args)?
+        .ok_or_else(|| "apply requires an explicit PATH. Run `sweep help`.".to_string())
 }
 
 fn expand_tilde(p: &str) -> String {
@@ -964,12 +989,14 @@ fn sealer() -> Option<KeychainSeal> {
 /// a stored plan is a second plaintext index of the user's filenames, and
 /// deleting the asset beats protecting it.
 fn cmd_review(args: &[String]) -> ExitCode {
-    let path = args
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with('-'))
-        .map(|p| PathBuf::from(expand_tilde(p)))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let path = match path_arg("review", &args[1..]) {
+        Ok(Some(p)) => p,
+        Ok(None) => std::env::current_dir().unwrap_or_default(),
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
 
     let depth = match parse_depth(args) {
         Ok(d) => d,
@@ -1305,8 +1332,18 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     };
 
     // A named path reverses that folder's apply, whichever one it was.
-    if let Some(named) = args.iter().skip(1).find(|a| !a.starts_with('-')) {
-        let path = PathBuf::from(expand_tilde(named));
+    // Correct by coincidence before this: `undo` reads no value-bearing flag,
+    // so "first argument not starting with -" happened to be the path. The
+    // day someone gives undo a flag with a value, it would have broken the
+    // same way review did.
+    let named = match path_arg("undo", &args[1..]) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Some(path) = named {
         let Ok(target) = path.canonicalize() else {
             eprintln!("sweep: no folder at {}", path.display());
             return ExitCode::from(3);
@@ -1770,6 +1807,53 @@ mod tests {
                     "{name} is accepted but undocumented in `sweep help`"
                 );
             }
+        }
+    }
+
+    /// Every command that takes a path finds the same path, whichever side of
+    /// the flags it sits on.
+    ///
+    /// Derived from COMMAND_FLAGS rather than hand-listed, so a command added
+    /// later is covered without anyone remembering to cover it. That is the
+    /// point of the fix: `apply` had this right and a test guarding it, while
+    /// the scan path and `review` each hand-rolled the search and got it
+    /// wrong in different ways.
+    #[test]
+    fn every_command_finds_the_path_on_either_side_of_its_flags() {
+        for (cmd, flags) in COMMAND_FLAGS {
+            let Some((flag, takes_value)) = flags.iter().find(|(_, v)| *v) else {
+                continue; // no value-bearing flag: the ambiguity cannot arise
+            };
+            assert!(takes_value);
+            let value = match *flag {
+                "--depth" => "2",
+                "--since" => "1d",
+                "--only" => "Documents",
+                other => panic!("{other} takes a value but this test has none for it"),
+            };
+
+            let after: Vec<String> = vec![
+                "/tmp/somewhere".into(),
+                (*flag).to_string(),
+                value.to_string(),
+            ];
+            let before: Vec<String> = vec![
+                (*flag).to_string(),
+                value.to_string(),
+                "/tmp/somewhere".into(),
+            ];
+
+            assert_eq!(
+                path_arg(cmd, &after).expect("path after flags"),
+                Some(PathBuf::from("/tmp/somewhere")),
+                "{cmd}: the path was lost when it came before {flag}"
+            );
+            assert_eq!(
+                path_arg(cmd, &before).expect("path before flags"),
+                Some(PathBuf::from("/tmp/somewhere")),
+                "{cmd}: {flag}'s value {value:?} was mistaken for the path, or \
+                 the path was ignored and the current directory used instead"
+            );
         }
     }
 
