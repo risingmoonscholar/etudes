@@ -132,12 +132,12 @@ jobs:
           # `command grep`, not `grep`: a shell that wraps grep with something
           # else can change what -qv means. Verified under bash, which is what
           # `run:` uses.
-          if printf '%s\n' "$changed" | command grep -qvE '^(README\.md|CHANGELOG\.md|CONTRIBUTING\.md|LICENSE|demo/|docs/|\.gitignore)'; then
+          if printf '%s\n' "$changed" | command grep -qvE '^(README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|\.gitignore)'; then
             echo "run=yes" >> "$GITHUB_OUTPUT"
             echo "reason=the diff touches something outside documentation" >> "$GITHUB_OUTPUT"
           else
             echo "run=no" >> "$GITHUB_OUTPUT"
-            echo "reason=every changed path is documentation or demo output" >> "$GITHUB_OUTPUT"
+            echo "reason=every changed path is documentation" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Say what was decided

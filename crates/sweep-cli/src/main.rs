@@ -1660,7 +1660,9 @@ sweep {v}
     cargo test                     the full suite
     scripts/no-network-test.sh     the suite with sockets denied by the OS
 
-  Destroy all journals and the key:  sweep forget
+  Destroy sweep's journals:  sweep forget
+    The key is shared with stash, so it goes only when no stash journal is
+    holding files, and you are asked first.
 ",
         v = env!("CARGO_PKG_VERSION"),
         count = count,

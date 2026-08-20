@@ -9,7 +9,7 @@ $ sweep ~/Desktop
 Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
 
   Screenshots      34 files   named "Screenshot ..."
-  Photos, Aug 19   27 files   camera names, taken within 3 days
+  Photos, Jan 15   27 files   camera names, taken within 3 days
   Installers        3 files   .dmg and .pkg
   Archives          3 files   .tar, .zip
   Documents        17 files   .docx, .md, .pdf, .txt
@@ -17,11 +17,14 @@ Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
   Scripts           3 files   .sh
 
   14 files look like personal records and were not touched
-  4 files matched no group and were left where they are
+  1 file changed too recently to judge and was left alone
+  3 files matched no group and were left where they are
 
   skipped 1 hidden item and 3 symlinks
 
 Nothing has been moved.  Nothing left this machine.
+Note: this listing is in your terminal scrollback.
+Review: sweep review <path>     Apply: sweep apply <path> --yes
 ```
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
@@ -33,16 +36,16 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
-| **`sweep`** | Organises the obvious and leaves the private alone | v0.3 |
-| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.3 |
-| **`unpack`** | One command for every archive format, safely | v0.3 |
+| **`sweep`** | Organises the obvious and leaves the private alone | v0.5 |
+| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5 |
+| **`unpack`** | One command for every archive format, safely | v0.5 |
 
 ## Install
 
 ```sh
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.4.0 sweep-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.4.0 stash-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.4.0 unpack-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.0 sweep-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.0 stash-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.0 unpack-cli
 ```
 
 The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
@@ -53,6 +56,9 @@ whatever `main` is at that moment, so two people running the same command on the
 same day can get binaries that behave differently -- which is how three exit
 codes changed under a version number that never moved. Drop the flag to track
 `main` deliberately.
+
+Security properties, and the ones this does not have, are in
+[SECURITY.md](SECURITY.md).
 
 ## Check the claims in a minute
 
@@ -91,6 +97,61 @@ cargo run -p sweep-cli --bin sweep -- /tmp/demo
 cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 ```
 
+## What sweep refuses to touch
+
+Four things, and the output always says which one applied and to how many
+files. A count with no reason beside it is the defect this project keeps
+finding in itself.
+
+**Your projects.** A folder holding `project.godot`, `Cargo.toml`, a `.flp`,
+a `.blend`, a `.ptx` -- 25 markers in all -- is stepped over rather than
+sorted. A Godot `.tscn` references its siblings as `res://scripts/main.gd`,
+absolute from the project root, so moving any file inside one breaks every
+reference to it. The list was measured against real projects on a real disk,
+not assembled from vendor documentation.
+
+**Anything macOS treats as a single item.** A `.fcpbundle`, a `.band`, a
+`.logicx`, a `.app`, a Pages document. The folder holding one is ordinary and
+still gets swept -- the bundle is stepped over as a unit, not made contagious.
+
+**Downloads still arriving.** `.part`, `.crdownload`, `.download` and friends,
+whether they are files or directories. Safari writes `movie.mp4.download/`
+with the partial data inside it.
+
+**Anything touched in the last day.** A file you are working on right now is
+not a file to be filed. `--since 6h` narrows the window, `--since 0` turns it
+off, and an unreadable value is an error rather than a silent fallback to the
+default.
+
+```console
+$ sweep ~/Downloads
+
+  Documents       12 files   .pdf
+  1 folder was left alone because it holds a project file
+  2 files changed too recently to judge and were left alone
+  1 download is still in progress and was left alone
+```
+
+### What it does not protect
+
+`sweep` never reads your files, and that has a cost worth stating plainly.
+
+A project *document* -- a `.blend`, an `.flp`, an `.als` -- references its
+assets relative to itself and freely upward, out of its own folder. Sweep
+steps over the folder holding one, which is right for a `project.godot` that
+marks a project root by definition, and **not enough** for a `.blend` in
+`scenes/` that points at `../textures/`. Those textures can still be sorted.
+[Issue #49](../../issues/49) carries four reproductions.
+
+The complete rule -- refuse any scan with a project document anywhere below it
+-- was built, reviewed and rejected: one `.flp` made an entire Downloads folder
+unsweepable, which removes the tool from the folder it exists for.
+
+Similarly, a Final Cut library told to keep its media *outside* the bundle has
+no filesystem-level mark saying which library owns that media. That
+relationship lives in the library's own database. Sweep protects managed
+layouts; it cannot protect an arrangement only the application knows about.
+
 ## Two rules the tools share
 
 **Never coin a label the filesystem did not already contain.** A folder named
@@ -113,7 +174,8 @@ rendering is drawn from. A tool that tells a person one thing and an agent
 another is the worst kind of interface.
 
 ```sh
-sweep ~/Desktop --json          # the plan
+sweep ~/Desktop --json          # the plan, including projects_skipped,
+                                # downloads_skipped and packages_skipped
 stash ~/Desktop --for 3d --json # what moved, and when it is due
 stash status --json             # what is held, and whether it is overdue
 unpack a.zip --list --json      # inspect an archive without extracting
