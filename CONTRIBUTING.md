@@ -68,11 +68,13 @@ request does not reliably arrive.
 
 Two things worth having next to the rule:
 
-- **The stress suite does not run on pull requests.** `fmt, clippy, test` pass in
-  seconds while the ratchet job is skipped, so a green PR page says nothing about
-  the scenarios. One pull request existed *because* the ratchet was red and its
-  own page showed all-green throughout. Dispatch `ci.yml` on the branch by hand
-  before merging anything touching `stress/` or the code it exercises.
+- **The stress suite runs on pull requests, and always reports.** It did not
+  once: the ratchet job was skipped on PRs, so a green page said nothing about
+  the scenarios, and one pull request existed *because* the ratchet was red
+  while its own page showed all-green throughout. It now runs whenever a change
+  touches code or the harness, and reports a skip -- rather than nothing -- for
+  documentation-only diffs. A required check that never reports leaves a pull
+  request pending forever, which is why it reports either way.
 - **A rebased branch is re-tested on the resolved tree.** Running the suite
   during a rebase with unresolved conflicts still prints a passing count. That is
   a number shaped like a result.
