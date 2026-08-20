@@ -669,8 +669,8 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             plan.scanned
         );
         print_refused_by_policy_note(&plan);
-        print_projects_skipped_note(&plan);
         print_unreadable_warning(&plan);
+        print_left_alone_notes(&plan, false);
         // "Nothing here needs organising" is only true when nothing was held
         // back. Files inside the grace window or still downloading DO need
         // organising -- just not yet -- and saying otherwise sends someone
@@ -776,6 +776,7 @@ fn print_unreadable_warning(p: &plan::Plan) {
 /// mode should get the same disclosure. Worded without "system" alone,
 /// since `NEVER_ENTER` also covers plain noise directories like
 /// `node_modules`, not just credential or OS locations.
+<<<<<<< HEAD
 /// Say which project folders were stepped over.
 ///
 /// Silence here would be the grace window's mistake again: a folder that
@@ -815,6 +816,8 @@ fn print_projects_skipped_note(p: &plan::Plan) {
     }
 }
 
+=======
+>>>>>>> afa9810 (Say what was left behind, in every command that leaves something behind)
 fn print_refused_by_policy_note(p: &plan::Plan) {
     if p.skipped_system > 0 {
         println!(
@@ -826,6 +829,58 @@ fn print_refused_by_policy_note(p: &plan::Plan) {
                 "locations"
             }
         );
+    }
+}
+
+/// Say what the plan deliberately left where it was, and why.
+///
+/// Scan, apply, and review all draw from the same plan. Keeping their human
+/// disclosure here prevents a command from reporting only the work it did
+/// while silently omitting files it held back. Every count shares a line with
+/// its reason: separating them caused a real user to attach a large count to
+/// the wrong explanation.
+fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
+    let counts = p.sensitive_counts();
+    let personal: usize = counts.values().sum();
+    let recent = p.too_recent();
+    let downloading = p.in_flight();
+    let unclear = p.no_clear_group();
+    let projects = p.skipped_project;
+
+    if personal + recent + downloading + unclear + projects == 0 {
+        return;
+    }
+
+    println!();
+    if personal == 1 {
+        println!("  1 file looks like a personal record and was not touched");
+    } else if personal > 1 {
+        println!("  {personal} files look like personal records and were not touched");
+    }
+    if explain {
+        for (cat, n) in &counts {
+            println!("      {n:>3}  {}", cat.describe());
+        }
+    }
+    if recent == 1 {
+        println!("  1 file changed too recently to judge and was left alone");
+    } else if recent > 1 {
+        println!("  {recent} files changed too recently to judge and were left alone");
+    }
+    if downloading == 1 {
+        println!("  1 download is still in progress and was left alone");
+    } else if downloading > 1 {
+        println!("  {downloading} downloads are still in progress and were left alone");
+    }
+    if unclear == 1 {
+        println!("  1 file matched no group and was left where it is");
+    } else if unclear > 1 {
+        println!("  {unclear} files matched no group and were left where they are");
+    }
+    if projects == 1 {
+        println!("  1 folder was left alone because it holds a project file");
+    } else if projects > 1 {
+        println!("  {projects} folders were left alone because they hold project files");
     }
 }
 
@@ -855,59 +910,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
         );
     }
 
-    let counts = p.sensitive_counts();
-    let personal: usize = counts.values().sum();
-    let unclear = p.no_clear_group();
-    // Two separate outcomes, reported separately. They shared a "Left alone"
-    // heading, privacy line first, and a real user read "Left alone 32" plus
-    // the only sentence with words in it and concluded the tool had refused
-    // 32 files for privacy. One file had been. A count and its reason must
-    // not come from different lines.
-    if personal + unclear + p.too_recent() + p.in_flight() > 0 {
-        println!();
-    }
-    if personal > 0 {
-        // Singular agreement matters here: "1 look like" reads straight past
-        // the 1 as if it were a plural count. The per-category breakdown
-        // stays behind --explain; the summary must not read like an
-        // inventory of the user's private life.
-        if personal == 1 {
-            println!("  1 file looks like a personal record and was not touched");
-        } else {
-            println!("  {personal} files look like personal records and were not touched");
-        }
-        if explain {
-            for (cat, n) in &counts {
-                println!("      {n:>3}  {}", cat.describe());
-            }
-        }
-    }
-    // Each reason says why on its own line, for the same reason the personal
-    // and ungrouped counts were split this morning: a number whose reason
-    // lives on a different line gets attached to the wrong reason.
-    let recent = p.too_recent();
-    if recent > 0 {
-        if recent == 1 {
-            println!("  1 file changed too recently to judge and was left alone");
-        } else {
-            println!("  {recent} files changed too recently to judge and were left alone");
-        }
-    }
-    let downloading = p.in_flight();
-    if downloading > 0 {
-        if downloading == 1 {
-            println!("  1 download is still in progress and was left alone");
-        } else {
-            println!("  {downloading} downloads are still in progress and were left alone");
-        }
-    }
-    if unclear > 0 {
-        if unclear == 1 {
-            println!("  1 file matched no group and was left where it is");
-        } else {
-            println!("  {unclear} files matched no group and were left where they are");
-        }
-    }
+    print_left_alone_notes(p, explain);
 
     if p.skipped_hidden + p.skipped_symlink > 0 {
         println!(
@@ -928,7 +931,6 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     }
     print_refused_by_policy_note(p);
     print_unreadable_warning(p);
-    print_projects_skipped_note(p);
     if p.root_is_synced {
         println!("\n  warning: this folder is inside a cloud-synced tree");
     }
@@ -1022,8 +1024,16 @@ fn cmd_review(args: &[String]) -> ExitCode {
         }
     };
     let mut p = plan::build(&outcome);
+    print_left_alone_notes(&p, false);
     if p.groups.is_empty() {
-        println!("\nNothing here needs organising.");
+        if p.too_recent() + p.in_flight() > 0 {
+            println!(
+                "\nNothing else here needs organising. Run again later, or pass\n\
+                 --since 0 to include everything."
+            );
+        } else {
+            println!("\nNothing here needs organising.");
+        }
         return ExitCode::from(1);
     }
 
@@ -1254,6 +1264,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             None => true,
         };
     }
+    print_left_alone_notes(&p, false);
     if p.moves() == 0 {
         eprintln!("sweep: nothing to apply.");
         return ExitCode::from(1);
