@@ -776,48 +776,6 @@ fn print_unreadable_warning(p: &plan::Plan) {
 /// mode should get the same disclosure. Worded without "system" alone,
 /// since `NEVER_ENTER` also covers plain noise directories like
 /// `node_modules`, not just credential or OS locations.
-<<<<<<< HEAD
-/// Say which project folders were stepped over.
-///
-/// Silence here would be the grace window's mistake again: a folder that
-/// looks tidied while a project inside it was deliberately skipped, with
-/// nothing saying so. A user who wonders why their project is untouched
-/// should not have to guess.
-fn print_projects_skipped_note(p: &plan::Plan) {
-    if p.skipped_project == 1 {
-        println!("\n  1 folder was left alone because it holds a project file");
-    } else if p.skipped_project > 1 {
-        println!(
-            "\n  {} folders were left alone because they hold project files",
-            p.skipped_project
-        );
-    }
-    // Counted and worded apart from projects. A movie.mp4.download/ is not a
-    // folder that holds a project file, and putting its count under that
-    // sentence would attach a number to a reason that is not its own.
-    if p.skipped_in_flight == 1 {
-        println!("\n  1 folder is a download still in progress and was left alone");
-    } else if p.skipped_in_flight > 1 {
-        println!(
-            "\n  {} folders are downloads still in progress and were left alone",
-            p.skipped_in_flight
-        );
-    }
-    // A Song.band does not HOLD a project file. It is one. And the same
-    // counter carries generic OS packages -- a Pages document is not a
-    // project bundle, so the sentence says package, which is true of both.
-    if p.skipped_package == 1 {
-        println!("\n  1 folder was left alone because macOS treats it as a single item");
-    } else if p.skipped_package > 1 {
-        println!(
-            "\n  {} folders were left alone because macOS treats each as a single item",
-            p.skipped_package
-        );
-    }
-}
-
-=======
->>>>>>> afa9810 (Say what was left behind, in every command that leaves something behind)
 fn print_refused_by_policy_note(p: &plan::Plan) {
     if p.skipped_system > 0 {
         println!(
@@ -846,8 +804,10 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     let downloading = p.in_flight();
     let unclear = p.no_clear_group();
     let projects = p.skipped_project;
+    let incomplete = p.skipped_in_flight;
+    let packages = p.skipped_package;
 
-    if personal + recent + downloading + unclear + projects == 0 {
+    if personal + recent + downloading + unclear + projects + incomplete + packages == 0 {
         return;
     }
 
@@ -881,6 +841,20 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
         println!("  1 folder was left alone because it holds a project file");
     } else if projects > 1 {
         println!("  {projects} folders were left alone because they hold project files");
+    }
+    // Each on its own line with its own reason. A movie.mp4.download/ is not
+    // a folder that holds a project file, and a Pages document is not a
+    // project bundle -- putting either count under the sentence above would
+    // attach a number to a reason that is not its own.
+    if incomplete == 1 {
+        println!("  1 folder is a download still in progress and was left alone");
+    } else if incomplete > 1 {
+        println!("  {incomplete} folders are downloads still in progress and were left alone");
+    }
+    if packages == 1 {
+        println!("  1 folder was left alone because macOS treats it as a single item");
+    } else if packages > 1 {
+        println!("  {packages} folders were left alone because macOS treats each as a single item");
     }
 }
 
