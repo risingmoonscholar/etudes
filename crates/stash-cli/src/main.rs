@@ -43,7 +43,8 @@ USAGE
 DURATION
     30m  2h  3d  1w        default: no deadline, restore whenever
 
-stash moves EVERYTHING, including files sweep would refuse to organise.
+stash moves everything sweep can see, including the files sweep would refuse
+to organise. Hidden items are left in place, and it says how many.
 That is deliberate: clearing a folder for a screen share means clearing it.
 Everything is reversible, and stash prints what it took.";
 

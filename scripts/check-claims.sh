@@ -45,7 +45,7 @@ claim() {
 tests_actual=$(cargo test --all 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
-for f in README.md; do
+for f in README.md demo/index.html; do
   claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
 
@@ -55,10 +55,10 @@ done
 # a bug in the first version of this fix: it read 36 with one file untracked,
 # so the readme was corrected to a number no clone would ever see.
 scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
-# Every file that states the number, not just the readme. It is
+# Every file that states the number, not just the readme. demo/index.html is
 # the published site: it can be wrong in front of everyone while CI is green,
 # which is the exact failure this script exists to catch, one file over.
-for f in README.md; do
+for f in README.md demo/index.html; do
   claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 done
 
@@ -88,6 +88,23 @@ fi
 # The version the site shows, against the version the binaries report.
 # It was hardcoded in the page template as "v0.3" and stayed there through the
 # whole of 0.4, on the most public surface this project has. A version is a
+# claim like any other.
+site_version=$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('demo/transcripts.json'))
+    print(d.get('version',''))
+except Exception:
+    print('')
+")
+real_version=$(grep -m1 '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+if [ -z "$site_version" ]; then
+  bad "demo/transcripts.json records no version; the site cannot show one. Re-run scripts/capture-demos.sh"
+elif [ "$site_version" = "$real_version" ]; then
+  ok "the site shows v$site_version, which is what the binaries report"
+else
+  bad "the site shows v$site_version; the workspace is $real_version"
+fi
 
 # etude-core's zero dependencies, the claim the no-network argument rests on.
 # Checked against the manifest, not against the sentence in the readme.
@@ -98,5 +115,50 @@ else
   bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
 fi
 
+# The page carries the transcripts twice: fetched from demo/transcripts.json
+# when hosted, and inline when the file is opened locally. The generator says
+# it writes "the same data, same step" -- and they had drifted anyway, so the
+# hosted page witnessed one output contract and a double-clicked copy
+# witnessed an older one. Nobody would ever notice by reading.
+inline_check=$(python3 - <<'PY_INNER'
+import json, re, sys
+try:
+    ext = json.load(open("demo/transcripts.json"))
+    html = open("demo/index.html").read()
+    m = re.search(r'<script type="application/json" id="transcripts-inline">(.*?)</script>', html, re.S)
+    if not m:
+        print("MISSING"); sys.exit(0)
+    print("SAME" if json.loads(m.group(1)) == ext else "DRIFTED")
+except Exception as e:
+    print("ERROR " + str(e))
+PY_INNER
+)
+case "$inline_check" in
+  SAME) ok "the page's inline transcripts are byte-identical to demo/transcripts.json" ;;
+  MISSING) bad "demo/index.html has no inline transcript block; a local copy of the page would show nothing" ;;
+  DRIFTED) bad "demo/index.html's inline transcripts differ from demo/transcripts.json. A hosted page and a local one would witness different output. Re-run scripts/capture-demos.sh" ;;
+  *) bad "could not compare the inline transcripts with demo/transcripts.json: $inline_check" ;;
+esac
+
+# The API panel is the tool's own help, captured. If a help stops being
+# captured the panel goes empty and the page silently documents nothing --
+# which is how the hand-written table it replaced went wrong in the first
+# place, only quieter.
+helps=$(python3 - <<'PY_INNER'
+import json
+try:
+    d = json.load(open("demo/transcripts.json"))
+    have = {t["label"] for t in d["transcripts"]}
+    missing = [f"{t}-help" for t in ("sweep", "stash", "unpack") if f"{t}-help" not in have]
+    print(",".join(missing) if missing else "ALL")
+except Exception as e:
+    print("ERROR " + str(e))
+PY_INNER
+)
+if [ "$helps" = "ALL" ]; then
+  ok "the site's API panels are each a captured --help, not a table written beside it"
+else
+  bad "no captured help for: $helps. That tool's API panel on the site is empty. Re-run scripts/capture-demos.sh"
+fi
 
 exit $status
