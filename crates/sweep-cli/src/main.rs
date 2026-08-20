@@ -29,6 +29,7 @@ USAGE
 
 FLAGS
     --depth N       recursion depth (default 1, max 8)
+    --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
     --json          machine-readable plan on stdout (for agents)
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
@@ -308,7 +309,30 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
 /// their folder is idle can say so; someone tidying right after a download
 /// session can widen it. Returns None when the flag is absent, meaning "use
 /// the default", which is distinct from Some(ZERO), meaning "no window".
-fn since_flag(args: &[String]) -> Option<std::time::Duration> {
+fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
+    // The flag is read before the environment variable on purpose. Someone who
+    // types --since means it, and a stale SWEEP_GRACE_SECS exported into a
+    // shell hours ago should not quietly outrank what they just typed.
+    if let Some(i) = args.iter().position(|a| a == "--since") {
+        let raw = args.get(i + 1).ok_or_else(|| {
+            "--since needs a value, like --since 6h. Run `sweep help`.".to_string()
+        })?;
+        let (digits, unit) = match raw.chars().last() {
+            Some('h' | 'H') => (&raw[..raw.len() - 1], 60 * 60),
+            Some('d' | 'D') => (&raw[..raw.len() - 1], 24 * 60 * 60),
+            _ => (raw.as_str(), 24 * 60 * 60),
+        };
+        // Wrong window, loud. This mirrors parse_depth, and for the same
+        // reason: --since decides which files are held back, so a value the
+        // parser could not read must never become the default silently. A user
+        // who typos --since 6hh and is shown the ordinary 24h result has been
+        // told their instruction was obeyed when it was discarded.
+        let n: u64 = digits.parse().map_err(|_| {
+            format!("--since must be a number, optionally with h or d, got {raw:?}")
+        })?;
+        return Ok(Some(std::time::Duration::from_secs(n * unit)));
+    }
+
     // SWEEP_GRACE_SECS exists for the stress harness, which builds a tree and
     // sweeps it in the same second. Every one of its 35 scenarios is inside
     // the default window by construction, and none of them is about the
@@ -321,19 +345,9 @@ fn since_flag(args: &[String]) -> Option<std::time::Duration> {
     if let Ok(v) = std::env::var("SWEEP_GRACE_SECS")
         && let Ok(n) = v.parse::<u64>()
     {
-        return Some(std::time::Duration::from_secs(n));
+        return Ok(Some(std::time::Duration::from_secs(n)));
     }
-    let i = args.iter().position(|a| a == "--since")?;
-    let raw = args.get(i + 1)?;
-    let (digits, unit) = match raw.chars().last() {
-        Some('h' | 'H') => (&raw[..raw.len() - 1], 60 * 60),
-        Some('d' | 'D') => (&raw[..raw.len() - 1], 24 * 60 * 60),
-        _ => (raw.as_str(), 24 * 60 * 60),
-    };
-    digits
-        .parse::<u64>()
-        .ok()
-        .map(|n| std::time::Duration::from_secs(n * unit))
+    Ok(None)
 }
 
 const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
@@ -582,7 +596,13 @@ fn scan_and_plan(
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
-        grace: since_flag(args).or(ScanConfig::default().grace),
+        grace: match since_flag(args) {
+            Ok(g) => g.or(ScanConfig::default().grace),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return Err(ExitCode::from(2));
+            }
+        },
         ..Default::default()
     };
     let outcome = match scan::scan(path, &cfg) {
@@ -924,7 +944,13 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
-        grace: since_flag(args).or(ScanConfig::default().grace),
+        grace: match since_flag(args) {
+            Ok(g) => g.or(ScanConfig::default().grace),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return ExitCode::from(2);
+            }
+        },
         ..Default::default()
     };
     let outcome = match scan::scan(&path, &cfg) {
@@ -1144,7 +1170,13 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
-        grace: since_flag(args).or(ScanConfig::default().grace),
+        grace: match since_flag(args) {
+            Ok(g) => g.or(ScanConfig::default().grace),
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return ExitCode::from(2);
+            }
+        },
         ..Default::default()
     };
     let outcome = match scan::scan(&path, &cfg) {
@@ -1634,6 +1666,55 @@ mod tests {
         assert!(parse_depth(&["--depth".to_string(), "999".to_string()]).is_err());
         assert!(parse_depth(&["--depth".to_string(), "0".to_string()]).is_err());
         assert!(parse_depth(&["--depth".to_string(), "banana".to_string()]).is_err());
+    }
+
+    /// A grace window the parser could not read must not become the default.
+    ///
+    /// `--since` decides which files are held back, so silently substituting
+    /// 24h for a value someone typed tells them their instruction was obeyed
+    /// when it was discarded. Same rule as parse_depth above.
+    #[test]
+    fn since_rejects_garbage_rather_than_falling_back_to_the_default() {
+        let s = |v: &str| since_flag(&["--since".to_string(), v.to_string()]);
+        assert_eq!(s("0"), Ok(Some(std::time::Duration::ZERO)));
+        assert_eq!(
+            s("6h"),
+            Ok(Some(std::time::Duration::from_secs(6 * 60 * 60)))
+        );
+        assert_eq!(
+            s("2d"),
+            Ok(Some(std::time::Duration::from_secs(2 * 24 * 60 * 60)))
+        );
+        assert!(s("banana").is_err());
+        assert!(s("6hh").is_err());
+        assert!(s("").is_err());
+        // present but with nothing after it
+        assert!(since_flag(&["--since".to_string()]).is_err());
+    }
+
+    /// What someone typed beats what their shell exported.
+    #[test]
+    fn an_explicit_since_outranks_the_harness_environment_variable() {
+        // SAFETY: single-threaded test, variable removed before returning.
+        unsafe { std::env::set_var("SWEEP_GRACE_SECS", "0") };
+        let typed = since_flag(&["--since".to_string(), "6h".to_string()]);
+        let untyped = since_flag(&[]);
+        unsafe { std::env::remove_var("SWEEP_GRACE_SECS") };
+        assert_eq!(typed, Ok(Some(std::time::Duration::from_secs(6 * 60 * 60))));
+        assert_eq!(untyped, Ok(Some(std::time::Duration::ZERO)));
+    }
+
+    /// The flag a user can type has to be in the help they can read.
+    #[test]
+    fn every_user_facing_flag_appears_in_usage() {
+        for (_, flags) in COMMAND_FLAGS {
+            for (name, _) in *flags {
+                assert!(
+                    USAGE.contains(name),
+                    "{name} is accepted but undocumented in `sweep help`"
+                );
+            }
+        }
     }
 
     // a value consumed by a flag is not a positional path.
