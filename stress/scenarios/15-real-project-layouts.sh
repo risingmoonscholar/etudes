@@ -143,24 +143,43 @@ print(sum(g['count'] for g in d['groups']))
 assert_eq 6 "$REAL_GROUPED" "the six real .wav files still group; only the twins are skipped"
 
 # --- the case the guard exists for: a Downloads folder AROUND projects ------
+#
+# Split by marker kind, because the two halves are genuinely different and
+# asserting one behaviour for both asserted something untrue.
+#
+# A project.godot marks its project's ROOT, so the project is exactly that
+# folder and the Downloads around it is ordinary: sweep the invoices, step
+# over the project.
 DL="$W/Downloads"; mkdir -p "$DL"
 build_godot "$DL/ad-astra"
-build_flp   "$DL/anthem-project"
-build_song  "$DL/closer"
-build_blender "$DL/Ground031_4K-PNG"
 for n in 1 2 3 4; do : > "$DL/invoice_$n.pdf"; done
 
-INSIDE_BEFORE=$(find "$DL/ad-astra" "$DL/anthem-project" "$DL/closer" "$DL/Ground031_4K-PNG" -type f | wc -l | tr -d ' ')
-assert_exit 0 "a Downloads folder that merely CONTAINS four projects is sweepable" -- "$SWEEP" "$DL"
+INSIDE_BEFORE=$(find "$DL/ad-astra" -type f | wc -l | tr -d ' ')
+assert_exit 0 "a Downloads folder containing a ROOT-marked project is sweepable" -- "$SWEEP" "$DL"
 
-APPLY=$("$SWEEP" apply "$DL" --yes 2>&1); assert_eq 0 "$?" "apply succeeds on a folder full of projects"
+APPLY=$("$SWEEP" apply "$DL" --yes 2>&1); assert_eq 0 "$?" "apply succeeds on a folder holding a root-marked project"
 
-INSIDE_AFTER=$(find "$DL/ad-astra" "$DL/anthem-project" "$DL/closer" "$DL/Ground031_4K-PNG" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside any of the four projects moved during an apply of the folder around them"
+INSIDE_AFTER=$(find "$DL/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside the Godot project moved during an apply of the folder around it"
+[ -f "$DL/ad-astra/capture_t06.png" ] && pass "untouched: ad-astra/capture_t06.png" \
+  || fail "a project's internal file moved: ad-astra/capture_t06.png"
 
-for f in "$DL/ad-astra/capture_t06.png" "$DL/anthem-project/Backup/anthem (autosaved at 16h00).flp" \
-         "$DL/closer/Media/vocal.wav" "$DL/Ground031_4K-PNG/render_final.png"; do
-  [ -f "$f" ] && pass "untouched: ${f#$DL/}" || fail "a project's internal file moved: ${f#$DL/}"
+# The other half. A .flp, .song or .blend references its assets relative to
+# itself and freely upward, so the folder AROUND one is not safe either --
+# Project/scenes/main.blend reaching //../wood.png is the measured case. These
+# refuse, and refusing is the correct answer even though it costs the invoices.
+for kind in flp song blender; do
+  DLD="$W/Downloads_$kind"; mkdir -p "$DLD"
+  "build_$kind" "$DLD/proj"
+  for n in 1 2 3 4; do : > "$DLD/invoice_$n.pdf"; done
+  DLD_BEFORE=$(find "$DLD" -type f | sort)
+  assert_exit 2 "a folder containing a $kind project is refused, because its documents reference upward" -- "$SWEEP" "$DLD"
+  DLD_AFTER=$(find "$DLD" -type f | sort)
+  if [ "$DLD_BEFORE" = "$DLD_AFTER" ]; then
+    pass "$kind: the refused scan moved nothing"
+  else
+    fail "$kind: the refused scan moved something"
+  fi
 done
 
 # --- the same folder, WITH --depth ---------------------------------------
@@ -275,6 +294,46 @@ if grep -qE '^  Documents' <<<"$FCP_OUT"; then
 else
   fail "a folder holding a .fcpbundle refused to sweep its own invoices: $FCP_OUT"
 fi
+FCP_MANIFEST_BEFORE=$(find "$FCP/MyMovie.fcpbundle" -type f | sort)
 assert_exit 0 "apply beside a Final Cut library succeeds" -- "$SWEEP" apply "$FCP" --yes --depth 4
-FCP_AFTER=$(find "$FCP/MyMovie.fcpbundle" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$FCP_BEFORE" "$FCP_AFTER" "not one file moved from inside the Final Cut library"
+FCP_MANIFEST_AFTER=$(find "$FCP/MyMovie.fcpbundle" -type f 2>/dev/null | sort)
+# Paths, not counts. Equal counts would also hold if a file moved WITHIN the
+# bundle, which is exactly the damage this is meant to rule out.
+if [ "$FCP_MANIFEST_BEFORE" = "$FCP_MANIFEST_AFTER" ]; then
+  pass "every file inside the Final Cut library is at the same path it started at"
+else
+  fail "the Final Cut library's contents changed path:
+$(diff <(echo "$FCP_MANIFEST_BEFORE") <(echo "$FCP_MANIFEST_AFTER") || true)"
+fi
+
+# --- the depth-1 upward reference -------------------------------------------
+# Project/scenes/main.blend references Project/wood.png as //../wood.png. At
+# --depth 1 sweep steps over scenes/ and used to collect wood.png anyway, so
+# the project's own texture was sorted into Images/ at the DEFAULT depth --
+# not at an opt-in one.
+UP="$W/UpwardRef"; mkdir -p "$UP/scenes"
+: > "$UP/scenes/main.blend"
+for c in 1 2 3; do : > "$UP/wood_$c.png"; done
+UP_BEFORE=$(find "$UP" -type f | sort)
+assert_exit 2 "a .blend in a subfolder refuses the scan at the DEFAULT depth, not just at --depth 2" -- "$SWEEP" "$UP"
+assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$UP" --yes
+UP_AFTER=$(find "$UP" -type f | sort)
+if [ "$UP_BEFORE" = "$UP_AFTER" ]; then
+  pass "not one texture moved from beside the .blend that references it upward"
+else
+  fail "a texture referenced as //../wood.png moved"
+fi
+
+# --- the marker search prunes what the walk prunes ---------------------------
+# A .blend inside a location the walk itself never enters must not refuse the
+# scan: the refusal would name a file that was never at risk, and the folder's
+# own files would go unswept for no reason.
+PP="$W/PruneParity"; mkdir -p "$PP/a/b/Library/project"
+: > "$PP/a/b/Library/project/main.blend"
+for n in 1 2 3; do : > "$PP/loose_$n.pdf"; done
+PP_OUT=$("$SWEEP" "$PP" --depth 3 2>&1)
+if grep -qE '^  Documents' <<<"$PP_OUT"; then
+  pass "a .blend inside a refused system location does not refuse the whole scan"
+else
+  fail "the marker search entered a location the walk prunes and refused on what it found: $PP_OUT"
+fi

@@ -98,6 +98,15 @@ pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
 /// directory and everything the project owns lives inside it. Nothing outside
 /// it belongs to it, so the folder holding one is ordinary and sweepable --
 /// step over the bundle and sort the invoices sitting beside it.
+///
+/// KNOWN LIMIT, inherent rather than unfinished: Final Cut can be told to keep
+/// media OUTSIDE its library. An externally stored clip carries no
+/// filesystem-level mark saying which library owns it -- that relationship
+/// lives in the library's own database. Sweep does not read files, so a folder
+/// of external media beside a .fcpbundle is indistinguishable from a folder of
+/// unrelated video. The same holds for any format with external assets by
+/// configuration. Sweep protects managed layouts; it cannot protect an
+/// arrangement only the application knows about.
 const BUNDLE_MARKERS: &[&str] = &[".fcpbundle", ".band", ".logicx"];
 
 /// A marker file that marks the project ROOT.
@@ -216,6 +225,11 @@ fn document_marker_below(dir: &Path) -> Option<(PathBuf, String)> {
             && !name_matches(&name, BUNDLE_MARKERS)
             && !is_package(&name)
             && !os_says_package(&path)
+            // Parity with the main walk. Without this the search refused a
+            // scan because of a .blend inside a location the walk itself
+            // would never have entered, so the refusal named a file that was
+            // never at risk.
+            && !is_refused_system_location(&path)
             && let Some(hit) = document_marker_below(&path)
         {
             return Some(hit);
@@ -746,14 +760,16 @@ fn walk(
             // A document does not bound its project, so finding one below
             // the root taints the whole scan rather than one directory.
             //
-            // At --depth 1 this does not apply. Nothing inside `path` will be
-            // collected, and the scan's own loose files sit ABOVE the marker
-            // rather than beside it. Refusing there would break the case this
-            // guard was built for: someone tidying the folder their projects
-            // live in.
-            if cfg.depth > 1
-                && let Some(marker) = document_marker_in(&path)
-            {
+            // This runs at every depth, including 1. Codex demonstrated why:
+            // Project/scenes/main.blend references Project/wood.png as
+            // //../wood.png, so a depth-1 scan that steps over scenes/ still
+            // collects and moves wood.png. Upward references are the whole
+            // reason documents are a separate kind, and "nothing inside that
+            // folder is collected" was never the risk.
+            //
+            // It costs nothing extra: project_marker_in already reads each
+            // child directory here to decide whether to step over it.
+            if let Some(marker) = document_marker_in(&path) {
                 return Err(ScanError::RefusedProjectRoot {
                     root: root.to_path_buf(),
                     marker,

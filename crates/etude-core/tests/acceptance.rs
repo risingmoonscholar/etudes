@@ -285,12 +285,19 @@ fn a_project_folder_is_refused_as_a_scan_root() {
 /// A folder that merely contains project folders is ordinary and must still
 /// be sweepable -- refusing it would make the guard useless for the case it
 /// was built for, someone tidying the folder their projects live in.
+///
+/// The fixture holds a Godot project, not the Ableton one it used to. A
+/// project.godot marks the project ROOT, so the project is exactly that
+/// folder and this parent really is ordinary. An .als does not: it
+/// references its samples relative to itself and freely upward, so a folder
+/// holding one is NOT safe to sweep, and the companion test below pins that.
+/// Using .als here made this test assert something untrue.
 #[test]
 fn a_folder_containing_projects_is_still_sweepable() {
     let root = std::env::temp_dir().join(format!("sweep_projparent_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("TrackOne")).expect("mkdir");
-    fs::write(root.join("TrackOne/TrackOne.als"), b"synthetic").expect("write");
+    fs::write(root.join("TrackOne/project.godot"), b"synthetic").expect("write");
     for i in 0..4 {
         fs::write(root.join(format!("note_{i}.pdf")), b"synthetic").expect("write");
     }
@@ -301,6 +308,42 @@ fn a_folder_containing_projects_is_still_sweepable() {
         out.entries.iter().any(|e| e.ext == "pdf"),
         "the parent folder's own files should still be considered"
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// ...but a folder containing a DOCUMENT-marked project is not.
+///
+/// Project/scenes/main.blend references Project/wood.png as //../wood.png.
+/// A depth-1 scan steps over scenes/ and still collects wood.png, so the
+/// project's own texture gets sorted into Images/ and the reference breaks.
+/// Stepping over the marker's folder is not enough when the marker points
+/// upward out of it.
+#[test]
+fn a_folder_containing_a_document_marked_project_is_refused_even_at_depth_one() {
+    let root = std::env::temp_dir().join(format!("sweep_docparent_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("scenes")).expect("mkdir");
+    fs::write(root.join("scenes/main.blend"), b"synthetic").expect("write");
+    for i in 0..3 {
+        fs::write(root.join(format!("wood_{i}.png")), b"synthetic").expect("write");
+    }
+
+    // Depth 1: the default, and the depth a real user runs.
+    match scan::scan(&root, &ScanConfig::default()) {
+        Err(scan::ScanError::RefusedProjectRoot { marker, .. }) => {
+            assert!(
+                marker.contains("main.blend"),
+                "the refusal should name the document that caused it, got {marker:?}"
+            );
+        }
+        Err(other) => panic!("refused for the wrong reason: {other:?}"),
+        Ok(out) => panic!(
+            "a folder whose subfolder holds main.blend was swept anyway: {} entries \
+             would be grouped, and a .blend references //../ upward",
+            out.entries.len()
+        ),
+    }
 
     let _ = fs::remove_dir_all(&root);
 }
