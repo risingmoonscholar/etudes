@@ -703,16 +703,24 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // Not re-printed here: print_projects_skipped_note above already
             // disclosed the directory-form downloads. This branch only needs
             // to count them so the conclusion does not contradict it.
-            if recent > 0 {
-                println!(
+            // Three cases, because "--since 0 includes everything" is only
+            // true when the grace window is the ONLY thing holding anything
+            // back. With one recent file and one .part beside it, that
+            // sentence promised to include a download the flag cannot reach.
+            let still_arriving = downloading + plan.skipped_in_flight;
+            match (recent > 0, still_arriving > 0) {
+                (true, false) => println!(
                     "\nNothing else here needs organising. Run again later, or pass\n\
                      --since 0 to include everything."
-                );
-            } else {
-                println!(
+                ),
+                (false, true) => println!(
                     "\nNothing else here needs organising. These finish downloading on\n\
                      their own; run again once they have."
-                );
+                ),
+                _ => println!(
+                    "\nNothing else here needs organising. --since 0 would include the\n\
+                     recent ones; the downloads have to finish first either way."
+                ),
             }
             println!("\nNothing has been moved.  Nothing left this machine.");
         } else {
@@ -794,13 +802,15 @@ fn print_projects_skipped_note(p: &plan::Plan) {
             p.skipped_in_flight
         );
     }
-    // A Song.band does not HOLD a project file. It is one.
-    if p.skipped_bundle == 1 {
-        println!("\n  1 folder was left alone because it is a project bundle");
-    } else if p.skipped_bundle > 1 {
+    // A Song.band does not HOLD a project file. It is one. And the same
+    // counter carries generic OS packages -- a Pages document is not a
+    // project bundle, so the sentence says package, which is true of both.
+    if p.skipped_package == 1 {
+        println!("\n  1 folder was left alone because macOS treats it as a single item");
+    } else if p.skipped_package > 1 {
         println!(
-            "\n  {} folders were left alone because they are project bundles",
-            p.skipped_bundle
+            "\n  {} folders were left alone because macOS treats each as a single item",
+            p.skipped_package
         );
     }
 }

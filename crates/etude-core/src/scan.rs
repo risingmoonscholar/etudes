@@ -164,9 +164,33 @@ fn name_matches(name: &str, list: &[&str]) -> bool {
     })
 }
 
-fn project_marker_in(dir: &Path) -> Option<String> {
-    let rd = fs::read_dir(dir).ok()?;
-    for e in rd.flatten() {
+/// A directory whose entries could not be listed. Distinct from "no marker".
+#[derive(Debug)]
+struct Unreadable;
+
+/// Whether this folder holds a project marker, or could not be asked.
+///
+fn project_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
+    //
+    // Marker detection and the main walk are separate reads of the same
+    // directory. A transient failure here answered "no marker", and the walk
+    // that followed succeeded and grouped the project's files. Persistent
+    // failures were already safe, because the walk records the directory as
+    // unreadable; the transient case was the hole. Unknown is not "no".
+    //
+    // Unknown is not "yes" either. Answering "marker" would fold a folder
+    // sweep could not read into the project count, and an unreadable folder
+    // has to stay visible as unreadable -- that was issue #4, and a test has
+    // guarded it ever since.
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Err(Unreadable);
+    };
+    for entry in rd {
+        // flatten() dropped per-entry errors, which is the same fail-open one
+        // level down: a partial enumeration could miss the marker entirely.
+        let Ok(e) = entry else {
+            return Err(Unreadable);
+        };
         let name = e.file_name().to_string_lossy().into_owned();
         // A bundle sitting in a folder does not make that folder a project.
         // Refusing a Documents folder outright because one .fcpbundle lives
@@ -190,19 +214,20 @@ fn project_marker_in(dir: &Path) -> Option<String> {
         // tree, which contradicts this scanner's own rule about never
         // resolving a target that escapes the root.
         //
-        // !is_dir() on the link itself needs neither. A symlink counts as a
-        // marker whatever it points at, which over-refuses only for a link to
-        // a directory named like a marker -- the safe direction, and no path
-        // outside the root is ever resolved.
+        // !is_dir() on the link itself needs neither. Anything that is not a
+        // directory counts: a regular file, a symlink whatever it points at,
+        // and also a FIFO, socket or device node carrying a marker name. That
+        // last group is a real over-refusal, measured, and it fails closed --
+        // filed rather than fixed here. No path outside the root is resolved.
         if (name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS))
             && fs::symlink_metadata(e.path())
                 .map(|m| !m.is_dir())
                 .unwrap_or(true)
         {
-            return Some(name);
+            return Ok(Some(name));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Roots under which cloud sync agents operate. Presence triggers a refusal
@@ -283,6 +308,11 @@ pub enum ScanError {
     /// The root is a project: a package directory, or a folder holding a
     /// project file at its top level. Its contents belong to one piece of
     /// work and reference each other by relative path.
+    /// The root is itself a download in progress: `movie.mp4.part`, or
+    /// Safari's `movie.mp4.download/`. Refused for the same reason the file
+    /// form is held back -- it is not finished arriving.
+    RefusedInFlightRoot(PathBuf),
+
     RefusedProjectRoot {
         root: PathBuf,
         marker: String,
@@ -305,6 +335,7 @@ impl ScanError {
             self,
             ScanError::RefusedSystemLocation(_)
                 | ScanError::RefusedProjectRoot { .. }
+                | ScanError::RefusedInFlightRoot(_)
                 | ScanError::RefusedSyncRoot(_)
                 | ScanError::RefusedRunningAsRoot
                 | ScanError::TooManyEntries { .. }
@@ -327,6 +358,12 @@ impl std::fmt::Display for ScanError {
                     crate::redact::path(p)
                 )
             }
+            ScanError::RefusedInFlightRoot(root) => write!(
+                f,
+                "refused: {} is a download still in progress. Sweep it once it \
+                 has finished arriving",
+                crate::redact::path(root)
+            ),
             ScanError::RefusedProjectRoot { root, marker } => {
                 // "X is in it" is false when the folder IS X. A refusal that
                 // misdescribes what it saw teaches the user the wrong shape of
@@ -418,11 +455,16 @@ pub struct ScanOutcome {
     /// repo keeps finding.
     pub skipped_in_flight: usize,
 
-    /// Directories that ARE a project or package, rather than holding one:
-    /// `Song.band`, `MyMovie.fcpbundle`, a nested `.app`. Counted apart from
-    /// `skipped_project` because "left alone because it holds a project file"
-    /// is false of them -- the folder IS the project.
-    pub skipped_bundle: usize,
+    /// Directories macOS treats as one item: `Song.band`, `MyMovie.fcpbundle`,
+    /// a nested `.app`, and anything Spotlight reports as `com.apple.package`
+    /// including a Pages document.
+    ///
+    /// Counted apart from `skipped_project` because "it holds a project file"
+    /// is false of them. Named for `package`, not `bundle`, because the two
+    /// paths that increment it are project bundles AND generic OS packages --
+    /// and a Pages document is not a project bundle. Package is the term that
+    /// is true of both.
+    pub skipped_package: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
@@ -575,6 +617,17 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
+    // Before the package check: on this Mac a movie.mp4.download/ is reported
+    // as a package and would be refused under "it is a project bundle", which
+    // is false. On any other platform os_says_package is always false and the
+    // same root sweeps its own partial members into a Media group.
+    let lower_root = root_name.to_ascii_lowercase();
+    if IN_FLIGHT_SUFFIXES
+        .iter()
+        .any(|suffix| lower_root.ends_with(suffix))
+    {
+        return Err(ScanError::RefusedInFlightRoot(root.clone()));
+    }
     if is_package(&root_name) || os_says_package(&root) {
         // The root's own name, not a synthetic label. The message decides
         // between "X is in it" and "it is a project bundle" by comparing the
@@ -594,7 +647,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
             marker: root_name.clone(),
         });
     }
-    if let Some(marker) = project_marker_in(&root) {
+    if let Ok(Some(marker)) = project_marker_in(&root) {
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
             marker,
@@ -619,7 +672,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_system: 0,
         skipped_project: 0,
         skipped_in_flight: 0,
-        skipped_bundle: 0,
+        skipped_package: 0,
         skipped_unreadable: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
@@ -750,17 +803,26 @@ fn walk(
                 continue;
             }
             if os_says_package(&path) {
-                out.skipped_bundle += 1;
+                out.skipped_package += 1;
                 continue;
             }
             // A bundle is a unit: step over it, never into it.
             if name_matches(&name, BUNDLE_MARKERS) {
-                out.skipped_bundle += 1;
+                out.skipped_package += 1;
                 continue;
             }
-            if project_marker_in(&path).is_some() {
-                out.skipped_project += 1;
-                continue;
+            match project_marker_in(&path) {
+                Ok(Some(_)) => {
+                    out.skipped_project += 1;
+                    continue;
+                }
+                // Could not be asked. Step over it and count it for what it
+                // is, rather than guessing either way.
+                Err(Unreadable) => {
+                    out.skipped_unreadable += 1;
+                    continue;
+                }
+                Ok(None) => {}
             }
             #[cfg(unix)]
             {
@@ -834,7 +896,7 @@ mod tests {
             let _ = f.write_all(b"x");
 
             assert_eq!(
-                project_marker_in(&dir).as_deref(),
+                project_marker_in(&dir).expect("readable").as_deref(),
                 Some(fname.as_str()),
                 "{m:?} is a ROOT or DOCUMENT marker but a folder holding {fname:?} was \
                  not recognised as a project. The list and the matcher have drifted"
@@ -879,7 +941,7 @@ mod tests {
             };
             let outside = scan(&base, &cfg).expect("the folder holding a bundle is ordinary");
             assert_eq!(
-                outside.skipped_bundle, 1,
+                outside.skipped_package, 1,
                 "the {m} bundle was not stepped over"
             );
             assert_eq!(
@@ -1105,7 +1167,7 @@ mod tests {
             fs::write(dir.join(innocent), b"x").expect("write");
         }
         assert_eq!(
-            project_marker_in(&dir),
+            project_marker_in(&dir).expect("readable"),
             None,
             "a filename that merely contains a marker string triggered a refusal"
         );

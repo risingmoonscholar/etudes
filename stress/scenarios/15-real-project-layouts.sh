@@ -346,8 +346,8 @@ BP="$W/BundleParent"; mkdir -p "$BP/Song.band"
 for n in 1 2 3; do : > "$BP/Song.band/track_$n.wav"; done
 for n in 1 2 3; do : > "$BP/loose_$n.pdf"; done
 BP_OUT=$("$SWEEP" "$BP" --depth 2 2>&1 || true)
-if grep -q "it is a project bundle" <<<"$BP_OUT"; then
-  pass "a nested bundle is disclosed as being a project, not as holding one"
+if grep -q "single item" <<<"$BP_OUT"; then
+  pass "a nested bundle is disclosed as being a package, not as holding a project file"
 else
   fail "Song.band was reported as a folder that holds a project file: $BP_OUT"
 fi
@@ -356,12 +356,26 @@ fi
 # is_file() via symlink_metadata dropped symlinked markers; is_file() via
 # metadata fixed that by resolving a path outside the scan root, which this
 # scanner promises never to do. !is_dir() on the link needs neither.
-OUT_T="$W/OutsideTarget"; mkdir -p "$OUT_T"
-: > "$OUT_T/Cargo.toml"
+# The link must point at a DIRECTORY outside the root. Pointing it at a
+# regular file proves nothing: the old follow-the-target code sees a
+# non-directory and recognises the marker, and so does the new code looking at
+# the link itself. Both pass, so that arm could not detect a restoration of
+# the escape. A link to a directory separates them --
+#   metadata():          follows, sees a directory, NOT a marker, sweeps
+#   symlink_metadata():  sees a link, not a directory, marker, refuses
+OUT_T="$W/OutsideTarget"; mkdir -p "$OUT_T/somedir"
 SL="$W/SymOutside"; mkdir -p "$SL"
-ln -s "$OUT_T/Cargo.toml" "$SL/Cargo.toml"
+ln -s "$OUT_T/somedir" "$SL/Cargo.toml"
 for n in 1 2 3; do : > "$SL/doc_$n.pdf"; done
-assert_exit 2 "a symlinked Cargo.toml still marks the project" -- "$SWEEP" "$SL"
+assert_exit 2 "a Cargo.toml symlinked to a directory outside the root is still a marker, and its target is never resolved" -- "$SWEEP" "$SL"
+
+# And the ordinary case: a link to a regular file outside the root.
+OUT_F="$W/OutsideFile"; mkdir -p "$OUT_F"
+: > "$OUT_F/Cargo.toml"
+SLF="$W/SymOutsideFile"; mkdir -p "$SLF"
+ln -s "$OUT_F/Cargo.toml" "$SLF/Cargo.toml"
+for n in 1 2 3; do : > "$SLF/doc_$n.pdf"; done
+assert_exit 2 "a symlinked Cargo.toml still marks the project" -- "$SWEEP" "$SLF"
 
 # And a plain directory named like a document marker is still ordinary.
 OD="$W/OrdinaryDir"; mkdir -p "$OD/ordinary.flp"
@@ -372,4 +386,51 @@ if grep -qE '^  Documents' <<<"$OD_OUT"; then
   pass "a plain directory named ordinary.flp still does not freeze its parent"
 else
   fail "the !is_dir() form reintroduced the ordinary.flp over-refusal: $OD_OUT"
+fi
+
+# --- a download that IS the scan root ----------------------------------------
+# The directory check only ran for children, so pointing sweep straight at
+# movie.mp4.part sorted its own partial members into a Media group. A
+# .download/ happened to fail closed on this Mac because Spotlight calls it a
+# package -- under a false "project bundle" reason -- and would fail open
+# anywhere else.
+for suffix in .part .download .crdownload; do
+  RT="$W/RootDl$suffix/movie.mp4$suffix"; mkdir -p "$RT"
+  for n in 1 2 3; do : > "$RT/part_$n.mp4"; done
+  RT_BEFORE=$(find "$RT" -type f | sort)
+  assert_exit 2 "a $suffix directory as the scan root is refused as a download, not swept" -- "$SWEEP" "$RT" --since 0
+  RT_OUT=$("$SWEEP" "$RT" --since 0 2>&1 || true)
+  if grep -q "download still in progress" <<<"$RT_OUT"; then
+    pass "$suffix: refused for being a download, not for being a project bundle"
+  else
+    fail "$suffix root refused under the wrong reason: $RT_OUT"
+  fi
+  RT_AFTER=$(find "$RT" -type f | sort)
+  assert_eq "$RT_BEFORE" "$RT_AFTER" "$suffix: nothing inside the download moved"
+done
+
+# --- mixed held-back reasons give guidance true of both ----------------------
+# --since 0 cannot include a download. With one recent file and one .part
+# beside it, the advice promised something the flag could not do.
+MX="$W/Mixed"; mkdir -p "$MX/b.part"
+: > "$MX/recent.pdf"
+: > "$MX/a.crdownload"
+# --since 1d, because the harness exports SWEEP_GRACE_SECS=0 and a mixed case
+# needs a live window. The flag beats the environment variable by design.
+MX_OUT=$("$SWEEP" "$MX" --depth 2 --since 1d 2>&1 || true)
+if grep -q "downloads have to finish first" <<<"$MX_OUT"; then
+  pass "mixed recent and in-flight gets guidance that is true of both"
+else
+  fail "mixed held-back reasons were told --since 0 includes everything: $MX_OUT"
+fi
+
+# --- a generic OS package is not a project bundle ----------------------------
+PG="$W/PagesDoc"; mkdir -p "$PG/Example.pages"
+: > "$PG/Example.pages/index.xml"
+for n in 1 2 3; do : > "$PG/loose_$n.pdf"; done
+PG_OUT=$("$SWEEP" "$PG" --depth 2 2>&1 || true)
+if grep -q "project bundle" <<<"$PG_OUT"; then
+  fail "a Pages document was called a project bundle: $PG_OUT"
+else
+  pass "a generic OS package is not described as a project bundle"
 fi

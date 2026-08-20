@@ -60,7 +60,7 @@ fn build_bench_plan(root: &std::path::Path, n: usize) -> Plan {
         skipped_system: 0,
         skipped_project: 0,
         skipped_in_flight: 0,
-        skipped_bundle: 0,
+        skipped_package: 0,
         skipped_unreadable: 0,
         root_is_synced: false,
         allow_sync: false,
