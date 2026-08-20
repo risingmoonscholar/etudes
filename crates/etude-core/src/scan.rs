@@ -137,10 +137,17 @@ const ROOT_MARKERS: &[&str] = &[
 /// Measured: project/scenes/main.blend beside project/textures/*.png, swept at
 /// depth 4, moved all three textures and broke every reference to them.
 ///
-/// Since the extent cannot be known without reading the file, and sweep does
-/// not read files, the only honest answer is to refuse the whole scan and say
-/// which document caused it. Same rule the scan root has always used, applied
-/// at every depth rather than only the top.
+/// NOT YET ACTED ON. Today a DOCUMENT marker behaves exactly like a ROOT one:
+/// the folder holding it is stepped over, and the scan around it continues.
+/// That is knowingly incomplete -- it loses assets a document references
+/// upward, out of its own folder.
+///
+/// The complete rule costs more than it is worth so far. Refusing the whole
+/// scan whenever a document marker appears anywhere below the root means one
+/// .flp in Downloads makes Downloads unsweepable, which removes the tool from
+/// the folder it exists for. Reviewed and rejected on those grounds. The list
+/// stays because the distinction is real and the fix needs it; see the issue
+/// linked from the guard's tests for the four reproductions.
 const DOCUMENT_MARKERS: &[&str] = &[
     ".song", ".als", ".ptx", ".sesx", ".flp", ".rpp", ".prproj", ".aep", ".drp", ".veg", ".blend",
     ".c4d",
@@ -155,19 +162,6 @@ fn name_matches(name: &str, list: &[&str]) -> bool {
             lower == *m
         }
     })
-}
-
-/// A DOCUMENT marker at the top level of `dir`.
-fn document_marker_in(dir: &Path) -> Option<String> {
-    for e in fs::read_dir(dir).ok()?.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name_matches(&name, DOCUMENT_MARKERS)
-            && fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_file())
-        {
-            return Some(name);
-        }
-    }
-    None
 }
 
 fn project_marker_in(dir: &Path) -> Option<String> {
@@ -190,56 +184,6 @@ fn project_marker_in(dir: &Path) -> Option<String> {
             && fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_file())
         {
             return Some(name);
-        }
-    }
-    None
-}
-
-/// A document marker anywhere under `dir`.
-///
-/// Deliberately NOT bounded by the scan depth. The scan collects files down
-/// to --depth, but a document marker deeper than that still describes them:
-/// a .blend four levels down references textures one level down, and
-/// stopping the search at the collection depth finds the assets while
-/// missing the thing that owns them. Codex found exactly that hole in the
-/// bounded version of this function.
-///
-/// It prunes what the main walk prunes -- hidden entries, NEVER_ENTER
-/// directories, packages and bundles -- so it does not descend into .git or
-/// node_modules looking for a project file that could not be there. It stops
-/// at the first hit.
-///
-/// The cost is a second traversal, and on a marker-free tree that is a full
-/// one. It runs only at --depth 2 and above, which the user opts into; the
-/// default depth of 1 never calls it.
-fn document_marker_below(dir: &Path) -> Option<(PathBuf, String)> {
-    for e in fs::read_dir(dir).ok()?.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if is_hidden(&name) || never_enter(&name) {
-            continue;
-        }
-        let path = e.path();
-        // symlink_metadata, not metadata: following a link here would let an
-        // escaping symlink walk the whole disk, and has cost this codebase
-        // three separate bugs already.
-        let Ok(meta) = fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if meta.is_file() && name_matches(&name, DOCUMENT_MARKERS) {
-            return Some((path, name));
-        }
-        if meta.is_dir()
-            && !name_matches(&name, BUNDLE_MARKERS)
-            && !is_package(&name)
-            && !os_says_package(&path)
-            // Parity with the main walk. Without this the search refused a
-            // scan because of a .blend inside a location the walk itself
-            // would never have entered, so the refusal named a file that was
-            // never at risk.
-            && !is_refused_system_location(&path)
-            && let Some(hit) = document_marker_below(&path)
-        {
-            return Some(hit);
         }
     }
     None
@@ -655,23 +599,6 @@ fn walk(
     visited: &mut HashSet<(u64, u64)>,
 ) -> Result<(), ScanError> {
     if depth >= cfg.depth.min(8) {
-        // The collection horizon, not the knowledge horizon. A .blend below
-        // this point still describes files above it, so the search continues
-        // even though nothing down here will be collected. Measured: bounding
-        // this at the collection depth left a project whose marker sat deeper
-        // than its assets fully exposed.
-        //
-        // Only at --depth 2 and up, which the user opts into. At the default
-        // depth of 1 the top-level check in `scan` is the whole guard, and a
-        // scan stays as cheap as it has always been.
-        if cfg.depth > 1
-            && let Some((_, marker)) = document_marker_below(dir)
-        {
-            return Err(ScanError::RefusedProjectRoot {
-                root: root.to_path_buf(),
-                marker,
-            });
-        }
         return Ok(());
     }
 
@@ -763,24 +690,6 @@ fn walk(
             if name_matches(&name, BUNDLE_MARKERS) {
                 out.skipped_project += 1;
                 continue;
-            }
-            // A document does not bound its project, so finding one below
-            // the root taints the whole scan rather than one directory.
-            //
-            // This runs at every depth, including 1. Codex demonstrated why:
-            // Project/scenes/main.blend references Project/wood.png as
-            // //../wood.png, so a depth-1 scan that steps over scenes/ still
-            // collects and moves wood.png. Upward references are the whole
-            // reason documents are a separate kind, and "nothing inside that
-            // folder is collected" was never the risk.
-            //
-            // It costs nothing extra: project_marker_in already reads each
-            // child directory here to decide whether to step over it.
-            if let Some(marker) = document_marker_in(&path) {
-                return Err(ScanError::RefusedProjectRoot {
-                    root: root.to_path_buf(),
-                    marker,
-                });
             }
             if project_marker_in(&path).is_some() {
                 out.skipped_project += 1;
@@ -974,43 +883,42 @@ mod tests {
         }
     }
 
-    /// A document marker does not say where its project ends.
+    /// A document marker below the root does NOT refuse the scan, and that
+    /// is a known gap -- see issue #49.
     ///
-    /// Measured on a real Blender layout: scenes/main.blend beside
-    /// textures/*.png, swept at depth 4, moved all three textures. A .blend
-    /// references them as //../textures/wood.png, so every reference broke.
-    /// Stepping over scenes/ alone is not enough -- the project is scenes/
-    /// AND some unknown set of its siblings, so the whole scan has to refuse.
+    /// This pins behaviour the project knows is incomplete, so that changing
+    /// it is a deliberate act. A .blend references //../textures/wood.png, so
+    /// stepping over scenes/ leaves wood.png collected and moved. Measured
+    /// four ways, all reproducing.
+    ///
+    /// The complete rule -- refuse any scan with a document marker anywhere
+    /// below it -- was built, reviewed and rejected: one .flp made a whole
+    /// Downloads folder unsweepable, which removes the tool from the folder it
+    /// exists for. When #49 lands, this test flips.
     #[test]
-    fn a_document_marker_below_the_root_refuses_the_whole_scan() {
-        for m in DOCUMENT_MARKERS {
-            let base = std::env::temp_dir().join(format!(
-                "sweep_doc_{}_{}",
-                m.trim_start_matches('.'),
-                std::process::id()
-            ));
-            let _ = fs::remove_dir_all(&base);
-            fs::create_dir_all(base.join("scenes")).expect("mkdir");
-            fs::create_dir_all(base.join("textures")).expect("mkdir");
-            fs::write(base.join("scenes").join(format!("main{m}")), b"x").expect("write");
-            for n in ["t1.png", "t2.png", "t3.png"] {
-                fs::write(base.join("textures").join(n), b"x").expect("write");
-            }
+    fn a_document_marker_below_the_root_does_not_yet_refuse_the_scan() {
+        let base = std::env::temp_dir().join(format!("sweep_doc_gap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("scenes")).expect("mkdir");
+        fs::write(base.join("scenes").join("main.blend"), b"x").expect("write");
+        fs::write(base.join("wood.png"), b"x").expect("write");
 
-            let cfg = ScanConfig {
-                depth: 4,
-                grace: None,
-                ..ScanConfig::default()
-            };
-            let got = scan(&base, &cfg);
-            assert!(
-                matches!(got, Err(ScanError::RefusedProjectRoot { .. })),
-                "a {m} one level down did not refuse the scan, so its sibling \
-                 assets were collected: {got:?}"
-            );
+        let cfg = ScanConfig {
+            grace: None,
+            ..ScanConfig::default()
+        };
+        let got = scan(&base, &cfg).expect("today this is swept, not refused");
+        assert!(
+            got.entries.iter().any(|e| e.path.ends_with("wood.png")),
+            "the known gap in #49 has closed. That is good -- update this test \
+             to assert the refusal instead of the gap"
+        );
+        assert_eq!(
+            got.skipped_project, 1,
+            "the folder holding main.blend should still be stepped over"
+        );
 
-            let _ = fs::remove_dir_all(&base);
-        }
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// A root marker bounds its project, so the folder above it is ordinary.

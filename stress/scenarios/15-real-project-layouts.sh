@@ -164,23 +164,6 @@ assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside the Godot projec
 [ -f "$DL/ad-astra/capture_t06.png" ] && pass "untouched: ad-astra/capture_t06.png" \
   || fail "a project's internal file moved: ad-astra/capture_t06.png"
 
-# The other half. A .flp, .song or .blend references its assets relative to
-# itself and freely upward, so the folder AROUND one is not safe either --
-# Project/scenes/main.blend reaching //../wood.png is the measured case. These
-# refuse, and refusing is the correct answer even though it costs the invoices.
-for kind in flp song blender; do
-  DLD="$W/Downloads_$kind"; mkdir -p "$DLD"
-  "build_$kind" "$DLD/proj"
-  for n in 1 2 3 4; do : > "$DLD/invoice_$n.pdf"; done
-  DLD_BEFORE=$(find "$DLD" -type f | sort)
-  assert_exit 2 "a folder containing a $kind project is refused, because its documents reference upward" -- "$SWEEP" "$DLD"
-  DLD_AFTER=$(find "$DLD" -type f | sort)
-  if [ "$DLD_BEFORE" = "$DLD_AFTER" ]; then
-    pass "$kind: the refused scan moved nothing"
-  else
-    fail "$kind: the refused scan moved something"
-  fi
-done
 
 # --- the same folder, WITH --depth ---------------------------------------
 # The arm above runs at the default depth of 1, where sweep never descends
@@ -232,45 +215,8 @@ assert_exit 0 "apply at depth succeeds on a folder containing a root-marked proj
 D2_AFTER=$(find "$DL2/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$D2_BEFORE" "$D2_AFTER" "at --depth 4, an APPLY moved nothing inside the Godot project"
 
-# --- document markers: the whole scan refuses -------------------------------
-DL3="$W/Downloads3"; mkdir -p "$DL3"
-build_flp  "$DL3/anthem-project"
-build_song "$DL3/closer"
-for n in 1 2 3 4; do : > "$DL3/invoice_$n.pdf"; done
-D3_BEFORE=$(find "$DL3" -type f | wc -l | tr -d ' ')
 
-assert_exit 2 "a .flp below the scan root refuses the whole scan at depth" -- "$SWEEP" "$DL3" --depth 4
-assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$DL3" --yes --depth 4
-D3_AFTER=$(find "$DL3" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$D3_BEFORE" "$D3_AFTER" "the refused scan moved nothing at all"
 
-# --- the Blender layout that motivated the rule -----------------------------
-# scenes/main.blend beside textures/*.png. Before the document-marker rule,
-# sweep stepped over scenes/ and moved all three textures, breaking every
-# //../textures/ reference in the .blend.
-BL="$W/BlendProj"; mkdir -p "$BL/scenes" "$BL/textures"
-: > "$BL/scenes/main.blend"
-for c in Color Normal Roughness; do : > "$BL/textures/Ground_$c.png"; done
-BL_BEFORE=$(find "$BL/textures" -type f | wc -l | tr -d ' ')
-
-assert_exit 2 "a .blend one level down refuses the scan rather than sorting its sibling textures" -- "$SWEEP" "$BL" --depth 4
-assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$BL" --yes --depth 4
-BL_AFTER=$(find "$BL/textures" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$BL_BEFORE" "$BL_AFTER" "not one Blender texture moved"
-
-# --- the marker below the collection horizon --------------------------------
-# The first version of the document rule searched only as deep as --depth. A
-# .blend five levels down still describes textures one level down, so the scan
-# collected the assets and never saw the thing that owns them. The search is
-# unbounded now; this pins that.
-HZ="$W/DeepProj"; mkdir -p "$HZ/textures" "$HZ/a/b/c/d"
-: > "$HZ/a/b/c/d/main.blend"
-for c in 1 2 3; do : > "$HZ/textures/t$c.png"; done
-HZ_BEFORE=$(find "$HZ/textures" -type f | wc -l | tr -d ' ')
-assert_exit 2 "a document marker deeper than --depth still refuses the scan above it" -- "$SWEEP" "$HZ" --depth 2
-assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$HZ" --yes --depth 2
-HZ_AFTER=$(find "$HZ/textures" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$HZ_BEFORE" "$HZ_AFTER" "not one texture moved when the marker was below the collection depth"
 
 # --- a folder named like a project file is not a project ---------------------
 NP="$W/NotAProject/ordinary.flp"; mkdir -p "$NP"
@@ -284,6 +230,13 @@ if grep -qE '^  Documents' <<<"$NP_OUT"; then
 else
   fail "a plain folder named ordinary.flp was refused or grouped nothing: $NP_OUT"
 fi
+
+# KNOWN GAP, issue #49: a project DOCUMENT (.blend, .flp, .als, .song, .ptx)
+# references its assets upward, so stepping over the folder holding one still
+# loses assets sitting beside it. The complete rule -- refuse any scan with a
+# document marker below it -- was built and rejected: one .flp made a whole
+# Downloads folder unsweepable. Nothing here asserts the incomplete behaviour
+# is correct; the unit test pins it so changing it is deliberate.
 
 # --- a bundle is stepped over, its neighbours are not ------------------------
 FCP="$W/Movies"; mkdir -p "$FCP/MyMovie.fcpbundle/Original Media"
@@ -309,34 +262,3 @@ else
 $(diff <(echo "$FCP_MANIFEST_BEFORE") <(echo "$FCP_MANIFEST_AFTER") || true)"
 fi
 
-# --- the depth-1 upward reference -------------------------------------------
-# Project/scenes/main.blend references Project/wood.png as //../wood.png. At
-# --depth 1 sweep steps over scenes/ and used to collect wood.png anyway, so
-# the project's own texture was sorted into Images/ at the DEFAULT depth --
-# not at an opt-in one.
-UP="$W/UpwardRef"; mkdir -p "$UP/scenes"
-: > "$UP/scenes/main.blend"
-for c in 1 2 3; do : > "$UP/wood_$c.png"; done
-UP_BEFORE=$(find "$UP" -type f | sort)
-assert_exit 2 "a .blend in a subfolder refuses the scan at the DEFAULT depth, not just at --depth 2" -- "$SWEEP" "$UP"
-assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$UP" --yes
-UP_AFTER=$(find "$UP" -type f | sort)
-if [ "$UP_BEFORE" = "$UP_AFTER" ]; then
-  pass "not one texture moved from beside the .blend that references it upward"
-else
-  fail "a texture referenced as //../wood.png moved"
-fi
-
-# --- the marker search prunes what the walk prunes ---------------------------
-# A .blend inside a location the walk itself never enters must not refuse the
-# scan: the refusal would name a file that was never at risk, and the folder's
-# own files would go unswept for no reason.
-PP="$W/PruneParity"; mkdir -p "$PP/a/b/Library/project"
-: > "$PP/a/b/Library/project/main.blend"
-for n in 1 2 3; do : > "$PP/loose_$n.pdf"; done
-PP_OUT=$("$SWEEP" "$PP" --depth 3 2>&1)
-if grep -qE '^  Documents' <<<"$PP_OUT"; then
-  pass "a .blend inside a refused system location does not refuse the whole scan"
-else
-  fail "the marker search entered a location the walk prunes and refused on what it found: $PP_OUT"
-fi
