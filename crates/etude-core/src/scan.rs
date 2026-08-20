@@ -127,19 +127,33 @@ const PROJECT_MARKERS: &[&str] = &[
 ///
 /// Top level only, deliberately. A project file three directories down says
 /// something about that directory, not about the one being scanned.
+/// Does this name name a project? Dotted markers match as an extension, bare
+/// markers as a whole filename.
+///
+/// Split out from `project_marker_in` because the same list has to answer two
+/// questions, and answering only one of them was a real hole. Half the markers
+/// name a *bundle* -- `.fcpbundle`, `.band`, `.logicx` are directories, and
+/// the project IS the directory. Asking only "does this folder contain a
+/// marker?" recognises `MyMovie.fcpbundle` sitting in Documents and misses it
+/// when the user points sweep straight at it. Measured before this fix:
+/// `sweep MyMovie.fcpbundle` grouped the library's three .mov files under
+/// Media.
+fn is_project_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    PROJECT_MARKERS.iter().any(|m| {
+        if m.starts_with('.') {
+            lower.ends_with(m)
+        } else {
+            lower == *m
+        }
+    })
+}
+
 fn project_marker_in(dir: &Path) -> Option<String> {
     let rd = fs::read_dir(dir).ok()?;
     for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().to_ascii_lowercase();
-        for m in PROJECT_MARKERS {
-            let hit = if m.starts_with('.') {
-                name.ends_with(m)
-            } else {
-                name == *m
-            };
-            if hit {
-                return Some(e.file_name().to_string_lossy().into_owned());
-            }
+        if is_project_name(&e.file_name().to_string_lossy()) {
+            return Some(e.file_name().to_string_lossy().into_owned());
         }
     }
     None
@@ -267,13 +281,27 @@ impl std::fmt::Display for ScanError {
                     crate::redact::path(p)
                 )
             }
-            ScanError::RefusedProjectRoot { root, marker } => write!(
-                f,
-                "refused: {} looks like a project ({marker} is in it). Its files \
-                 reference each other by relative path, so sorting them into type \
-                 folders would break it. Sweep the folder that contains it instead",
-                crate::redact::path(root)
-            ),
+            ScanError::RefusedProjectRoot { root, marker } => {
+                // "X is in it" is false when the folder IS X. A refusal that
+                // misdescribes what it saw teaches the user the wrong shape of
+                // the rule, and they go looking for a stray file that is not
+                // there.
+                let itself = root
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().as_ref() == marker.as_str());
+                let because = if itself {
+                    "it is a project bundle".to_string()
+                } else {
+                    format!("{marker} is in it")
+                };
+                write!(
+                    f,
+                    "refused: {} looks like a project ({because}). Its files \
+                     reference each other by relative path, so sorting them into type \
+                     folders would break it. Sweep the folder that contains it instead",
+                    crate::redact::path(root)
+                )
+            }
             ScanError::RefusedSyncRoot(p) => write!(
                 f,
                 "refused: {} is inside a cloud-synced folder; pass --allow-sync to override",
@@ -478,6 +506,14 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
             marker: "a package directory".to_string(),
+        });
+    }
+    // The root is itself a project bundle. Being inside a project is being
+    // inside a project regardless of which argument the user typed.
+    if is_project_name(&root_name) {
+        return Err(ScanError::RefusedProjectRoot {
+            root: root.clone(),
+            marker: root_name.clone(),
         });
     }
     if let Some(marker) = project_marker_in(&root) {
@@ -699,6 +735,45 @@ mod tests {
                  not recognised as a project. The list and the matcher have drifted"
             );
             let _ = fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Half the markers name a directory, and the test above builds them all
+    /// as files.
+    ///
+    /// A `.fcpbundle`, a `.band`, a `.logicx` IS the directory. The
+    /// file-shaped test stayed green while `sweep MyMovie.fcpbundle` grouped
+    /// the library's own media into a Media folder -- the oracle survived
+    /// while its subject moved out from under it. This drives the real `scan`
+    /// entry point, in both shapes, so neither can pass on the other's behalf.
+    #[test]
+    fn a_project_bundle_is_refused_as_a_directory_and_as_the_root() {
+        for m in PROJECT_MARKERS.iter().filter(|m| m.starts_with('.')) {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_bundle_{}_{}",
+                m.trim_start_matches('.'),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            let bundle = base.join(format!("thing{m}"));
+            fs::create_dir_all(bundle.join("Media")).expect("mkdir bundle");
+            fs::write(bundle.join("Media").join("a.mov"), b"x").expect("write");
+
+            // Pointed straight at the bundle: it is the project.
+            let inside = scan(&bundle, &ScanConfig::default());
+            assert!(
+                matches!(inside, Err(ScanError::RefusedProjectRoot { .. })),
+                "scanning into a {m} bundle was not refused: {inside:?}"
+            );
+
+            // Pointed at the folder holding it: the bundle is a marker.
+            let outside = scan(&base, &ScanConfig::default());
+            assert!(
+                matches!(outside, Err(ScanError::RefusedProjectRoot { .. })),
+                "a folder holding a {m} bundle was not refused: {outside:?}"
+            );
+
+            let _ = fs::remove_dir_all(&base);
         }
     }
 
