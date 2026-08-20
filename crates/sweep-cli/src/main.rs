@@ -675,7 +675,12 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         // back. Files inside the grace window or still downloading DO need
         // organising -- just not yet -- and saying otherwise sends someone
         // away believing their folder was looked at and found tidy.
-        let held = plan.too_recent() + plan.in_flight();
+        // skipped_in_flight belongs here too. A folder holding only
+        // movie.mp4.download/ disclosed the folder and then concluded
+        // "Nothing here needs organising", which denies what it just said.
+        // A download in progress is something to organise later, whether it
+        // arrived as a file or as a directory.
+        let held = plan.too_recent() + plan.in_flight() + plan.skipped_in_flight;
         if held > 0 {
             println!();
             let recent = plan.too_recent();
@@ -695,6 +700,9 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // window, so telling someone to pass --since 0 for a folder of
             // .part files sends them to run a command that changes nothing
             // and prints the same refusal.
+            // Not re-printed here: print_projects_skipped_note above already
+            // disclosed the directory-form downloads. This branch only needs
+            // to count them so the conclusion does not contradict it.
             if recent > 0 {
                 println!(
                     "\nNothing else here needs organising. Run again later, or pass\n\
@@ -784,6 +792,15 @@ fn print_projects_skipped_note(p: &plan::Plan) {
         println!(
             "\n  {} folders are downloads still in progress and were left alone",
             p.skipped_in_flight
+        );
+    }
+    // A Song.band does not HOLD a project file. It is one.
+    if p.skipped_bundle == 1 {
+        println!("\n  1 folder was left alone because it is a project bundle");
+    } else if p.skipped_bundle > 1 {
+        println!(
+            "\n  {} folders were left alone because they are project bundles",
+            p.skipped_bundle
         );
     }
 }

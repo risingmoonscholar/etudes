@@ -321,3 +321,55 @@ if grep -q "it is a project bundle" <<<"$BND_OUT"; then
 else
   fail "a .band root was told a package directory is in it: $BND_OUT"
 fi
+
+# --- a folder that holds ONLY a directory-form download ----------------------
+# The disclosure and the conclusion have to agree. This printed "1 folder is a
+# download still in progress" and then "Nothing here needs organising", which
+# denies what it just said. The earlier arm missed it by adding loose PDFs,
+# which made the plan non-empty.
+ONLY="$W/OnlyDownload"; mkdir -p "$ONLY/movie.mp4.download"
+for n in 1 2 3; do : > "$ONLY/movie.mp4.download/part_$n.mp4"; done
+ONLY_OUT=$("$SWEEP" "$ONLY" --depth 2 2>&1 || true)
+if grep -q "Nothing here needs organising" <<<"$ONLY_OUT"; then
+  fail "a folder of nothing but an in-flight download was called tidy: $ONLY_OUT"
+else
+  pass "a folder holding only a directory-form download is not called tidy"
+fi
+if grep -q "finish downloading on" <<<"$ONLY_OUT"; then
+  pass "and it is told to run again later rather than to pass --since 0"
+else
+  fail "the guidance for a directory-form download was wrong or missing: $ONLY_OUT"
+fi
+
+# --- a bundle is not a folder that HOLDS a project file ----------------------
+BP="$W/BundleParent"; mkdir -p "$BP/Song.band"
+for n in 1 2 3; do : > "$BP/Song.band/track_$n.wav"; done
+for n in 1 2 3; do : > "$BP/loose_$n.pdf"; done
+BP_OUT=$("$SWEEP" "$BP" --depth 2 2>&1 || true)
+if grep -q "it is a project bundle" <<<"$BP_OUT"; then
+  pass "a nested bundle is disclosed as being a project, not as holding one"
+else
+  fail "Song.band was reported as a folder that holds a project file: $BP_OUT"
+fi
+
+# --- a marker symlink is a marker, and its target is never resolved ----------
+# is_file() via symlink_metadata dropped symlinked markers; is_file() via
+# metadata fixed that by resolving a path outside the scan root, which this
+# scanner promises never to do. !is_dir() on the link needs neither.
+OUT_T="$W/OutsideTarget"; mkdir -p "$OUT_T"
+: > "$OUT_T/Cargo.toml"
+SL="$W/SymOutside"; mkdir -p "$SL"
+ln -s "$OUT_T/Cargo.toml" "$SL/Cargo.toml"
+for n in 1 2 3; do : > "$SL/doc_$n.pdf"; done
+assert_exit 2 "a symlinked Cargo.toml still marks the project" -- "$SWEEP" "$SL"
+
+# And a plain directory named like a document marker is still ordinary.
+OD="$W/OrdinaryDir"; mkdir -p "$OD/ordinary.flp"
+: > "$OD/ordinary.flp/receipt.pdf"
+for n in 1 2 3; do : > "$OD/loose_$n.pdf"; done
+OD_OUT=$("$SWEEP" "$OD" 2>&1 || true)
+if grep -qE '^  Documents' <<<"$OD_OUT"; then
+  pass "a plain directory named ordinary.flp still does not freeze its parent"
+else
+  fail "the !is_dir() form reintroduced the ordinary.flp over-refusal: $OD_OUT"
+fi

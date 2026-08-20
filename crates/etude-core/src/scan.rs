@@ -180,14 +180,24 @@ fn project_marker_in(dir: &Path) -> Option<String> {
         // called ordinary.flp -- no FL Studio project anywhere, and the loose
         // files went unswept. Only BUNDLE markers name directories, and they
         // are handled above.
-        // metadata, which FOLLOWS the link, not symlink_metadata. The point
-        // of this check is to exclude DIRECTORIES named like a marker, and
-        // symlink_metadata reports a symlinked Cargo.toml as neither file nor
-        // directory -- so it stopped being a marker and the Cargo project it
-        // marked was reorganised. A link that cannot be resolved counts as a
-        // marker: failing closed is the cheap direction here.
+        // Ask "is this a directory", not "is this a file", and ask it without
+        // following the link.
+        //
+        // The check exists to stop a DIRECTORY named ordinary.flp freezing the
+        // folder it sits in. Phrasing it as is_file() with symlink_metadata
+        // dropped symlinked markers, because a link is neither; phrasing it as
+        // is_file() with metadata fixed that by following the link out of the
+        // tree, which contradicts this scanner's own rule about never
+        // resolving a target that escapes the root.
+        //
+        // !is_dir() on the link itself needs neither. A symlink counts as a
+        // marker whatever it points at, which over-refuses only for a link to
+        // a directory named like a marker -- the safe direction, and no path
+        // outside the root is ever resolved.
         if (name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS))
-            && fs::metadata(e.path()).map(|m| m.is_file()).unwrap_or(true)
+            && fs::symlink_metadata(e.path())
+                .map(|m| !m.is_dir())
+                .unwrap_or(true)
         {
             return Some(name);
         }
@@ -407,6 +417,12 @@ pub struct ScanOutcome {
     /// a count under a reason that does not apply to it is the defect this
     /// repo keeps finding.
     pub skipped_in_flight: usize,
+
+    /// Directories that ARE a project or package, rather than holding one:
+    /// `Song.band`, `MyMovie.fcpbundle`, a nested `.app`. Counted apart from
+    /// `skipped_project` because "left alone because it holds a project file"
+    /// is false of them -- the folder IS the project.
+    pub skipped_bundle: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
@@ -603,6 +619,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_system: 0,
         skipped_project: 0,
         skipped_in_flight: 0,
+        skipped_bundle: 0,
         skipped_unreadable: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
@@ -733,12 +750,12 @@ fn walk(
                 continue;
             }
             if os_says_package(&path) {
-                out.skipped_project += 1;
+                out.skipped_bundle += 1;
                 continue;
             }
             // A bundle is a unit: step over it, never into it.
             if name_matches(&name, BUNDLE_MARKERS) {
-                out.skipped_project += 1;
+                out.skipped_bundle += 1;
                 continue;
             }
             if project_marker_in(&path).is_some() {
@@ -862,8 +879,13 @@ mod tests {
             };
             let outside = scan(&base, &cfg).expect("the folder holding a bundle is ordinary");
             assert_eq!(
-                outside.skipped_project, 1,
+                outside.skipped_bundle, 1,
                 "the {m} bundle was not stepped over"
+            );
+            assert_eq!(
+                outside.skipped_project, 0,
+                "a bundle counted as a folder that HOLDS a project file, which \
+                 would put its count under a reason that is not its own"
             );
             assert!(
                 outside.entries.iter().all(|e| !e.path.starts_with(&bundle)),

@@ -76,6 +76,7 @@ pub struct Plan {
     /// Directories not entered because they hold a project marker.
     pub skipped_project: usize,
     pub skipped_in_flight: usize,
+    pub skipped_bundle: usize,
     /// Directories that could not be read at all. See
     /// `ScanOutcome::skipped_unreadable`. A nonzero value here means
     /// `scanned` is a floor, not a total: some part of the tree was
@@ -204,6 +205,7 @@ impl Plan {
                     ("too_recent", j::num(self.too_recent())),
                     ("projects_skipped", j::num(self.skipped_project)),
                     ("downloads_skipped", j::num(self.skipped_in_flight)),
+                    ("bundles_skipped", j::num(self.skipped_bundle)),
                     ("in_flight", j::num(self.in_flight())),
                     ("no_clear_group", j::num(self.no_clear_group())),
                     ("no_clear_group_paths", no_group),
@@ -455,6 +457,7 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
+        skipped_bundle: scan.skipped_bundle,
         skipped_unreadable: scan.skipped_unreadable,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
@@ -535,6 +538,7 @@ mod tests {
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
+            skipped_bundle: 0,
             skipped_unreadable: 0,
             root_is_synced: false,
             allow_sync: false,
