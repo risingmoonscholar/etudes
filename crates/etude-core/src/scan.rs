@@ -148,6 +148,19 @@ fn name_matches(name: &str, list: &[&str]) -> bool {
     })
 }
 
+/// A DOCUMENT marker at the top level of `dir`.
+fn document_marker_in(dir: &Path) -> Option<String> {
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name_matches(&name, DOCUMENT_MARKERS)
+            && fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_file())
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn project_marker_in(dir: &Path) -> Option<String> {
     let rd = fs::read_dir(dir).ok()?;
     for e in rd.flatten() {
@@ -166,18 +179,33 @@ fn project_marker_in(dir: &Path) -> Option<String> {
     None
 }
 
-/// A document marker anywhere under `dir`, with the path that holds it.
+/// A document marker anywhere under `dir`.
 ///
-/// Separate from `project_marker_in` because the answer means something
-/// different: a document marker does not bound the project, so finding one
-/// below the scan root taints the whole scan rather than one directory.
-fn document_marker_below(dir: &Path, depth: u8, limit: u8) -> Option<(PathBuf, String)> {
-    if depth >= limit.min(8) {
-        return None;
-    }
+/// Deliberately NOT bounded by the scan depth. The scan collects files down
+/// to --depth, but a document marker deeper than that still describes them:
+/// a .blend four levels down references textures one level down, and
+/// stopping the search at the collection depth finds the assets while
+/// missing the thing that owns them. Codex found exactly that hole in the
+/// bounded version of this function.
+///
+/// It prunes what the main walk prunes -- hidden entries, NEVER_ENTER
+/// directories, packages and bundles -- so it does not descend into .git or
+/// node_modules looking for a project file that could not be there. It stops
+/// at the first hit.
+///
+/// The cost is a second traversal, and on a marker-free tree that is a full
+/// one. It runs only at --depth 2 and above, which the user opts into; the
+/// default depth of 1 never calls it.
+fn document_marker_below(dir: &Path) -> Option<(PathBuf, String)> {
     for e in fs::read_dir(dir).ok()?.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
+        if is_hidden(&name) || never_enter(&name) {
+            continue;
+        }
         let path = e.path();
+        // symlink_metadata, not metadata: following a link here would let an
+        // escaping symlink walk the whole disk, and has cost this codebase
+        // three separate bugs already.
         let Ok(meta) = fs::symlink_metadata(&path) else {
             continue;
         };
@@ -186,7 +214,9 @@ fn document_marker_below(dir: &Path, depth: u8, limit: u8) -> Option<(PathBuf, S
         }
         if meta.is_dir()
             && !name_matches(&name, BUNDLE_MARKERS)
-            && let Some(hit) = document_marker_below(&path, depth + 1, limit)
+            && !is_package(&name)
+            && !os_says_package(&path)
+            && let Some(hit) = document_marker_below(&path)
         {
             return Some(hit);
         }
@@ -557,18 +587,6 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
             marker,
         });
     }
-    // A document marker below the root taints the whole scan, because a
-    // document does not say where its project ends. Only reachable at
-    // --depth 2 and above; at the default depth of 1 this is exactly the
-    // top-level check above, so the common case is unchanged.
-    if cfg.depth > 1
-        && let Some((_, marker)) = document_marker_below(&root, 0, cfg.depth)
-    {
-        return Err(ScanError::RefusedProjectRoot {
-            root: root.clone(),
-            marker,
-        });
-    }
 
     if is_refused_system_location(&root) {
         return Err(ScanError::RefusedSystemLocation(root.clone()));
@@ -616,6 +634,23 @@ fn walk(
     visited: &mut HashSet<(u64, u64)>,
 ) -> Result<(), ScanError> {
     if depth >= cfg.depth.min(8) {
+        // The collection horizon, not the knowledge horizon. A .blend below
+        // this point still describes files above it, so the search continues
+        // even though nothing down here will be collected. Measured: bounding
+        // this at the collection depth left a project whose marker sat deeper
+        // than its assets fully exposed.
+        //
+        // Only at --depth 2 and up, which the user opts into. At the default
+        // depth of 1 the top-level check in `scan` is the whole guard, and a
+        // scan stays as cheap as it has always been.
+        if cfg.depth > 1
+            && let Some((_, marker)) = document_marker_below(dir)
+        {
+            return Err(ScanError::RefusedProjectRoot {
+                root: root.to_path_buf(),
+                marker,
+            });
+        }
         return Ok(());
     }
 
@@ -708,6 +743,22 @@ fn walk(
                 out.skipped_project += 1;
                 continue;
             }
+            // A document does not bound its project, so finding one below
+            // the root taints the whole scan rather than one directory.
+            //
+            // At --depth 1 this does not apply. Nothing inside `path` will be
+            // collected, and the scan's own loose files sit ABOVE the marker
+            // rather than beside it. Refusing there would break the case this
+            // guard was built for: someone tidying the folder their projects
+            // live in.
+            if cfg.depth > 1
+                && let Some(marker) = document_marker_in(&path)
+            {
+                return Err(ScanError::RefusedProjectRoot {
+                    root: root.to_path_buf(),
+                    marker,
+                });
+            }
             if project_marker_in(&path).is_some() {
                 out.skipped_project += 1;
                 continue;
@@ -786,7 +837,7 @@ mod tests {
             assert_eq!(
                 project_marker_in(&dir).as_deref(),
                 Some(fname.as_str()),
-                "PROJECT_MARKERS lists {m:?} but a folder holding {fname:?} was \
+                "{m:?} is a ROOT or DOCUMENT marker but a folder holding {fname:?} was \
                  not recognised as a project. The list and the matcher have drifted"
             );
             let _ = fs::remove_dir_all(&dir);
@@ -844,6 +895,44 @@ mod tests {
                 "the invoice beside the {m} bundle was not swept"
             );
 
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// A folder named like a project file is not a project.
+    ///
+    /// Only BUNDLE markers name directories. Matching every dotted marker
+    /// against directory names refused an ordinary folder called
+    /// `ordinary.flp` holding three receipts -- over-refusal is a real cost,
+    /// not the safe side of the trade.
+    #[test]
+    fn a_folder_named_like_a_document_marker_is_still_ordinary() {
+        for m in DOCUMENT_MARKERS {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_notproj_{}_{}",
+                m.trim_start_matches('.'),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            let dir = base.join(format!("ordinary{m}"));
+            fs::create_dir_all(&dir).expect("mkdir");
+            for n in ["r1.pdf", "r2.pdf", "r3.pdf"] {
+                fs::write(dir.join(n), b"x").expect("write");
+            }
+            let cfg = ScanConfig {
+                grace: None,
+                ..ScanConfig::default()
+            };
+            let got = scan(&dir, &cfg);
+            assert!(
+                got.is_ok(),
+                "a plain folder named ordinary{m} was refused as a project: {got:?}"
+            );
+            assert_eq!(
+                got.unwrap().entries.len(),
+                3,
+                "the receipts in a folder named ordinary{m} were not swept"
+            );
             let _ = fs::remove_dir_all(&base);
         }
     }
@@ -934,10 +1023,16 @@ mod tests {
         }
     }
 
-    /// The three kinds partition the list. A marker in none of them is
-    /// unreachable; a marker in two is ambiguous.
+    /// No marker appears in two kinds.
+    ///
+    /// Named for what it can actually prove. It cannot tell that a marker is
+    /// in the RIGHT kind -- there is no oracle for that short of knowing the
+    /// format -- and because its universe is the three lists concatenated, it
+    /// cannot notice a marker deleted outright. What it does catch is the
+    /// ambiguous case: a marker in two kinds has no defined behaviour, since
+    /// whichever check runs first wins.
     #[test]
-    fn every_project_marker_has_exactly_one_kind() {
+    fn no_marker_appears_in_two_kinds() {
         let all: Vec<&&str> = BUNDLE_MARKERS
             .iter()
             .chain(ROOT_MARKERS)

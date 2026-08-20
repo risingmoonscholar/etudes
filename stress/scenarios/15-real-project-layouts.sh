@@ -239,6 +239,30 @@ assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$BL" --yes --depth 4
 BL_AFTER=$(find "$BL/textures" -type f 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$BL_BEFORE" "$BL_AFTER" "not one Blender texture moved"
 
+# --- the marker below the collection horizon --------------------------------
+# The first version of the document rule searched only as deep as --depth. A
+# .blend five levels down still describes textures one level down, so the scan
+# collected the assets and never saw the thing that owns them. The search is
+# unbounded now; this pins that.
+HZ="$W/DeepProj"; mkdir -p "$HZ/textures" "$HZ/a/b/c/d"
+: > "$HZ/a/b/c/d/main.blend"
+for c in 1 2 3; do : > "$HZ/textures/t$c.png"; done
+HZ_BEFORE=$(find "$HZ/textures" -type f | wc -l | tr -d ' ')
+assert_exit 2 "a document marker deeper than --depth still refuses the scan above it" -- "$SWEEP" "$HZ" --depth 2
+assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$HZ" --yes --depth 2
+HZ_AFTER=$(find "$HZ/textures" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$HZ_BEFORE" "$HZ_AFTER" "not one texture moved when the marker was below the collection depth"
+
+# --- a folder named like a project file is not a project ---------------------
+NP="$W/NotAProject/ordinary.flp"; mkdir -p "$NP"
+for n in 1 2 3; do : > "$NP/receipt_$n.pdf"; done
+NP_OUT=$("$SWEEP" "$NP" 2>&1)
+if grep -qE '^  Documents' <<<"$NP_OUT"; then
+  pass "a plain folder named ordinary.flp sweeps normally; over-refusal is a cost too"
+else
+  fail "a plain folder named ordinary.flp was refused or grouped nothing: $NP_OUT"
+fi
+
 # --- a bundle is stepped over, its neighbours are not ------------------------
 FCP="$W/Movies"; mkdir -p "$FCP/MyMovie.fcpbundle/Original Media"
 for c in 1 2 3; do : > "$FCP/MyMovie.fcpbundle/Original Media/clip$c.mov"; done
