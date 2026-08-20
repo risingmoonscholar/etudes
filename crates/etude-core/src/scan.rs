@@ -58,7 +58,14 @@ pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
     ".!ut",
 ];
 
-/// Files whose presence makes the folder holding them a project.
+/// Does this folder hold a project file at its top level?
+///
+/// Top level only, deliberately. A project file three directories down says
+/// something about that directory, not about the one being scanned.
+/// Files and directories whose presence marks a project.
+///
+/// Split into three kinds below, because they do not all mean the same thing
+/// and treating them alike moved a Blender project's textures.
 ///
 /// A project file references its siblings by relative path: an .als expects
 /// its bounces beside it, a .prproj expects its footage. Sorting those into
@@ -78,42 +85,30 @@ pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
 ///
 /// The test is whether the format OWNS a directory layout. An .als expects
 /// Samples/ beside it; a .sketch is one file that expects nothing.
-const PROJECT_MARKERS: &[&str] = &[
-    // --- Game engines -----------------------------------------------------
-    // Verified against a real 18,724-file Godot project on the author's
-    // machine. Its .tscn files reference siblings as res://scripts/main.gd --
-    // absolute from the project root -- so moving ANY file inside a Godot
-    // project breaks every reference to it. project.godot was missing from
-    // the first version of this list, which is how that project came within
-    // one `sweep ~/Documents/dev-projects/ad-astra` of losing its layout.
+///
+/// Verified against a real 18,724-file Godot project on the author's machine.
+/// Its .tscn files reference siblings as res://scripts/main.gd -- absolute
+/// from the project root -- so moving ANY file inside a Godot project breaks
+/// every reference to it. project.godot was missing from the first version of
+/// this list, which is how that project came within one
+/// `sweep ~/Documents/dev-projects/ad-astra` of losing its layout.
+/// A marker directory that IS the project, whole and self-contained.
+///
+/// A Final Cut library, a GarageBand song, a Logic project: the bundle is a
+/// directory and everything the project owns lives inside it. Nothing outside
+/// it belongs to it, so the folder holding one is ordinary and sweepable --
+/// step over the bundle and sort the invoices sitting beside it.
+const BUNDLE_MARKERS: &[&str] = &[".fcpbundle", ".band", ".logicx"];
+
+/// A marker file that marks the project ROOT.
+///
+/// `project.godot`, `Cargo.toml`, `package.json` sit at the top of their
+/// project by definition, so the directory holding one is the entire project
+/// and its parent is ordinary. Step over that directory, sweep the rest.
+const ROOT_MARKERS: &[&str] = &[
     "project.godot",
-    ".uproject", // Unreal: sits beside Content/ Config/ Source/ Saved/
+    ".uproject",
     ".unity",
-    ".song", // Studio One: folder per song
-    // --- Audio ------------------------------------------------------------
-    // A session references its bounces, stems and samples by path.
-    ".als",
-    ".logicx",
-    ".ptx",
-    ".sesx",
-    ".flp", // FL Studio, beside its rendered audio and sample references
-    ".rpp",
-    ".band",
-    // --- Video ------------------------------------------------------------
-    // A timeline references footage by path; sorting the footage takes every
-    // clip offline.
-    ".prproj",
-    ".aep",
-    ".drp",
-    ".veg",
-    ".fcpbundle",
-    // --- 3D and compositing -----------------------------------------------
-    // Blender's // paths are relative to the .blend, so a texture moved out
-    // of its folder is a texture the file cannot find.
-    ".blend",
-    ".c4d",
-    // --- Code projects, by their manifest ---------------------------------
-    // A manifest names a directory layout, so the directory is the unit.
     "cargo.toml",
     "package.json",
     "pyproject.toml",
@@ -123,24 +118,28 @@ const PROJECT_MARKERS: &[&str] = &[
     "makefile",
 ];
 
-/// Does this folder hold a project file at its top level?
+/// A marker file that is a DOCUMENT, and says nothing about where the project
+/// ends.
 ///
-/// Top level only, deliberately. A project file three directories down says
-/// something about that directory, not about the one being scanned.
-/// Does this name name a project? Dotted markers match as an extension, bare
-/// markers as a whole filename.
+/// This is the distinction that cost a Blender project its textures. A .blend
+/// references assets as //../textures/wood.png -- relative to the .blend, and
+/// freely upward. So scenes/main.blend does NOT mean scenes/ is the project;
+/// it means the project is scenes/ AND some unknown set of its siblings.
+/// Measured: project/scenes/main.blend beside project/textures/*.png, swept at
+/// depth 4, moved all three textures and broke every reference to them.
 ///
-/// Split out from `project_marker_in` because the same list has to answer two
-/// questions, and answering only one of them was a real hole. Half the markers
-/// name a *bundle* -- `.fcpbundle`, `.band`, `.logicx` are directories, and
-/// the project IS the directory. Asking only "does this folder contain a
-/// marker?" recognises `MyMovie.fcpbundle` sitting in Documents and misses it
-/// when the user points sweep straight at it. Measured before this fix:
-/// `sweep MyMovie.fcpbundle` grouped the library's three .mov files under
-/// Media.
-fn is_project_name(name: &str) -> bool {
+/// Since the extent cannot be known without reading the file, and sweep does
+/// not read files, the only honest answer is to refuse the whole scan and say
+/// which document caused it. Same rule the scan root has always used, applied
+/// at every depth rather than only the top.
+const DOCUMENT_MARKERS: &[&str] = &[
+    ".song", ".als", ".ptx", ".sesx", ".flp", ".rpp", ".prproj", ".aep", ".drp", ".veg", ".blend",
+    ".c4d",
+];
+
+fn name_matches(name: &str, list: &[&str]) -> bool {
     let lower = name.to_ascii_lowercase();
-    PROJECT_MARKERS.iter().any(|m| {
+    list.iter().any(|m| {
         if m.starts_with('.') {
             lower.ends_with(m)
         } else {
@@ -152,8 +151,44 @@ fn is_project_name(name: &str) -> bool {
 fn project_marker_in(dir: &Path) -> Option<String> {
     let rd = fs::read_dir(dir).ok()?;
     for e in rd.flatten() {
-        if is_project_name(&e.file_name().to_string_lossy()) {
-            return Some(e.file_name().to_string_lossy().into_owned());
+        let name = e.file_name().to_string_lossy().into_owned();
+        // A bundle sitting in a folder does not make that folder a project.
+        // Refusing a Documents folder outright because one .fcpbundle lives
+        // in it means the user cannot sweep the invoices beside it, and the
+        // bundle was never at risk -- it is stepped over as a unit.
+        if name_matches(&name, BUNDLE_MARKERS) {
+            continue;
+        }
+        if name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// A document marker anywhere under `dir`, with the path that holds it.
+///
+/// Separate from `project_marker_in` because the answer means something
+/// different: a document marker does not bound the project, so finding one
+/// below the scan root taints the whole scan rather than one directory.
+fn document_marker_below(dir: &Path, depth: u8, limit: u8) -> Option<(PathBuf, String)> {
+    if depth >= limit.min(8) {
+        return None;
+    }
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_file() && name_matches(&name, DOCUMENT_MARKERS) {
+            return Some((path, name));
+        }
+        if meta.is_dir()
+            && !name_matches(&name, BUNDLE_MARKERS)
+            && let Some(hit) = document_marker_below(&path, depth + 1, limit)
+        {
+            return Some(hit);
         }
     }
     None
@@ -510,13 +545,25 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
     }
     // The root is itself a project bundle. Being inside a project is being
     // inside a project regardless of which argument the user typed.
-    if is_project_name(&root_name) {
+    if name_matches(&root_name, BUNDLE_MARKERS) {
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
             marker: root_name.clone(),
         });
     }
     if let Some(marker) = project_marker_in(&root) {
+        return Err(ScanError::RefusedProjectRoot {
+            root: root.clone(),
+            marker,
+        });
+    }
+    // A document marker below the root taints the whole scan, because a
+    // document does not say where its project ends. Only reachable at
+    // --depth 2 and above; at the default depth of 1 this is exactly the
+    // top-level check above, so the common case is unchanged.
+    if cfg.depth > 1
+        && let Some((_, marker)) = document_marker_below(&root, 0, cfg.depth)
+    {
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
             marker,
@@ -656,6 +703,11 @@ fn walk(
             // difference between the root case and this one: the folder being
             // swept is ordinary and its own loose files are fair game. Only
             // the project inside it is off limits.
+            // A bundle is a unit: step over it, never into it.
+            if name_matches(&name, BUNDLE_MARKERS) {
+                out.skipped_project += 1;
+                continue;
+            }
             if project_marker_in(&path).is_some() {
                 out.skipped_project += 1;
                 continue;
@@ -710,7 +762,10 @@ mod tests {
     #[test]
     fn every_project_marker_is_recognised_as_one() {
         use std::io::Write;
-        for m in PROJECT_MARKERS {
+        // Bundles are excluded on purpose: a bundle in a folder does not make
+        // that folder a project, and `a_bundle_is_the_project_and_the_folder_
+        // holding_it_is_not` covers them instead.
+        for m in ROOT_MARKERS.iter().chain(DOCUMENT_MARKERS) {
             let dir = std::env::temp_dir().join(format!(
                 "sweep_marker_{}_{}",
                 m.trim_start_matches('.').replace(['.', '/'], "_"),
@@ -738,17 +793,16 @@ mod tests {
         }
     }
 
-    /// Half the markers name a directory, and the test above builds them all
-    /// as files.
+    /// A bundle is the project; the folder holding one is ordinary.
     ///
-    /// A `.fcpbundle`, a `.band`, a `.logicx` IS the directory. The
-    /// file-shaped test stayed green while `sweep MyMovie.fcpbundle` grouped
-    /// the library's own media into a Media folder -- the oracle survived
-    /// while its subject moved out from under it. This drives the real `scan`
-    /// entry point, in both shapes, so neither can pass on the other's behalf.
+    /// The first version of this test asserted that a folder containing a
+    /// .fcpbundle was refused outright. That was wrong and the test pinned it:
+    /// a Documents folder holding one video library plus a year of invoices
+    /// would refuse to sweep the invoices, and the library was never at risk
+    /// because a bundle is stepped over as a unit.
     #[test]
-    fn a_project_bundle_is_refused_as_a_directory_and_as_the_root() {
-        for m in PROJECT_MARKERS.iter().filter(|m| m.starts_with('.')) {
+    fn a_bundle_is_the_project_and_the_folder_holding_it_is_not() {
+        for m in BUNDLE_MARKERS {
             let base = std::env::temp_dir().join(format!(
                 "sweep_bundle_{}_{}",
                 m.trim_start_matches('.'),
@@ -758,6 +812,7 @@ mod tests {
             let bundle = base.join(format!("thing{m}"));
             fs::create_dir_all(bundle.join("Media")).expect("mkdir bundle");
             fs::write(bundle.join("Media").join("a.mov"), b"x").expect("write");
+            fs::write(base.join("invoice.pdf"), b"x").expect("write");
 
             // Pointed straight at the bundle: it is the project.
             let inside = scan(&bundle, &ScanConfig::default());
@@ -766,14 +821,135 @@ mod tests {
                 "scanning into a {m} bundle was not refused: {inside:?}"
             );
 
-            // Pointed at the folder holding it: the bundle is a marker.
-            let outside = scan(&base, &ScanConfig::default());
+            // Pointed at the folder holding it: sweep it, step over the bundle.
+            let cfg = ScanConfig {
+                depth: 3,
+                grace: None,
+                ..ScanConfig::default()
+            };
+            let outside = scan(&base, &cfg).expect("the folder holding a bundle is ordinary");
+            assert_eq!(
+                outside.skipped_project, 1,
+                "the {m} bundle was not stepped over"
+            );
             assert!(
-                matches!(outside, Err(ScanError::RefusedProjectRoot { .. })),
-                "a folder holding a {m} bundle was not refused: {outside:?}"
+                outside.entries.iter().all(|e| !e.path.starts_with(&bundle)),
+                "a file from inside the {m} bundle was collected"
+            );
+            assert!(
+                outside
+                    .entries
+                    .iter()
+                    .any(|e| e.path.ends_with("invoice.pdf")),
+                "the invoice beside the {m} bundle was not swept"
             );
 
             let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// A document marker does not say where its project ends.
+    ///
+    /// Measured on a real Blender layout: scenes/main.blend beside
+    /// textures/*.png, swept at depth 4, moved all three textures. A .blend
+    /// references them as //../textures/wood.png, so every reference broke.
+    /// Stepping over scenes/ alone is not enough -- the project is scenes/
+    /// AND some unknown set of its siblings, so the whole scan has to refuse.
+    #[test]
+    fn a_document_marker_below_the_root_refuses_the_whole_scan() {
+        for m in DOCUMENT_MARKERS {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_doc_{}_{}",
+                m.trim_start_matches('.'),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            fs::create_dir_all(base.join("scenes")).expect("mkdir");
+            fs::create_dir_all(base.join("textures")).expect("mkdir");
+            fs::write(base.join("scenes").join(format!("main{m}")), b"x").expect("write");
+            for n in ["t1.png", "t2.png", "t3.png"] {
+                fs::write(base.join("textures").join(n), b"x").expect("write");
+            }
+
+            let cfg = ScanConfig {
+                depth: 4,
+                grace: None,
+                ..ScanConfig::default()
+            };
+            let got = scan(&base, &cfg);
+            assert!(
+                matches!(got, Err(ScanError::RefusedProjectRoot { .. })),
+                "a {m} one level down did not refuse the scan, so its sibling \
+                 assets were collected: {got:?}"
+            );
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// A root marker bounds its project, so the folder above it is ordinary.
+    ///
+    /// This is the Downloads case, and it must keep working: someone with a
+    /// Godot project in Downloads still gets their loose files sorted.
+    #[test]
+    fn a_root_marker_bounds_its_project_and_the_folder_above_stays_sweepable() {
+        for m in ROOT_MARKERS {
+            let base = std::env::temp_dir().join(format!(
+                "sweep_rootm_{}_{}",
+                m.trim_start_matches('.').replace('.', "_"),
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&base);
+            let proj = base.join("TheProject");
+            fs::create_dir_all(&proj).expect("mkdir");
+            let fname = if m.starts_with('.') {
+                format!("thing{m}")
+            } else {
+                (*m).to_string()
+            };
+            fs::write(proj.join(&fname), b"x").expect("write");
+            fs::write(proj.join("icon.png"), b"x").expect("write");
+            fs::write(base.join("loose.pdf"), b"x").expect("write");
+
+            let cfg = ScanConfig {
+                depth: 3,
+                grace: None,
+                ..ScanConfig::default()
+            };
+            let got = scan(&base, &cfg).expect("a folder holding a project is ordinary");
+            assert_eq!(
+                got.skipped_project, 1,
+                "the {m} project was not stepped over"
+            );
+            assert!(
+                got.entries.iter().all(|e| !e.path.starts_with(&proj)),
+                "a file from inside the {m} project was collected"
+            );
+            assert!(
+                got.entries.iter().any(|e| e.path.ends_with("loose.pdf")),
+                "the loose file beside the {m} project was not swept"
+            );
+
+            let _ = fs::remove_dir_all(&base);
+        }
+    }
+
+    /// The three kinds partition the list. A marker in none of them is
+    /// unreachable; a marker in two is ambiguous.
+    #[test]
+    fn every_project_marker_has_exactly_one_kind() {
+        let all: Vec<&&str> = BUNDLE_MARKERS
+            .iter()
+            .chain(ROOT_MARKERS)
+            .chain(DOCUMENT_MARKERS)
+            .collect();
+        for m in &all {
+            let n = all.iter().filter(|o| o == &m).count();
+            assert_eq!(
+                n, 1,
+                "{m:?} appears in {n} of the three marker kinds. A marker in \
+                 two kinds has no defined behaviour"
+            );
         }
     }
 

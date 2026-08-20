@@ -170,36 +170,87 @@ done
 # With --depth, sweep does descend -- and before the nested-project guard it
 # grouped a Godot project's captures into Images while project.godot sat
 # listed as ungrouped. Applying that plan would have reorganised the project.
+# The three project kinds behave differently at depth, and they have to.
+#
+# A project.godot marks the project ROOT, so the project is exactly that
+# folder: step over it and sort the invoices beside it.
+#
+# A .flp or a .song is a DOCUMENT. It references its samples relative to
+# itself and freely upward, so finding one below the scan root does not say
+# where the project ends. Measured on a real Blender layout: scenes/main.blend
+# beside textures/*.png, swept at depth 4, moved all three textures. Stepping
+# over scenes/ alone would not have saved them. So a document marker refuses
+# the whole scan.
 DL2="$W/Downloads2"; mkdir -p "$DL2"
 build_godot "$DL2/ad-astra"
-build_flp   "$DL2/anthem-project"
-build_song  "$DL2/closer"
 for n in 1 2 3 4; do : > "$DL2/invoice_$n.pdf"; done
 
-D2_BEFORE=$(find "$DL2/ad-astra" "$DL2/anthem-project" "$DL2/closer" -type f | wc -l | tr -d ' ')
+D2_BEFORE=$(find "$DL2/ad-astra" -type f | wc -l | tr -d ' ')
 D2_OUT=$("$SWEEP" "$DL2" --depth 4 2>&1)
 
-# Nothing from inside any project may appear in any proposed group.
+# Nothing from inside the project may appear in any proposed group.
 LEAKED=$("$SWEEP" "$DL2" --depth 4 --json 2>/dev/null | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 mem=[f for g in d['groups'] for f in g.get('members',[])]
-print(sum(1 for f in mem if '/ad-astra/' in f or '/anthem-project/' in f or '/closer/' in f))
+print(sum(1 for f in mem if '/ad-astra/' in f))
 ")
-assert_eq 0 "$LEAKED" "at --depth 4, not one file from inside the three projects appears in any proposed group"
+assert_eq 0 "$LEAKED" "at --depth 4, not one file from inside the Godot project appears in any proposed group"
 
 if grep -qE '^  Documents' <<<"$D2_OUT"; then
-  pass "the folder's own loose invoices still group at --depth 4; only the projects are off limits"
+  pass "the folder's own loose invoices still group at --depth 4; only the project is off limits"
 else
   fail "the loose invoices formed no group at depth, so this arm proves nothing: $D2_OUT"
 fi
 
-if grep -q "hold project files" <<<"$D2_OUT"; then
-  pass "the output says the project folders were left alone, rather than skipping them silently"
+if grep -qE "holds? a project file|hold project files" <<<"$D2_OUT"; then
+  pass "the output says the project folder was left alone, rather than skipping it silently"
 else
-  fail "three project folders were stepped over with nothing in the output saying so: $D2_OUT"
+  fail "the project folder was stepped over with nothing in the output saying so: $D2_OUT"
 fi
 
-assert_exit 0 "apply at depth succeeds on a folder containing projects" -- "$SWEEP" apply "$DL2" --yes --depth 4
-D2_AFTER=$(find "$DL2/ad-astra" "$DL2/anthem-project" "$DL2/closer" -type f 2>/dev/null | wc -l | tr -d ' ')
-assert_eq "$D2_BEFORE" "$D2_AFTER" "at --depth 4, an APPLY moved nothing inside any of the three projects"
+assert_exit 0 "apply at depth succeeds on a folder containing a root-marked project" -- "$SWEEP" apply "$DL2" --yes --depth 4
+D2_AFTER=$(find "$DL2/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$D2_BEFORE" "$D2_AFTER" "at --depth 4, an APPLY moved nothing inside the Godot project"
+
+# --- document markers: the whole scan refuses -------------------------------
+DL3="$W/Downloads3"; mkdir -p "$DL3"
+build_flp  "$DL3/anthem-project"
+build_song "$DL3/closer"
+for n in 1 2 3 4; do : > "$DL3/invoice_$n.pdf"; done
+D3_BEFORE=$(find "$DL3" -type f | wc -l | tr -d ' ')
+
+assert_exit 2 "a .flp below the scan root refuses the whole scan at depth" -- "$SWEEP" "$DL3" --depth 4
+assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$DL3" --yes --depth 4
+D3_AFTER=$(find "$DL3" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$D3_BEFORE" "$D3_AFTER" "the refused scan moved nothing at all"
+
+# --- the Blender layout that motivated the rule -----------------------------
+# scenes/main.blend beside textures/*.png. Before the document-marker rule,
+# sweep stepped over scenes/ and moved all three textures, breaking every
+# //../textures/ reference in the .blend.
+BL="$W/BlendProj"; mkdir -p "$BL/scenes" "$BL/textures"
+: > "$BL/scenes/main.blend"
+for c in Color Normal Roughness; do : > "$BL/textures/Ground_$c.png"; done
+BL_BEFORE=$(find "$BL/textures" -type f | wc -l | tr -d ' ')
+
+assert_exit 2 "a .blend one level down refuses the scan rather than sorting its sibling textures" -- "$SWEEP" "$BL" --depth 4
+assert_exit 2 "and apply refuses it too" -- "$SWEEP" apply "$BL" --yes --depth 4
+BL_AFTER=$(find "$BL/textures" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$BL_BEFORE" "$BL_AFTER" "not one Blender texture moved"
+
+# --- a bundle is stepped over, its neighbours are not ------------------------
+FCP="$W/Movies"; mkdir -p "$FCP/MyMovie.fcpbundle/Original Media"
+for c in 1 2 3; do : > "$FCP/MyMovie.fcpbundle/Original Media/clip$c.mov"; done
+for n in 1 2 3; do : > "$FCP/invoice_$n.pdf"; done
+FCP_BEFORE=$(find "$FCP/MyMovie.fcpbundle" -type f | wc -l | tr -d ' ')
+FCP_OUT=$("$SWEEP" "$FCP" --depth 4 2>&1)
+
+if grep -qE '^  Documents' <<<"$FCP_OUT"; then
+  pass "invoices beside a Final Cut library still group; the library is not contagious"
+else
+  fail "a folder holding a .fcpbundle refused to sweep its own invoices: $FCP_OUT"
+fi
+assert_exit 0 "apply beside a Final Cut library succeeds" -- "$SWEEP" apply "$FCP" --yes --depth 4
+FCP_AFTER=$(find "$FCP/MyMovie.fcpbundle" -type f 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$FCP_BEFORE" "$FCP_AFTER" "not one file moved from inside the Final Cut library"

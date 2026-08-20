@@ -330,7 +330,14 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
         let n: u64 = digits.parse().map_err(|_| {
             format!("--since must be a number, optionally with h or d, got {raw:?}")
         })?;
-        return Ok(Some(std::time::Duration::from_secs(n * unit)));
+        // Overflow is a wrong window, and a wrong window silently changes
+        // which files are held back. Unchecked, this panicked in debug and
+        // wrapped in release -- the release build accepted a nonsense value
+        // and swept with a window nobody chose.
+        let secs = n.checked_mul(unit).ok_or_else(|| {
+            format!("--since {raw:?} is too large. The longest window is 213503d")
+        })?;
+        return Ok(Some(std::time::Duration::from_secs(secs)));
     }
 
     // SWEEP_GRACE_SECS exists for the stress harness, which builds a tree and
@@ -1690,6 +1697,9 @@ mod tests {
         assert!(s("").is_err());
         // present but with nothing after it
         assert!(since_flag(&["--since".to_string()]).is_err());
+        // Release builds wrapped this and swept with a window nobody chose.
+        assert!(s("18446744073709551615d").is_err());
+        assert!(s("999999999999999999999").is_err());
     }
 
     /// What someone typed beats what their shell exported.
