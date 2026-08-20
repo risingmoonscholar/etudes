@@ -1148,6 +1148,7 @@ mod tests {
             skipped_hidden: 0,
             skipped_symlink: 0,
             skipped_system: 0,
+            skipped_project: 0,
             skipped_unreadable: 0,
             root_is_synced: false,
             allow_sync: false,

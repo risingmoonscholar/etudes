@@ -392,3 +392,65 @@ fn a_download_in_flight_is_never_grouped() {
 
     let _ = fs::remove_dir_all(&root);
 }
+
+/// A project nested inside a swept folder is stepped over, not descended into.
+///
+/// The root check alone was not enough. It protects someone standing IN their
+/// project; it does nothing for someone sweeping the folder their projects
+/// live in. Verified before this guard existed: a Downloads folder holding a
+/// Godot project, scanned at depth 2, produced an Images group of that
+/// project's captures while its project.godot sat listed as ungrouped.
+/// Applying that plan would have reorganised the project.
+///
+/// The folder AROUND the project stays ordinary -- its own loose files still
+/// group. Only the project is off limits.
+#[test]
+fn a_project_nested_in_a_swept_folder_is_not_descended_into() {
+    let root = std::env::temp_dir().join(format!("sweep_nested_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("ad-astra")).expect("mkdir");
+    fs::write(root.join("ad-astra/project.godot"), b"synthetic").expect("write");
+    for i in 0..4 {
+        fs::write(root.join(format!("ad-astra/capture_{i}.png")), b"x").expect("write");
+    }
+    for i in 0..3 {
+        fs::write(root.join(format!("invoice_{i}.pdf")), b"x").expect("write");
+    }
+
+    let cfg = ScanConfig {
+        depth: 3,
+        grace: None,
+        ..Default::default()
+    };
+    let out = scan::scan(&root, &cfg).expect("the folder AROUND a project is ordinary");
+
+    assert_eq!(
+        out.skipped_project, 1,
+        "the nested project was not counted as skipped, so nothing would tell \
+         the user their project was deliberately left alone"
+    );
+    for e in &out.entries {
+        assert!(
+            !e.path.to_string_lossy().contains("ad-astra"),
+            "a file from inside the project was scanned at depth 3: {}",
+            e.path.display()
+        );
+    }
+
+    let p = plan::build(&out);
+    assert!(
+        p.groups.iter().any(|g| g.name == "Documents"),
+        "the folder's own loose invoices should still group; only the project is off limits"
+    );
+    for g in &p.groups {
+        for m in &g.members {
+            assert!(
+                !m.to_string_lossy().contains("capture_"),
+                "a project's internal file was grouped into {:?}",
+                g.name
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}

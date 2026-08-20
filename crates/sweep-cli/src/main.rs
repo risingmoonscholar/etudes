@@ -635,6 +635,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             plan.scanned
         );
         print_refused_by_policy_note(&plan);
+        print_projects_skipped_note(&plan);
         print_unreadable_warning(&plan);
         // "Nothing here needs organising" is only true when nothing was held
         // back. Files inside the grace window or still downloading DO need
@@ -713,6 +714,26 @@ fn print_unreadable_warning(p: &plan::Plan) {
 /// mode should get the same disclosure. Worded without "system" alone,
 /// since `NEVER_ENTER` also covers plain noise directories like
 /// `node_modules`, not just credential or OS locations.
+/// Say which project folders were stepped over.
+///
+/// Silence here would be the grace window's mistake again: a folder that
+/// looks tidied while a project inside it was deliberately skipped, with
+/// nothing saying so. A user who wonders why their project is untouched
+/// should not have to guess.
+fn print_projects_skipped_note(p: &plan::Plan) {
+    if p.skipped_project == 0 {
+        return;
+    }
+    if p.skipped_project == 1 {
+        println!("\n  1 folder was left alone because it holds a project file");
+    } else {
+        println!(
+            "\n  {} folders were left alone because they hold project files",
+            p.skipped_project
+        );
+    }
+}
+
 fn print_refused_by_policy_note(p: &plan::Plan) {
     if p.skipped_system > 0 {
         println!(
@@ -826,6 +847,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     }
     print_refused_by_policy_note(p);
     print_unreadable_warning(p);
+    print_projects_skipped_note(p);
     if p.root_is_synced {
         println!("\n  warning: this folder is inside a cloud-synced tree");
     }

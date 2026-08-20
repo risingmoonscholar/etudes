@@ -315,6 +315,13 @@ pub struct ScanOutcome {
     /// unaccounted for and MUST be disclosed, or "Scanned N items" silently
     /// claims completeness it does not have.
     pub skipped_unreadable: usize,
+    /// Directories not entered because they hold a project marker.
+    ///
+    /// Distinct from `skipped_system`: this is not policy about WHERE the
+    /// directory is, it is a fact about what is in it. A folder holding a
+    /// project file is one unit of work whose files reference each other, so
+    /// sweep steps over it rather than into it.
+    pub skipped_project: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
@@ -496,6 +503,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_hidden: 0,
         skipped_symlink: 0,
         skipped_system: 0,
+        skipped_project: 0,
         skipped_unreadable: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
@@ -600,6 +608,22 @@ fn walk(
         let pkg = is_dir && (is_package(&name) || cfg.whole_units);
 
         if is_dir && !pkg {
+            // A child directory holding a project marker is not entered. The
+            // root check alone was not enough: it protects someone standing
+            // IN their project, and does nothing for someone sweeping the
+            // folder their projects live in with --depth. Verified before
+            // this existed -- a Downloads folder holding a Godot project,
+            // scanned at depth 2, produced an Images group of that project's
+            // captures while its project.godot sat listed as ungrouped.
+            //
+            // Stepping over it, rather than refusing the whole scan, is the
+            // difference between the root case and this one: the folder being
+            // swept is ordinary and its own loose files are fair game. Only
+            // the project inside it is off limits.
+            if project_marker_in(&path).is_some() {
+                out.skipped_project += 1;
+                continue;
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
