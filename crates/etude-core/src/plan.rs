@@ -75,6 +75,7 @@ pub struct Plan {
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
     pub skipped_project: usize,
+    pub skipped_in_flight: usize,
     /// Directories that could not be read at all. See
     /// `ScanOutcome::skipped_unreadable`. A nonzero value here means
     /// `scanned` is a floor, not a total: some part of the tree was
@@ -202,6 +203,7 @@ impl Plan {
                     ("by_category", by_category),
                     ("too_recent", j::num(self.too_recent())),
                     ("projects_skipped", j::num(self.skipped_project)),
+                    ("downloads_skipped", j::num(self.skipped_in_flight)),
                     ("in_flight", j::num(self.in_flight())),
                     ("no_clear_group", j::num(self.no_clear_group())),
                     ("no_clear_group_paths", no_group),
@@ -288,6 +290,18 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         // is the conservative reading of a file whose clock disagrees with
         // this one, and it is now a decision rather than the fallback of an
         // unwrap.
+        // A file whose mtime could not be read, with a window in force. The
+        // window's question is "was this changed recently", and the honest
+        // answer here is that sweep does not know -- so it holds the file
+        // back rather than treating unknown as old. Bypassing the check meant
+        // an unreadable timestamp was silently the most permissive case.
+        if let Some(window) = scan.grace
+            && !window.is_zero()
+            && e.modified.is_none()
+        {
+            untouched.push((e.path.clone(), Untouched::TooRecent));
+            continue;
+        }
         if let Some(window) = scan.grace
             && !window.is_zero()
             && let Some(modified) = e.modified
@@ -440,6 +454,7 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         skipped_symlink: scan.skipped_symlink,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
+        skipped_in_flight: scan.skipped_in_flight,
         skipped_unreadable: scan.skipped_unreadable,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
@@ -519,10 +534,49 @@ mod tests {
             skipped_symlink: 0,
             skipped_system: 0,
             skipped_project: 0,
+            skipped_in_flight: 0,
             skipped_unreadable: 0,
             root_is_synced: false,
             allow_sync: false,
         }
+    }
+
+    /// A file whose mtime cannot be read is held back, not swept.
+    ///
+    /// The grace window asks "was this changed recently". When the timestamp
+    /// is unreadable the honest answer is that sweep does not know, and the
+    /// old code answered "no" by skipping the check entirely -- so an
+    /// unreadable timestamp was quietly the most permissive case there is.
+    #[test]
+    fn a_file_whose_age_cannot_be_read_is_held_back_by_a_live_window() {
+        let mut entries: Vec<Entry> = (0..3)
+            .map(|i| cam_entry(&format!("report_{i}.pdf"), 0))
+            .collect();
+        for e in &mut entries {
+            e.modified = None;
+        }
+        let mut scan = scan_outcome(entries);
+        scan.grace = Some(Duration::from_secs(24 * 60 * 60));
+
+        let p = build(&scan);
+        assert_eq!(
+            p.too_recent(),
+            3,
+            "files with an unreadable mtime were swept by a live grace window"
+        );
+        assert!(
+            p.groups.is_empty(),
+            "an unreadable timestamp must not be the most permissive case"
+        );
+
+        // With the window off, they are eligible again -- zero means zero.
+        scan.grace = Some(Duration::ZERO);
+        let p = build(&scan);
+        assert_eq!(
+            p.too_recent(),
+            0,
+            "--since 0 must hold nothing back, unreadable mtime included"
+        );
     }
 
     #[test]

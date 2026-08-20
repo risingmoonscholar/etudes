@@ -180,8 +180,14 @@ fn project_marker_in(dir: &Path) -> Option<String> {
         // called ordinary.flp -- no FL Studio project anywhere, and the loose
         // files went unswept. Only BUNDLE markers name directories, and they
         // are handled above.
+        // metadata, which FOLLOWS the link, not symlink_metadata. The point
+        // of this check is to exclude DIRECTORIES named like a marker, and
+        // symlink_metadata reports a symlinked Cargo.toml as neither file nor
+        // directory -- so it stopped being a marker and the Cargo project it
+        // marked was reorganised. A link that cannot be resolved counts as a
+        // marker: failing closed is the cheap direction here.
         if (name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS))
-            && fs::symlink_metadata(e.path()).is_ok_and(|m| m.is_file())
+            && fs::metadata(e.path()).map(|m| m.is_file()).unwrap_or(true)
         {
             return Some(name);
         }
@@ -324,11 +330,25 @@ impl std::fmt::Display for ScanError {
                 } else {
                     format!("{marker} is in it")
                 };
+                // The advice has to be true for the marker that triggered it.
+                // "Sweep the folder that contains it instead" is safe for a
+                // bundle and for a project root, whose project stops at its
+                // own boundary. It is NOT safe for a document: an .als or a
+                // .blend references assets relative to itself and freely
+                // upward, so the containing folder may hold files the project
+                // needs. Sending someone there is sending them at the one
+                // case sweep does not yet handle.
+                let advice = if name_matches(marker, DOCUMENT_MARKERS) {
+                    "Sweep a folder that does not hold this project -- the one \
+                     around it may hold files this project references"
+                } else {
+                    "Sweep the folder that contains it instead"
+                };
                 write!(
                     f,
                     "refused: {} looks like a project ({because}). Its files \
                      reference each other by relative path, so sorting them into type \
-                     folders would break it. Sweep the folder that contains it instead",
+                     folders would break it. {advice}",
                     crate::redact::path(root)
                 )
             }
@@ -380,6 +400,13 @@ pub struct ScanOutcome {
     /// project file is one unit of work whose files reference each other, so
     /// sweep steps over it rather than into it.
     pub skipped_project: usize,
+
+    /// Directories that are themselves a download in progress, like Safari's
+    /// `movie.mp4.download/`. Counted apart from `skipped_project` because
+    /// "left alone because it holds a project file" is not true of them, and
+    /// a count under a reason that does not apply to it is the defect this
+    /// repo keeps finding.
+    pub skipped_in_flight: usize,
     /// True when the root sits inside a cloud-synced tree.
     pub root_is_synced: bool,
     /// The `allow_sync` this scan was actually run with. NOT derived from
@@ -533,9 +560,14 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         .to_string_lossy()
         .into_owned();
     if is_package(&root_name) || os_says_package(&root) {
+        // The root's own name, not a synthetic label. The message decides
+        // between "X is in it" and "it is a project bundle" by comparing the
+        // marker against the root's name, and a synthetic string never
+        // matched -- so a .band root was told a package directory was inside
+        // it when the directory WAS the package.
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
-            marker: "a package directory".to_string(),
+            marker: root_name.clone(),
         });
     }
     // The root is itself a project bundle. Being inside a project is being
@@ -570,6 +602,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_symlink: 0,
         skipped_system: 0,
         skipped_project: 0,
+        skipped_in_flight: 0,
         skipped_unreadable: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
@@ -686,6 +719,23 @@ fn walk(
             // difference between the root case and this one: the folder being
             // swept is ordinary and its own loose files are fair game. Only
             // the project inside it is off limits.
+            // A download in progress can be a DIRECTORY. Safari writes
+            // movie.mp4.download/ with the partial data inside it, and macOS
+            // reports it as a package. Descending into one proposed its three
+            // partial members as a Media group -- the plan's in-flight check
+            // only ever sees files, so nothing else was going to catch it.
+            let lower_name = name.to_ascii_lowercase();
+            if IN_FLIGHT_SUFFIXES
+                .iter()
+                .any(|suffix| lower_name.ends_with(suffix))
+            {
+                out.skipped_in_flight += 1;
+                continue;
+            }
+            if os_says_package(&path) {
+                out.skipped_project += 1;
+                continue;
+            }
             // A bundle is a unit: step over it, never into it.
             if name_matches(&name, BUNDLE_MARKERS) {
                 out.skipped_project += 1;

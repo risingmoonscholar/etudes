@@ -264,3 +264,60 @@ else
 $(diff <(echo "$FCP_MANIFEST_BEFORE") <(echo "$FCP_MANIFEST_AFTER") || true)"
 fi
 
+
+# --- a symlinked project marker still marks the project ----------------------
+# Requiring the marker to be a regular file (to stop a DIRECTORY named
+# ordinary.flp freezing its parent) made a symlinked Cargo.toml invisible,
+# because symlink_metadata reports a link as neither file nor directory. The
+# Cargo project it marked was reorganised.
+SYM="$W/SymProj"; mkdir -p "$SYM/real"
+: > "$SYM/real/Cargo.toml"; ln -s "$SYM/real/Cargo.toml" "$SYM/Cargo.toml"
+for n in 1 2 3; do : > "$SYM/doc_$n.pdf"; done
+SYM_BEFORE=$(find "$SYM" -type f -o -type l | sort)
+assert_exit 2 "a symlinked Cargo.toml still marks the project" -- "$SWEEP" "$SYM"
+SYM_AFTER=$(find "$SYM" -type f -o -type l | sort)
+assert_eq "$SYM_BEFORE" "$SYM_AFTER" "the refused scan moved nothing"
+
+# --- a download that is a DIRECTORY ------------------------------------------
+# Safari writes movie.mp4.download/ with the partial data inside it. The plan's
+# in-flight check only ever sees files, so nothing caught the directory form:
+# sweep descended into one and proposed its three partial members as a group.
+DLD="$W/DirDownload"; mkdir -p "$DLD/movie.mp4.download"
+for n in 1 2 3; do : > "$DLD/movie.mp4.download/part_$n.mp4"; done
+for n in 1 2 3; do : > "$DLD/keep_$n.pdf"; done
+DLD_OUT=$("$SWEEP" "$DLD" --depth 2 2>&1)
+if grep -qE '^  Media' <<<"$DLD_OUT"; then
+  fail "sweep descended into movie.mp4.download/ and grouped its partial members: $DLD_OUT"
+else
+  pass "a directory-form download is stepped over, not descended into"
+fi
+if grep -q "download still in progress" <<<"$DLD_OUT"; then
+  pass "and it is disclosed as a download, not as a folder holding a project file"
+else
+  fail "the directory-form download was skipped silently, or under the wrong reason: $DLD_OUT"
+fi
+if grep -qE '^  Documents' <<<"$DLD_OUT"; then
+  pass "the folder's own loose files still group"
+else
+  fail "nothing grouped, so this arm proves nothing: $DLD_OUT"
+fi
+
+# --- the refusal advice has to be true for the marker that triggered it -------
+# "Sweep the folder that contains it instead" is safe for a bundle and for a
+# project root. It is NOT safe for a document, whose assets can sit in that
+# very folder -- issue #49. Sending someone there points them at the one case
+# sweep does not handle.
+ADV="$W/Advice"; mkdir -p "$ADV"; : > "$ADV/track.als"
+ADV_OUT=$("$SWEEP" "$ADV" 2>&1 || true)
+if grep -q "does not hold this project" <<<"$ADV_OUT"; then
+  pass "a document refusal does not tell the user to sweep the folder around it"
+else
+  fail "a .als refusal gave the containing-folder advice, which is the #49 gap: $ADV_OUT"
+fi
+BND="$W/BandRoot/Song.band"; mkdir -p "$BND"; : > "$BND/track.wav"
+BND_OUT=$("$SWEEP" "$BND" 2>&1 || true)
+if grep -q "it is a project bundle" <<<"$BND_OUT"; then
+  pass "a package root is told it IS the package, not that one is inside it"
+else
+  fail "a .band root was told a package directory is in it: $BND_OUT"
+fi

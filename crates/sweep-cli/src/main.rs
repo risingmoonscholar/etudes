@@ -690,11 +690,23 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             } else if downloading > 1 {
                 println!("  {downloading} downloads are still in progress and were left alone");
             }
-            println!(
-                "\nNothing else here needs organising. Run again later, or pass\n\
-                 --since 0 to include everything.\n\n\
-                 Nothing has been moved.  Nothing left this machine."
-            );
+            // --since 0 only helps if the grace window is what held things
+            // back. An in-flight download is refused regardless of the
+            // window, so telling someone to pass --since 0 for a folder of
+            // .part files sends them to run a command that changes nothing
+            // and prints the same refusal.
+            if recent > 0 {
+                println!(
+                    "\nNothing else here needs organising. Run again later, or pass\n\
+                     --since 0 to include everything."
+                );
+            } else {
+                println!(
+                    "\nNothing else here needs organising. These finish downloading on\n\
+                     their own; run again once they have."
+                );
+            }
+            println!("\nNothing has been moved.  Nothing left this machine.");
         } else {
             println!(
                 "\nNothing here needs organising.\n\n\
@@ -755,15 +767,23 @@ fn print_unreadable_warning(p: &plan::Plan) {
 /// nothing saying so. A user who wonders why their project is untouched
 /// should not have to guess.
 fn print_projects_skipped_note(p: &plan::Plan) {
-    if p.skipped_project == 0 {
-        return;
-    }
     if p.skipped_project == 1 {
         println!("\n  1 folder was left alone because it holds a project file");
-    } else {
+    } else if p.skipped_project > 1 {
         println!(
             "\n  {} folders were left alone because they hold project files",
             p.skipped_project
+        );
+    }
+    // Counted and worded apart from projects. A movie.mp4.download/ is not a
+    // folder that holds a project file, and putting its count under that
+    // sentence would attach a number to a reason that is not its own.
+    if p.skipped_in_flight == 1 {
+        println!("\n  1 folder is a download still in progress and was left alone");
+    } else if p.skipped_in_flight > 1 {
+        println!(
+            "\n  {} folders are downloads still in progress and were left alone",
+            p.skipped_in_flight
         );
     }
 }
