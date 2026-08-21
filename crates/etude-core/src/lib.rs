@@ -22,7 +22,7 @@ pub use plan::{Group, Plan, Signal};
 pub use scan::{Entry, ScanConfig, ScanError, ScanOutcome};
 
 /// Why sweep declined to act on a file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Untouched {
     /// Matched a personal-records pattern. Never grouped, never moved.
     LooksPersonal(Category),
@@ -36,6 +36,19 @@ pub enum Untouched {
     /// A download still in flight. Moving one produces a partial file at a
     /// destination the downloader is not writing to, and it never completes.
     InFlight,
+    /// A project document (.flp, .blend, ...) sitting loose at the top level
+    /// of the swept folder. It used to refuse the entire sweep -- the first
+    /// professional to test sweep hit exit 2 on a Downloads folder because
+    /// one stray .flp had been downloaded into it. The folder is not a
+    /// project; the document is just here.
+    ProjectDocument,
+    /// In a file family the loose document above could reference (Media,
+    /// Images, Scripts, Data). A .flp's samples are Media, a .blend's
+    /// textures are Images -- the reference surface is exactly the families,
+    /// so holding them protects a flat project folder while everything the
+    /// document could not reference (Documents, Archives, Installers) still
+    /// sorts. Carries the marker's name so the output can say WHY.
+    NearProjectDocument(String),
 }
 
 /// Categories of personal record sweep recognises well enough to refuse.

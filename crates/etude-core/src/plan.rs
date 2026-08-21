@@ -124,6 +124,28 @@ impl Plan {
             .count()
     }
 
+    /// Loose project documents left in place at the scan root.
+    pub fn project_documents(&self) -> usize {
+        self.untouched
+            .iter()
+            .filter(|(_, u)| *u == Untouched::ProjectDocument)
+            .count()
+    }
+
+    /// Files held because a loose document could reference them, with the
+    /// marker's name -- the count's reason includes WHICH file caused it.
+    pub fn near_document(&self) -> Option<(usize, String)> {
+        let mut n = 0;
+        let mut marker = None;
+        for (_, u) in &self.untouched {
+            if let Untouched::NearProjectDocument(m) = u {
+                n += 1;
+                marker.get_or_insert_with(|| m.clone());
+            }
+        }
+        marker.map(|m| (n, m))
+    }
+
     pub fn no_clear_group(&self) -> usize {
         self.untouched
             .iter()
@@ -203,6 +225,11 @@ impl Plan {
                     ("looks_personal", j::num(personal)),
                     ("by_category", by_category),
                     ("too_recent", j::num(self.too_recent())),
+                    ("project_documents", j::num(self.project_documents())),
+                    (
+                        "held_near_document",
+                        j::num(self.near_document().map(|(n, _)| n).unwrap_or(0)),
+                    ),
                     ("projects_skipped", j::num(self.skipped_project)),
                     ("downloads_skipped", j::num(self.skipped_in_flight)),
                     ("packages_skipped", j::num(self.skipped_package)),
@@ -252,7 +279,43 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
     let mut remaining: Vec<&Entry> = Vec::new();
 
     // Pass 1: the refusal detectors. Run first, remove from all others.
+    // Loose project documents at the top level, before anything else. A .flp
+    // sitting in Downloads used to refuse the ENTIRE sweep (it went through
+    // the same check as Cargo.toml, which genuinely does mark a project
+    // root). Now the document stays put, and so does its reference surface:
+    // a .flp's samples are Media, a .blend's textures are Images, so holding
+    // the families the document could point at protects a flat project
+    // folder while the PDFs and installers beside it still sort.
+    //
+    // Screenshot-named files are exempt from the hold. On macOS screenshots
+    // land on the Desktop -- the folder most likely to also hold a stray
+    // project file -- and a project referencing a file named
+    // "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a real layout. The
+    // name pattern is the same one the Screenshots detector uses.
+    let loose_documents: Vec<&Entry> = scan
+        .entries
+        .iter()
+        .filter(|e| !e.is_dir && crate::scan::is_document_marker(&e.name))
+        .collect();
+    const HELD_FAMILIES: &[&str] = &["Media", "Images", "Scripts", "Data"];
+    let held_near_document = |e: &Entry| -> Option<String> {
+        let first = loose_documents.first()?;
+        if classify::is_screenshot(e) {
+            return None;
+        }
+        let fam = classify::type_family(&e.ext)?;
+        HELD_FAMILIES.contains(&fam).then(|| first.name.clone())
+    };
+
     for e in &scan.entries {
+        if !e.is_dir && crate::scan::is_document_marker(&e.name) {
+            untouched.push((e.path.clone(), Untouched::ProjectDocument));
+            continue;
+        }
+        if let Some(marker) = held_near_document(e) {
+            untouched.push((e.path.clone(), Untouched::NearProjectDocument(marker)));
+            continue;
+        }
         // Filename first: it is free, and a file already refused by name is
         // never opened. Reading it could only confirm what we already decided.
         if let Some(cat) = classify::sensitive(e) {
