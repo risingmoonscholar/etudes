@@ -74,7 +74,20 @@ jobs:
       # new binary refusing with exit 2. A demo whose facts stop being
       # measurable is a demo that must not be shown.
       - name: The refusal demo still tells the truth
-        run: bash demo/refusal/run.sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          EVIDENCE_DIR="$RUNNER_TEMP/evidence" bash demo/refusal/run.sh
+
+      # Retained so a reader can check the claim without rebuilding two tagged
+      # binaries and cloning a 70 MB fixture. The job is the evidence; this is
+      # the part of it someone can download in a few seconds.
+      - name: Keep the demo's evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: refusal-demo-evidence
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: warn
 
   deny:
     name: dependency policy (cargo deny)
