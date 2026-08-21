@@ -44,6 +44,11 @@ say "fixture digest: $BEFORE"
 
 say "building sweep $OLD_TAG and $NEW_TAG from their tags..."
 for tag in "$OLD_TAG" "$NEW_TAG"; do
+  # CI checkouts are shallow and tagless; a missing tag is fetchable, and a
+  # tag that does not exist on the remote either is a real failure.
+  git -C "$root" rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+    || git -C "$root" fetch -q --depth 1 origin "refs/tags/$tag:refs/tags/$tag" \
+    || fail "tag $tag exists neither locally nor on origin"
   git -C "$root" worktree add -q "$work/src-$tag" "$tag"
   (cd "$work/src-$tag" && cargo build --release -q -p sweep-cli)
   got=$("$work/src-$tag/target/release/sweep" --version | awk '{print $2}')
