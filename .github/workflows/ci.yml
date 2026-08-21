@@ -68,6 +68,14 @@ jobs:
       - name: Do the committed transcripts still come out of these binaries
         run: bash scripts/check-transcripts-reproduce.sh
 
+      # The refusal demo's evidence chain. Clones a pinned public fixture,
+      # builds v0.4.0 and v0.5.0 from their tags, and asserts every number the
+      # demo states -- 356 files proposed, 105 of them res://-referenced, the
+      # new binary refusing with exit 2. A demo whose facts stop being
+      # measurable is a demo that must not be shown.
+      - name: The refusal demo still tells the truth
+        run: bash demo/refusal/run.sh
+
   deny:
     name: dependency policy (cargo deny)
     runs-on: ubuntu-latest
