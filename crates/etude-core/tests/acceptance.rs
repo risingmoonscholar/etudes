@@ -416,10 +416,10 @@ fn a_download_in_flight_is_never_grouped() {
 fn a_project_nested_in_a_swept_folder_is_not_descended_into() {
     let root = std::env::temp_dir().join(format!("sweep_nested_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("ad-astra")).expect("mkdir");
-    fs::write(root.join("ad-astra/project.godot"), b"synthetic").expect("write");
+    fs::create_dir_all(root.join("orbital-drift")).expect("mkdir");
+    fs::write(root.join("orbital-drift/project.godot"), b"synthetic").expect("write");
     for i in 0..4 {
-        fs::write(root.join(format!("ad-astra/capture_{i}.png")), b"x").expect("write");
+        fs::write(root.join(format!("orbital-drift/capture_{i}.png")), b"x").expect("write");
     }
     for i in 0..3 {
         fs::write(root.join(format!("invoice_{i}.pdf")), b"x").expect("write");
@@ -439,7 +439,7 @@ fn a_project_nested_in_a_swept_folder_is_not_descended_into() {
     );
     for e in &out.entries {
         assert!(
-            !e.path.to_string_lossy().contains("ad-astra"),
+            !e.path.to_string_lossy().contains("orbital-drift"),
             "a file from inside the project was scanned at depth 3: {}",
             e.path.display()
         );

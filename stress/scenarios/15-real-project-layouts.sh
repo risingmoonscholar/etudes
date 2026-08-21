@@ -159,18 +159,18 @@ assert_eq 6 "$REAL_GROUPED" "the six real .wav files still group; only the twins
 # folder and the Downloads around it is ordinary: sweep the invoices, step
 # over the project.
 DL="$W/Downloads"; mkdir -p "$DL"
-build_godot "$DL/ad-astra"
+build_godot "$DL/orbital-drift"
 for n in 1 2 3 4; do : > "$DL/invoice_$n.pdf"; done
 
-INSIDE_BEFORE=$(find "$DL/ad-astra" -type f | wc -l | tr -d ' ')
+INSIDE_BEFORE=$(find "$DL/orbital-drift" -type f | wc -l | tr -d ' ')
 assert_exit 0 "a Downloads folder containing a ROOT-marked project is sweepable" -- "$SWEEP" "$DL"
 
 APPLY=$("$SWEEP" apply "$DL" --yes 2>&1); assert_eq 0 "$?" "apply succeeds on a folder holding a root-marked project"
 
-INSIDE_AFTER=$(find "$DL/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
+INSIDE_AFTER=$(find "$DL/orbital-drift" -type f 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside the Godot project moved during an apply of the folder around it"
-[ -f "$DL/ad-astra/capture_t06.png" ] && pass "untouched: ad-astra/capture_t06.png" \
-  || fail "a project's internal file moved: ad-astra/capture_t06.png"
+[ -f "$DL/orbital-drift/capture_t06.png" ] && pass "untouched: orbital-drift/capture_t06.png" \
+  || fail "a project's internal file moved: orbital-drift/capture_t06.png"
 
 
 # --- the same folder, WITH --depth ---------------------------------------
@@ -187,10 +187,10 @@ assert_eq "$INSIDE_BEFORE" "$INSIDE_AFTER" "not one file inside the Godot projec
 # Document markers (.blend, .flp, .als) behave the same way today, and that is
 # knowingly incomplete -- see issue #49. Nothing here asserts it is correct.
 DL2="$W/Downloads2"; mkdir -p "$DL2"
-build_godot "$DL2/ad-astra"
+build_godot "$DL2/orbital-drift"
 for n in 1 2 3 4; do : > "$DL2/invoice_$n.pdf"; done
 
-D2_BEFORE=$(find "$DL2/ad-astra" -type f | wc -l | tr -d ' ')
+D2_BEFORE=$(find "$DL2/orbital-drift" -type f | wc -l | tr -d ' ')
 D2_OUT=$("$SWEEP" "$DL2" --depth 4 2>&1)
 
 # Nothing from inside the project may appear in any proposed group.
@@ -198,7 +198,7 @@ LEAKED=$("$SWEEP" "$DL2" --depth 4 --json 2>/dev/null | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 mem=[f for g in d['groups'] for f in g.get('members',[])]
-print(sum(1 for f in mem if '/ad-astra/' in f))
+print(sum(1 for f in mem if '/orbital-drift/' in f))
 ")
 assert_eq 0 "$LEAKED" "at --depth 4, not one file from inside the Godot project appears in any proposed group"
 
@@ -215,7 +215,7 @@ else
 fi
 
 assert_exit 0 "apply at depth succeeds on a folder containing a root-marked project" -- "$SWEEP" apply "$DL2" --yes --depth 4
-D2_AFTER=$(find "$DL2/ad-astra" -type f 2>/dev/null | wc -l | tr -d ' ')
+D2_AFTER=$(find "$DL2/orbital-drift" -type f 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$D2_BEFORE" "$D2_AFTER" "at --depth 4, an APPLY moved nothing inside the Godot project"
 
 
