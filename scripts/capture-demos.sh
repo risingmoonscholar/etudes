@@ -3,8 +3,10 @@
 #
 # Nothing here is authored by hand. Every transcript in demo/transcripts.json is
 # stdout from a binary built out of this tree, run against the synthetic fixture
-# that `mkfx` generates. Regenerate and diff: a transcript that no longer matches
-# the tool is a build failure, not a stale doc.
+# that `mkfx` generates. A transcript that no longer matches the tool is a build
+# failure, not a stale doc -- and scripts/check-transcripts-reproduce.sh is what
+# makes that true. It said so here for weeks while nothing enforced it, which is
+# the shape of defect this repo keeps finding in its own checkers.
 #
 # The one edit made to captured output is a path substitution, declared in the
 # `substitution_rule` field of the output file. The fixture lives in a temporary
