@@ -10,6 +10,38 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-21
+
+### Fixed
+
+- **A loose project document no longer takes the whole folder hostage.** The
+  first professional to test sweep ran it on a Downloads folder holding one
+  stray `.flp` and the entire sweep exited 2 -- the file had merely been
+  downloaded there, but it went through the same top-level check as
+  `Cargo.toml`, which genuinely does mark a project root.
+
+  The two marker kinds now part ways at the scan root. A ROOT marker
+  (`project.godot`, `Cargo.toml`, ...) still refuses the folder whole: it
+  marks a project by definition. A DOCUMENT marker (`.flp`, `.blend`,
+  `.als`, ...) holds instead: the document stays put, and so does every file
+  in the families it could reference -- Media, Images, Scripts, Data --
+  disclosed with the document's name. Documents, Archives and Installers
+  beside it still sort.
+
+  The reference surface IS the protection, so a flat project folder (an
+  `.als` beside its bounces, no subfolders) keeps its layout too: every
+  bounce is Media and every bounce stays. The refusal it replaces protected
+  that case by locking the tester's Downloads folder.
+
+  Screenshot-named files are exempt from the hold. macOS puts screenshots on
+  the Desktop, the folder most likely to also hold a stray project file, and
+  a project referencing "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a
+  real layout.
+
+  Two new `--json` keys under `left_alone`: `project_documents`,
+  `held_near_document`. Child directories are unchanged -- a folder holding
+  either kind of marker is still stepped over.
+
 ## [0.5.0] - 2026-08-20
 
 Sweep refuses more than it used to, and group names changed, so scripts

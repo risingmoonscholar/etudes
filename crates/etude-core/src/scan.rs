@@ -140,17 +140,17 @@ const ROOT_MARKERS: &[&str] = &[
 /// Measured: project/scenes/main.blend beside project/textures/*.png, swept at
 /// depth 4, moved all three textures and broke every reference to them.
 ///
-/// NOT YET ACTED ON. Today a DOCUMENT marker behaves exactly like a ROOT one:
-/// the folder holding it is stepped over, and the scan around it continues.
-/// That is knowingly incomplete -- it loses assets a document references
-/// upward, out of its own folder.
+/// ACTED ON at the scan root since 0.5.1: a document marker at the top level
+/// holds the document and its reference families (Media, Images, Scripts,
+/// Data) instead of refusing -- see the plan's loose-document pass. In CHILD
+/// directories a document still behaves like a root marker: the folder
+/// holding it is stepped over and the scan continues.
 ///
-/// The complete rule costs more than it is worth so far. Refusing the whole
-/// scan whenever a document marker appears anywhere below the root means one
-/// .flp in Downloads makes Downloads unsweepable, which removes the tool from
-/// the folder it exists for. Reviewed and rejected on those grounds. The list
-/// stays because the distinction is real and the fix needs it; see the issue
-/// linked from the guard's tests for the four reproductions.
+/// The remaining gap is #49's: a document in a subfolder referencing assets
+/// upward, out of its own folder, at depth. The contagious whole-scan refusal
+/// that would close it was reviewed and rejected -- one .flp in Downloads
+/// made Downloads unsweepable, which removes the tool from the folder it
+/// exists for.
 const DOCUMENT_MARKERS: &[&str] = &[
     ".song", ".als", ".ptx", ".sesx", ".flp", ".rpp", ".prproj", ".aep", ".drp", ".veg", ".blend",
     ".c4d",
@@ -173,6 +173,31 @@ struct Unreadable;
 
 /// Whether this folder holds a project marker, or could not be asked.
 ///
+/// A ROOT marker at the top level: the folder itself is a project.
+///
+/// The walk's child check keeps using `project_marker_in` (both kinds),
+/// because a child folder holding EITHER kind is stepped over. Only the scan
+/// root distinguishes them: a root marker refuses, a document marker holds.
+fn root_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Err(Unreadable);
+    };
+    for entry in rd {
+        let Ok(e) = entry else {
+            return Err(Unreadable);
+        };
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name_matches(&name, ROOT_MARKERS)
+            && fs::symlink_metadata(e.path())
+                .map(|m| !m.is_dir())
+                .unwrap_or(true)
+        {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
 fn project_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
     //
     // Marker detection and the main walk are separate reads of the same
@@ -380,25 +405,16 @@ impl std::fmt::Display for ScanError {
                 } else {
                     format!("{marker} is in it")
                 };
-                // The advice has to be true for the marker that triggered it.
-                // "Sweep the folder that contains it instead" is safe for a
-                // bundle and for a project root, whose project stops at its
-                // own boundary. It is NOT safe for a document: an .als or a
-                // .blend references assets relative to itself and freely
-                // upward, so the containing folder may hold files the project
-                // needs. Sending someone there is sending them at the one
-                // case sweep does not yet handle.
-                let advice = if name_matches(marker, DOCUMENT_MARKERS) {
-                    "Sweep a folder that does not hold this project -- the one \
-                     around it may hold files this project references"
-                } else {
-                    "Sweep the folder that contains it instead"
-                };
+                // Only bundles and ROOT markers reach this refusal now. A
+                // document marker at the scan root holds files instead of
+                // refusing, so the document branch of this advice -- which
+                // existed because "sweep the folder that contains it" pointed
+                // at the #49 gap -- went dead and is gone.
                 write!(
                     f,
                     "refused: {} looks like a project ({because}). Its files \
                      reference each other by relative path, so sorting them into type \
-                     folders would break it. {advice}",
+                     folders would break it. Sweep the folder that contains it instead",
                     crate::redact::path(root)
                 )
             }
@@ -480,6 +496,12 @@ pub struct ScanOutcome {
 }
 
 /// True when any component of `path` looks like a cloud-sync root.
+/// Is this filename a project DOCUMENT marker? Used by the plan to hold a
+/// loose document and its reference surface rather than refusing the sweep.
+pub fn is_document_marker(name: &str) -> bool {
+    name_matches(name, DOCUMENT_MARKERS)
+}
+
 pub fn is_synced(path: &Path) -> bool {
     let s = path.to_string_lossy();
     SYNC_MARKERS.iter().any(|m| s.contains(m))
@@ -650,7 +672,14 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
             marker: root_name.clone(),
         });
     }
-    if let Ok(Some(marker)) = project_marker_in(&root) {
+    // ROOT markers only. A Cargo.toml or project.godot at the top level means
+    // this folder IS a project by definition, and sorting it would break it.
+    // A DOCUMENT marker (.flp, .blend) does not mean that: in a Downloads or
+    // Desktop folder it is usually a stray file that arrived alone, and
+    // refusing the whole sweep over it was the first thing a professional
+    // tester hit. Documents are collected below and handled by the plan --
+    // the document stays put, and so does everything it could reference.
+    if let Ok(Some(marker)) = root_marker_in(&root) {
         return Err(ScanError::RefusedProjectRoot {
             root: root.clone(),
             marker,

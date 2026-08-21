@@ -99,35 +99,72 @@ build_ptx() {
 declare -a NAMES=(godot blender flp song ptx)
 declare -a MARKERS=("project.godot" ".blend" ".flp" ".song" ".ptx")
 
-REFUSED=0
+# The two kinds of marker part ways at the scan root, and each layout asserts
+# the behaviour its kind earns. A ROOT marker (project.godot) means the folder
+# IS a project: refused whole. A DOCUMENT marker (.blend .flp .song .ptx)
+# means a document is here: the document and every file it could reference
+# (Media, Images, Scripts, Data) are held by name, the rest may sort, and
+# NOTHING inside the project may move. The refusal used to cover all five,
+# and took a Downloads folder hostage over one stray .flp -- the first
+# professional tester hit exactly that.
 for i in "${!NAMES[@]}"; do
   eng="${NAMES[$i]}"; d="$W/roots/$eng"; "build_$eng" "$d"
-  BEFORE=$(find "$d" -type f | wc -l | tr -d ' ')
-  OUT=$("$SWEEP" "$d" 2>&1); CODE=$?
-  AFTER=$(find "$d" -type f | wc -l | tr -d ' ')
-  if [ "$CODE" = "2" ] && grep -qi "looks like a project" <<<"$OUT"; then
-    REFUSED=$((REFUSED + 1))
+  MANIFEST_BEFORE=$(find "$d" -type f | sort)
+  # The harness runs with pipefail and -e; a scan that exits 1 (nothing to
+  # do) is an EXPECTED outcome here, so capture the code without letting the
+  # assignment abort the scenario or a pipeline re-trigger a fallback.
+  CODE=0; OUT=$("$SWEEP" "$d" 2>&1) || CODE=$?
+  if [ "$eng" = "godot" ]; then
+    assert_eq 2 "$CODE" "godot: a ROOT-marked project is still refused whole"
+    grep -qi "looks like a project" <<<"$OUT" \
+      && pass "godot: and the refusal says why" \
+      || fail "godot: refused without a reason: $OUT"
   else
-    fail "$eng: a real project layout was not refused as a root (exit $CODE). Marker ${MARKERS[$i]}: $OUT"
+    case "$CODE" in 0|1) pass "$eng: a document layout scans rather than refusing (exit $CODE)";;
+      *) fail "$eng: unexpected exit $CODE: $OUT";; esac
+    grep -q "project document" <<<"$OUT" \
+      && pass "$eng: the document is disclosed as held" \
+      || fail "$eng: the document was not disclosed (exit $CODE): $OUT"
+    # Nothing the document could reference may appear in any group. Written
+    # to a file first: sweep's exit 1 inside a pipeline under pipefail was
+    # appending a fallback line to the probe's own answer.
+    "$SWEEP" "$d" --json > "$W/$eng.json" 2>/dev/null || true
+    LEAK=$(python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+mem=[f for g in d['groups'] for f in g.get('members',[])]
+print(sum(1 for f in mem if f.rsplit('.',1)[-1].lower() in
+  ('wav','mp3','aiff','flac','m4a','mp4','mov','png','jpg','jpeg','svg','tiff','gif','py','sh','js','csv')))
+" "$W/$eng.json" 2>/dev/null || echo probe-failed)
+    assert_eq 0 "$LEAK" "$eng: no file the document could reference appears in any group"
   fi
-  assert_eq "$BEFORE" "$AFTER" "$eng: nothing inside the project moved when it was scanned as a root"
+  MANIFEST_AFTER=$(find "$d" -type f | sort)
+  [ "$MANIFEST_BEFORE" = "$MANIFEST_AFTER" ] \
+    && pass "$eng: nothing inside the project moved when it was scanned as a root" \
+    || fail "$eng: a scan moved files"
 done
-assert_eq 5 "$REFUSED" "all five measured project layouts (godot, blender, flp, song, ptx) are refused as scan roots"
 
-# The refusal names the file, so a user knows why rather than being stonewalled.
-if grep -q "closer.song" <<<"$("$SWEEP" "$W/roots/song" 2>&1)"; then
-  pass "the refusal names the marker file, so the user can see why their folder was left alone"
-else
-  fail "the Studio One refusal did not name closer.song"
-fi
+# The hold names the file when there is a held file to explain. The Studio
+# One layout keeps its audio in Media/, a subfolder, so at the default depth
+# there is nothing near the document to hold and no line to name it -- the
+# naming assertion lives in the LooseDoc arm, whose fixture has audio at the
+# top level. Here we assert the document line exists for a layout whose name
+# differs from its folder, which is what this arm has always been about.
+CODE=0; SONG_NAMED=$("$SWEEP" "$W/roots/song" 2>&1) || CODE=$?
+grep -q "project document and was not touched" <<<"$SONG_NAMED" \
+  && pass "a session named differently from its folder is still held as a document" \
+  || fail "closer.song inside song/ was not recognised: $SONG_NAMED"
 
-# Studio One's Media/ is a name sweep itself uses. The project must be refused
-# BEFORE any grouping, so the collision cannot arise.
-SONG_OUT=$("$SWEEP" "$W/roots/song" 2>&1)
+# Studio One's Media/ is a name sweep itself uses. At the default depth its
+# wavs sit below the scan boundary -- inside Media/ -- so this arm proves
+# only that no colliding Media group forms at the top level. It does NOT
+# exercise the reference-surface hold; the LooseDoc arm does, with audio at
+# the top level where the hold can actually see it.
+CODE=0; SONG_OUT=$("$SWEEP" "$W/roots/song" 2>&1) || CODE=$?
 if grep -qE '^  Media' <<<"$SONG_OUT"; then
-  fail "sweep tried to build a Media group inside a Studio One project that already has a Media/ folder: $SONG_OUT"
+  fail "sweep built a Media group inside a Studio One project that already has a Media/ folder: $SONG_OUT"
 else
-  pass "a project with its own Media/ folder is refused whole; no group is built to collide with it"
+  pass "a project with its own Media/ folder gets no colliding group at the top level"
 fi
 
 # AppleDouble ._ twins are hidden and must never be filed as loose files. Test
@@ -303,17 +340,8 @@ else
 fi
 
 # --- the refusal advice has to be true for the marker that triggered it -------
-# "Sweep the folder that contains it instead" is safe for a bundle and for a
-# project root. It is NOT safe for a document, whose assets can sit in that
-# very folder -- issue #49. Sending someone there points them at the one case
-# sweep does not handle.
-ADV="$W/Advice"; mkdir -p "$ADV"; : > "$ADV/track.als"
-ADV_OUT=$("$SWEEP" "$ADV" 2>&1 || true)
-if grep -q "does not hold this project" <<<"$ADV_OUT"; then
-  pass "a document refusal does not tell the user to sweep the folder around it"
-else
-  fail "a .als refusal gave the containing-folder advice, which is the #49 gap: $ADV_OUT"
-fi
+# Document markers no longer refuse at the root (they hold instead), so only
+# the bundle case still carries refusal advice.
 BND="$W/BandRoot/Song.band"; mkdir -p "$BND"; : > "$BND/track.wav"
 BND_OUT=$("$SWEEP" "$BND" 2>&1 || true)
 if grep -q "it is a project bundle" <<<"$BND_OUT"; then
@@ -433,4 +461,52 @@ if grep -q "project bundle" <<<"$PG_OUT"; then
   fail "a Pages document was called a project bundle: $PG_OUT"
 else
   pass "a generic OS package is not described as a project bundle"
+fi
+
+# --- a loose project document does not take the folder hostage ----------------
+# The first professional tester ran sweep on a Downloads folder holding one
+# stray .flp and the ENTIRE sweep exited 2. The folder was not a project. Now
+# the document stays, its reference surface (Media/Images/Scripts/Data) stays,
+# and everything else sorts. A ROOT marker like Cargo.toml still refuses.
+LD="$W/LooseDoc"; mkdir -p "$LD"
+: > "$LD/anthem.flp"
+for n in 1 2 3; do : > "$LD/invoice_$n.pdf"; done
+for n in 1 2; do : > "$LD/sample_$n.wav"; done
+LD_OUT=$("$SWEEP" "$LD" 2>&1); LD_CODE=$?
+assert_eq 0 "$LD_CODE" "a stray .flp no longer refuses the whole folder"
+if grep -qE '^  Documents' <<<"$LD_OUT"; then
+  pass "the PDFs beside a stray .flp still sort"
+else
+  fail "nothing grouped beside the stray document: $LD_OUT"
+fi
+if grep -q "project document and was not touched" <<<"$LD_OUT"; then
+  pass "the document itself is disclosed as held"
+else
+  fail "the .flp was held silently or moved: $LD_OUT"
+fi
+if grep -q "because anthem.flp may reference them" <<<"$LD_OUT"; then
+  pass "the audio beside it is held, and the reason names the document"
+else
+  fail "the .flp's reference surface was not held or not explained: $LD_OUT"
+fi
+# --no-journal: this arm is about WHAT apply moves, not about the journal,
+# and a host whose keychain refuses the key would otherwise fail apply
+# before it moved anything -- which made the two "stayed in place"
+# assertions below pass vacuously on Codex's sandbox. Exit is asserted so a
+# failed apply can never again masquerade as restraint.
+CODE=0; APPLY_LD=$("$SWEEP" apply "$LD" --yes --no-journal 2>&1) || CODE=$?
+assert_eq 0 "$CODE" "apply on the loose-document folder succeeds"
+[ -f "$LD/anthem.flp" ] && pass "apply left the document in place" || fail "apply moved the project document"
+[ -f "$LD/sample_1.wav" ] && pass "apply left the referenced audio in place" || fail "apply moved a file the document may reference"
+[ ! -f "$LD/invoice_1.pdf" ] && pass "apply still moved the unrelated PDFs" || fail "apply moved nothing, so the loosening did not loosen"
+
+# Screenshots sort past a loose document -- the Desktop case.
+SD="$W/DesktopDoc"; mkdir -p "$SD"
+: > "$SD/track.als"
+for d in 12 13 14; do : > "$SD/Screenshot 2026-08-$d at 9.15.11 AM.png"; done
+SD_OUT=$("$SWEEP" "$SD" 2>&1 || true)
+if grep -qE '^  Screenshots' <<<"$SD_OUT"; then
+  pass "screenshots do not freeze behind a stray .als"
+else
+  fail "the screenshot pile froze behind a loose document: $SD_OUT"
 fi

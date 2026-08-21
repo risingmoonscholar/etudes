@@ -832,7 +832,9 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     let incomplete = p.skipped_in_flight;
     let packages = p.skipped_package;
 
-    if personal + recent + downloading + unclear + projects + incomplete + packages == 0 {
+    let doc_held = p.project_documents() + p.near_document().map(|(n, _)| n).unwrap_or(0);
+    if personal + recent + downloading + unclear + projects + incomplete + packages + doc_held == 0
+    {
         return;
     }
 
@@ -856,6 +858,19 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
         println!("  1 download is still in progress and was left alone");
     } else if downloading > 1 {
         println!("  {downloading} downloads are still in progress and were left alone");
+    }
+    let documents = p.project_documents();
+    if documents == 1 {
+        println!("  1 file is a project document and was not touched");
+    } else if documents > 1 {
+        println!("  {documents} files are project documents and were not touched");
+    }
+    if let Some((n, marker)) = p.near_document() {
+        if n == 1 {
+            println!("  1 file stays because {marker} may reference it");
+        } else {
+            println!("  {n} files stay because {marker} may reference them");
+        }
     }
     if unclear == 1 {
         println!("  1 file matched no group and was left where it is");

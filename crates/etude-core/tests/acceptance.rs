@@ -245,16 +245,23 @@ fn the_screenshot_group_is_found_and_correctly_sized() {
     cleanup(&root);
 }
 
-/// A project folder is refused as a scan root, not sorted into type folders.
+/// A flat project folder keeps its layout, without needing a refusal.
 ///
 /// The case depth cannot cover. Not descending protects a project that sits
 /// INSIDE the folder being swept; it does nothing when the project IS that
 /// folder, which is what happens when someone changes into their track and
 /// runs the tidy tool. Its bounces and renders are the immediate children
 /// then, and without this they move: measured at eight files into Media/,
-/// away from the .als that references them by relative path.
+/// A flat Ableton project -- .als beside its bounces -- keeps its layout.
+///
+/// This test used to assert the whole folder was REFUSED, and that behaviour
+/// was deliberately changed: a stray document at the top level of Downloads
+/// took the entire sweep hostage, and the first professional tester hit it.
+/// What the refusal was protecting is the .als's reference surface, and the
+/// family hold protects it directly: every bounce is Media, so every bounce
+/// stays, named after the document that caused it. Nothing here may group.
 #[test]
-fn a_project_folder_is_refused_as_a_scan_root() {
+fn a_flat_project_folder_keeps_its_layout_without_a_refusal() {
     let root = std::env::temp_dir().join(format!("sweep_proj_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("mkdir");
@@ -263,19 +270,23 @@ fn a_project_folder_is_refused_as_a_scan_root() {
         fs::write(root.join(format!("bounce_{i}.wav")), b"synthetic").expect("write");
     }
 
-    match scan::scan(&root, &ScanConfig::default()) {
-        Err(scan::ScanError::RefusedProjectRoot { marker, .. }) => {
-            assert!(
-                marker.to_lowercase().contains("als"),
-                "the refusal should name the file that made this a project, got {marker:?}"
-            );
-        }
-        Err(other) => panic!("refused for the wrong reason: {other:?}"),
-        Ok(out) => panic!(
-            "a folder holding MyTrack.als was scanned anyway: {} entries would be grouped",
-            out.entries.len()
-        ),
-    }
+    let cfg = ScanConfig {
+        grace: None,
+        ..ScanConfig::default()
+    };
+    let plan = plan::build(&scan::scan(&root, &cfg).expect("scanned, not refused"));
+    assert!(
+        plan.groups.is_empty(),
+        "something in a flat Ableton project would move: {:?}",
+        plan.groups
+    );
+    assert_eq!(plan.project_documents(), 1);
+    let (held, marker) = plan.near_document().expect("the bounces are held");
+    assert_eq!(held, 5, "every bounce is Media and stays");
+    assert!(
+        marker.to_lowercase().contains("als"),
+        "the hold names the document, got {marker:?}"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
@@ -459,6 +470,122 @@ fn a_project_nested_in_a_swept_folder_is_not_descended_into() {
             );
         }
     }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A loose project document does not take the whole folder hostage.
+///
+/// The first professional to test sweep ran it on a Downloads folder holding
+/// one stray .flp and got exit 2 for the entire sweep. The folder was not a
+/// project; the document had just been downloaded into it. Now the document
+/// stays put, the families it could reference stay put, and everything else
+/// sorts.
+#[test]
+fn a_loose_document_holds_its_reference_surface_not_the_folder() {
+    let root = std::env::temp_dir().join(format!("sweep_loosedoc_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    fs::write(root.join("anthem.flp"), b"synthetic").expect("write");
+    for n in ["inv_1.pdf", "inv_2.pdf", "inv_3.pdf"] {
+        fs::write(root.join(n), b"synthetic").expect("write");
+    }
+    for n in ["kick.wav", "snare.wav"] {
+        fs::write(root.join(n), b"synthetic").expect("write");
+    }
+
+    let cfg = ScanConfig {
+        grace: None,
+        ..ScanConfig::default()
+    };
+    let out = scan::scan(&root, &cfg).expect("a folder holding a stray document is sweepable");
+    let plan = plan::build(&out);
+
+    // The PDFs group; the document and the audio it could reference do not.
+    assert!(
+        plan.groups
+            .iter()
+            .any(|g| g.name == "Documents" && g.members.len() == 3),
+        "the PDFs beside a stray .flp did not group: {:?}",
+        plan.groups
+    );
+    assert_eq!(plan.project_documents(), 1, "the .flp itself must be held");
+    let (held, marker) = plan.near_document().expect("the wavs must be held");
+    assert_eq!(held, 2, "both wavs are Media, the .flp's reference surface");
+    assert_eq!(
+        marker, "anthem.flp",
+        "the hold names the document that caused it"
+    );
+    assert!(
+        !plan
+            .groups
+            .iter()
+            .any(|g| g.members.iter().any(|m| m.ends_with(".wav"))),
+        "a file the document could reference was grouped"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Screenshots sort even when a loose document is present.
+///
+/// On macOS screenshots land on the Desktop -- the folder most likely to
+/// also hold a stray project file. A project referencing a file named
+/// "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a real layout, and
+/// freezing the screenshot pile would remove the tool from the folder it
+/// exists for.
+#[test]
+fn screenshots_sort_past_a_loose_document() {
+    let root = std::env::temp_dir().join(format!("sweep_shotdoc_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    fs::write(root.join("track.als"), b"synthetic").expect("write");
+    for d in ["12", "13", "14"] {
+        fs::write(
+            root.join(format!("Screenshot 2026-08-{d} at 9.15.11 AM.png")),
+            b"synthetic",
+        )
+        .expect("write");
+    }
+    // and one plain image, which IS held: it could be an asset
+    fs::write(root.join("cover.png"), b"synthetic").expect("write");
+
+    let cfg = ScanConfig {
+        grace: None,
+        ..ScanConfig::default()
+    };
+    let plan = plan::build(&scan::scan(&root, &cfg).expect("sweepable"));
+    assert!(
+        plan.groups
+            .iter()
+            .any(|g| g.name == "Screenshots" && g.members.len() == 3),
+        "screenshots froze behind a stray .als: {:?}",
+        plan.groups
+    );
+    let (held, _) = plan.near_document().expect("the plain png is held");
+    assert_eq!(held, 1, "cover.png is Images, the .als's reference surface");
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A ROOT marker at the top level still refuses the whole folder.
+///
+/// The loosening is for documents only. A Cargo.toml at the top level means
+/// the folder IS a project by definition, and that refusal is the guard's
+/// original, correct case.
+#[test]
+fn a_root_marker_at_top_level_still_refuses_the_folder() {
+    let root = std::env::temp_dir().join(format!("sweep_rootstill_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("mkdir");
+    fs::write(root.join("Cargo.toml"), b"synthetic").expect("write");
+    fs::write(root.join("main.rs"), b"synthetic").expect("write");
+
+    let got = scan::scan(&root, &ScanConfig::default());
+    assert!(
+        matches!(got, Err(scan::ScanError::RefusedProjectRoot { .. })),
+        "a Cargo.toml at the top level stopped refusing: {got:?}"
+    );
 
     let _ = fs::remove_dir_all(&root);
 }
