@@ -61,6 +61,13 @@ jobs:
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
 
+      # check-claims.sh proves the page and demo/transcripts.json agree with
+      # each other. Two equally stale copies agree with each other too. This
+      # runs the binaries again and diffs what they print against what is
+      # committed, which is the claim the site actually makes.
+      - name: Do the committed transcripts still come out of these binaries
+        run: bash scripts/check-transcripts-reproduce.sh
+
   deny:
     name: dependency policy (cargo deny)
     runs-on: ubuntu-latest
