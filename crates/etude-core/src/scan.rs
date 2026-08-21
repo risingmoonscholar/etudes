@@ -86,12 +86,15 @@ pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
 /// The test is whether the format OWNS a directory layout. An .als expects
 /// Samples/ beside it; a .sketch is one file that expects nothing.
 ///
-/// Verified against a real 18,724-file Godot project on the author's machine.
-/// Its .tscn files reference siblings as res://scripts/main.gd -- absolute
-/// from the project root -- so moving ANY file inside a Godot project breaks
-/// every reference to it. project.godot was missing from the first version of
-/// this list, which is how that project came within one
-/// `sweep ~/Documents/dev-projects/ad-astra` of losing its layout.
+/// Verified against a real 18,724-file Godot project, not against vendor
+/// documentation. Its .tscn files reference siblings as res://scripts/main.gd
+/// -- absolute from the project root -- so moving ANY file inside a Godot
+/// project breaks every reference to it.
+///
+/// project.godot was missing from the first version of this list, and that
+/// project came within one `sweep` of losing its layout. The measurement is
+/// what carries the lesson; which project it was does not, so it is not
+/// named here.
 /// A marker directory that IS the project, whole and self-contained.
 ///
 /// A Final Cut library, a GarageBand song, a Logic project: the bundle is a
