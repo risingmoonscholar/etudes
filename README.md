@@ -43,9 +43,9 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 ## Install
 
 ```sh
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.0 sweep-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.0 stash-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.0 unpack-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 sweep-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 stash-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 unpack-cli
 ```
 
 The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
