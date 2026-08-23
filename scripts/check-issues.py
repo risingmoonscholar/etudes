@@ -31,16 +31,34 @@ import re
 import subprocess
 import sys
 
+# ATTRIBUTION IS NOT A LEAK. The site says so in as many words: "Night Watch
+# is the agent that runs these against this repo and writes up what it finds.
+# The open issues are its output. Each carries its own attribution." Naming
+# the model that found a defect is table stakes and advertised here, and an
+# earlier version of this checker treated it as a blocker -- which cost three
+# perfectly good defect reports before the rule was corrected.
+#
+# What actually does not belong is the working session: an unresolved
+# decision, a quoted private conversation, or a map of where the tool is weak
+# before a fix exists.
 RULES = [
-    ("reviewer-named", "blocker",
-     r"\b(codex|claude|gpt-?\d|chatgpt|copilot|cursor|gemini)\b",
-     "names the tool or model that did the work"),
-    ("person-named", "blocker",
+    # "The operator" is the tell. It is an internal role-word: nobody writes it
+    # in a public artifact unless they are narrating a private working
+    # relationship -- "the operator chose X over the reviewer's
+    # recommendation" is a session transcript wearing a PR body. The
+    # maintainer's own NAME is not a leak in his own repository, and flagging
+    # it was noise.
+    ("role-narration", "blocker",
      r"(\bthe operator\b|\boperator'?s?\s+(refinement|framing|call|decision"
-     r"|words|wants|said|asked|chose)|\brohan\b|maintainer's framing)",
-     "names the maintainer"),
+     r"|words|wants|said|asked|chose|diagnosed|overruled)"
+     r"|\bthe maintainer (chose|wants|decided|asked)\b)",
+     "narrates a private decision between the author and the maintainer"),
+    # Bare "verbatim" is ordinary technical prose -- "undo's verbatim output",
+    # "renders them verbatim" -- and flagging it produced five false positives
+    # against one true one. Speech attribution is the real signal.
     ("quoted-decision", "blocker",
-     r"(verbatim|'s framing:|his words|her words|their words|said:)",
+     r"('s framing:|his words|her words|their words|\bsaid:|\btold me\b"
+     r"|quoted verbatim|verbatim quote)",
      "quotes a private conversation"),
     ("undecided", "blocker",
      r"(open questions?|for discussion,? not decided|candidate surface"
@@ -68,13 +86,41 @@ RULES = [
 QUERY = """
 query($owner:String!, $name:String!, $cursor:String) {
   repository(owner:$owner, name:$name) {
-    issues(first:50, after:$cursor, states:[OPEN,CLOSED]) {
+    issues(first:25, after:$cursor, states:[OPEN,CLOSED]) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number state title body
-        userContentEdits(first:20) { nodes { diff } }
-        comments(first:50) {
-          nodes { body userContentEdits(first:20) { nodes { diff } } }
+        userContentEdits(first:100) { totalCount nodes { diff } }
+        comments(first:100) {
+          totalCount
+          nodes { body userContentEdits(first:100) { totalCount nodes { diff } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+# Pull requests are NOT issues in GitHub's GraphQL schema -- `issues()` excludes
+# them entirely. The first version of this checker read only `issues()` and
+# called the repo clean while 13 of 44 pull requests named the review tool in
+# their bodies, and one described an unfixed vulnerability. A PR body is as
+# public as an issue body, and review comments live in a third place again.
+PR_QUERY = """
+query($owner:String!, $name:String!, $cursor:String) {
+  repository(owner:$owner, name:$name) {
+    pullRequests(first:25, after:$cursor, states:[OPEN,CLOSED,MERGED]) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number state title body
+        userContentEdits(first:100) { totalCount nodes { diff } }
+        comments(first:100) {
+          totalCount
+          nodes { body userContentEdits(first:100) { totalCount nodes { diff } } }
+        }
+        reviews(first:50) {
+          totalCount
+          nodes { body comments(first:50) { totalCount nodes { body } } }
         }
       }
     }
@@ -87,22 +133,43 @@ def gh(args, **kw):
     return subprocess.run(["gh"] + args, capture_output=True, text=True, **kw)
 
 
-def fetch(repo):
+def fetch(repo, query, key):
+    """Every node, following pagination. Truncation is an error, not a pass."""
     owner, name = repo.split("/", 1)
     out, cursor = [], None
     while True:
-        cmd = ["api", "graphql", "-f", f"query={QUERY}",
+        cmd = ["api", "graphql", "-f", f"query={query}",
                "-F", f"owner={owner}", "-F", f"name={name}"]
         if cursor:
             cmd += ["-F", f"cursor={cursor}"]
         r = gh(cmd)
         if r.returncode != 0:
             raise RuntimeError(r.stderr.strip() or "graphql failed")
-        page = json.loads(r.stdout)["data"]["repository"]["issues"]
+        payload = json.loads(r.stdout)
+        # A partial response carries `errors` alongside `data`. Reading only
+        # `data` would scan whatever survived and report clean on the rest.
+        if payload.get("errors"):
+            raise RuntimeError(f"graphql errors: {payload['errors']}")
+        page = payload["data"]["repository"][key]
         out.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             return out
         cursor = page["pageInfo"]["endCursor"]
+
+
+def assert_complete(kind, number, label, conn):
+    """A connection whose totalCount exceeds what was returned is unchecked.
+
+    The claims checker in this repo once passed because its pattern could only
+    find a claim while the claim was correct. This is the same shape: an issue
+    with 120 comments and a 100-comment page would report clean on the last 20.
+    """
+    got, total = len(conn["nodes"]), conn.get("totalCount", len(conn["nodes"]))
+    if total > got:
+        raise RuntimeError(
+            f"{kind} #{number}: {label} returned {got} of {total}; "
+            "raise the page size or paginate. Refusing to report clean on a "
+            "partial read.")
 
 
 # Quoted tool output and fenced code are the ISSUE'S EVIDENCE, not its prose.
@@ -119,32 +186,50 @@ def prose_only(text):
     return text
 
 
-def scan(repo):
-    issues = fetch(repo)
-    findings = []
-    for i in issues:
-        # Current text, and every version that came before it. A prior version
-        # is as public as the current one.
-        sources = [("current", f"{i['title']}\n{i.get('body') or ''}")]
-        for n, e in enumerate(i["userContentEdits"]["nodes"]):
+def sources_of(kind, i):
+    """Every public text on one issue or PR: current, history, comments,
+    comment history, and (for PRs) reviews and review comments."""
+    num = i["number"]
+    out = [("current", f"{i['title']}\n{i.get('body') or ''}")]
+    assert_complete(kind, num, "edit history", i["userContentEdits"])
+    for n, e in enumerate(i["userContentEdits"]["nodes"]):
+        if e.get("diff"):
+            out.append((f"edit -{n + 1}", e["diff"]))
+    assert_complete(kind, num, "comments", i["comments"])
+    for c, com in enumerate(i["comments"]["nodes"]):
+        out.append((f"comment {c + 1}", com.get("body") or ""))
+        assert_complete(kind, num, f"comment {c + 1} history",
+                        com["userContentEdits"])
+        for n, e in enumerate(com["userContentEdits"]["nodes"]):
             if e.get("diff"):
-                sources.append((f"edit -{n + 1}", e["diff"]))
-        # Comments were the hole this checker had on its first run: the worst
-        # thing published in this repo -- an acceptance bar quoting a private
-        # decision -- was a COMMENT, and a body-only check called it clean.
-        for c, com in enumerate(i["comments"]["nodes"]):
-            sources.append((f"comment {c + 1}", com.get("body") or ""))
-            for n, e in enumerate(com["userContentEdits"]["nodes"]):
-                if e.get("diff"):
-                    sources.append((f"comment {c + 1} edit -{n + 1}", e["diff"]))
+                out.append((f"comment {c + 1} edit -{n + 1}", e["diff"]))
+    if "reviews" in i:
+        assert_complete(kind, num, "reviews", i["reviews"])
+        for r, rev in enumerate(i["reviews"]["nodes"]):
+            out.append((f"review {r + 1}", rev.get("body") or ""))
+            assert_complete(kind, num, f"review {r + 1} comments",
+                            rev["comments"])
+            for rc, com in enumerate(rev["comments"]["nodes"]):
+                out.append((f"review {r + 1} comment {rc + 1}",
+                            com.get("body") or ""))
+    return out
+
+
+def scan(repo):
+    items = [("issue", i) for i in fetch(repo, QUERY, "issues")]
+    items += [("pr", p) for p in fetch(repo, PR_QUERY, "pullRequests")]
+    findings = []
+    for kind, i in items:
+        sources = sources_of(kind, i)
         for where, text in sources:
             body = prose_only(text)
             for rid, sev, pat, why in RULES:
                 m = re.search(pat, body, re.I | re.M)
                 if m:
-                    findings.append((sev, i["number"], i["state"].lower(),
-                                     where, why, rid, m.group(0).strip()[:40]))
-    return len(issues), findings
+                    findings.append((sev, kind, i["number"],
+                                     i["state"].lower(), where, why, rid,
+                                     m.group(0).strip()[:40]))
+    return len(items), findings
 
 
 def main(argv):
@@ -164,24 +249,41 @@ def main(argv):
             print(f"FAIL {repo}: could not check ({e})", file=sys.stderr)
             worst = max(worst, 2)
             continue
-        print(f"{repo}: checked {count} issues, including edit history")
+        print(f"{repo}: checked {count} issues and pull requests, "
+              "with comments, reviews and every prior version")
         if not findings:
             print("  ok   every issue reads as a defect report")
             continue
-        for sev, num, state, where, why, rid, hit in sorted(findings):
+        # What is fixable and what is not are different reports. Current text
+        # can be corrected; a prior version cannot -- GitHub keeps and serves
+        # it forever, and a pull request cannot be deleted at all. Failing the
+        # build on immutable history would mean a check that can never pass,
+        # and a check that can never pass is one somebody switches off. So
+        # history is REPORTED and does not gate; only live text gates.
+        live = [f for f in findings if f[4] == "current"]
+        history = [f for f in findings if f[4] != "current"]
+
+        for sev, kind, num, state, where, why, rid, hit in sorted(live):
             label = "BLOCKER" if sev == "blocker" else "warn"
-            print(f"  {label:8} #{num} [{state}, {where}] {why}")
+            print(f"  {label:8} {kind} #{num} [{state}] {why}")
             print(f"           {hit!r} ({rid})")
-        if any(f[0] == "blocker" for f in findings):
-            print("\n  Editing does not remove these: GitHub keeps and serves the")
-            print("  old version. Delete the issue and re-file it clean.")
+        if history:
+            hist_items = sorted({(f[1], f[2]) for f in history})
+            print(f"  note     {len(history)} finding(s) in text that is no longer "
+                  f"live, across {len(hist_items)} item(s):")
+            print("           " + ", ".join(f"{k} #{n}" for k, n in hist_items))
+            print("           Prior versions and merged pull requests cannot be")
+            print("           removed. These are reported, not gated.")
+        if any(f[0] == "blocker" for f in live):
+            print("\n  Fix the live text. Note that editing an issue or PR does not")
+            print("  erase what was there: the old version stays public, so the")
+            print("  edit is a correction, not a removal.")
             worst = max(worst, 1)
     return worst
 
 
 SAMPLES = {
-    "reviewer-named": "Found by Codex reviewing the guard.",
-    "person-named": "Operator refinement, and it is the acceptance bar.",
+    "role-narration": "The operator chose the narrower option.",
     "quoted-decision": "His words: this over-refuses badly.",
     "undecided": "Open questions for the maintainer before building.",
     "weakness-roadmap": "The attack surface to scenario, roughly by nastiness.",
@@ -190,11 +292,16 @@ SAMPLES = {
 }
 
 CLEAN = [
+    # Attribution, which this project publishes on purpose.
+    "Found by Codex reviewing the project guard. Reproduced below.",
+    "Night Watch found this while running the stress suite.",
     "Killing a run leaves ram disks attached. I ended up with four of them.",
     "```\nsweep: refused: I will not guess which files are yours\n```",
     "> the tool printed: I cannot judge this file",
     "Sweep sorts the textures into Images/ and the project cannot find them.",
     "The ? operator propagates the error to the caller.",
+    "undo's verbatim output is compared against the committed transcript.",
+    "The API panel renders the captured help verbatim.",
 ]
 
 
