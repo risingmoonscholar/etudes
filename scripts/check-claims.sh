@@ -19,8 +19,15 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 status=0
-ok()   { printf "ok   %s\n" "$1"; }
-bad()  { printf "FAIL %s\n" "$1"; status=1; }
+# Sourced, not required: a check that cannot emit a trace still checks.
+# shellcheck source=/dev/null
+[ -f "$(dirname "${BASH_SOURCE[0]}")/trace.sh" ] && . "$(dirname "${BASH_SOURCE[0]}")/trace.sh"
+type trace_event >/dev/null 2>&1 || trace_event() { :; }
+
+# Each verdict this script already prints is also emitted as a typed event.
+# The trace is a byproduct of the check, never a separate task.
+ok()   { printf "ok   %s\n" "$1"; trace_event verification "$1" ; }
+bad()  { printf "FAIL %s\n" "$1"; status=1; trace_event failure "$1" ; }
 
 # claim FILE PATTERN CAPTURE DESCRIPTION ACTUAL
 #

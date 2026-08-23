@@ -65,6 +65,10 @@ what = "the claims SECURITY.md makes about what holds"
 watched_by = []
 unwatched = "no check maps SECURITY.md's claims to tests; the strongest candidate for the next one"
 
+[surface.trace-emission]
+what = "the causal-trace events these checks emit when ETUDES_TRACE is set"
+watched_by = ["check-coverage.py"]
+
 # --- the checks themselves ------------------------------------------------
 
 [check."cargo test --all"]

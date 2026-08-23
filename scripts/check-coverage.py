@@ -24,9 +24,28 @@ that cannot.
 
 Exit 0 covered, 1 gaps, 2 could not check.
 """
+import json
+import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+
+def trace(kind, statement, data=None):
+    """Emit the verdict this check already prints, as a typed event.
+
+    Silent when ETUDES_TRACE is unset, so running a check by hand does not
+    quietly produce research artifacts.
+    """
+    run = os.environ.get("ETUDES_TRACE")
+    if not run:
+        return
+    here = Path(__file__).resolve().parent / "trace.sh"
+    subprocess.run(["bash", "-c",
+                    f'. "{here}"; trace_event "$1" "$2" "$3"',
+                    "_", kind, statement, json.dumps(data or {})],
+                   check=False)
 
 
 def main(argv):
@@ -80,6 +99,13 @@ def main(argv):
     watched = sum(1 for s in surfaces.values() if s.get("watched_by"))
     print(f"{watched} of {len(surfaces)} surfaces are watched by "
           f"{len(checks)} declared checks")
+    # Coverage is the one verdict an observer most needs, because it bounds
+    # what every other green in this run is worth.
+    trace("failure" if bad else "verification",
+          f"{watched} of {len(surfaces)} surfaces watched, "
+          f"{len(surfaces) - watched} knowingly not",
+          {"surfaces": len(surfaces), "watched": watched,
+           "unwatched": [n for n, _ in unwatched], "checks": len(checks)})
     for name, why in unwatched:
         print(f"  unwatched  {name}: {why}")
     if not bad:
