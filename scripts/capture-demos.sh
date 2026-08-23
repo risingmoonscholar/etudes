@@ -75,8 +75,15 @@ caps, home, work, out = sys.argv[1:5]
 # rather than read from a manifest. The page used to hardcode "v0.3" in its
 # template, so it went on saying 0.3 through the whole of 0.4 and nothing
 # noticed -- a version is a claim like any other here.
-version = subprocess.run([os.path.join(sys.argv[5], "sweep"), "--version"],
-                         capture_output=True, text=True).stdout.strip().split()[-1]
+# Per tool, asked of each binary. One ambient version stamped onto all three
+# panels is how the site showed stash and unpack at a version they are frozen
+# below -- the tools version separately now, and the page has to say what
+# each binary says, not what the workspace happens to be.
+versions = {}
+for tool in ("sweep", "stash", "unpack"):
+    versions[tool] = subprocess.run([os.path.join(sys.argv[5], tool), "--version"],
+                                    capture_output=True, text=True).stdout.strip().split()[-1]
+version = versions["sweep"]  # legacy field; per-tool is authoritative
 
 rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                      capture_output=True, text=True).stdout.strip() or "unknown"
@@ -108,6 +115,7 @@ payload = {
     "generated_by": "scripts/capture-demos.sh",
     "commit": rev,
     "version": version,
+    "versions": versions,
     "note": ("Real stdout from binaries built out of this tree, run against the "
              "synthetic mkfx fixture. Not hand-written."),
     "substitution_rule": ("The temporary directory the fixture was built in is "

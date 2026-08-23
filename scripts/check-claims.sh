@@ -111,8 +111,23 @@ try:
 except Exception:
     print('')
 ")
-# sweep's own manifest, not the workspace: the site's transcripts are sweep's
-# output, and sweep versions independently now.
+# Per tool, against each tool's own manifest. One ambient version compared
+# against one manifest let the site show stash and unpack at a version they
+# are frozen below -- the freeze has to convey all the way to the page.
+for tool in sweep stash unpack; do
+  panel_v=$(python3 -c "
+import json
+d=json.load(open('demo/transcripts.json'))
+print(d.get('versions',{}).get('$tool',''))")
+  manifest_v=$(grep -m1 '^version' "crates/$tool-cli/Cargo.toml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  if [ -z "$panel_v" ]; then
+    bad "the site records no version for $tool. Re-run scripts/capture-demos.sh"
+  elif [ "$panel_v" = "$manifest_v" ]; then
+    ok "the site shows $tool v$panel_v, which its manifest declares"
+  else
+    bad "the site shows $tool v$panel_v; its manifest declares $manifest_v"
+  fi
+done
 real_version=$(grep -m1 '^version' crates/sweep-cli/Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 if [ -z "$site_version" ]; then
   bad "demo/transcripts.json records no version; the site cannot show one. Re-run scripts/capture-demos.sh"
