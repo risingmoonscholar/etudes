@@ -690,8 +690,9 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() {
         println!(
-            "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read",
-            plan.scanned
+            "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read  ·  sweep {}",
+            plan.scanned,
+            env!("CARGO_PKG_VERSION")
         );
         print_refused_by_policy_note(&plan);
         print_unreadable_warning(&plan);
@@ -905,7 +906,11 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     } else {
         "names, sizes and dates only  ·  no contents read"
     };
-    println!("\nScanned {} items  ·  {basis}\n", p.scanned);
+    println!(
+        "\nScanned {} items  ·  {basis}  ·  sweep {}\n",
+        p.scanned,
+        env!("CARGO_PKG_VERSION")
+    );
 
     let width = p
         .groups
