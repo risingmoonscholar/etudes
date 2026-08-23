@@ -510,3 +510,48 @@ if grep -qE '^  Screenshots' <<<"$SD_OUT"; then
 else
   fail "the screenshot pile froze behind a loose document: $SD_OUT"
 fi
+
+# --- agent mappings: last and least ------------------------------------------
+# --map routes unknown extensions into a folder, one run only. The claims that
+# must hold: no map outranks a refusal, all-or-nothing validation, the journal
+# is mandatory, and an agent-coined name is announced.
+MP="$W/Mapped"; mkdir -p "$MP"
+for n in a b c; do : > "$MP/model_$n.bpy"; done
+: > "$MP/tax_return_2025.bpy"
+for n in 1 2 3; do : > "$MP/doc_$n.pdf"; done
+CODE=0; MP_OUT=$("$SWEEP" apply "$MP" --map bpy=BlenderBits --yes 2>&1) || CODE=$?
+assert_eq 0 "$CODE" "a mapped apply succeeds"
+grep -q 'chosen by your agent' <<<"$MP_OUT" \
+  && pass "an agent-coined folder name announces itself" \
+  || fail "the coined-name disclosure is missing: $MP_OUT"
+[ -f "$MP/BlenderBits/model_a.bpy" ] && pass "mapped files moved into the agent's folder" \
+  || fail "the mapped group did not apply"
+[ -f "$MP/tax_return_2025.bpy" ] && pass "the personal-looking .bpy stayed put; no map outranks a refusal" \
+  || fail "an agent mapping moved a personal-looking file"
+CODE=0; "$SWEEP" undo "$MP" >/dev/null 2>&1 || CODE=$?
+assert_eq 0 "$CODE" "undo of a mapped apply succeeds"
+[ -f "$MP/model_a.bpy" ] && pass "undo restored the mapped files" || fail "undo lost a mapped file"
+
+# Repeatability first: two VALID maps in one invocation must both apply.
+# The first version of this arm never proved that -- a duplicate-flag guard
+# was rejecting the second --map before validation ran, and the arm passed
+# on that exit 2 while asserting a different claim entirely. Codex caught
+# both the bug and the test passing because of it.
+mkdir -p "$MP"; for n in a b c; do : > "$MP/asset_$n.foo"; done
+CODE=0; TWO_OUT=$("$SWEEP" "$MP" --map bpy=BlenderBits --map foo=FooBits 2>&1) || CODE=$?
+grep -q 'BlenderBits' <<<"$TWO_OUT" && grep -q 'FooBits' <<<"$TWO_OUT" \
+  && pass "two --map flags in one invocation both form groups" \
+  || fail "repeatable --map is broken again: $TWO_OUT"
+
+# All-or-nothing: one bad map fails the whole invocation, nothing moves, and
+# the error names the BAD MAP -- an exit 2 from any other cause must not pass.
+CODE=0; BAD_OUT=$("$SWEEP" apply "$MP" --map bpy=GoodName --map pdf=Bad --yes 2>&1) || CODE=$?
+assert_eq 2 "$CODE" "one invalid map refuses the whole invocation"
+grep -q 'pdf already belongs to a built-in group' <<<"$BAD_OUT" \
+  && pass "and the refusal names the invalid map, not some other exit-2 cause" \
+  || fail "the refusal was not about the bad map: $BAD_OUT"
+[ -f "$MP/model_a.bpy" ] && pass "and nothing moved" || fail "a partial map applied"
+
+# The journal is not optional for agent-directed moves.
+CODE=0; "$SWEEP" apply "$MP" --map bpy=GoodName --yes --no-journal >/dev/null 2>&1 || CODE=$?
+assert_eq 2 "$CODE" "--map with --no-journal is refused"

@@ -22,6 +22,15 @@ pub enum Signal {
     TypeFamily {
         exts: Vec<String>,
     },
+    /// An agent-supplied one-shot mapping: EXT routed to a named folder via
+    /// --map. `created` records whether the folder already existed in the
+    /// swept directory or was named by the agent -- the output labels the two
+    /// differently, because a name the filesystem already carried and a name
+    /// an agent coined are different claims and the user gets told which.
+    Mapped {
+        ext: String,
+        created: bool,
+    },
     /// Not a detector. A caller-supplied set already decided elsewhere --
     /// stash's holding folder is one group by definition. Was called
     /// SharedToken, back when a rule grouped files by words they contained;
@@ -36,6 +45,13 @@ impl Signal {
     pub fn describe(&self) -> String {
         match self {
             Signal::Screenshot => "named \"Screenshot ...\"".to_string(),
+            Signal::Mapped { ext, created } => {
+                if *created {
+                    format!(".{ext} (agent-named, one-shot)")
+                } else {
+                    format!(".{ext} (mapped, one-shot)")
+                }
+            }
             Signal::CameraBurst { days } => {
                 format!("camera names, taken within {days} days")
             }
@@ -225,6 +241,28 @@ impl Plan {
                     ("looks_personal", j::num(personal)),
                     ("by_category", by_category),
                     ("too_recent", j::num(self.too_recent())),
+                    ("unknown_extensions", {
+                        // Counts only, per codex's review: paths for the
+                        // unknowns already appear under no_clear_group_paths,
+                        // and an agent deciding whether .bpy deserves a
+                        // folder needs the shape, not another copy of the
+                        // names.
+                        let mut by_ext: BTreeMap<String, usize> = BTreeMap::new();
+                        for (p, u) in &self.untouched {
+                            if *u == Untouched::NoClearGroup
+                                && let Some(e) = p.extension()
+                            {
+                                *by_ext
+                                    .entry(e.to_string_lossy().to_ascii_lowercase())
+                                    .or_default() += 1;
+                            }
+                        }
+                        let pairs: Vec<(String, String)> =
+                            by_ext.into_iter().map(|(k, v)| (k, j::num(v))).collect();
+                        let refs: Vec<(&str, String)> =
+                            pairs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+                        j::obj(&refs)
+                    }),
                     ("project_documents", j::num(self.project_documents())),
                     (
                         "held_near_document",
@@ -266,15 +304,160 @@ const MIN_STRUCTURAL_GROUP: usize = 3;
 const BURST_DAYS: u32 = 3;
 
 /// Build a plan from metadata alone. Pure: reads no file contents.
+/// One agent-supplied mapping, already validated by `validate_maps`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MapSpec {
+    pub ext: String,
+    pub folder: String,
+    /// False when the folder already exists as a direct child of the root.
+    pub created: bool,
+}
+
+/// Names no mapping may target, case-insensitively: the vocabulary sweep
+/// itself uses. An agent routing .bpy into "documents" would silently merge
+/// its files into a built-in group's folder and make the count a lie.
+const RESERVED_DESTINATIONS: &[&str] = &[
+    "Images",
+    "Documents",
+    "Scripts",
+    "Installers",
+    "Archives",
+    "Media",
+    "Data",
+    "Screenshots",
+];
+
+/// Validate agent mappings against the root. All-or-nothing: the first
+/// invalid mapping fails the whole set, because an agent loop that gets a
+/// partial application has to diff what happened against what it asked for,
+/// and this repo's record says partially-true summaries are how users get
+/// misled.
+pub fn validate_maps(
+    raw: &[(String, String)],
+    root: &std::path::Path,
+) -> Result<Vec<MapSpec>, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (ext_raw, folder) in raw {
+        // Strip at most ONE leading dot: ".bpy" is a courtesy spelling of
+        // "bpy", but "..bpy" is a typo, and silently normalising a typo into
+        // a different accepted instruction is how an agent's mistake becomes
+        // a move nobody asked for.
+        let ext = ext_raw
+            .strip_prefix('.')
+            .unwrap_or(ext_raw)
+            .to_ascii_lowercase();
+        if ext.is_empty() || ext.contains('.') || ext.contains('/') || ext.len() > 32 {
+            return Err(format!(
+                "--map: {ext_raw:?} is not a single extension (like bpy)"
+            ));
+        }
+        if classify::type_family(&ext).is_some() || ext == "dmg" || ext == "pkg" {
+            return Err(format!(
+                "--map: .{ext} already belongs to a built-in group; a mapping may \
+                 only route extensions sweep does not know"
+            ));
+        }
+        if crate::scan::is_document_marker(&format!("x.{ext}")) {
+            return Err(format!(
+                "--map: .{ext} is a project document, which sweep holds rather \
+                 than moves; mapping it would fight that guard"
+            ));
+        }
+        if !seen.insert(ext.clone()) {
+            return Err(format!("--map: .{ext} is mapped twice"));
+        }
+        // The folder: exactly one component, visible, not a reserved name.
+        if folder.is_empty()
+            || folder == "."
+            || folder == ".."
+            || folder.contains('/')
+            || folder.contains('\\')
+            || folder.contains('\0')
+            || folder.starts_with('.')
+            || folder.len() > 255
+        {
+            return Err(format!(
+                "--map: {folder:?} is not a plain visible folder name"
+            ));
+        }
+        if RESERVED_DESTINATIONS
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(folder))
+            || folder.to_ascii_lowercase().starts_with("photos")
+        {
+            return Err(format!(
+                "--map: {folder:?} is a name sweep itself uses; routing files \
+                 there would fold them into a built-in group's count"
+            ));
+        }
+        // Two extensions may not name the same folder: --only NAME targets
+        // one group, and two groups wearing one name defeats it.
+        if out
+            .iter()
+            .any(|m: &MapSpec| m.folder.eq_ignore_ascii_case(folder))
+        {
+            return Err(format!(
+                "--map: two extensions map to {folder:?}; each mapping needs its own folder"
+            ));
+        }
+        // A target that differs from an existing folder only by case or
+        // Unicode normalisation is the on-disk folder wearing a different
+        // spelling. APFS would route the files into the existing directory
+        // while the plan displays the agent's spelling -- two names for one
+        // destination, one of them false. Refuse and name the real one.
+        if let Ok(rd) = std::fs::read_dir(root) {
+            for e in rd.flatten() {
+                let existing = e.file_name().to_string_lossy().into_owned();
+                if existing != *folder
+                    && existing.to_lowercase() == folder.to_lowercase()
+                    && e.path().is_dir()
+                {
+                    return Err(format!(
+                        "--map: {folder:?} differs from the existing folder {existing:?} \
+                         only by spelling; use the existing name"
+                    ));
+                }
+            }
+        }
+        let dest = root.join(folder);
+        let created = match std::fs::symlink_metadata(&dest) {
+            Ok(m) if m.is_dir() => false,
+            Ok(_) => {
+                return Err(format!("--map: {folder:?} exists here but is not a folder"));
+            }
+            Err(_) => true,
+        };
+        out.push(MapSpec {
+            ext,
+            folder: folder.clone(),
+            created,
+        });
+    }
+    Ok(out)
+}
+
 pub fn build(scan: &ScanOutcome) -> Plan {
-    build_with(scan, None)
+    build_mapped(scan, &[])
+}
+
+pub fn build_mapped(scan: &ScanOutcome, maps: &[MapSpec]) -> Plan {
+    build_with_maps(scan, None, maps)
 }
 
 /// Build a plan, optionally inspecting contents to refuse more files.
 ///
 /// The inspector runs in pass 1 only, alongside the filename check, and its
 /// result can do exactly one thing: move a file into the untouched set.
-pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>) -> Plan {
+pub fn build_with(scan: &ScanOutcome, inspector: Option<&mut dyn Inspector>) -> Plan {
+    build_with_maps(scan, inspector, &[])
+}
+
+pub fn build_with_maps(
+    scan: &ScanOutcome,
+    mut inspector: Option<&mut dyn Inspector>,
+    maps: &[MapSpec],
+) -> Plan {
     let mut untouched: Vec<(PathBuf, Untouched)> = Vec::new();
     let mut remaining: Vec<&Entry> = Vec::new();
 
@@ -503,6 +686,35 @@ pub fn build_with(scan: &ScanOutcome, mut inspector: Option<&mut dyn Inspector>)
         }
     }
 
+    // Agent mappings, last and least: they may claim only what every
+    // built-in pass declined. A mapping can never take a file from a
+    // detector, and nothing here runs before the refusals -- a personal
+    // record, a held document's reference surface, a fresh file or an
+    // in-flight download never reaches this point. Same three-file floor as
+    // every structural group: below it, --map would be an arbitrary
+    // one-file move command wearing a safety vocabulary.
+    for m in maps {
+        let members: Vec<&Entry> = remaining
+            .iter()
+            .filter(|e| !claimed.contains(&e.path))
+            .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
+            .copied()
+            .collect();
+        if members.len() < MIN_STRUCTURAL_GROUP {
+            continue;
+        }
+        claimed.extend(members.iter().map(|e| e.path.clone()));
+        groups.push(Group {
+            name: m.folder.clone(),
+            signal: Signal::Mapped {
+                ext: m.ext.clone(),
+                created: m.created,
+            },
+            members: members.iter().map(|e| e.path.clone()).collect(),
+            accepted: false,
+        });
+    }
+
     // Everything still unclaimed is honestly reported as ungrouped.
     for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
         untouched.push((e.path.clone(), Untouched::NoClearGroup));
@@ -643,6 +855,101 @@ mod tests {
             p.too_recent(),
             0,
             "--since 0 must hold nothing back, unreadable mtime included"
+        );
+    }
+
+    /// The full validation surface of --map, one probe per rule.
+    ///
+    /// Table-driven over the failure modes so a rule added later gets a probe
+    /// by pattern. Every rejection must carry a message a person can act on.
+    #[test]
+    fn map_validation_refuses_each_bad_shape_and_says_why() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("sweep_mapval_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Blender")).unwrap();
+        fs::write(root.join("notafolder"), b"x").unwrap();
+
+        let bad: &[(&str, &str, &str)] = &[
+            ("", "X", "empty extension"),
+            ("b.py", "X", "dotted extension"),
+            ("pdf", "X", "built-in family"),
+            ("dmg", "X", "installer detector"),
+            ("flp", "X", "project document"),
+            ("bpy", "", "empty folder"),
+            ("bpy", "..", "dot-dot"),
+            ("bpy", "a/b", "path separator"),
+            ("bpy", ".hidden", "leading dot"),
+            ("bpy", "Documents", "reserved family name"),
+            ("bpy", "screenshots", "reserved, case-folded"),
+            ("bpy", "Photos, Jan", "photos namespace"),
+            ("bpy", "notafolder", "exists but is a file"),
+        ];
+        for (ext, folder, why) in bad {
+            let r = validate_maps(&[(ext.to_string(), folder.to_string())], &root);
+            assert!(r.is_err(), "{why}: {ext}={folder} was accepted");
+        }
+        // duplicate ext across two maps
+        assert!(
+            validate_maps(
+                &[
+                    ("bpy".into(), "Blender".into()),
+                    ("BPY".into(), "Other".into())
+                ],
+                &root
+            )
+            .is_err(),
+            "the same extension mapped twice was accepted"
+        );
+
+        // and the two good shapes
+        let ok = validate_maps(&[("bpy".into(), "Blender".into())], &root).unwrap();
+        assert!(!ok[0].created, "an existing folder was marked created");
+        let ok = validate_maps(&[("bpy".into(), "Fresh".into())], &root).unwrap();
+        assert!(ok[0].created, "a new folder was not marked agent-created");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A mapping claims only what every built-in pass declined.
+    ///
+    /// The .bpy named like a tax form goes to the personal hold, not to the
+    /// agent's folder -- no mapping outranks a refusal, and the map takes
+    /// exactly the remainder.
+    #[test]
+    fn a_map_cannot_take_a_file_a_refusal_already_holds() {
+        let mut entries = vec![
+            cam_entry("model_a.bpy", 1000),
+            cam_entry("model_b.bpy", 1000),
+            cam_entry("model_c.bpy", 1000),
+            cam_entry("tax_return_2025.bpy", 1000),
+        ];
+        for e in &mut entries {
+            e.modified = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1000));
+        }
+        let scan = scan_outcome(entries);
+        let maps = vec![MapSpec {
+            ext: "bpy".into(),
+            folder: "Blender".into(),
+            created: true,
+        }];
+        let p = build_mapped(&scan, &maps);
+        let g = p
+            .groups
+            .iter()
+            .find(|g| g.name == "Blender")
+            .expect("the mapped group forms");
+        assert_eq!(g.members.len(), 3, "the map took a refused file");
+        assert!(
+            !g.members.iter().any(|m| m.ends_with("tax_return_2025.bpy")),
+            "a personal-looking file was routed by an agent mapping"
+        );
+        assert!(
+            p.untouched
+                .iter()
+                .any(|(path, u)| path.ends_with("tax_return_2025.bpy")
+                    && matches!(u, Untouched::LooksPersonal(_))),
+            "the tax-named file is not in the personal hold"
         );
     }
 

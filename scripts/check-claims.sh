@@ -75,15 +75,29 @@ claim CHANGELOG.md 'pruned after [0-9]+ days' '[0-9]+' "TTL days" "$ttl_actual"
 # A release that moves without this line moving sends every new user to the
 # previous version, and nothing else would notice: the command still works,
 # it just installs something older than the docs describe.
-readme_tag=$(grep -oE '\-\-tag v[0-9]+\.[0-9]+\.[0-9]+' README.md | head -1 | grep -oE 'v[0-9.]+')
-newest_tag=$(git tag --sort=-v:refname | head -1)
-if [ -z "$newest_tag" ]; then
-  ok "no tags yet, so the readme pins nothing"
-elif [ "$readme_tag" = "$newest_tag" ]; then
-  ok "README.md installs $readme_tag, the newest tag"
-else
-  bad "README.md installs ${readme_tag:-nothing}; the newest tag is $newest_tag"
-fi
+# The tools version separately now -- sweep matures, stash and unpack are
+# static -- so "newest tag" stopped being one question. The check that
+# replaces it is stronger: for each tool, the tag its install line pins must
+# match the version its OWN manifest declares. A release that bumps a
+# manifest without moving the install line, or vice versa, fails here.
+check_pin() {
+  local crate="$1" manifest="$2"
+  local ver tag_line
+  ver=$(grep -m1 '^version' "$manifest" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  tag_line=$(grep -oE -- "--tag [a-z-]*v[0-9.]+ $crate" README.md | head -1)
+  if [ -z "$tag_line" ]; then
+    bad "README.md has no install line pinning a tag for $crate"
+    return
+  fi
+  if grep -qE -- "v$ver $crate\$" <<<"$tag_line"; then
+    ok "README.md installs $crate at v$ver, which its manifest declares"
+  else
+    bad "README.md installs '$tag_line' but $manifest declares $ver"
+  fi
+}
+check_pin sweep-cli  crates/sweep-cli/Cargo.toml
+check_pin stash-cli  crates/stash-cli/Cargo.toml
+check_pin unpack-cli crates/unpack-cli/Cargo.toml
 
 # The version the site shows, against the version the binaries report.
 # It was hardcoded in the page template as "v0.3" and stayed there through the
@@ -97,7 +111,9 @@ try:
 except Exception:
     print('')
 ")
-real_version=$(grep -m1 '^version' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+# sweep's own manifest, not the workspace: the site's transcripts are sweep's
+# output, and sweep versions independently now.
+real_version=$(grep -m1 '^version' crates/sweep-cli/Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 if [ -z "$site_version" ]; then
   bad "demo/transcripts.json records no version; the site cannot show one. Re-run scripts/capture-demos.sh"
 elif [ "$site_version" = "$real_version" ]; then

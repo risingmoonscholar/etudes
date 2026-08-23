@@ -1,6 +1,6 @@
 [package]
 name = "unpack-cli"
-version.workspace = true
+version = "0.5.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -16,4 +16,4 @@ path = "src/main.rs"
 # No archive-parsing crates. The system tools are better tested than anything
 # this would add, and the value here is the safe uniform wrapper, not a parser.
 [dependencies]
-etude-core = { path = "../etude-core", version = "0.5.1" }
+etude-core = { path = "../etude-core", version = "0.5.2" }

@@ -10,6 +10,34 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+## [sweep 0.5.2] - 2026-08-23
+
+From here the tools version separately. sweep is the one maturing; stash and
+unpack are static and keep 0.5.1 until they themselves change. A sweep-only
+release is tagged `sweep-vN` so the tag says what moved.
+
+### Added
+
+- **`--map EXT=Folder`** (repeatable): an agent -- or a person -- routes an
+  extension sweep has no rule for into a named folder, this run only. Maps
+  run last and claim only files every built-in pass declined: no map outranks
+  a refusal, the personal/project/grace/in-flight holds all win, and the
+  three-file floor applies so `--map` cannot be a one-file move command.
+  All-or-nothing validation; `--map` with `--no-journal` is refused outright.
+
+  If the folder does not already exist, the output says so in as many words:
+  *the folder name "X" was chosen by your agent, not derived from your
+  files*. That is the one sanctioned exception to the rule that destination
+  names come from the filesystem, and it announces itself every time.
+
+- **`unknown_extensions`** in `--json` under `left_alone`: counts per
+  extension among the files sweep had no rule for. The agent's eyes --
+  it sees the shape of what sweep declined without another copy of the names.
+
+- The scan summary line now ends with `· sweep 0.5.2`, so a screenshot
+  identifies its own version. A tester's stale build produced folders no
+  current binary can produce, and nothing in his screenshot could say why.
+
 ## [0.5.1] - 2026-08-21
 
 ### Fixed

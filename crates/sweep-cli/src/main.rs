@@ -30,6 +30,8 @@ USAGE
 FLAGS
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
+    --map EXT=Folder  route an unknown extension into a folder, this run only
+                      (repeatable; refusals still win; journal required)
     --json          machine-readable plan on stdout (for agents)
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
@@ -381,6 +383,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--allow-sync", false),
             ("--inspect-content", false),
             ("--since", true),
+            ("--map", true),
         ],
     ),
     (
@@ -392,6 +395,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--depth", true),
             ("--allow-sync", false),
             ("--since", true),
+            ("--map", true),
         ],
     ),
     (
@@ -475,9 +479,13 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     // nothing said so. On apply it decides which files move: `--only A
     // --only B --yes` moved A and left every file in B where it was.
     //
-    // No flag here is repeatable -- none accumulate, none are counters --
-    // so a repeat is always a mistake, and always one where the user
-    // believes something is happening that is not.
+    // One flag is repeatable: --map accumulates one mapping per occurrence,
+    // and validate_maps rejects a duplicate EXTENSION inside the set with a
+    // message naming it. Every other flag stays non-repeatable -- a repeat is
+    // a mistake where the user believes something is happening that is not.
+    // (The first version of this comment said "no flag here is repeatable"
+    // and the guard enforced it against --map too, which made the repeatable
+    // flag unusable and let a vacuous stress test pass on the wrong exit 2.)
     let mut seen: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -491,7 +499,7 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
         // defect one level down. `-h` and `-V` are answered at dispatch and
         // never reach here.
         if a.starts_with('-') && !matches!(a.as_str(), "--help" | "--version" | "-h" | "-V") {
-            if seen.contains(&a.as_str()) {
+            if a != "--map" && seen.contains(&a.as_str()) {
                 return Err(format!(
                     "{a} was given more than once, and only the first would\n       \
                      have been used. Remove the ones you do not mean."
@@ -621,6 +629,28 @@ fn expand_tilde(p: &str) -> String {
 
 /// Scan and build a plan, running content inspection when the user asked for
 /// it AND consented. Returns the plan plus any inspection stats to disclose.
+/// Every `--map EXT=Folder` in order. Parsing only; validation happens in
+/// etude-core against the actual root, all-or-nothing.
+fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--map" {
+            let v = args
+                .get(i + 1)
+                .ok_or_else(|| "--map needs EXT=Folder, like --map bpy=Blender".to_string())?;
+            let (ext, folder) = v
+                .split_once('=')
+                .ok_or_else(|| format!("--map {v:?}: expected EXT=Folder"))?;
+            out.push((ext.to_string(), folder.to_string()));
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
 fn scan_and_plan(
     path: &Path,
     args: &[String],
@@ -652,8 +682,32 @@ fn scan_and_plan(
         }
     };
 
+    let maps = match map_flags(args) {
+        Ok(raw) if raw.is_empty() => Vec::new(),
+        Ok(raw) => match plan::validate_maps(&raw, path) {
+            Ok(m) => m,
+            Err(msg) => {
+                eprintln!("sweep: {msg}");
+                return Err(ExitCode::from(2));
+            }
+        },
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return Err(ExitCode::from(2));
+        }
+    };
+    // Agent-directed moves without a journal would be moves nobody can
+    // reverse, initiated by the party most likely to be wrong. Refused.
+    if !maps.is_empty() && has(args, "--no-journal") {
+        eprintln!(
+            "sweep: --map with --no-journal is refused. A mapped move must stay\n\
+             reversible; drop --no-journal."
+        );
+        return Err(ExitCode::from(2));
+    }
+
     if !has(args, "--inspect-content") {
-        return Ok((plan::build(&outcome), None));
+        return Ok((plan::build_mapped(&outcome, &maps), None));
     }
 
     // Consent to reading is separate from consent to moving. --yes does not
@@ -662,7 +716,7 @@ fn scan_and_plan(
         Ok(true) => {}
         Ok(false) => {
             println!("  Contents were not read. Continuing on names and dates only.\n");
-            return Ok((plan::build(&outcome), None));
+            return Ok((plan::build_mapped(&outcome, &maps), None));
         }
         Err(e) => {
             refuse("could not read your answer to the consent prompt", &e);
@@ -671,7 +725,7 @@ fn scan_and_plan(
     }
 
     let mut insp = inspect::ContentInspector::new();
-    let p = plan::build_with(&outcome, Some(&mut insp));
+    let p = plan::build_with_maps(&outcome, Some(&mut insp), &maps);
     Ok((p, Some(insp.stats)))
 }
 
@@ -697,6 +751,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         print_refused_by_policy_note(&plan);
         print_unreadable_warning(&plan);
         print_left_alone_notes(&plan, false);
+        print_agent_named_note(&plan);
         // "Nothing here needs organising" is only true when nothing was held
         // back. Files inside the grace window or still downloading DO need
         // organising -- just not yet -- and saying otherwise sends someone
@@ -899,6 +954,35 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     }
 }
 
+/// Say when a folder name came from an agent rather than from the files.
+///
+/// The invariant this qualifies is the oldest in the repo: destination names
+/// are derived from the filesystem, never coined. --map with a folder that
+/// does not exist yet is the one sanctioned exception, and an exception the
+/// output does not announce would just be the invariant quietly gone.
+fn print_agent_named_note(p: &plan::Plan) {
+    let coined: Vec<&str> = p
+        .groups
+        .iter()
+        .filter_map(|g| match &g.signal {
+            plan::Signal::Mapped { created: true, .. } => Some(g.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    match coined.len() {
+        0 => {}
+        1 => println!(
+            "\n  the folder name {:?} was chosen by your agent, not derived from your files",
+            coined[0]
+        ),
+        _ => println!(
+            "\n  {} folder names were chosen by your agent, not derived from your files: {}",
+            coined.len(),
+            coined.join(", ")
+        ),
+    }
+}
+
 fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     // This line must never claim more restraint than actually happened.
     let basis = if read_contents {
@@ -930,6 +1014,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     }
 
     print_left_alone_notes(p, explain);
+    print_agent_named_note(p);
 
     if p.skipped_hidden + p.skipped_symlink > 0 {
         println!(
@@ -1046,6 +1131,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     };
     let mut p = plan::build(&outcome);
     print_left_alone_notes(&p, false);
+    print_agent_named_note(&p);
     if p.groups.is_empty() {
         if p.too_recent() + p.in_flight() > 0 {
             println!(
@@ -1278,7 +1364,27 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             return scan_exit_code(&e);
         }
     };
-    let mut p = plan::build(&outcome);
+    let maps = match map_flags(args).and_then(|raw| {
+        if raw.is_empty() {
+            Ok(Vec::new())
+        } else {
+            plan::validate_maps(&raw, &path)
+        }
+    }) {
+        Ok(m) => m,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+    if !maps.is_empty() && !use_journal {
+        eprintln!(
+            "sweep: --map with --no-journal is refused. A mapped move must stay\n\
+             reversible; drop --no-journal."
+        );
+        return ExitCode::from(2);
+    }
+    let mut p = plan::build_mapped(&outcome, &maps);
     for g in &mut p.groups {
         g.accepted = match &only {
             Some(n) => &g.name == n,
@@ -1286,6 +1392,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         };
     }
     print_left_alone_notes(&p, false);
+    print_agent_named_note(&p);
     if p.moves() == 0 {
         eprintln!("sweep: nothing to apply.");
         return ExitCode::from(1);

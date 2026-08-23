@@ -1,6 +1,6 @@
 [package]
 name = "sweep-cli"
-version.workspace = true
+version = "0.5.2"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -17,7 +17,7 @@ path = "src/main.rs"
 # a tool whose selling point is a readable dependency tree, and sweep's grammar
 # is four verbs.
 [dependencies]
-etude-core = { path = "../etude-core", version = "0.5.1" }
+etude-core = { path = "../etude-core", version = "0.5.2" }
 etude-keep = { path = "../etude-keep", version = "0.5.1" }
 etude-read = { path = "../etude-read", version = "0.5.1" }
 
