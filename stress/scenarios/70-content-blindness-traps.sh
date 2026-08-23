@@ -174,3 +174,46 @@ if mkfifo "$F/quarter_report_9.txt" 2>/dev/null && command -v script >/dev/null 
 else
   unproven "INSTRUMENT 2: FIFO positive control" "mkfifo or script(1) unavailable"
 fi
+
+# --- unpack refuses members it cannot safely create --------------------------
+# Before this guard, unpack judged a name-only listing (unzip -Z1 / tar -tf),
+# which cannot see a member's TYPE. Measured: it printed "Checked 2 paths
+# before writing anything" and landed shortcut -> /etc/passwd in the target.
+# Both formats reproduced it. Each refusal must name the member, state the
+# rule, and offer a recourse -- exit 2 with no next move is the failure this
+# whole guard exists to avoid, one level up from the tool.
+UNP="$W/unpackhostile"; mkdir -p "$UNP/stage"
+ln -s /etc/passwd "$UNP/stage/shortcut"; : > "$UNP/stage/ordinary.txt"
+tar -czf "$UNP/sym.tar.gz" -C "$UNP/stage" shortcut ordinary.txt 2>/dev/null
+CODE=0; SYM_OUT=$("$UNPACK" "$UNP/sym.tar.gz" --into "$UNP/out-sym" 2>&1) || CODE=$?
+assert_eq 2 "$CODE" "an archive carrying a symlink is refused"
+grep -q "symlink: shortcut" <<<"$SYM_OUT" \
+  && pass "the refusal names the member and its kind" \
+  || fail "the symlink refusal did not name the member: $SYM_OUT"
+grep -q -- "--list" <<<"$SYM_OUT" \
+  && pass "and offers a recourse" \
+  || fail "the refusal offered no next move: $SYM_OUT"
+[ ! -d "$UNP/out-sym" ] && pass "and nothing was written" || fail "a refused archive created its target"
+
+# setuid, from a real archive
+: > "$UNP/stage/suid.bin"; chmod 4755 "$UNP/stage/suid.bin"
+tar -cf "$UNP/suid.tar" -C "$UNP/stage" suid.bin 2>/dev/null
+CODE=0; SUID_OUT=$("$UNPACK" "$UNP/suid.tar" --into "$UNP/out-suid" 2>&1) || CODE=$?
+assert_eq 2 "$CODE" "an archive carrying a setuid bit is refused"
+grep -q "setuid" <<<"$SUID_OUT" && pass "and says so" || fail "no setuid reason: $SUID_OUT"
+
+# a FIFO
+mkfifo "$UNP/stage/pipe" 2>/dev/null && tar -cf "$UNP/fifo.tar" -C "$UNP/stage" pipe 2>/dev/null
+if [ -f "$UNP/fifo.tar" ]; then
+  CODE=0; "$UNPACK" "$UNP/fifo.tar" --into "$UNP/out-fifo" >/dev/null 2>&1 || CODE=$?
+  assert_eq 2 "$CODE" "an archive carrying a FIFO is refused"
+else
+  unproven "could not build a FIFO archive on this host"
+fi
+
+# and the ordinary case still works, or the guard has eaten the tool
+mkdir -p "$UNP/ok"; echo a > "$UNP/ok/a.txt"; echo b > "$UNP/ok/b.txt"
+tar -czf "$UNP/ok.tar.gz" -C "$UNP/ok" . 2>/dev/null
+CODE=0; "$UNPACK" "$UNP/ok.tar.gz" --into "$UNP/out-ok" >/dev/null 2>&1 || CODE=$?
+assert_eq 0 "$CODE" "an ordinary archive still extracts"
+[ -f "$UNP/out-ok/a.txt" ] && pass "and its files landed" || fail "the ordinary archive lost files"

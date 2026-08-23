@@ -11,8 +11,19 @@ impl Drop for TestDir {
     }
 }
 
+/// An archive carrying a symlink is refused outright, and nothing outside is
+/// touched.
+///
+/// This test used to assert that unpack SUCCEEDED on such an archive and
+/// merely declined to follow the link while tidying junk. That was the right
+/// assertion for a tool that extracted symlinks; it is the wrong one now.
+/// Measured before the change: `unpack lone.zip` printed "Checked 2 paths
+/// before writing anything" and landed `shortcut -> /etc/passwd` in the
+/// target, because a name-only listing cannot see a member's type. The
+/// symlink is refused at preflight now, so the guarantee is stronger --
+/// nothing is written at all -- and this asserts the stronger thing.
 #[test]
-fn junk_removal_does_not_follow_symlinks_outside_the_target() {
+fn an_archive_carrying_a_symlink_is_refused_and_touches_nothing() {
     let root = std::env::temp_dir().join(format!("unpack-symlink-escape-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -46,12 +57,33 @@ fn junk_removal_does_not_follow_symlinks_outside_the_target() {
         .arg(&dest)
         .output()
         .unwrap();
-    assert!(
-        unpack.status.success(),
-        "unpack failed: {}",
+
+    // Refused, exit 2, naming the member and offering a recourse.
+    assert_eq!(
+        unpack.status.code(),
+        Some(2),
+        "an archive with a symlink was not refused: {}",
         String::from_utf8_lossy(&unpack.stderr)
     );
+    let msg = String::from_utf8_lossy(&unpack.stderr).to_string();
+    assert!(
+        msg.contains("symlink"),
+        "the refusal does not name the kind: {msg}"
+    );
+    assert!(
+        msg.contains("outside-link"),
+        "the refusal does not name the member: {msg}"
+    );
+    assert!(
+        msg.contains("--list"),
+        "the refusal offers no recourse: {msg}"
+    );
 
+    // Nothing written, and nothing outside disturbed.
+    assert!(
+        !dest.exists(),
+        "a refused archive still created its destination"
+    );
     assert!(sentinel.exists());
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"outside sentinel");
 }

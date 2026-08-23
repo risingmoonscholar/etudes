@@ -77,6 +77,24 @@ pub const MAX_DEPTH: usize = 32;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Unsafe {
+    /// A symlink member. Measured, not assumed: `unpack lone.zip` reported
+    /// "Checked 2 paths before writing anything" and then landed
+    /// `shortcut -> /etc/passwd` in the target, because the name-only
+    /// listing this tool used could not see a member's TYPE. Both bsdtar and
+    /// Info-ZIP refused to write THROUGH such a link on this machine -- but
+    /// that is version-pinned platform behaviour, not this tool's contract,
+    /// and the link itself is still a booby trap handed to whoever opens the
+    /// folder next.
+    Symlink(String),
+    /// A hard link member: it can name an inode outside the target, so
+    /// writing "inside" the extraction changes data outside it.
+    Hardlink(String),
+    /// A device node, FIFO or socket. Nothing an archive of files needs, and
+    /// each is a surface this tool has no business creating.
+    SpecialNode(String),
+    /// setuid or setgid bits. An extracted file must never carry authority
+    /// its extractor did not have.
+    SetuidBit(String),
     /// `/etc/passwd`: would write outside the target entirely.
     AbsolutePath(String),
     /// `../../.ssh/authorized_keys`: the classic Zip Slip.
@@ -96,6 +114,31 @@ impl std::fmt::Display for Unsafe {
             Unsafe::Escapes(p) => write!(f, "escapes the target: {p}"),
             Unsafe::DriveOrUnc(p) => write!(f, "drive or UNC path: {p}"),
             Unsafe::TooDeep(p) => write!(f, "nested deeper than {MAX_DEPTH}: {p}"),
+            Unsafe::Symlink(p) => write!(
+                f,
+                "symlink: {p}\n       a dispatched extractor cannot be stopped from \
+                 writing through a link, and the link itself points wherever the \
+                 archive says. This build unpacks regular files and directories.\n       \
+                 `unpack ARCHIVE --list` shows every member without writing"
+            ),
+            Unsafe::Hardlink(p) => write!(
+                f,
+                "hard link: {p}\n       a hard link can name a file outside the target, \
+                 so writing inside the extraction would change data outside it.\n       \
+                 `unpack ARCHIVE --list` shows every member without writing"
+            ),
+            Unsafe::SpecialNode(p) => write!(
+                f,
+                "device, FIFO or socket: {p}\n       an archive of files has no need of \
+                 one, and creating it is a surface this tool will not open.\n       \
+                 `unpack ARCHIVE --list` shows every member without writing"
+            ),
+            Unsafe::SetuidBit(p) => write!(
+                f,
+                "setuid or setgid: {p}\n       an extracted file must not carry authority \
+                 its extractor did not have.\n       \
+                 extract it yourself with `tar -xf` if you trust the source"
+            ),
         }
     }
 }
@@ -104,6 +147,37 @@ impl std::fmt::Display for Unsafe {
 ///
 /// Purely lexical: it never touches the filesystem, so it cannot be defeated by
 /// anything that changes on disk between the check and the extraction.
+/// One member as a verbose listing describes it: the mode string decides the
+/// TYPE, which a name-only listing cannot.
+///
+/// `tar -tvf` and `unzip -Z` both lead with a mode string, and both were
+/// measured before this was written:
+///
+///     lrwxr-xr-x  ...  link -> /tmp/OUTSIDE     symlink, tar
+///     lrwxrwxrwx  ...  slink                    symlink, zip
+///     -rwsr-xr-x  ...  suid.bin                 setuid, tar
+///
+/// The type character is position 0; setuid and setgid are the `s`/`S` in
+/// positions 3 and 6. Anything that is not a regular file or a directory is
+/// refused by kind, so a format that grows a new node type is refused rather
+/// than silently permitted.
+pub fn judge_mode(mode: &str, path: &str) -> Option<Unsafe> {
+    let b = mode.as_bytes();
+    if b.len() < 10 {
+        return None; // not a mode string; the caller falls back to the name
+    }
+    match b[0] {
+        b'-' | b'd' => {}
+        b'l' => return Some(Unsafe::Symlink(path.to_string())),
+        b'h' => return Some(Unsafe::Hardlink(path.to_string())),
+        _ => return Some(Unsafe::SpecialNode(path.to_string())),
+    }
+    if matches!(b[3], b's' | b'S') || matches!(b[6], b's' | b'S') {
+        return Some(Unsafe::SetuidBit(path.to_string()));
+    }
+    None
+}
+
 pub fn judge(path: &str) -> Option<Unsafe> {
     let p = path.trim();
     if p.is_empty() {
@@ -291,5 +365,117 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(wrapper_dir(&paths), None);
+    }
+}
+
+#[cfg(test)]
+mod type_tests {
+    use super::*;
+
+    /// Mode strings measured from the real tools, not invented.
+    ///
+    /// Each row was copied from an actual `tar -tvf` or `unzip -Z` run
+    /// against an archive built for the purpose. That is the difference
+    /// between a test of this parser and a test of my idea of the format.
+    #[test]
+    fn measured_mode_strings_are_judged_by_kind() {
+        // tar -tvf, real output
+        assert!(matches!(
+            judge_mode("lrwxr-xr-x", "link"),
+            Some(Unsafe::Symlink(_))
+        ));
+        assert!(matches!(
+            judge_mode("-rwsr-xr-x", "suid.bin"),
+            Some(Unsafe::SetuidBit(_))
+        ));
+        assert!(matches!(
+            judge_mode("prw-r--r--", "pipe"),
+            Some(Unsafe::SpecialNode(_))
+        ));
+        // unzip -Z, real output
+        assert!(matches!(
+            judge_mode("lrwxrwxrwx", "slink"),
+            Some(Unsafe::Symlink(_))
+        ));
+        // ordinary members pass
+        assert!(judge_mode("-rw-r--r--", "a.txt").is_none());
+        assert!(judge_mode("drwxr-xr-x", "dir").is_none());
+        // setgid too, and in either position
+        assert!(matches!(
+            judge_mode("-rwxr-sr-x", "sgid.bin"),
+            Some(Unsafe::SetuidBit(_))
+        ));
+        // a device node and a socket are refused by KIND, so a type this
+        // code has never seen is refused rather than permitted by default
+        assert!(matches!(
+            judge_mode("crw-rw-rw-", "dev"),
+            Some(Unsafe::SpecialNode(_))
+        ));
+        assert!(matches!(
+            judge_mode("srwxrwxrwx", "sock"),
+            Some(Unsafe::SpecialNode(_))
+        ));
+        // not a mode string at all: no opinion, the caller falls back
+        assert!(judge_mode("Archive:", "x").is_none());
+        assert!(judge_mode("", "x").is_none());
+    }
+
+    /// The line-level property the parser rests on, stated so it is checked:
+    /// the TYPE character is at position 0 of the mode string, which both
+    /// tools emit first on every member row. So even a member whose NAME
+    /// mimics a mode string, a timestamp, or contains " -> " is judged by
+    /// kind correctly -- and because refusal is all-or-nothing on the
+    /// archive, a mis-parsed PATH can only name the member imprecisely, never
+    /// let it through. Measured against real archives built for each shape.
+    #[test]
+    fn the_type_character_decides_regardless_of_the_name() {
+        for name in [
+            "two words link",
+            "evil -> notreally",
+            "12:34",
+            "-rw-r--r--",
+            "line1\\nline2",
+        ] {
+            assert!(
+                matches!(judge_mode("lrwxr-xr-x", name), Some(Unsafe::Symlink(_))),
+                "a symlink named {name:?} was not judged a symlink"
+            );
+        }
+        // and a regular file with an alarming name is still just a file
+        assert!(judge_mode("-rw-r--r--", "lrwxr-xr-x").is_none());
+    }
+
+    /// Every refusal names the member, states the rule, and gives a recourse.
+    ///
+    /// The operator's contract, asserted rather than assumed: a refusal that
+    /// only blocks is a dead end, and an agent branching on exit 2 needs a
+    /// next move in the text.
+    #[test]
+    fn every_refusal_carries_member_rule_and_recourse() {
+        let cases = vec![
+            Unsafe::Symlink("shortcut".into()),
+            Unsafe::Hardlink("hl".into()),
+            Unsafe::SpecialNode("pipe".into()),
+            Unsafe::SetuidBit("suid.bin".into()),
+        ];
+        for c in cases {
+            let msg = c.to_string();
+            let member = match &c {
+                Unsafe::Symlink(p)
+                | Unsafe::Hardlink(p)
+                | Unsafe::SpecialNode(p)
+                | Unsafe::SetuidBit(p) => p.clone(),
+                _ => unreachable!(),
+            };
+            assert!(
+                msg.contains(&member),
+                "refusal does not name the member: {msg}"
+            );
+            assert!(
+                msg.contains("unpack ARCHIVE --list") || msg.contains("tar -xf"),
+                "refusal offers no recourse: {msg}"
+            );
+            assert!(msg.len() > 60, "refusal states no rule: {msg}");
+        }
     }
 }

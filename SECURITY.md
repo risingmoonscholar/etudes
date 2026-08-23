@@ -41,6 +41,71 @@ write.
 **`--json` discloses less than the human output.** For files that look like
 personal records it carries counts by category and never the paths.
 
+## unpack: what it refuses, and what that is worth
+
+unpack dispatches to the system `unzip`, `tar` and `gunzip`. It parses no
+archive format itself, which is its main defence and also the shape of its
+limits.
+
+**Refused at preflight, before anything is written**, each naming the member
+and offering a recourse:
+
+| refused | why |
+|---|---|
+| symlink members | a dispatched extractor cannot be stopped from writing *through* a link, and the link itself points wherever the archive says |
+| hard link members | can name an inode outside the target, so writing "inside" changes data outside |
+| device nodes, FIFOs, sockets | nothing an archive of files needs; a surface this tool will not open |
+| setuid/setgid bits | an extracted file must not carry authority its extractor did not have |
+| traversal, absolute and UNC paths | the classic escapes |
+| a listing that reports names but not types | a check that cannot run is not a check that passed |
+
+Measured, not assumed: before this existed, `unpack lone.zip` reported
+*"Checked 2 paths before writing anything"* and then landed
+`shortcut -> /etc/passwd` in the target, because the name-only listing it
+used could not see a member's type. Both `bsdtar` and Info-ZIP refused to
+write *through* such a link on the machine this was measured on — but that
+is version-pinned platform behaviour, not a contract this tool offers, and
+the link itself was still delivered.
+
+**What this does not cover, stated plainly:**
+
+- **A listing that lies about types.** Listing and extraction are separate
+  parses and can disagree. An archive that conceals a symlink from
+  `tar -tvf` could still cause one to be created. Preventing that needs
+  containment *during* extraction — libarchive's secure-extraction flags, or
+  a sandboxed extractor — which is a different tool than the one that parses
+  nothing.
+- **Nested archives.** A zip inside a zip is just a file here; unpack does
+  not recurse, so the bound applies per invocation, not to what you unpack
+  next.
+- **CPU and time.** The write bound is on bytes landing on disk. A small
+  archive that decompresses slowly is not bounded by it.
+- **Parser vulnerabilities in the system tools.** Dispatching means their
+  bugs are reachable. Keep macOS patched; unpack does not run privileged.
+
+The honest claim is: *unpack refuses every dangerous member its listing
+declares, and writes nothing when it cannot judge one.* Not "safe
+unarchive".
+
+**The attacks are public, on purpose.** `stress/scenarios/` ships in the
+clone and builds its hostile archives at run time -- a symlink pointing at
+`/etc/passwd`, a setuid bit, a FIFO, member names containing spaces,
+newlines, `->`, and strings that mimic a mode column. None of it is novel:
+Zip Slip, tar symlink traversal and setuid-in-archive are decades old and
+sit in every security curriculum and CVE record. Publishing the scenarios
+withholds nothing from anyone and is what lets a reader check the refusal
+rather than trust it. A security claim whose tests are private is a claim,
+not evidence.
+
+The fixtures are generated rather than committed, and the reasons are
+hygiene and reviewability, NOT secrecy -- an earlier draft of this section
+implied otherwise and was wrong. Anyone who runs the script gets the same
+archive a committed one would hand them. What differs is that a script is
+readable where a blob is not, and that a committed malicious archive lands
+on every clone's disk, gets indexed, and can trip endpoint scanners on
+machines belonging to people who never ran the tests. Neither reason is a
+security property.
+
 ## What does not hold, and is not meant to
 
 **Ciphertext length leaks coarsely.** Journals are padded to the next 4 KiB
