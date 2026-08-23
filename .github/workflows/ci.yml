@@ -65,6 +65,13 @@ jobs:
       # comment, and every prior version GitHub still serves, and fails when
       # one reads as a working session rather than a defect report. It runs
       # its own self-test first and refuses to judge if a rule has gone dead.
+      # Before any individual check runs: is anything this project exposes
+      # watched by nothing? A check can report UNKNOWN about a criterion it
+      # holds; it says nothing about a criterion nobody wrote, and that gap
+      # looks exactly like everything passing.
+      - name: Nothing this project exposes is silently unwatched
+        run: python3 scripts/check-coverage.py
+
       - name: The public issues read like bug reports
         run: python3 scripts/check-issues.py
         env:
