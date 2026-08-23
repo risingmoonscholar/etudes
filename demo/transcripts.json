@@ -1,10 +1,10 @@
 {
   "generated_by": "scripts/capture-demos.sh",
-  "commit": "a4d4512",
+  "commit": "e3242bc",
   "version": "0.5.2",
   "versions": {
     "sweep": "0.5.2",
-    "stash": "0.5.1",
+    "stash": "0.5.2",
     "unpack": "0.5.1"
   },
   "note": "Real stdout from binaries built out of this tree, run against the synthetic mkfx fixture. Not hand-written.",
@@ -38,7 +38,7 @@
       "label": "stash-help",
       "command": "stash help",
       "exit": 0,
-      "stdout": "stash: clean now, decide later\n\nUSAGE\n    stash [PATH] [--for DURATION]   move everything into a hidden holding folder\n    stash pop [PATH]                bring back the stash for PATH (or here)\n    stash status [PATH]             what is stashed, and when it is due back\n    --json                          machine-readable output (for agents)\n    --version                       print the version and exit\n    stash help\n\nDURATION\n    30m  2h  3d  1w        default: no deadline, restore whenever\n\nstash moves everything sweep can see, including the files sweep would refuse\nto organise. Hidden items are left in place, and it says how many.\nThat is deliberate: clearing a folder for a screen share means clearing it.\nEverything is reversible, and stash prints what it took.\n"
+      "stdout": "stash: clean now, decide later\n\nUSAGE\n    stash [PATH] [--for DURATION]   move everything into a hidden holding folder\n    stash pop [PATH]                bring back the stash for PATH (or here)\n    stash pop [PATH] --if-due       pop only if the deadline has passed;\n                                    exit 2 when early, 1 when nothing stashed\n    stash status [PATH]             what is stashed, and when it is due back\n    stash status --all              every stash this machine's journals know,\n                                    paths redacted; --paths shows them\n    --json                          machine-readable output (for agents)\n    --version                       print the version and exit\n    stash help\n\nDURATION\n    30m  2h  3d  1w        default: no deadline, restore whenever\n\nstash moves everything sweep can see, including the files sweep would refuse\nto organise. Hidden items are left in place, and it says how many.\nThat is deliberate: clearing a folder for a screen share means clearing it.\nEverything is reversible, and stash prints what it took.\n"
     },
     {
       "label": "unpack-help",

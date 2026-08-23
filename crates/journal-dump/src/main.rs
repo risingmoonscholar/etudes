@@ -34,6 +34,18 @@ impl etude_core::journal::Sealer for KeychainSeal {
 }
 
 fn main() -> ExitCode {
+    // A decrypted journal is the full pathname history of everything the
+    // tools ever moved. That answers only to a person at a terminal, for the
+    // same reason stash's --paths does: the reach of the read is the whole
+    // machine, and a non-interactive caller gets a refusal with the reason
+    // rather than the history.
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!(
+            "journal-dump: a decrypted journal lists every path the tools ever\n\
+             touched, so it prints only for a person at a terminal. Refusing."
+        );
+        return ExitCode::from(2);
+    }
     let Some(arg) = std::env::args().nth(1) else {
         eprintln!("usage: journal-dump <path-to-.journal>");
         return ExitCode::from(2);

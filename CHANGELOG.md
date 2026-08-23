@@ -10,6 +10,35 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+## [stash 0.5.2] - 2026-08-23
+
+stash's first independent move: the deadline becomes a contract an agent can
+build on, while stash itself stays a tool that only acts when asked -- no
+daemon, no timer, nothing at login. The agent is the automation layer; stash
+is the custody layer. Same division sweep 0.5.2 shipped.
+
+### Added
+
+- `stash pop --if-due`: pops only past the deadline. Early is exit 2
+  (refused by the clock), nothing stashed is exit 1 -- distinct, so a
+  launchd job can tell "fire again later" from "delete yourself". A typo of
+  the flag is refused rather than falling through to a plain early pop,
+  which required giving stash the per-command flag table sweep already had.
+- `stash status --all`: every stash this machine's journals know, with a
+  stable id, ISO-8601 deadline and overdue flag. Roots are REDACTED unless
+  `--paths` is passed -- the flag advertises the read's reach in the
+  invocation string itself, because `status --all` reads as narrow in an
+  agent's audit log while enumerating paths machine-wide.
+- `id` and `due_iso` in per-root `status --json`.
+- A plain early `pop` says, in one line, that it is early. It never asks
+  and never refuses: deciding later includes deciding now.
+- `--paths` answers only to a person at a terminal: a non-interactive caller
+  gets exit 2 and the reasoning, never the paths. `journal-dump` -- the
+  decrypted pathname history of every move -- now refuses non-interactive
+  callers the same way. The principle and the full list of gated surfaces
+  are in SECURITY.md: where a command's reach exceeds the folder it was
+  pointed at, refuse and say why.
+
 ## [sweep 0.5.2] - 2026-08-23
 
 From here the tools version separately. sweep is the one maturing; stash and

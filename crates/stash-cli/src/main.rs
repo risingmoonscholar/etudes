@@ -35,7 +35,11 @@ stash: clean now, decide later
 USAGE
     stash [PATH] [--for DURATION]   move everything into a hidden holding folder
     stash pop [PATH]                bring back the stash for PATH (or here)
+    stash pop [PATH] --if-due       pop only if the deadline has passed;
+                                    exit 2 when early, 1 when nothing stashed
     stash status [PATH]             what is stashed, and when it is due back
+    stash status --all              every stash this machine's journals know,
+                                    paths redacted; --paths shows them
     --json                          machine-readable output (for agents)
     --version                       print the version and exit
     stash help
@@ -67,8 +71,20 @@ fn main() -> ExitCode {
             println!("stash {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Some("pop" | "restore") => cmd_pop(&args),
-        Some("status" | "list") => cmd_status(&args),
+        Some("pop" | "restore") => match check_flags("pop", &args) {
+            Ok(()) => cmd_pop(&args),
+            Err(m) => {
+                eprintln!("stash: {m}");
+                ExitCode::from(2)
+            }
+        },
+        Some("status" | "list") => match check_flags("status", &args) {
+            Ok(()) => cmd_status(&args),
+            Err(m) => {
+                eprintln!("stash: {m}");
+                ExitCode::from(2)
+            }
+        },
         None => cmd_stash(&std::env::current_dir().unwrap_or_default(), &args),
         // A leading flag means "stash the current directory", which is the most
         // destructive thing this tool does. An unrecognised one must therefore
@@ -92,6 +108,46 @@ fn main() -> ExitCode {
 /// Flags that may lead the argument list. Anything else there is a typo, and a
 /// typo must not stash the current directory.
 const STASH_FLAGS: &[&str] = &["--for", "--json"];
+
+/// Every command, and every flag reachable from it. Same construction as
+/// sweep's COMMAND_FLAGS and for the same reason: the leading-flag guard
+/// above protected exactly one position, so `stash pop --ifdue` -- a typo of
+/// the flag that makes the deadline binding -- sailed through and popped
+/// early. A tool cannot offer automation a contract while accepting any
+/// misspelling of it.
+const COMMAND_FLAGS: &[(&str, &[&str])] = &[
+    ("", &["--for", "--json"]),
+    ("pop", &["--if-due"]),
+    ("status", &["--json", "--all", "--paths"]),
+];
+
+/// Refuse any flag the command does not read. `--for` takes a value, which is
+/// skipped, not judged.
+fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
+    let allowed = COMMAND_FLAGS
+        .iter()
+        .find(|(c, _)| *c == cmd)
+        .map(|(_, f)| *f)
+        .unwrap_or(&[]);
+    let mut i = 1; // skip the subcommand itself (or index 0 for bare)
+    if cmd.is_empty() {
+        i = 0;
+    }
+    while i < args.len() {
+        let a = &args[i];
+        if a == "--for" && allowed.contains(&"--for") {
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') && !allowed.contains(&a.as_str()) {
+            return Err(format!(
+                "unknown option {a} for this command. Run `stash help`."
+            ));
+        }
+        i += 1;
+    }
+    Ok(())
+}
 
 fn expand_tilde(p: &str) -> String {
     match p.strip_prefix("~/") {
@@ -414,6 +470,29 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         eprintln!("stash: no stash found for {}", path.display());
         return ExitCode::from(1);
     };
+    // The clock, before the journal. --if-due makes the deadline binding:
+    // an early call is refused (exit 2), same class as sweep refusing a
+    // project, and distinct from exit 1 (nothing stashed) so an automation
+    // job can tell "fire again later" from "clean yourself up". A plain pop
+    // stays a human right -- decide-later includes deciding now -- and says
+    // in one line that it is early, never asks, never refuses.
+    if let Some(holding) = find_holding(&target) {
+        let name = holding
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        match pop_clock(deadline_of(name), now_secs(), flag(args, "--if-due")) {
+            ClockDecision::RefuseEarly { human } => {
+                eprintln!("stash: not due for {human}. Refusing --if-due.");
+                return ExitCode::from(2);
+            }
+            ClockDecision::NoticeEarly { human, due } => {
+                println!("due {}; popping {human} early.", iso_utc(due));
+            }
+            ClockDecision::Pop => {}
+        }
+    }
+
     let (found, damaged) = journal_for_root("stash", &sl, &target);
     let mut j = match found {
         Some(j) => j,
@@ -548,7 +627,111 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The --paths disclosure gate, before ANY other work. Split out and called
+/// first so it is the deterministic refusal for a non-interactive --paths
+/// call -- Codex found it running after sealer(), so a caller with no
+/// keychain got "could not store the key" instead of the disclosure reason,
+/// and the contract (refuse, and say it is because --paths discloses
+/// machine-wide paths) was violated by ordering. Takes an explicit tty so a
+/// test can drive both branches without a real terminal.
+fn paths_gate(show_paths: bool, is_tty: bool) -> Result<(), String> {
+    if show_paths && !is_tty {
+        return Err(
+            "stash: --paths reveals every stashed folder's location on this\n\
+             machine, so it answers only to a person at a terminal. Without\n\
+             --paths you still get ids, deadlines and redacted roots -- enough\n\
+             to schedule against. Refusing."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn cmd_status_all(args: &[String]) -> ExitCode {
+    let show_paths = flag(args, "--paths");
+    // Disclosure gate BEFORE the keychain: a machine-wide-read refusal must
+    // not be pre-empted by an unrelated key error, or the reason is wrong.
+    if let Err(msg) = paths_gate(
+        show_paths,
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+    ) {
+        eprintln!("{msg}");
+        return ExitCode::from(2);
+    }
+    let Some(sl) = sealer() else {
+        return ExitCode::from(2);
+    };
+    let now = now_secs();
+    let stashes = all_stashes(&sl);
+    if flag(args, "--json") {
+        use etude_core::json as j;
+        let rows: Vec<String> = stashes
+            .iter()
+            .map(|(root, holding)| {
+                let name = holding
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                let due = deadline_of(name);
+                let root_field = if show_paths {
+                    j::path(root)
+                } else {
+                    j::str(&etude_core::redact::path(root))
+                };
+                j::obj(&[
+                    ("id", j::str(name)),
+                    ("root", root_field),
+                    (
+                        "due",
+                        due.map(|t| j::str(&iso_utc(t)))
+                            .unwrap_or_else(|| "null".into()),
+                    ),
+                    ("overdue", j::bool(due.is_some_and(|t| t <= now))),
+                ])
+            })
+            .collect();
+        println!(
+            "{}",
+            j::obj(&[
+                ("stashes", format!("[{}]", rows.join(","))),
+                ("paths_shown", j::bool(show_paths)),
+            ])
+        );
+        return ExitCode::from(if stashes.is_empty() { 1 } else { 0 });
+    }
+    if stashes.is_empty() {
+        println!("Nothing stashed anywhere this machine's journals know of.");
+        return ExitCode::from(1);
+    }
+    for (root, holding) in &stashes {
+        let name = holding
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        let shown = if show_paths {
+            root.display().to_string()
+        } else {
+            etude_core::redact::path(root)
+        };
+        match deadline_of(name) {
+            Some(t) if t <= now => println!("  {shown}  OVERDUE since {}", iso_utc(t)),
+            Some(t) => println!("  {shown}  due {}", iso_utc(t)),
+            None => println!("  {shown}  no deadline"),
+        }
+    }
+    if !show_paths {
+        println!(
+            "
+  paths are redacted; `stash status --all --paths` shows them."
+        );
+    }
+    ExitCode::SUCCESS
+}
+
 fn cmd_status(args: &[String]) -> ExitCode {
+    if flag(args, "--all") {
+        return cmd_status_all(args);
+    }
     let root = args
         .iter()
         .skip(1)
@@ -608,7 +791,13 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     j::obj(&[
                         ("root", j::path(&root)),
                         ("stashed", j::num(n)),
+                        ("id", j::str(name)),
                         ("due", due.map(j::num).unwrap_or_else(|| "null".into())),
+                        (
+                            "due_iso",
+                            due.map(|t| j::str(&iso_utc(t)))
+                                .unwrap_or_else(|| "null".into()),
+                        ),
                         ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
                         ("elsewhere", "null".into()),
                     ])
@@ -637,6 +826,81 @@ fn cmd_status(args: &[String]) -> ExitCode {
 ///
 /// A user who stashes one folder and asks for status in another should not get
 /// a flat denial of something that just happened.
+/// What the clock says about a pop, decided purely so every branch is testable
+/// without a keychain, a stash, or the passage of time. Codex asked for the
+/// due-pop path to be proven; making it deterministic meant not baking the
+/// decision into a real overdue stash (whose journal paths a test cannot
+/// backdate) but extracting the arithmetic, exactly as `paths_gate` did for
+/// the disclosure gate.
+#[derive(Debug, PartialEq, Eq)]
+enum ClockDecision {
+    /// --if-due, and the deadline has not passed: refuse (exit 2).
+    RefuseEarly { human: String },
+    /// A plain pop before the deadline: pop, but say it is early.
+    NoticeEarly { human: String, due: u64 },
+    /// Due, past due, or no deadline at all: just pop.
+    Pop,
+}
+
+fn pop_clock(deadline: Option<u64>, now: u64, if_due: bool) -> ClockDecision {
+    let Some(due) = deadline else {
+        return ClockDecision::Pop; // no deadline: nothing to be early against
+    };
+    if now >= due {
+        return ClockDecision::Pop;
+    }
+    let left = due - now;
+    let human = if left >= 86_400 {
+        format!("{} day(s)", left.div_ceil(86_400))
+    } else if left >= 3_600 {
+        format!("{} hour(s)", left.div_ceil(3_600))
+    } else {
+        format!("{} minute(s)", left.div_ceil(60))
+    };
+    if if_due {
+        ClockDecision::RefuseEarly { human }
+    } else {
+        ClockDecision::NoticeEarly { human, due }
+    }
+}
+
+/// Epoch seconds as UTC ISO-8601, no dependencies: days-from-civil in
+/// reverse, the standard Howard Hinnant construction.
+fn iso_utc(epoch: u64) -> String {
+    let days = (epoch / 86400) as i64;
+    let secs = epoch % 86400;
+    let (h, m, sec) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mth = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mth <= 2 { y + 1 } else { y };
+    format!("{y:04}-{mth:02}-{d:02}T{h:02}:{m:02}:{sec:02}Z")
+}
+
+/// Every stash on this machine, from the journals stash already keeps.
+///
+/// The agent-delegation surface: one call yields everything needed to build
+/// calendar items or launchd jobs, so the agent holds no state. Roots are
+/// REDACTED unless the caller passes --paths: an invocation string has to
+/// advertise its own reach, because `stash status --all` reads as narrow in
+/// an agent's audit log while enumerating paths machine-wide. The flag is
+/// the disclosure.
+fn all_stashes(sl: &KeychainSeal) -> Vec<(PathBuf, PathBuf)> {
+    let mut out: Vec<(PathBuf, PathBuf)> = journal_roots("stash", sl)
+        .into_iter()
+        .filter_map(|root| find_holding(&root).map(|h| (root, h)))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn stash_elsewhere(here: &Path) -> Option<PathBuf> {
     // Quietly: a missing key means status cannot look, which is not worth an
     // error on a read-only command.
@@ -1002,5 +1266,99 @@ mod tests {
             progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));
+    }
+
+    /// Every flag a command reads is in the help, and every misspelling is
+    /// refused. sweep grew this guard after --map shipped undocumented; stash
+    /// gets it the same week --if-due shipped as an automation contract --
+    /// a contract a tool cannot offer while accepting typos of it.
+    #[test]
+    fn every_stash_flag_is_documented_and_typos_refuse() {
+        for (_, flags) in COMMAND_FLAGS {
+            for f in *flags {
+                assert!(
+                    USAGE.contains(f),
+                    "{f} is accepted but undocumented in `stash help`"
+                );
+            }
+        }
+        assert!(check_flags("pop", &["pop".into(), "--ifdue".into()]).is_err());
+        assert!(check_flags("status", &["status".into(), "--al".into()]).is_err());
+        assert!(check_flags("pop", &["pop".into(), "--if-due".into()]).is_ok());
+        assert!(
+            check_flags(
+                "status",
+                &["status".into(), "--all".into(), "--paths".into()]
+            )
+            .is_ok()
+        );
+    }
+
+    /// The ISO renderer against known fixed points, including a leap year.
+    #[test]
+    fn iso_rendering_matches_known_dates() {
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(951_827_696), "2000-02-29T12:34:56Z");
+        assert_eq!(iso_utc(1_787_519_993), "2026-08-23T21:19:53Z");
+        // day rollover, both sides of midnight
+        assert_eq!(iso_utc(86_399), "1970-01-01T23:59:59Z");
+        assert_eq!(iso_utc(86_400), "1970-01-02T00:00:00Z");
+        // a non-leap century (2100 is not a leap year) and a far-future date
+        assert_eq!(iso_utc(4_107_542_400), "2100-03-01T00:00:00Z");
+        assert_eq!(iso_utc(4_107_456_000), "2100-02-28T00:00:00Z");
+    }
+
+    /// Every clock branch, without a stash, a key, or a real clock.
+    #[test]
+    fn pop_clock_covers_every_branch() {
+        // no deadline: always pops
+        assert_eq!(pop_clock(None, 100, true), ClockDecision::Pop);
+        assert_eq!(pop_clock(None, 100, false), ClockDecision::Pop);
+        // exactly due, and past due: pops, --if-due or not
+        assert_eq!(pop_clock(Some(100), 100, true), ClockDecision::Pop);
+        assert_eq!(pop_clock(Some(100), 200, true), ClockDecision::Pop);
+        assert_eq!(pop_clock(Some(100), 200, false), ClockDecision::Pop);
+        // early + --if-due: refused
+        assert!(matches!(
+            pop_clock(Some(1000), 100, true),
+            ClockDecision::RefuseEarly { .. }
+        ));
+        // early + plain: notice, still pops
+        assert!(matches!(
+            pop_clock(Some(1000), 100, false),
+            ClockDecision::NoticeEarly { due: 1000, .. }
+        ));
+        // the one-second-early boundary rounds up to a minute, never "0"
+        if let ClockDecision::RefuseEarly { human } = pop_clock(Some(100), 99, true) {
+            assert_eq!(human, "1 minute(s)");
+        } else {
+            panic!("one second early was not refused");
+        }
+    }
+
+    /// The disclosure gate answers on the tty alone, before any keychain.
+    ///
+    /// Codex found it running after sealer(), so a caller with no key got the
+    /// wrong refusal. This drives both branches with an explicit tty and needs
+    /// no keychain -- the regression the ordering bug demanded.
+    #[test]
+    fn the_paths_gate_refuses_a_non_terminal_and_needs_no_keychain() {
+        assert!(
+            paths_gate(true, false).is_err(),
+            "--paths from a pipe was allowed"
+        );
+        let msg = paths_gate(true, false).unwrap_err();
+        assert!(
+            msg.contains("person at a terminal"),
+            "the refusal lost its reason"
+        );
+        assert!(
+            paths_gate(true, true).is_ok(),
+            "--paths at a terminal was refused"
+        );
+        assert!(
+            paths_gate(false, false).is_ok(),
+            "redacted --all from a pipe was refused"
+        );
     }
 }

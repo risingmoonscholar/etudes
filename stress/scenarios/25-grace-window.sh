@@ -99,3 +99,64 @@ if grep -q "changed too recently" <<<"$FUT_OUT2"; then
 else
   fail "a future-dated file was swept with a 1d window: $FUT_OUT2"
 fi
+
+# --- stash's clock becomes a contract ----------------------------------------
+# pop --if-due is the automation gate: early is exit 2 (refused by the clock,
+# distinct from 1 = nothing stashed, so a launchd job can tell "fire again"
+# from "clean yourself up"), due is a normal pop, and a typo of the flag is
+# refused rather than popping early -- the typo case is the one that would
+# have silently voided the contract.
+SC="$W/stashclock"; mkdir -p "$SC"; for n in 1 2 3; do : > "$SC/f_$n.txt"; done
+"$STASH" "$SC" --for 1w >/dev/null 2>&1 || fail "stash --for failed"
+CODE=0; "$STASH" pop "$SC" --if-due >/dev/null 2>&1 || CODE=$?
+assert_eq 2 "$CODE" "pop --if-due a week early is refused by the clock"
+[ -f "$SC/f_1.txt" ] && fail "an early --if-due pop moved files" || pass "and nothing came back early"
+CODE=0; "$STASH" pop "$SC" --ifdue >/dev/null 2>&1 || CODE=$?
+assert_eq 2 "$CODE" "a typo of --if-due is refused, not treated as a plain pop"
+[ ! -f "$SC/f_1.txt" ] && pass "the typo moved nothing" || fail "a typo'd flag popped the stash"
+# a plain early pop is a human right, and says it is early
+EARLY_OUT=$("$STASH" pop "$SC" 2>&1); CODE=$?
+assert_eq 0 "$CODE" "a plain early pop still works"
+grep -q "popping .* early" <<<"$EARLY_OUT" \
+  && pass "and says in one line that it is early" \
+  || fail "the early pop was silent about the clock: $EARLY_OUT"
+[ -f "$SC/f_1.txt" ] && pass "files restored" || fail "pop lost files"
+
+# nothing stashed: exit 1, distinct from the refusal
+CODE=0; "$STASH" pop "$SC" --if-due >/dev/null 2>&1 || CODE=$?
+assert_eq 1 "$CODE" "--if-due with nothing stashed is exit 1, so a job knows to clean itself up"
+
+# --if-due with a DEADLINE-LESS stash pops, exit 0: nothing to be early
+# against. This is the deterministic integration proof of the exit-0 path.
+# The "past a real deadline pops" arithmetic is proven exhaustively in the
+# pop_clock unit test -- deterministically, without time control, because the
+# minimum --for unit is a minute and a real overdue stash cannot be forged
+# (its journal records paths inside the original holding-dir name, which a
+# backdating rename would orphan; that attempt is what caught this).
+NODL="$W/stashnodl"; mkdir -p "$NODL"; for n in 1 2 3; do : > "$NODL/g_$n.txt"; done
+"$STASH" "$NODL" >/dev/null 2>&1 || fail "stash without a deadline failed"
+CODE=0; "$STASH" pop "$NODL" --if-due >/dev/null 2>&1 || CODE=$?
+assert_eq 0 "$CODE" "pop --if-due on a deadline-less stash pops, exit 0"
+[ -f "$NODL/g_1.txt" ] && pass "and the files came back" || fail "the pop lost files"
+
+# status --all on a POPULATED machine: redact by default. Hold a stash for
+# the duration of this assertion, then release it -- the earlier version ran
+# after its only stash was popped, so "Nothing stashed anywhere" passed the
+# redaction check without a populated response to redact.
+HELD="$W/stashheld"; mkdir -p "$HELD"; for n in 1 2 3; do : > "$HELD/h_$n.txt"; done
+"$STASH" "$HELD" --for 1w >/dev/null 2>&1 || fail "stash --for held failed"
+ALL_OUT=$("$STASH" status --all 2>&1); true
+grep -q "stashheld" <<<"$ALL_OUT" && fail "status --all showed a full path with no --paths: $ALL_OUT" \
+  || pass "status --all redacts a real held stash's path"
+grep -q "redacted" <<<"$ALL_OUT" && pass "and says paths are redacted" \
+  || fail "status --all did not disclose that it redacts: $ALL_OUT"
+"$STASH" pop "$HELD" >/dev/null 2>&1 || true
+# The harness is not a terminal, which makes it the exact caller the --paths
+# gate exists for: the refusal must fire here, state its reasoning, and leak
+# nothing. journal-dump answers to the same rule.
+CODE=0; PATHS_OUT=$("$STASH" status --all --paths 2>&1) || CODE=$?
+assert_eq 2 "$CODE" "--paths without a terminal is refused"
+grep -q "person at a terminal" <<<"$PATHS_OUT" \
+  && pass "and the refusal states its reasoning" \
+  || fail "the --paths refusal gave no reason: $PATHS_OUT"
+grep -q "$W" <<<"$PATHS_OUT" && fail "the refusal itself leaked a path" || pass "and leaked nothing"

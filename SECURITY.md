@@ -66,6 +66,24 @@ be proven on this machine rather than claiming it passed.
 `review` require a TTY. That stops accidental non-interactive use; it does not
 stop a process driving a pty.
 
+**Machine-wide reads answer only to a person at a terminal.** The operating
+rule, applied wherever a command's reach exceeds the folder it was pointed
+at: refuse non-interactive callers, and state the reasoning in the refusal.
+Currently gated this way:
+
+| surface | what it reveals or does |
+|---|---|
+| `stash status --all --paths` | every stashed folder's full path |
+| `journal-dump` | the decrypted pathname history of every move |
+| `sweep --inspect-content` | consent to reading contents at all |
+| `sweep review` | interactive renaming |
+| `sweep forget`'s key destruction | the key stash also relies on |
+
+A TTY gate is a default-flip, not a boundary: a process driving a pty walks
+through, deliberately and auditably. `stash status --all` without `--paths`
+stays agent-callable -- ids, ISO deadlines and redacted roots are enough to
+build a schedule against, which is the intended delegation surface.
+
 ## Checking any of this
 
 ```sh
