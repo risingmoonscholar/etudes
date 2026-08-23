@@ -61,6 +61,15 @@ jobs:
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
 
+      # The public tracker is a product surface. This reads every issue, every
+      # comment, and every prior version GitHub still serves, and fails when
+      # one reads as a working session rather than a defect report. It runs
+      # its own self-test first and refuses to judge if a rule has gone dead.
+      - name: The public issues read like bug reports
+        run: python3 scripts/check-issues.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # check-claims.sh proves the page and demo/transcripts.json agree with
       # each other. Two equally stale copies agree with each other too. This
       # runs the binaries again and diffs what they print against what is
