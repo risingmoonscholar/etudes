@@ -36,14 +36,14 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
-| **`sweep`** | Organises the obvious and leaves the private alone | v0.5 |
-| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5 |
-| **`unpack`** | One command for every archive format, safely | v0.5 |
+| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.2, maturing |
+| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.1, static |
+| **`unpack`** | One command for every archive format, safely | v0.5.1, static |
 
 ## Install
 
 ```sh
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 sweep-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.2 sweep-cli
 cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 stash-cli
 cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 unpack-cli
 ```
@@ -66,7 +66,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 236 tests
+cargo test --all                # 238 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -175,7 +175,9 @@ another is the worst kind of interface.
 
 ```sh
 sweep ~/Desktop --json          # the plan, including projects_skipped,
-                                # downloads_skipped and packages_skipped
+                                # downloads_skipped, packages_skipped, and
+                                # unknown_extensions -- counts per extension
+                                # sweep has no rule for
 stash ~/Desktop --for 3d --json # what moved, and when it is due
 stash status --json             # what is held, and whether it is overdue
 unpack a.zip --list --json      # inspect an archive without extracting
@@ -195,6 +197,17 @@ property holds no matter who is driving:
 | `review` needs a TTY | convenience gate against accidental non-interactive use, not a security boundary against a process driving a pty |
 | sweep sensitive-name refusal | sweep leaves a tax document alone even with `--yes`; stash still moves everything |
 | per-tool journals | an agent cannot undo the other tool's work by accident |
+
+**The agent supplies judgment; sweep supplies custody.** `unknown_extensions`
+tells an agent what sweep has no rule for. The agent decides whether four
+`.bpy` files deserve a folder -- that is the nondeterministic part, spent
+where judgment is the job -- and comes back with `--map bpy=Blender`. Sweep
+executes the mapping as one more table row, this run only: every refusal
+still wins over a map, the moves are journaled, `undo` reverses them, and
+`--map` with `--no-journal` is refused outright. If the folder does not
+already exist, the output says so plainly: *the folder name "Blender" was
+chosen by your agent, not derived from your files* -- the one sanctioned
+exception to the naming rule, and it announces itself.
 
 **`--json` discloses less, not more.** For files that look like personal
 records, the JSON carries counts by category and **never the paths**. An agent
