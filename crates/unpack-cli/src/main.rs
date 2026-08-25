@@ -229,7 +229,37 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
 
     // --- 2. judge, before anything is written ------------------------------
-    let blocked: Vec<Unsafe> = entries.iter().filter_map(|p| safety::judge(p)).collect();
+    // Two judgements, and the second is the one a name-only listing could not
+    // make. Lexical first (traversal, absolute, depth) on every member; then
+    // TYPE, from the verbose listing's mode string -- symlink, hard link,
+    // device node, setuid. A member is refused if either says so.
+    let mut blocked: Vec<Unsafe> = entries.iter().filter_map(|p| safety::judge(p)).collect();
+    match list_members(archive, fmt) {
+        Ok(members) => {
+            for m in &members {
+                if let Some(mode) = &m.mode
+                    && let Some(u) = safety::judge_mode(mode, &m.path)
+                {
+                    blocked.push(u);
+                }
+            }
+        }
+        Err(_) => {
+            // The verbose listing failed where the plain one worked. That is
+            // a parse disagreement between two reads of the same archive, and
+            // codex's rule applies: never treat agreement as proof, and never
+            // treat a failed check as a pass. Refuse rather than extract with
+            // one of the two judgements missing.
+            eprintln!(
+                "unpack: REFUSED. This archive lists its names but not its member\n\
+                 types, so whether it contains links or device nodes cannot be\n\
+                 established. Refusing rather than extracting half-checked.\n       \
+                 `unpack {} --list` shows the names it does report.",
+                archive.display()
+            );
+            return ExitCode::from(2);
+        }
+    }
     let junk = entries.iter().filter(|p| safety::is_junk(p)).count();
 
     if flag(args, "--list") && flag(args, "--json") {
@@ -296,7 +326,10 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     if !blocked.is_empty() {
         // Refuse the whole archive. Extracting the safe subset of a hostile
         // archive gives the attacker a partial success and the user a mess.
-        eprintln!("\nunpack: REFUSED. This archive tries to write outside the target.\n");
+        eprintln!(
+            "\nunpack: REFUSED. This archive contains members this tool will not\n\
+             create.\n"
+        );
         for b in blocked.iter().take(10) {
             eprintln!("  {b}");
         }
@@ -420,6 +453,112 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
 }
 
 /// Enumerate member paths without extracting.
+/// One member as the listing describes it: its mode string, if the format
+/// reports one, and its path.
+pub struct Member {
+    pub mode: Option<String>,
+    pub path: String,
+}
+
+/// Members with their modes, so a member's TYPE is visible.
+///
+/// The name-only listings this replaced (`-Z1`, `-tf`) could not see that a
+/// member was a symlink, so `unpack` printed "Checked 2 paths before writing
+/// anything" and then landed `shortcut -> /etc/passwd` in the target.
+/// Measured on both formats before this existed.
+fn list_members(archive: &Path, fmt: Format) -> Result<Vec<Member>, String> {
+    let (bin, args): (&str, Vec<&str>) = match fmt {
+        Format::Zip => ("unzip", vec!["-Z"]),
+        Format::Tar => ("tar", vec!["-tvf"]),
+        Format::TarGz => ("tar", vec!["-tvzf"]),
+        Format::TarBz2 => ("tar", vec!["-tvjf"]),
+        Format::TarXz => ("tar", vec!["-tvJf"]),
+        Format::Gz => {
+            return Ok(vec![Member {
+                mode: None,
+                path: stem(archive),
+            }]);
+        }
+        Format::Dmg => return Err("dmg unsupported".into()),
+    };
+    let out = Command::new(bin)
+        .args(&args)
+        .arg(archive)
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err("listing failed".into());
+    }
+    let mut members = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let first = t.split_whitespace().next().unwrap_or("");
+        // A mode string is 10 chars and starts with a type character. Lines
+        // that are not member rows (headers, totals) simply have no mode and
+        // no path we can trust, so they are skipped rather than guessed at.
+        let is_mode = first.len() == 10
+            && matches!(
+                first.as_bytes()[0],
+                b'-' | b'd' | b'l' | b'h' | b'c' | b'b' | b'p' | b's'
+            );
+        if !is_mode {
+            continue;
+        }
+        // The path is what follows the last structural column. tar and unzip
+        // differ in column count, so take everything after the timestamp by
+        // splitting on the mode and trusting the tail; a `->` target (symlink)
+        // is cut, since the member is the link, not what it points at.
+        let rest = t[first.len()..].trim();
+        let path = rest
+            .split_whitespace()
+            .skip_while(|w| !w.contains('-') || w.len() < 6)
+            .nth(1)
+            .map(|_| {
+                // fall through to the robust form below
+                String::new()
+            })
+            .unwrap_or_default();
+        let _ = path;
+        // Robust: the member path is the remainder after the final time-like
+        // column. Both tools end their fixed columns with a time (HH:MM) or a
+        // year, so split at the last such token.
+        let toks: Vec<&str> = rest.split_whitespace().collect();
+        let idx = toks
+            .iter()
+            .rposition(|w| {
+                w.contains(':') || (w.len() == 4 && w.chars().all(|c| c.is_ascii_digit()))
+            })
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if idx >= toks.len() {
+            continue;
+        }
+        let mut p = toks[idx..].join(" ");
+        // The LAST " -> ", not the first: the tools append a symlink's target
+        // after the name, so a member legitimately NAMED `evil -> notreally`
+        // renders as `evil -> notreally -> /etc/passwd`. Truncating at the
+        // first arrow named it `evil` -- refused either way, since refusal is
+        // all-or-nothing on the archive, but a refusal that names the wrong
+        // member is the kind of small lie this repo keeps finding.
+        if let Some(cut) = p.rfind(" -> ") {
+            p.truncate(cut);
+        }
+        let p = p.trim_end_matches('/').to_string();
+        if p.is_empty() {
+            continue;
+        }
+        members.push(Member {
+            mode: Some(first.to_string()),
+            path: p,
+        });
+    }
+    Ok(members)
+}
+
 fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
     let (bin, args): (&str, Vec<&str>) = match fmt {
         Format::Zip => ("unzip", vec!["-Z1"]),

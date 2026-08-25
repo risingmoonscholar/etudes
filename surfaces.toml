@@ -1,0 +1,97 @@
+# What this project exposes, and what watches each thing.
+#
+# Written because the failure mode that survives every other check is a
+# surface nobody is looking at. A four-valued assessment can say UNKNOWN
+# about a criterion it holds; it cannot say anything about a criterion
+# nobody wrote. That gap is invisible, and invisible reads as fine.
+#
+# Measured instance: scripts/check-issues.py reported this repository clean
+# while 19 of 44 pull requests carried exactly what it was built to find,
+# because GitHub's GraphQL schema excludes pull requests from issues() and
+# no criterion covered them. No amount of judgement inside the checker would
+# have found that. Only an inventory would.
+#
+# Rules:
+#   every surface names the checks that watch it, or states "unwatched"
+#     with a reason -- unwatched is a legitimate answer, silence is not
+#   every check names the property it guards and how it is proven failable
+#   scripts/check-coverage.py fails when a surface has neither
+
+[surface.binaries]
+what = "what sweep, stash and unpack do to a user's files"
+watched_by = ["cargo test --all", "stress-ratchet.sh"]
+
+[surface.output-truthfulness]
+what = "whether what the tools print is true of what they did"
+watched_by = ["stress-ratchet.sh", "check-transcripts-reproduce.sh"]
+
+[surface.docs-claims]
+what = "every number and version stated in README, CHANGELOG, the site"
+watched_by = ["check-claims.sh"]
+
+[surface.website]
+what = "demo/index.html and the transcripts it shows"
+watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh"]
+
+[surface.issues]
+what = "public issue bodies, comments, and prior versions"
+watched_by = ["check-issues.py"]
+
+[surface.pull-requests]
+what = "PR bodies, comments, reviews, and prior versions"
+watched_by = ["check-issues.py"]
+
+[surface.releases]
+what = "release notes and tags"
+watched_by = []
+unwatched = "audited by hand 2026-08-23, found clean; no check yet"
+
+[surface.commit-messages]
+what = "the permanent git history"
+watched_by = []
+unwatched = "deliberate: naming the tools used is normal practice, and history cannot be rewritten without a blast radius nobody can measure"
+
+[surface.wiki]
+what = "the GitHub wiki, which is enabled and publicly writable by collaborators"
+watched_by = []
+unwatched = "empty as of 2026-08-23; disable it or check it before anything lands there"
+
+[surface.demo-evidence]
+what = "the refusal demo's asserted numbers"
+watched_by = ["demo/refusal/run.sh"]
+
+[surface.security-posture]
+what = "the claims SECURITY.md makes about what holds"
+watched_by = []
+unwatched = "no check maps SECURITY.md's claims to tests; the strongest candidate for the next one"
+
+[surface.trace-emission]
+what = "the causal-trace events these checks emit when ETUDES_TRACE is set"
+watched_by = []
+unwatched = "the events are written and never read back -- nothing validates the chain, the digests, or the schema. Emitting is not checking."
+
+# --- the checks themselves ------------------------------------------------
+
+[check."cargo test --all"]
+guards = "the library and CLI behave as their tests describe"
+failable = "tests fail when the code they cover is reverted"
+
+[check."stress-ratchet.sh"]
+guards = "the adversarial scenarios, gated on the SET of failing names"
+failable = "a scenario not on the baseline turns the run red"
+
+[check."check-claims.sh"]
+guards = "every number the docs state matches what runs"
+failable = "a claim the pattern cannot find is a FAILURE, never a skip"
+
+[check."check-transcripts-reproduce.sh"]
+guards = "the site's captured output still comes out of these binaries"
+failable = "verified by tampering with stdout, an exit code, and a missing transcript"
+
+[check."check-issues.py"]
+guards = "public issues and PRs read as defect reports, not working sessions"
+failable = "self-tests every rule against known-bad text before judging, and refuses to run if one has gone dead"
+
+[check."demo/refusal/run.sh"]
+guards = "the nine numbers the refusal demo states"
+failable = "verified by tampering with each asserted count and the exit code"

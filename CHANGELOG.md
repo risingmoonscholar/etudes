@@ -10,6 +10,31 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+## [unpack 0.5.2] - 2026-08-23
+
+### Fixed
+
+- **A symlink in an archive is refused, not extracted.** Measured before the
+  fix: `unpack lone.zip` printed "Checked 2 paths before writing anything"
+  and then landed `shortcut -> /etc/passwd` in the target. The listing it
+  judged (`unzip -Z1`, `tar -tf`) reports names only, so a member's TYPE was
+  invisible to every check. Both formats reproduced it.
+
+### Added
+
+- Preflight now judges member TYPE from the verbose listing's mode string,
+  refusing symlinks, hard links, device nodes, FIFOs, sockets, and
+  setuid/setgid bits — alongside the traversal and depth checks it already
+  made. Each refusal names the member, states the rule, and offers a
+  recourse, the same shape the `.dmg` refusal has always had.
+- An archive whose verbose listing fails while its plain listing works is
+  refused: a check that cannot run is not a check that passed.
+
+SECURITY.md gains an unpack section stating what this buys and what it does
+not — a lying listing, nested archives, CPU-time bombs and parser bugs in
+the system tools are all outside it, and the claim is "refuses every
+dangerous member its listing declares", never "safe unarchive".
+
 ## [stash 0.5.2] - 2026-08-23
 
 stash's first independent move: the deadline becomes a contract an agent can

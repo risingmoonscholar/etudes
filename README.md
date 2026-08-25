@@ -38,14 +38,14 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 |---|---|---|
 | **`sweep`** | Organises the obvious and leaves the private alone | v0.5.2, maturing |
 | **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.2 |
-| **`unpack`** | One command for every archive format, safely | v0.5.1, static |
+| **`unpack`** | One command for every archive format, safely | v0.5.2 |
 
 ## Install
 
 ```sh
 cargo install --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.2 sweep-cli
 cargo install --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.2 stash-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag v0.5.1 unpack-cli
+cargo install --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.2 unpack-cli
 ```
 
 The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
@@ -66,7 +66,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 242 tests
+cargo test --all                # 245 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
