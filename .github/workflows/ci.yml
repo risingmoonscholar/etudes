@@ -76,6 +76,8 @@ jobs:
         run: python3 scripts/check-issues.py
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: The voice gate can still tell a defect report from a design doc
+        run: python3 scripts/check-issues.py --self-test
 
       # check-claims.sh proves the page and demo/transcripts.json agree with
       # each other. Two equally stale copies agree with each other too. This
