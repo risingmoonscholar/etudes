@@ -331,8 +331,11 @@ Remove:
   make, model, serial, firmware, and editing/software history;
 - EXIF and JFIF embedded thumbnails;
 - JPEG comments and unclassified descriptive/application metadata;
-- capture date/time and timezone. A date can identify an event and is not
-  rendering-critical, so v0.1 does not keep it.
+- capture date/time and timezone. Maintainer ruling 2026-08-25: the original
+  brief's example kept the capture date; it is removed instead. A date can
+  identify an event — a party, a clinic, a protest — and is not
+  rendering-critical. Anyone who wants the recipient to know the date can say
+  it out loud.
 
 Preserve only what is required to render the same photograph:
 
@@ -349,12 +352,30 @@ descriptive strings; the UI must say “color profile retained for rendering.”
 
 ### Pixel and color equivalence
 
-The preferred implementation leaves JPEG entropy-coded image data byte-for-byte
-unchanged while rewriting only metadata/container segments. If Apple Image I/O
-cannot do that, a re-encode is acceptable **only after a protocol revision**
-that replaces “same image samples” with a measured visual-loss claim and makes
-the lossy operation unavoidable in the UI. v0.1 as frozen here is killed rather
-than quietly re-encoding.
+The frozen requirement is that JPEG entropy-coded image data stays
+byte-for-byte unchanged while only metadata/container segments are rewritten.
+Two implementations may satisfy it, in order of preference:
+
+1. Apple Image I/O, if experiment shows it can rewrite metadata without
+   re-encoding. This is not assumed: `CGImageDestination` is a re-encoder by
+   design, and no Apple documentation promises lossless JPEG rewriting.
+2. A closed, minimal segment-level container rewrite: walk the JPEG marker
+   structure, copy entropy-coded data verbatim, drop the disallowed segments,
+   refuse on anything outside the allowlist. This is the probable design and
+   the S2 witness applies to it identically.
+
+Path 2 must be named for what it is: **the first Études code that parses a
+binary format inside a mutation path.** Every existing tool dispatches to
+platform software and refuses to parse the bytes it moves; that stance is
+load-bearing in SECURITY.md. The break is accepted here because the JPEG
+marker walk is a short length-prefixed scan, the allowlist is closed, and the
+unknown case refuses — but it is a break, it must be stated in SECURITY.md if
+scrub ships, and it does not license parsing anywhere else in the suite.
+
+A lossy re-encode satisfies nothing. It is acceptable **only after a protocol
+revision** that replaces “same image samples” with a measured visual-loss
+claim and makes the lossy operation unavoidable in the UI. v0.1 as frozen here
+is killed rather than quietly re-encoding.
 
 Orientation equivalence means decoding original and output with orientation
 applied yields the same width, height, and pixel raster for all EXIF values
@@ -370,8 +391,11 @@ other tools), `outcome`, `output`, `removed` (class names only), `preserved`,
 of this object.
 
 - `0`: every input produced a verified private copy.
-- `1`: every input was an exact no-op (reserved for a future idempotent mode;
-  v0.1 normally does not produce this).
+- `1`: every input was an exact no-op. Reserved and normally unreachable in
+  v0.1: scrub always creates a sibling or refuses, and detecting “already
+  scrubbed” would need a content-fingerprint registry the tool deliberately
+  does not keep. Stated so the suite-wide meaning of `1` is not quietly
+  different here.
 - `2`: at least one input was refused and none errored; successful siblings may
   coexist and are individually reported.
 - `3`: at least one input errored; successful siblings may coexist and are
@@ -591,7 +615,9 @@ prototype on the release OS matrix:
 Kill `scrub` v0.1 if any of these is observed:
 
 - removing the claimed JPEG metadata requires changing entropy-coded image data
-  or breaks any orientation 1–8 or color-profile fixture;
+  or breaks any orientation 1–8 or color-profile fixture, under BOTH candidate
+  implementations — Image I/O failing alone does not kill v0.1 while the
+  segment-level rewrite stands;
 - the independent inspector cannot enumerate every remaining JPEG segment and
   falsify every removed-class claim;
 - common JPEGs contain an open-ended set of unclassifiable segments such that
