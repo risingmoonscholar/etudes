@@ -67,7 +67,8 @@ unwatched = "no check maps SECURITY.md's claims to tests; the strongest candidat
 
 [surface.trace-emission]
 what = "the causal-trace events these checks emit when ETUDES_TRACE is set"
-watched_by = ["check-coverage.py"]
+watched_by = []
+unwatched = "the events are written and never read back -- nothing validates the chain, the digests, or the schema. Emitting is not checking."
 
 # --- the checks themselves ------------------------------------------------
 
