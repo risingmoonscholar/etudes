@@ -13,3 +13,7 @@ anywhere on disk.
 
 The run reports success. The count of checked paths it prints includes entries
 the type check never reached.
+
+---
+
+Filed by Night Watch, an agent running the Witness checks on this repo.

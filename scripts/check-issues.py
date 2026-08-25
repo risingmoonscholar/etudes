@@ -245,12 +245,19 @@ LENGTH_FLOOR = 200
 # is doing its job, so voice findings on PRs report and never gate. The
 # deliberation rules above them gate everywhere, as they always have.
 VOICE_RULES = {"source-citation", "prescribes-solution", "internal-structure",
-               "design-table", "brand-name", "length"}
+               "design-table", "brand-name", "length", "missing-witness-footer"}
+
+# Every issue signs itself: the reader learns who watches this repo and files
+# these, without any agent brand. The exact sentence from issue #12.
+WITNESS_FOOTER = "Filed by Night Watch, an agent running the Witness checks on this repo."
 
 
-def check_text(text):
+def check_text(text, require_footer=False):
     """Every violation in one public text. The single judgment path: the
-    tracker scan and the draft gate both call this, so they cannot diverge."""
+    tracker scan and the draft gate both call this, so they cannot diverge.
+
+    require_footer applies only to an issue BODY -- comments, reviews, and
+    pull requests do not sign themselves."""
     findings = []
     scoped = {"prose": prose_only(text), "raw": raw_only(text)}
     for rid, sev, pat, why, scope in RULES:
@@ -262,6 +269,10 @@ def check_text(text):
         findings.append(("blocker",
                          "runs past what a defect report needs",
                          "length", f"{words} words > {LENGTH_FLOOR}"))
+    if require_footer and WITNESS_FOOTER not in text:
+        findings.append(("blocker",
+                         "does not say who filed it and why",
+                         "missing-witness-footer", "footer absent"))
     return findings
 
 
@@ -301,7 +312,8 @@ def scan(repo):
     for kind, i in items:
         sources = sources_of(kind, i)
         for where, text in sources:
-            for sev, why, rid, hit in check_text(text):
+            need_footer = kind == "issue" and where == "current"
+            for sev, why, rid, hit in check_text(text, require_footer=need_footer):
                 findings.append((sev, kind, i["number"],
                                  i["state"].lower(), where, why, rid, hit))
     return len(items), findings
@@ -453,6 +465,14 @@ def selftest():
             print(f"FAIL self-test: {[f[2] for f in hits]} fired on clean "
                   f"text {line!r}", file=sys.stderr)
             bad = 1
+    footer_less = "sweep leaves the folder untouched and says why."
+    if "missing-witness-footer" not in {f[2] for f in check_text(footer_less, require_footer=True)}:
+        print("FAIL self-test: footer absence was not caught", file=sys.stderr)
+        bad = 1
+    signed = footer_less + "\n\n---\n\n" + WITNESS_FOOTER
+    if check_text(signed, require_footer=True):
+        print("FAIL self-test: a signed clean draft was rejected", file=sys.stderr)
+        bad = 1
     # The corpus: the actual documents this gate exists to reject, and the
     # actual documents the maintainer accepted. Committed files, so the
     # proof outlives the session that wrote it.
@@ -494,7 +514,7 @@ def draft(path):
     except OSError as e:
         print(f"FAIL cannot read draft: {e}", file=sys.stderr)
         return 2
-    findings = check_text(text)
+    findings = check_text(text, require_footer=True)
     if not findings:
         print(f"ok   {path} reads as a defect report")
         return 0

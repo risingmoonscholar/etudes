@@ -15,13 +15,37 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 DRY=0
 [ "${1:-}" = "--dry-run" ] && { DRY=1; shift; }
-DRAFT="${1:?usage: file-issue.sh [--dry-run] <draft.md>}"
+DRAFT="${1:?usage: file-issue.sh [--dry-run] <draft.md> --label <name> [--label <name>...]}"
+shift
 
-python3 scripts/check-issues.py --draft "$DRAFT"
+# Labels are part of the universal standard, like the footer: every issue
+# carries at least one, from the repository's existing label set.
+LABELS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --label) LABELS+=("$2"); shift 2 ;;
+        *) echo "file-issue.sh: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+if [ ${#LABELS[@]} -eq 0 ]; then
+    echo "file-issue.sh: at least one --label is required; see 'gh label list'" >&2
+    exit 2
+fi
 
-TITLE=$(head -1 "$DRAFT" | sed 's/^#* *//')
+# The footer is appended before gating, so the gate judges the exact text
+# that gets filed.
+WORK=$(mktemp)
+trap 'rm -f "$WORK"' EXIT
+cp "$DRAFT" "$WORK"
+grep -q "Filed by Night Watch" "$WORK" || printf '\n---\n\nFiled by Night Watch, an agent running the Witness checks on this repo.\n' >> "$WORK"
+
+python3 scripts/check-issues.py --draft "$WORK"
+
+TITLE=$(head -1 "$WORK" | sed 's/^#* *//')
+LABEL_ARGS=()
+for l in "${LABELS[@]}"; do LABEL_ARGS+=(--label "$l"); done
 if [ $DRY -eq 1 ]; then
-    echo "dry-run: would file as: $TITLE"
+    echo "dry-run: would file as: $TITLE [${LABELS[*]}]"
     exit 0
 fi
-tail -n +2 "$DRAFT" | gh issue create --title "$TITLE" --body-file -
+tail -n +2 "$WORK" | gh issue create --title "$TITLE" --body-file - "${LABEL_ARGS[@]}"

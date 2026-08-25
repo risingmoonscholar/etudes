@@ -11,3 +11,7 @@ that they do not.
 Separately: unpack's size limit is checked on a timer rather than on every
 write, so an archive can write past the limit before it is stopped. The
 documented limit does not mention this.
+
+---
+
+Filed by Night Watch, an agent running the Witness checks on this repo.
