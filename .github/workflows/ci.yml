@@ -74,6 +74,8 @@ jobs:
 
       - name: The public issues read like bug reports
         run: python3 scripts/check-issues.py
+      - name: The voice gate can still tell a defect report from a design doc
+        run: python3 scripts/check-issues.py --self-test
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
