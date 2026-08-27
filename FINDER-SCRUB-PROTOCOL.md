@@ -540,6 +540,18 @@ class, resulting tree, journal state, and disclosures. The only allowed Finder
 differences are UI presentation and batch envelope. Any policy/destination or
 refusal difference fails the gate.
 
+**The read surface is part of the equivalence claim.** A sandbox entitlement
+is a capability, not a behavior: `user-selected.read-write` says what macOS
+permits, not what the code does. Each engine's read surface is its existing
+contract — sweep reads names, sizes, and dates and never file contents;
+unpack reads archives because that is its job; scrub reads image bytes by
+stated contract — and the Finder path must exhibit the same surface as the
+CLI path. Witness it, do not assume it: trace file-content opens (for
+example, `fs_usage` or an `ESF`-based observer over the fixture corpus) on
+both paths and compare. A sweep invocation via Finder that opens a file's
+contents fails Gate U even if the resulting tree is identical, because the
+privacy claim, not the sort, is the product.
+
 ### Gate S: `scrub`
 
 | ID | Frozen claim | Independent observation |
