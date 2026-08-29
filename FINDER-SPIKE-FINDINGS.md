@@ -13,8 +13,38 @@ selected files' real paths with `inPlace=true`, on the user's own volume, for
 every item selected. A bundled helper launched from the sandboxed extension
 with an argv array receives those paths and runs. The protocol's central
 unproven claim — that a selection can be bridged to a bundled engine without
-broad entitlements, a daemon, or path copying — is now demonstrated for the
-read side. Writing beside the selection (gates F3/F4) remains open.
+broad entitlements, a daemon, or path copying — is demonstrated for the read
+side.
+
+**The write side is closed, and the answer is no.** The extension point is
+read-only in every form tested:
+
+- Creating a directory beside a selected file: refused (`EPERM`), from the
+  extension and from its spawned child alike.
+- Creating a directory INSIDE a selected folder: refused, same both ways —
+  the grant covers the item, and for writing it covers nothing.
+- With `com.apple.security.files.user-selected.read-write` entitled and
+  verified in the signature: refused.
+- With `startAccessingSecurityScopedResource()` returning `true`: refused.
+- In a location with no TCC protection (`/Users/Shared`): refused, ruling
+  out Desktop privacy protections as the cause.
+- Returning produced output via `completeRequest(returningItems:)`: the item
+  is silently discarded. Finder places nothing, reports nothing.
+
+## Architecture consequence
+
+The extension is an entry point, never a mutator. Everything a tool can do
+by reading — preview, judgment, refusal counts, the review sheet — runs in
+the extension against in-place originals. Mutation is handed to the
+containing app, which acquires write authority the sandbox-legal way: a
+Powerbox consent from the user, retained as a security-scoped bookmark. This
+is the fallback the protocol named before it was known to be necessary — a
+short-lived operation UI owned by the containing app, not a daemon, not a
+broadened entitlement.
+
+The refusal paths — most of what these tools do — need no write authority
+at all. For sweep the consent moment and the review step can be the same
+surface, which the safety model wanted anyway.
 
 ## Gate results so far
 
@@ -87,8 +117,7 @@ read side. Writing beside the selection (gates F3/F4) remains open.
 
 ## Open
 
-- F1 ordering; F3/F4 write-beside-the-selection; F5 File Provider locations;
-  F6 result presentation; F8 lifecycle across enable/upgrade/removal; F9
-  reveal-in-Finder. The write-beside experiment is next: one directory
-  created beside the input under `user-selected.read-write`, or the refusal
-  recorded.
+- F1 ordering; F5 File Provider locations; F6 result presentation; F8
+  lifecycle across enable/upgrade/removal; F9 reveal-in-Finder; and the
+  Powerbox consent-and-bookmark flow in the containing app, which the write
+  verdict above makes load-bearing for every mutating action.
