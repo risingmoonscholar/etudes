@@ -200,6 +200,53 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
 }
 
 #[test]
+fn undo_skips_a_file_whose_only_difference_is_its_contents() {
+    let _g = lock();
+    // The sibling test above edits a file freely, which changes size, mtime and
+    // hash together -- so it passes whether undo skips on ANY difference or
+    // only on ALL of them. This one changes exactly one field: same byte
+    // count, same modification time, different bytes. Undo must still refuse.
+    //
+    // Mutation testing found the gap: weakening the skip condition from "any
+    // field differs" to "every field differs" left the whole suite green,
+    // which would let a restore overwrite edited work.
+    let (root, _fx, p) = setup("hash-only");
+    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal");
+
+    let victim = j.entries[0].to.clone();
+    let before = fs::metadata(&victim).expect("stat");
+    let original = fs::read(&victim).expect("read");
+    // Same length, different content: only the hash moves.
+    let mut edited = original.clone();
+    let last = edited.len() - 1;
+    edited[last] = edited[last].wrapping_add(1);
+    fs::write(&victim, &edited).expect("edit");
+    // Put the modification time back, so mtime matches the journal too.
+    let f = fs::File::options().write(true).open(&victim).expect("open");
+    f.set_times(fs::FileTimes::new().set_modified(before.modified().expect("mtime")))
+        .expect("restore mtime");
+    drop(f);
+
+    let after = fs::metadata(&victim).expect("stat");
+    assert_eq!(after.len(), before.len(), "fixture changed the size");
+
+    let r = apply::undo(&mut j, &TestSeal);
+
+    assert!(r.error.is_none(), "unexpected undo error: {:?}", r.error);
+    assert!(
+        r.skipped_changed.contains(&victim),
+        "undo did not skip a file whose contents changed under an unchanged size and time"
+    );
+    assert_eq!(
+        fs::read(&victim).expect("read"),
+        edited,
+        "undo overwrote edited content it should have skipped"
+    );
+    cleanup(&root);
+}
+
+#[test]
 fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     let _g = lock();
     // Blind restoration would destroy newer work.

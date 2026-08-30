@@ -981,6 +981,44 @@ mod tests {
     /// paths without --explain, both depend on that -- so the test that
     /// proves the message got MORE informative also proves it did not get
     /// more revealing.
+    /// Two different files on ONE volume are not the same file.
+    ///
+    /// Identity is device AND inode together, because either alone is
+    /// ambiguous: every file on a volume shares its device, and inode numbers
+    /// repeat across volumes. Undo asks this question before deleting one of
+    /// two names it believes point at a single file, so a false yes deletes a
+    /// file nobody asked it to touch.
+    ///
+    /// Mutation testing found the gap: accepting either half instead of both
+    /// left the whole suite green.
+    #[cfg(unix)]
+    #[test]
+    fn two_files_on_one_volume_are_not_the_same_file() {
+        use super::same_file;
+        let dir = std::env::temp_dir().join(format!("etudes-samefile-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let a = dir.join("a");
+        let b = dir.join("b");
+        fs::write(&a, b"a").expect("write a");
+        fs::write(&b, b"b").expect("write b");
+
+        assert!(
+            !same_file(&a, &b),
+            "two distinct files on the same volume were reported as one file"
+        );
+        assert!(same_file(&a, &a), "a file is not itself");
+
+        // A hard link IS the same file: the true case must still hold, or the
+        // test above could pass by always answering no.
+        let link = dir.join("a-link");
+        fs::hard_link(&a, &link).expect("hard link");
+        assert!(
+            same_file(&a, &link),
+            "a hard link to a file was not recognised as that file"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_io_error_names_the_os_reason_without_naming_the_path() {
         let secret = std::path::Path::new("/nonexistent/TAX_RETURN_2024_SSN.pdf");
