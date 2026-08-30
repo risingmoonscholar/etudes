@@ -1,0 +1,64 @@
+# The scenario search space. Declared here so a sweep is CHECKABLE: any fleet
+# member can read what the composer is supposed to cover, and scripts/
+# check-scenario-coverage.py fails if a declared boundary was never sampled.
+# Sweeping is not the same as claiming to sweep.
+#
+# Each axis has a range and named BOUNDARIES -- the coordinates where "refuse
+# rather than damage" is actually tested. The composer is boundary-biased: it
+# samples the edges hard and the interior lightly, because the edges are where
+# the promises break. A boundary named here and absent from a run's coverage
+# is a failed sweep.
+
+strategy = "boundary-biased"
+seed_axis = "declared, not random: each boundary is sampled every run"
+
+[axis.depth]
+what = "directory nesting the tools descend through"
+min = 1
+max = 12
+boundaries = [1, 4, 8]     # 8 is the descent limit; 1 is a flat dir; 4 is ordinary
+reason = "descent has a hard limit; a scenario at the limit proves refusal, one past it proves the refusal holds"
+
+[axis.count]
+what = "entries in the swept directory"
+min = 0
+max = 20000
+boundaries = [0, 1, 10000, 20000]
+reason = "0 and 1 are the empty and singleton edge cases; 10000 is the measured perf cliff (issue #12); 20000 is well past it"
+
+[axis.name_hostility]
+what = "how adversarial the filenames are"
+levels = ["clean", "spaces", "unicode_nfc", "unicode_nfd", "control_bytes", "collision_pair"]
+boundaries = ["unicode_nfd", "control_bytes", "collision_pair"]
+reason = "NFC/NFD divergence and case-fold collisions are where path identity breaks; control bytes are where shell-safety breaks"
+
+[axis.ages]
+what = "entry modification times relative to the grace window"
+levels = ["all_fresh", "straddle", "all_stale"]
+boundaries = ["straddle"]
+reason = "the grace window is a +/-1s edge; a straddling set is the only one that tests the boundary rather than either side of it"
+
+[axis.project_doc]
+what = "where a project marker sits relative to its assets"
+levels = ["none", "top_level_marker", "doc_in_subfolder_with_sibling_assets"]
+boundaries = ["doc_in_subfolder_with_sibling_assets"]
+reason = "issue #73: the sibling-asset layout is the case the top-level marker logic does not cover"
+
+[axis.container]
+what = "what the swept tree sits inside"
+levels = ["plain", "package", "icloud_stub", "synced_root"]
+boundaries = ["package", "icloud_stub"]
+reason = "a package must be opaque (never descended); an iCloud stub must be refused, not materialized"
+
+[axis.concurrency]
+what = "parallel applies against one tree"
+min = 1
+max = 8
+boundaries = [1, 2]
+reason = "1 is the base case; 2 is the smallest race, and a race that holds at 2 is the property, not the count"
+
+[axis.interrupt]
+what = "SIGTERM at a fraction of the run, or none"
+levels = ["none", "early", "mid", "late"]
+boundaries = ["mid", "late"]
+reason = "mid-write is where the journal's crash-safety is actually exercised; late is where the done-record race lives"
