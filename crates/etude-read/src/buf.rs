@@ -1,9 +1,17 @@
 //! A buffer for file contents that is locked against swap where possible and
-//! always erased when dropped.
+//! erased when dropped, including the spare capacity past its length.
 //!
-//! Memory handling has honest limits: the `mlock` guarantee is best-effort and
-//! usually fails above ~64 KiB on macOS. [`LockedBuf::locked`] reports which
-//! case applies so nothing overclaims.
+//! Memory handling has honest limits, and they are stated rather than implied.
+//! The `mlock` guarantee is best-effort and usually fails above ~64 KiB on
+//! macOS; [`LockedBuf::locked`] reports which case applies.
+//!
+//! One path is NOT covered. [`LockedBuf::read_capped`] moves the allocation
+//! out of the struct while filling it, so the locked pointer is the one
+//! written to. If the reader panics mid-read, that local allocation is freed
+//! directly and the erase in `Drop` runs against the empty replacement. Bytes
+//! a panicking reader had already written are not erased. So the claim here is
+//! "erased when dropped", not "always erased" -- the difference is a panic,
+//! and it is not yet closed.
 
 use std::io::{self, Read};
 use std::sync::atomic::{Ordering, compiler_fence};
@@ -92,10 +100,17 @@ impl LockedBuf {
     fn erase_and_unlock(&mut self) {
         // Overwrite through a volatile write so the compiler cannot elide it as
         // a dead store to memory that is about to be freed.
-        let len = self.data.len();
+        // The whole allocation, not the logical length. mlock and munlock
+        // already treat capacity as one region; erasing only len left bytes
+        // above it untouched, and a safe Read may write into the spare
+        // capacity and then report a shorter count, stranding real content
+        // exactly there.
+        let cap = self.data.capacity();
         let ptr = self.data.as_mut_ptr();
-        for i in 0..len {
-            // SAFETY: i < len, so the offset is inside the allocation.
+        for i in 0..cap {
+            // SAFETY: i < cap, so the offset is inside the allocation. The
+            // memory past len is allocated and owned; writing zeroes to it is
+            // sound and is the point.
             unsafe { std::ptr::write_volatile(ptr.add(i), 0u8) };
         }
         compiler_fence(Ordering::SeqCst);
@@ -163,5 +178,56 @@ mod tests {
         // on macOS above RLIMIT_MEMLOCK.
         let buf = LockedBuf::read_capped(&mut b"hello".as_slice()).expect("read");
         let _ = buf.locked(); // either value is valid; the point is it is knowable
+    }
+
+    /// A safe `Read` may write into the buffer it was handed and then report
+    /// fewer bytes than it wrote. Those bytes live above the final `len`,
+    /// where an erase loop bounded by `len` never reaches, and `Vec` does not
+    /// scrub them either. This drives exactly that shape and fails if the
+    /// stranded bytes survive.
+    ///
+    /// Controlled fault: change the erase loop back to `0..len` and this test
+    /// goes red. That is the whole reason it exists -- the previous witness
+    /// covered the logical contents and would have stayed green.
+    struct WritesMoreThanItReports {
+        done: bool,
+    }
+
+    impl Read for WritesMoreThanItReports {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.done || buf.len() < 64 {
+                return Ok(0);
+            }
+            self.done = true;
+            // Write a recognisable pattern well past what we admit to.
+            for slot in buf.iter_mut().take(64) {
+                *slot = 0xAB;
+            }
+            // Report only the first 8. Bytes 8..64 are now stranded above len.
+            Ok(8)
+        }
+    }
+
+    #[test]
+    fn bytes_written_past_the_reported_length_are_still_erased() {
+        let mut reader = WritesMoreThanItReports { done: false };
+        let buf = LockedBuf::read_capped(&mut reader).expect("read");
+        assert_eq!(buf.len(), 8, "the reader admitted to 8 bytes");
+
+        // Read the allocation directly, past len, before the buffer is dropped:
+        // the stranded bytes are there, which is what makes this a real hazard
+        // rather than a hypothetical one.
+        let ptr = buf.bytes().as_ptr();
+        let stranded = unsafe { std::slice::from_raw_parts(ptr, 64) };
+        assert!(stranded[8..].iter().any(|&b| b == 0xAB),
+                "precondition: the reader really did strand bytes past len");
+
+        drop(buf);
+        // SAFETY: read_capped allocates MAX_READ up front and never
+        // reallocates, so this allocation was not moved. Reading freed memory
+        // is why this is a test-only witness and not a production path.
+        let after = unsafe { std::slice::from_raw_parts(ptr, 64) };
+        assert!(after.iter().all(|&b| b != 0xAB),
+                "bytes past the reported length survived the drop");
     }
 }
