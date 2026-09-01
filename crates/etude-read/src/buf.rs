@@ -223,53 +223,60 @@ mod tests {
     /// covered the logical contents and would have stayed green.
     struct WritesMoreThanItReports {
         done: bool,
+        /// How many bytes it actually wrote. Recorded because the size of the
+        /// slice `read_to_end` offers is an implementation detail that differs
+        /// between platforms -- the first version assumed at least 64 bytes,
+        /// wrote nothing when CI offered fewer, and failed its own
+        /// precondition rather than passing without demonstrating the hazard.
+        wrote: usize,
     }
 
     impl Read for WritesMoreThanItReports {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            if self.done || buf.len() < 64 {
+            // Needs only two bytes: one to admit to, one to strand. Whatever
+            // slice size the implementation offers, this writes all of it and
+            // reports one.
+            if self.done || buf.len() < 2 {
                 return Ok(0);
             }
             self.done = true;
-            // Write a recognisable pattern well past what we admit to.
-            for slot in buf.iter_mut().take(64) {
+            for slot in buf.iter_mut() {
                 *slot = 0xAB;
             }
-            // Report only the first 8. Bytes 8..64 are now stranded above len.
-            Ok(8)
+            self.wrote = buf.len();
+            Ok(1)
         }
     }
 
     #[test]
     fn bytes_written_past_the_reported_length_are_still_erased() {
-        let mut reader = WritesMoreThanItReports { done: false };
+        let mut reader = WritesMoreThanItReports {
+            done: false,
+            wrote: 0,
+        };
         let mut buf = LockedBuf::read_capped(&mut reader).expect("read");
-        assert_eq!(buf.len(), 8, "the reader admitted to 8 bytes");
+        assert_eq!(buf.len(), 1, "the reader admitted to one byte");
 
-        // The buffer stays ALIVE for the whole test. An earlier version of
-        // this read the allocation after `drop(buf)` to prove the erasure
-        // happened, which is undefined behaviour: it passed locally by luck
-        // and is exactly the defect the previous witness in this module
-        // existed to remove -- that one observed memory after free and
-        // segfaulted on Linux only.
-        //
-        // Calling `erase_and_unlock` directly is legal here because the test
-        // module is inside the module that defines it, and the Vec still owns
-        // its allocation while we look.
-        let cap = buf.data.capacity();
+        let wrote = reader.wrote;
+        assert!(wrote > 1, "the reader was never offered a usable slice");
+
+        // The buffer stays ALIVE throughout. An earlier version read the
+        // allocation after `drop(buf)`, which is undefined behaviour and is
+        // the same defect the other witness in this module exists to remove.
         let ptr = buf.data.as_ptr();
 
-        // SAFETY: the Vec owns this allocation for `cap` bytes and is alive.
-        let before = unsafe { std::slice::from_raw_parts(ptr, cap.min(64)) };
+        // SAFETY: the Vec owns this allocation and is alive; `wrote` bytes
+        // were written into it through the slice `read_to_end` handed over.
+        let before = unsafe { std::slice::from_raw_parts(ptr, wrote) };
         assert!(
-            before[8..].contains(&0xAB),
+            before[1..].contains(&0xAB),
             "precondition: the reader really did strand bytes past len"
         );
 
         buf.erase_and_unlock();
 
         // SAFETY: same allocation, still owned, still alive.
-        let after = unsafe { std::slice::from_raw_parts(ptr, cap.min(64)) };
+        let after = unsafe { std::slice::from_raw_parts(ptr, wrote) };
         assert!(
             after.iter().all(|&b| b != 0xAB),
             "bytes past the reported length survived erase_and_unlock"
