@@ -14,9 +14,18 @@ pub const MAX_READ: usize = 1024 * 1024;
 /// Bytes examined when deciding whether a file is really text.
 pub const SNIFF: usize = 8192;
 
+#[cfg(test)]
+const WITNESS_WAITING: u8 = 0;
+#[cfg(test)]
+const WITNESS_ERASED: u8 = 1;
+#[cfg(test)]
+const WITNESS_NOT_ERASED: u8 = 2;
+
 pub struct LockedBuf {
     data: Vec<u8>,
     locked: bool,
+    #[cfg(test)]
+    drop_witness: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
 }
 
 impl LockedBuf {
@@ -30,6 +39,8 @@ impl LockedBuf {
         let mut buf = Self {
             data,
             locked: false,
+            #[cfg(test)]
+            drop_witness: None,
         };
         buf.lock_pages();
 
@@ -100,6 +111,18 @@ impl LockedBuf {
         }
         compiler_fence(Ordering::SeqCst);
 
+        #[cfg(test)]
+        if let Some(witness) = &self.drop_witness {
+            // This happens while `self.data` is still allocated. The witness
+            // can therefore observe the zeroes without reading freed memory.
+            let state = if self.data.iter().all(|byte| *byte == 0) {
+                WITNESS_ERASED
+            } else {
+                WITNESS_NOT_ERASED
+            };
+            witness.store(state, Ordering::SeqCst);
+        }
+
         #[cfg(unix)]
         if self.locked {
             let cap = self.data.capacity();
@@ -126,6 +149,13 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    impl LockedBuf {
+        fn witness_drop_with(&mut self, witness: Arc<std::sync::atomic::AtomicU8>) {
+            self.drop_witness = Some(witness);
+        }
+    }
 
     #[test]
     fn reads_are_capped_so_a_huge_file_cannot_exhaust_memory() {
@@ -135,25 +165,27 @@ mod tests {
     }
 
     #[test]
-    fn contents_are_erased_before_the_buffer_is_released() {
-        // The previous version of this test read the allocation after the drop
-        // to prove the erase. That is undefined behaviour, and on Linux it is
-        // fatal: the 1 MiB reservation is mmap'd, freeing it munmaps it, and
-        // the read segfaults. It passed on macOS for three months because that
-        // allocator keeps the region mapped.
+    fn dropping_the_buffer_erases_contents_with_a_live_witness() {
+        // The previous test inspected the allocation after Drop. That is
+        // undefined behaviour and segfaults on Linux when the 1 MiB Vec is
+        // backed by mmap and freeing it unmaps the pages.
         //
-        // The property is the same and the observation is legal: run the erase
-        // the way `drop` runs it, on a buffer that is still alive, then look.
+        // Instead, the test-only witness is called from erase_and_unlock while
+        // the Vec still owns its allocation. It records whether the bytes are
+        // zero, then this scope invokes the real Drop implementation.
+        // Controlled fault: removing `self.erase_and_unlock()` from Drop leaves
+        // this witness waiting, so the assertion below fails.
         let secret = b"123-45-6789 SOCIAL SECURITY";
-        let mut buf = LockedBuf::read_capped(&mut secret.as_slice()).expect("read");
-        assert_eq!(buf.bytes(), secret, "test setup: contents did not land");
+        let witness = Arc::new(std::sync::atomic::AtomicU8::new(WITNESS_WAITING));
+        {
+            let mut buf = LockedBuf::read_capped(&mut secret.as_slice()).expect("read");
+            assert_eq!(buf.bytes(), secret, "test setup: contents did not land");
+            buf.witness_drop_with(Arc::clone(&witness));
+        }
 
-        buf.erase_and_unlock();
-
-        assert!(buf.bytes().iter().all(|b| *b == 0), "buffer was not erased");
         assert!(
-            !buf.locked(),
-            "the lock was not released, so a second release could double-unlock"
+            witness.load(Ordering::SeqCst) == WITNESS_ERASED,
+            "dropping the buffer did not erase its contents before release"
         );
     }
 
