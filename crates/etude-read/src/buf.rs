@@ -220,7 +220,7 @@ mod tests {
         let ptr = buf.bytes().as_ptr();
         let stranded = unsafe { std::slice::from_raw_parts(ptr, 64) };
         assert!(
-            stranded[8..].iter().any(|&b| b == 0xAB),
+            stranded[8..].contains(&0xAB),
             "precondition: the reader really did strand bytes past len"
         );
 
