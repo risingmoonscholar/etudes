@@ -219,15 +219,19 @@ mod tests {
         // rather than a hypothetical one.
         let ptr = buf.bytes().as_ptr();
         let stranded = unsafe { std::slice::from_raw_parts(ptr, 64) };
-        assert!(stranded[8..].iter().any(|&b| b == 0xAB),
-                "precondition: the reader really did strand bytes past len");
+        assert!(
+            stranded[8..].iter().any(|&b| b == 0xAB),
+            "precondition: the reader really did strand bytes past len"
+        );
 
         drop(buf);
         // SAFETY: read_capped allocates MAX_READ up front and never
         // reallocates, so this allocation was not moved. Reading freed memory
         // is why this is a test-only witness and not a production path.
         let after = unsafe { std::slice::from_raw_parts(ptr, 64) };
-        assert!(after.iter().all(|&b| b != 0xAB),
-                "bytes past the reported length survived the drop");
+        assert!(
+            after.iter().all(|&b| b != 0xAB),
+            "bytes past the reported length survived the drop"
+        );
     }
 }
