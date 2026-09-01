@@ -211,27 +211,36 @@ mod tests {
     #[test]
     fn bytes_written_past_the_reported_length_are_still_erased() {
         let mut reader = WritesMoreThanItReports { done: false };
-        let buf = LockedBuf::read_capped(&mut reader).expect("read");
+        let mut buf = LockedBuf::read_capped(&mut reader).expect("read");
         assert_eq!(buf.len(), 8, "the reader admitted to 8 bytes");
 
-        // Read the allocation directly, past len, before the buffer is dropped:
-        // the stranded bytes are there, which is what makes this a real hazard
-        // rather than a hypothetical one.
-        let ptr = buf.bytes().as_ptr();
-        let stranded = unsafe { std::slice::from_raw_parts(ptr, 64) };
+        // The buffer stays ALIVE for the whole test. An earlier version of
+        // this read the allocation after `drop(buf)` to prove the erasure
+        // happened, which is undefined behaviour: it passed locally by luck
+        // and is exactly the defect the previous witness in this module
+        // existed to remove -- that one observed memory after free and
+        // segfaulted on Linux only.
+        //
+        // Calling `erase_and_unlock` directly is legal here because the test
+        // module is inside the module that defines it, and the Vec still owns
+        // its allocation while we look.
+        let cap = buf.data.capacity();
+        let ptr = buf.data.as_ptr();
+
+        // SAFETY: the Vec owns this allocation for `cap` bytes and is alive.
+        let before = unsafe { std::slice::from_raw_parts(ptr, cap.min(64)) };
         assert!(
-            stranded[8..].contains(&0xAB),
+            before[8..].contains(&0xAB),
             "precondition: the reader really did strand bytes past len"
         );
 
-        drop(buf);
-        // SAFETY: read_capped allocates MAX_READ up front and never
-        // reallocates, so this allocation was not moved. Reading freed memory
-        // is why this is a test-only witness and not a production path.
-        let after = unsafe { std::slice::from_raw_parts(ptr, 64) };
+        buf.erase_and_unlock();
+
+        // SAFETY: same allocation, still owned, still alive.
+        let after = unsafe { std::slice::from_raw_parts(ptr, cap.min(64)) };
         assert!(
             after.iter().all(|&b| b != 0xAB),
-            "bytes past the reported length survived the drop"
+            "bytes past the reported length survived erase_and_unlock"
         );
     }
 }
