@@ -1,7 +1,5 @@
 # etudes
-
-Three small command-line tools that tidy a folder without reading your private files.
-
+A collection of my open source command-line tools for agents and humans.
 **macOS only.**
 ```console
 $ sweep ~/Desktop
