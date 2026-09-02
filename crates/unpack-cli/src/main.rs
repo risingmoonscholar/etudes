@@ -22,8 +22,15 @@ mod safety;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use safety::Unsafe;
+
+// `unpack` deliberately targets the macOS system extractors.  Do not replace
+// these with PATH lookups: the executable is part of the safety boundary.
+const UNZIP: &str = "/usr/bin/unzip";
+const TAR: &str = "/usr/bin/tar";
+const GUNZIP: &str = "/usr/bin/gunzip";
 
 const USAGE: &str = "\
 unpack: stop thinking about archive formats
@@ -67,6 +74,96 @@ enum Format {
     Gz,
     Dmg,
 }
+
+/// A private hard link to the archive we judged.
+///
+/// The callers below must use this name rather than the pathname supplied on
+/// the command line. Linking the caller's file once binds the listings and
+/// extractor to that file even if somebody replaces the original pathname
+/// after preflight, without a second full-sized copy or its extra disk-space
+/// requirement.
+struct ArchiveAnchor {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl ArchiveAnchor {
+    fn create(archive: &Path) -> Result<Self, String> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let pid = std::process::id();
+        for _ in 0..128 {
+            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("unpack-{pid}-{serial}"));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&dir) {
+                Ok(()) => {
+                    // `stem` supplies the output name for a bare .gz, so the
+                    // anchored file keeps the original basename while its
+                    // containing directory supplies the privacy boundary.
+                    let path = dir.join(
+                        archive
+                            .file_name()
+                            .unwrap_or(std::ffi::OsStr::new("archive")),
+                    );
+                    if let Err(error) = std::fs::hard_link(archive, &path) {
+                        let _ = std::fs::remove_dir_all(&dir);
+                        return Err(error.to_string());
+                    }
+                    // `link(2)` links a symlink itself rather than its
+                    // target. Reject that case from the anchored name: a
+                    // later tool must never follow a caller-controlled link.
+                    match std::fs::symlink_metadata(&path) {
+                        Ok(metadata) if metadata.file_type().is_symlink() => {
+                            let _ = std::fs::remove_dir_all(&dir);
+                            return Err("the archive path is a symlink".into());
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            let _ = std::fs::remove_dir_all(&dir);
+                            return Err(error.to_string());
+                        }
+                    }
+                    return Ok(Self { dir, path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Err("could not create a private archive anchor".into())
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ArchiveAnchor {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+// This seam exists only to make the pathname-replacement regression
+// deterministic.  It is compiled out of the shipped binary, so callers
+// cannot influence either the extractor path or the preflight/extract gap.
+#[cfg(test)]
+static AFTER_PREFLIGHT: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn after_preflight_for_test() {
+    if let Some(action) = AFTER_PREFLIGHT.lock().expect("preflight hook lock").take() {
+        action();
+    }
+}
+
+#[cfg(not(test))]
+fn after_preflight_for_test() {}
 
 fn detect(path: &Path) -> Option<Format> {
     let n = path.file_name()?.to_string_lossy().to_ascii_lowercase();
@@ -208,8 +305,20 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // Link the input once, before either listing. From this point onward no
+    // process is handed the caller-controlled pathname: both preflights and
+    // extraction consume the same private bytes, even if that pathname is
+    // replaced or rewritten in the meantime.
+    let pinned = match ArchiveAnchor::create(archive) {
+        Ok(pinned) => pinned,
+        Err(e) => {
+            eprintln!("unpack: could not secure the archive for checking ({e})");
+            return ExitCode::from(3);
+        }
+    };
+
     // --- 1. list -----------------------------------------------------------
-    let entries = match list(archive, fmt) {
+    let entries = match list(pinned.path(), fmt) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("unpack: could not read the archive ({e})");
@@ -235,7 +344,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // TYPE, from the verbose listing's mode string -- symlink, hard link,
     // device node, setuid. A member is refused if either says so.
     let mut blocked: Vec<Unsafe> = entries.iter().filter_map(|p| safety::judge(p)).collect();
-    let members = match list_members(archive, fmt) {
+    let members = match list_members(pinned.path(), fmt) {
         Ok(members) => {
             if let Err(missing) = typed_rows_cover_entries(&entries, &members) {
                 eprintln!(
@@ -355,6 +464,8 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    after_preflight_for_test();
+
     // --- 3. choose a destination that cannot explode into the cwd ----------
     let parent = archive.parent().unwrap_or(Path::new("."));
     let dest = match value(args, "--into") {
@@ -400,7 +511,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         eprintln!("unpack: cannot create the target ({e})");
         return ExitCode::from(3);
     }
-    match extract(archive, fmt, &dest, budget) {
+    match extract(pinned.path(), fmt, &dest, budget) {
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dest);
             eprintln!("unpack: extraction failed ({e}). Nothing was left behind.");
@@ -509,24 +620,13 @@ fn typed_rows_cover_entries(entries: &[String], members: &[Member]) -> Result<()
 /// anything" and then landed `shortcut -> /etc/passwd` in the target.
 /// Measured on both formats before this existed.
 fn list_members(archive: &Path, fmt: Format) -> Result<Vec<Member>, String> {
-    let (bin, args): (&str, Vec<&str>) = match fmt {
-        Format::Zip => ("unzip", vec!["-Z"]),
-        Format::Tar => ("tar", vec!["-tvf"]),
-        Format::TarGz => ("tar", vec!["-tvzf"]),
-        Format::TarBz2 => ("tar", vec!["-tvjf"]),
-        Format::TarXz => ("tar", vec!["-tvJf"]),
-        Format::Gz => {
-            return Ok(vec![Member {
-                mode: None,
-                path: stem(archive),
-            }]);
-        }
-        Format::Dmg => return Err("dmg unsupported".into()),
-    };
-    let out = Command::new(bin)
-        .args(&args)
-        .arg(archive)
-        .stderr(Stdio::null())
+    if fmt == Format::Gz {
+        return Ok(vec![Member {
+            mode: None,
+            path: stem(archive),
+        }]);
+    }
+    let out = listing_command(fmt, archive, true)?
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
@@ -539,6 +639,33 @@ fn list_members(archive: &Path, fmt: Format) -> Result<Vec<Member>, String> {
         }
     }
     Ok(members)
+}
+
+/// Construct either of the two archive listing commands.
+///
+/// These are deliberately distinct from `extractor_command`: their output is
+/// the evidence used for the safety decision, and their argv must not inherit
+/// extraction flags by accident.
+fn listing_command(fmt: Format, archive: &Path, typed: bool) -> Result<Command, String> {
+    let (bin, args): (&str, &[&str]) = match (fmt, typed) {
+        (Format::Zip, false) => (UNZIP, &["-Z1"]),
+        (Format::Zip, true) => (UNZIP, &["-Z"]),
+        (Format::Tar, false) => (TAR, &["-tf"]),
+        (Format::Tar, true) => (TAR, &["-tvf"]),
+        (Format::TarGz, false) => (TAR, &["-tzf"]),
+        (Format::TarGz, true) => (TAR, &["-tvzf"]),
+        (Format::TarBz2, false) => (TAR, &["-tjf"]),
+        (Format::TarBz2, true) => (TAR, &["-tvjf"]),
+        (Format::TarXz, false) => (TAR, &["-tJf"]),
+        (Format::TarXz, true) => (TAR, &["-tvJf"]),
+        (Format::Gz, _) => {
+            return Err("gzip has no member listing command".into());
+        }
+        (Format::Dmg, _) => return Err("dmg unsupported".into()),
+    };
+    let mut command = Command::new(bin);
+    command.args(args).arg(archive).stderr(Stdio::null());
+    Ok(command)
 }
 
 /// Parse one `tar -t[v...]` or `unzip -Z` member row.
@@ -633,20 +760,10 @@ fn after_first_time_column(rest: &str) -> Option<&str> {
 }
 
 fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
-    let (bin, args): (&str, Vec<&str>) = match fmt {
-        Format::Zip => ("unzip", vec!["-Z1"]),
-        Format::Tar => ("tar", vec!["-tf"]),
-        Format::TarGz => ("tar", vec!["-tzf"]),
-        Format::TarBz2 => ("tar", vec!["-tjf"]),
-        Format::TarXz => ("tar", vec!["-tJf"]),
-        // A bare .gz holds exactly one file, named by stripping .gz.
-        Format::Gz => return Ok(vec![stem(archive)]),
-        Format::Dmg => return Err("dmg unsupported".into()),
-    };
-    let out = Command::new(bin)
-        .args(&args)
-        .arg(archive)
-        .stderr(Stdio::null())
+    if fmt == Format::Gz {
+        return Ok(vec![stem(archive)]);
+    }
+    let out = listing_command(fmt, archive, false)?
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
@@ -799,9 +916,7 @@ fn extract(
     dest: &Path,
     budget: u64,
 ) -> Result<Result<(), Breach>, String> {
-    let (bin, args) = extractor_args(fmt, archive, dest);
-    let mut cmd = Command::new(bin);
-    cmd.args(args);
+    let mut cmd = extractor_command(fmt, archive, dest);
     if fmt == Format::Gz {
         let out_path = dest.join(stem(archive));
         let f = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
@@ -810,20 +925,25 @@ fn extract(
     run_bounded(cmd, dest, budget)
 }
 
-/// The complete argv passed to each extractor. Keep this separate from process
-/// creation so the containment-relevant command lines are directly pinned.
-fn extractor_args(fmt: Format, archive: &Path, dest: &Path) -> (&'static str, Vec<String>) {
-    let archive = archive.to_string_lossy().into_owned();
-    let dest = dest.to_string_lossy().into_owned();
+/// Construct the complete extractor command.
+///
+/// Tests inspect this `Command` at the process boundary; a helper that merely
+/// returns a vector would not prove what is actually passed to the child.
+fn extractor_command(fmt: Format, archive: &Path, dest: &Path) -> Command {
     match fmt {
         // -o overwrites only inside our freshly-created destination; -q is
         // presentation only. In particular, do not add unzip's -j (junk
         // paths): path containment is part of the archive contract.
-        Format::Zip => (
-            "unzip",
-            vec!["-o".into(), "-q".into(), archive, "-d".into(), dest],
-        ),
-        Format::Gz => ("gunzip", vec!["-c".into(), archive]),
+        Format::Zip => {
+            let mut command = Command::new(UNZIP);
+            command.args(["-o", "-q"]).arg(archive).arg("-d").arg(dest);
+            command
+        }
+        Format::Gz => {
+            let mut command = Command::new(GUNZIP);
+            command.arg("-c").arg(archive);
+            command
+        }
         _ => {
             let flag = match fmt {
                 Format::Tar => "-xf",
@@ -832,7 +952,9 @@ fn extractor_args(fmt: Format, archive: &Path, dest: &Path) -> (&'static str, Ve
                 Format::TarXz => "-xJf",
                 _ => unreachable!("dmg and zip handled above"),
             };
-            ("tar", vec![flag.into(), archive, "-C".into(), dest])
+            let mut command = Command::new(TAR);
+            command.arg(flag).arg(archive).arg("-C").arg(dest);
+            command
         }
     }
 }
@@ -893,6 +1015,7 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn the_longest_suffix_wins_so_tar_gz_is_not_gz() {
@@ -958,43 +1081,68 @@ mod tests {
     }
 
     #[test]
-    fn extractor_argument_vectors_are_pinned() {
+    fn extractor_commands_are_pinned_at_the_process_boundary() {
         let archive = Path::new("/tmp/archive.tar.gz");
         let dest = Path::new("/tmp/dest");
         for (format, bin, expected) in [
             (
                 Format::Zip,
-                "unzip",
+                UNZIP,
                 vec!["-o", "-q", "/tmp/archive.tar.gz", "-d", "/tmp/dest"],
             ),
             (
                 Format::Tar,
-                "tar",
+                TAR,
                 vec!["-xf", "/tmp/archive.tar.gz", "-C", "/tmp/dest"],
             ),
             (
                 Format::TarGz,
-                "tar",
+                TAR,
                 vec!["-xzf", "/tmp/archive.tar.gz", "-C", "/tmp/dest"],
             ),
             (
                 Format::TarBz2,
-                "tar",
+                TAR,
                 vec!["-xjf", "/tmp/archive.tar.gz", "-C", "/tmp/dest"],
             ),
             (
                 Format::TarXz,
-                "tar",
+                TAR,
                 vec!["-xJf", "/tmp/archive.tar.gz", "-C", "/tmp/dest"],
             ),
-            (Format::Gz, "gunzip", vec!["-c", "/tmp/archive.tar.gz"]),
+            (Format::Gz, GUNZIP, vec!["-c", "/tmp/archive.tar.gz"]),
         ] {
-            let (actual_bin, actual) = extractor_args(format, archive, dest);
-            assert_eq!(actual_bin, bin);
+            let command = extractor_command(format, archive, dest);
+            assert_eq!(command.get_program(), OsStr::new(bin));
             assert_eq!(
-                actual,
-                expected.into_iter().map(String::from).collect::<Vec<_>>()
+                command.get_args().collect::<Vec<_>>(),
+                expected.iter().map(OsStr::new).collect::<Vec<_>>()
             );
+        }
+    }
+
+    #[test]
+    fn plain_and_typed_listing_commands_are_pinned_at_the_process_boundary() {
+        let archive = Path::new("/tmp/archive.tar.gz");
+        for (format, bin, plain, typed) in [
+            (Format::Zip, UNZIP, vec!["-Z1"], vec!["-Z"]),
+            (Format::Tar, TAR, vec!["-tf"], vec!["-tvf"]),
+            (Format::TarGz, TAR, vec!["-tzf"], vec!["-tvzf"]),
+            (Format::TarBz2, TAR, vec!["-tjf"], vec!["-tvjf"]),
+            (Format::TarXz, TAR, vec!["-tJf"], vec!["-tvJf"]),
+        ] {
+            for (typed_row, flags) in [(false, plain), (true, typed)] {
+                let command = listing_command(format, archive, typed_row).unwrap();
+                assert_eq!(command.get_program(), OsStr::new(bin));
+                assert_eq!(
+                    command.get_args().collect::<Vec<_>>(),
+                    flags
+                        .iter()
+                        .map(OsStr::new)
+                        .chain(std::iter::once(archive.as_os_str()))
+                        .collect::<Vec<_>>()
+                );
+            }
         }
     }
 
@@ -1030,5 +1178,91 @@ mod tests {
         )
         .expect("a BSD tar row with a hyphenated group");
         assert_eq!(member.path, "ordinary.txt");
+    }
+
+    #[test]
+    fn run_extracts_the_anchored_zip_when_the_input_path_is_replaced() {
+        static TEST_NEXT: AtomicU64 = AtomicU64::new(0);
+        let serial = TEST_NEXT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("unpack-anchor-run-{}-{serial}", std::process::id()));
+        std::fs::create_dir(&root).expect("create test directory");
+        let source = root.join("checked.txt");
+        let replacement_source = root.join("replacement.txt");
+        let archive = root.join("input.zip");
+        let replacement = root.join("replacement.zip");
+        let dest = root.join("out");
+        std::fs::write(&source, b"checked archive").expect("write checked content");
+        std::fs::write(&replacement_source, b"replacement archive")
+            .expect("write replacement content");
+        for (input, output) in [(&source, &archive), (&replacement_source, &replacement)] {
+            let status = Command::new("/usr/bin/zip")
+                .args(["-q", "-j"])
+                .arg(output)
+                .arg(input)
+                .status()
+                .expect("build zip fixture");
+            assert!(status.success(), "zip fixture creation failed");
+        }
+
+        *AFTER_PREFLIGHT.lock().expect("preflight hook lock") = Some(Box::new({
+            let archive = archive.clone();
+            let replacement = replacement.clone();
+            move || std::fs::rename(replacement, archive).expect("replace archive after listings")
+        }));
+        let result = run(
+            &archive,
+            &[
+                "--into".into(),
+                dest.display().to_string(),
+                "--max-size".into(),
+                "1G".into(),
+            ],
+        );
+
+        assert_eq!(result, ExitCode::SUCCESS);
+        assert_eq!(
+            std::fs::read(dest.join("checked.txt")).expect("read extracted file"),
+            b"checked archive"
+        );
+        assert!(!dest.join("replacement.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn run_preserves_the_bare_gz_output_name_through_the_anchor() {
+        static TEST_NEXT: AtomicU64 = AtomicU64::new(0);
+        let serial = TEST_NEXT.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("unpack-anchor-gz-{}-{serial}", std::process::id()));
+        std::fs::create_dir(&root).expect("create test directory");
+        let source = root.join("dump.sql");
+        let archive = root.join("dump.sql.gz");
+        let dest = root.join("out");
+        std::fs::write(&source, b"select 1;\n").expect("write gzip fixture");
+        let compressed = Command::new("/usr/bin/gzip")
+            .args(["-c"])
+            .arg(&source)
+            .output()
+            .expect("compress gzip fixture");
+        assert!(compressed.status.success(), "gzip fixture creation failed");
+        std::fs::write(&archive, compressed.stdout).expect("write gzip archive");
+
+        let result = run(
+            &archive,
+            &[
+                "--into".into(),
+                dest.display().to_string(),
+                "--max-size".into(),
+                "1G".into(),
+            ],
+        );
+
+        assert_eq!(result, ExitCode::SUCCESS);
+        assert_eq!(
+            std::fs::read(dest.join("dump.sql")).expect("read extracted file"),
+            b"select 1;\n"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
