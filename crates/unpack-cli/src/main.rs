@@ -389,19 +389,21 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
     match extract(archive, fmt, &dest, budget) {
         Err(e) => {
-            let _ = std::fs::remove_dir_all(&dest);
-            eprintln!("unpack: extraction failed ({e}). Nothing was left behind.");
+            eprintln!(
+                "unpack: extraction failed ({e}). {}",
+                cleanup_destination(&dest).message()
+            );
             return ExitCode::from(3);
         }
         Ok(Err(breach)) => {
             // Remove what landed before the cap was hit. A partial extraction
             // left behind is the mess this tool exists to avoid, and it is
             // worse here than usual: the user did not choose to start it.
-            let _ = std::fs::remove_dir_all(&dest);
+            let cleanup = cleanup_destination(&dest);
             let Breach::Total(n) = breach;
             eprintln!(
                 "unpack: stopped at {}, which is more than this extraction was given.\n\
-                 Nothing was left behind.\n\n\
+                 {}\n\n\
                  The budget is half the free space on the target volume, so a large\n\
                  archive on a roomy disk is fine and the same archive on a full one is\n\
                  not. This says nothing about the archive being hostile: a big project\n\
@@ -409,6 +411,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                  limit is on damage rather than on intent.\n\n\
                  To allow more:  unpack ARCHIVE --max-size {}G",
                 human(n),
+                cleanup.message(),
                 (n / (1024 * 1024 * 1024)) + 2
             );
             return ExitCode::from(2);
@@ -641,6 +644,67 @@ fn free_bytes(p: &Path) -> Option<u64> {
     Some(avail_kb * 1024)
 }
 
+enum Cleanup {
+    Removed,
+    Remains {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+    Unverified {
+        path: PathBuf,
+        error: std::io::Error,
+    },
+}
+
+impl Cleanup {
+    fn message(&self) -> String {
+        match self {
+            Self::Removed => "Nothing was left behind.".into(),
+            Self::Remains { path, error } => format!(
+                "The partial extraction remains at {}: cleanup failed ({error}).",
+                etude_core::redact::path(path)
+            ),
+            Self::Unverified { path, error } => format!(
+                "Cleanup failed ({error}); could not verify the partial extraction at {}.",
+                etude_core::redact::path(path)
+            ),
+        }
+    }
+}
+
+fn cleanup_destination(dest: &Path) -> Cleanup {
+    cleanup_destination_with(dest, |path| std::fs::remove_dir_all(path))
+}
+
+fn cleanup_destination_with(
+    dest: &Path,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Cleanup {
+    match remove(dest) {
+        Ok(()) => Cleanup::Removed,
+        // `remove_dir_all` may report a destination that has disappeared
+        // between extraction and cleanup. That is still a checked absence,
+        // not an unverified cleanup failure.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Cleanup::Removed,
+        Err(error) => match dest.symlink_metadata() {
+            Ok(_) => Cleanup::Remains {
+                path: dest.to_path_buf(),
+                error,
+            },
+            // Metadata also observed the path absent, so there is no partial
+            // extraction left to describe even though removal reported an
+            // unrelated error.
+            Err(metadata_error) if metadata_error.kind() == std::io::ErrorKind::NotFound => {
+                Cleanup::Removed
+            }
+            Err(_) => Cleanup::Unverified {
+                path: dest.to_path_buf(),
+                error,
+            },
+        },
+    }
+}
+
 /// Total bytes written under `dir`.
 ///
 /// One number, because there is one bound. An earlier version also tracked
@@ -836,5 +900,68 @@ mod tests {
         assert_eq!(stem(Path::new("release.tar.gz")), "release");
         assert_eq!(stem(Path::new("data.tgz")), "data");
         assert_eq!(stem(Path::new("dump.sql.gz")), "dump.sql");
+    }
+
+    #[test]
+    fn a_cleanup_failure_names_the_partial_extraction_and_its_location() {
+        let dest =
+            std::env::temp_dir().join(format!("unpack-cleanup-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        // A file is deliberately not a valid extraction directory, so the
+        // production `remove_dir_all` call genuinely fails and the following
+        // metadata check can establish that something remains at this path.
+        std::fs::write(&dest, "partial extraction").expect("create partial extraction");
+
+        let cleanup = cleanup_destination(&dest);
+        let message = cleanup.message();
+
+        assert!(
+            message.contains("partial extraction remains"),
+            "cleanup failure claimed more than it knew: {message}"
+        );
+        assert!(
+            !message.contains("Nothing was left behind"),
+            "cleanup failure still claimed the partial extraction was gone: {message}"
+        );
+        assert!(
+            message.contains(&etude_core::redact::path(&dest)),
+            "cleanup failure did not name where the partial extraction remains: {message}"
+        );
+        assert!(
+            message.contains("cleanup failed"),
+            "cleanup failure discarded the operating-system reason: {message}"
+        );
+
+        std::fs::remove_file(&dest).expect("remove test file");
+    }
+
+    #[test]
+    fn a_not_found_removal_error_means_nothing_remains() {
+        let dest = Path::new("/a/path/that-is-already-gone");
+        let cleanup = cleanup_destination_with(dest, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "already removed",
+            ))
+        });
+
+        assert!(matches!(cleanup, Cleanup::Removed));
+        assert_eq!(cleanup.message(), "Nothing was left behind.");
+    }
+
+    #[test]
+    fn a_successful_cleanup_checks_that_the_destination_is_removed() {
+        let dest =
+            std::env::temp_dir().join(format!("unpack-cleanup-success-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::create_dir_all(&dest).expect("create extraction directory");
+
+        let cleanup = cleanup_destination(&dest);
+
+        assert!(matches!(cleanup, Cleanup::Removed));
+        assert!(
+            !dest.exists(),
+            "successful cleanup left its destination behind"
+        );
     }
 }
