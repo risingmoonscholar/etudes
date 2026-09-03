@@ -75,13 +75,12 @@ enum Format {
     Dmg,
 }
 
-/// A private hard link to the archive we judged.
+/// A private byte-for-byte copy of the archive we judged.
 ///
 /// The callers below must use this name rather than the pathname supplied on
-/// the command line. Linking the caller's file once binds the listings and
-/// extractor to that file even if somebody replaces the original pathname
-/// after preflight, without a second full-sized copy or its extra disk-space
-/// requirement.
+/// the command line. Copying the caller's file once binds the listings and
+/// extractor to private bytes even if somebody replaces the original pathname
+/// or rewrites the original inode after preflight.
 struct ArchiveAnchor {
     dir: PathBuf,
     path: PathBuf,
@@ -110,14 +109,12 @@ impl ArchiveAnchor {
                             .file_name()
                             .unwrap_or(std::ffi::OsStr::new("archive")),
                     );
-                    if let Err(error) = std::fs::hard_link(archive, &path) {
-                        let _ = std::fs::remove_dir_all(&dir);
-                        return Err(error.to_string());
-                    }
-                    // `link(2)` links a symlink itself rather than its
-                    // target. Reject that case from the anchored name: a
-                    // later tool must never follow a caller-controlled link.
-                    match std::fs::symlink_metadata(&path) {
+                    // Copy rather than hard-link: a link pins an inode, but
+                    // an attacker holding a writable descriptor can still
+                    // truncate and rewrite that inode after both preflights.
+                    // The private copy is the one immutable input all later
+                    // operations consume.
+                    match std::fs::symlink_metadata(archive) {
                         Ok(metadata) if metadata.file_type().is_symlink() => {
                             let _ = std::fs::remove_dir_all(&dir);
                             return Err("the archive path is a symlink".into());
@@ -127,6 +124,10 @@ impl ArchiveAnchor {
                             let _ = std::fs::remove_dir_all(&dir);
                             return Err(error.to_string());
                         }
+                    }
+                    if let Err(error) = std::fs::copy(archive, &path) {
+                        let _ = std::fs::remove_dir_all(&dir);
+                        return Err(error.to_string());
                     }
                     return Ok(Self { dir, path });
                 }
@@ -305,7 +306,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // Link the input once, before either listing. From this point onward no
+    // Copy the input once, before either listing. From this point onward no
     // process is handed the caller-controlled pathname: both preflights and
     // extraction consume the same private bytes, even if that pathname is
     // replaced or rewritten in the meantime.
@@ -1178,6 +1179,29 @@ mod tests {
         )
         .expect("a BSD tar row with a hyphenated group");
         assert_eq!(member.path, "ordinary.txt");
+    }
+
+    #[test]
+    fn archive_anchor_keeps_private_bytes_when_the_source_inode_is_rewritten() {
+        static TEST_NEXT: AtomicU64 = AtomicU64::new(0);
+        let serial = TEST_NEXT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "unpack-anchor-copy-{}-{serial}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&root).expect("create test directory");
+        let archive = root.join("input.zip");
+        std::fs::write(&archive, b"checked bytes").expect("write archive");
+
+        let anchor = ArchiveAnchor::create(&archive).expect("copy archive");
+        std::fs::write(&archive, b"rewritten bytes").expect("rewrite archive inode");
+
+        assert_eq!(
+            std::fs::read(anchor.path()).expect("read private copy"),
+            b"checked bytes"
+        );
+        drop(anchor);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
