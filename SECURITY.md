@@ -75,6 +75,15 @@ the link itself was still delivered.
   containment *during* extraction — libarchive's secure-extraction flags, or
   a sandboxed extractor — which is a different tool than the one that parses
   nothing.
+- **The destination, if its parent is writable by others.** unpack checks
+  that the destination does not exist, then creates it. Between those two
+  steps, anyone who can write the PARENT directory can create the destination
+  as a symlink, and the extractor then writes through it to wherever that link
+  points. Unpacking into a directory only you can write — your home, not
+  `/tmp` or a shared share — closes it; unpacking into a world-writable parent
+  is not defended, and no test exercises that path. Closing it properly needs
+  the directory created and then verified by handle rather than by name.
+
 - **A hostile process running as you.** unpack copies the archive into a
   freshly created 0700 directory and runs every listing and the extraction
   against that copy, so replacing or rewriting the original path after the
