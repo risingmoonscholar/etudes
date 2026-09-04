@@ -75,6 +75,18 @@ the link itself was still delivered.
   containment *during* extraction — libarchive's secure-extraction flags, or
   a sandboxed extractor — which is a different tool than the one that parses
   nothing.
+- **A hostile process running as you.** unpack copies the archive into a
+  freshly created 0700 directory and runs every listing and the extraction
+  against that copy, so replacing or rewriting the original path after the
+  preflight cannot change what is extracted. That closes the attack from
+  another *user*. It does not close it from a process running under your own
+  account: 0700 keeps others out and never you, and such a process can list
+  the temporary directory and find the copy whatever it is named. A random
+  name stops it being predicted, not being found. Closing this needs a handle
+  with no name to find -- an unlinked descriptor -- which is a different
+  design than a private copy, and this tool does not have it. If another
+  process is already running as you, it does not need unpack to do anything.
+
 - **Nested archives.** A zip inside a zip is just a file here; unpack does
   not recurse, so the bound applies per invocation, not to what you unpack
   next.
@@ -84,8 +96,11 @@ the link itself was still delivered.
   bugs are reachable. Keep macOS patched; unpack does not run privileged.
 
 The honest claim is: *unpack refuses every dangerous member its listing
-declares, and writes nothing when it cannot judge one.* Not "safe
-unarchive".
+declares, writes nothing when it cannot judge one, and extracts the same
+bytes it judged unless something is already running as you.* Not "safe
+unarchive", and deliberately not "the checked bytes are the bytes
+extracted" without that last clause -- six review rounds went into finding
+out that the shorter sentence was not true.
 
 **The attacks are public, on purpose.** `stress/scenarios/` ships in the
 clone and builds its hostile archives at run time -- a symlink pointing at
