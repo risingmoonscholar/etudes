@@ -20,8 +20,10 @@
 mod safety;
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use safety::Unsafe;
@@ -88,11 +90,22 @@ struct ArchiveAnchor {
 
 impl ArchiveAnchor {
     fn create(archive: &Path) -> Result<Self, String> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let pid = std::process::id();
         for _ in 0..128 {
-            let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-            let dir = std::env::temp_dir().join(format!("unpack-{pid}-{serial}"));
+            // A counter plus PID is visible to any process and makes this
+            // supposedly private filename predictable.  Read enough bytes
+            // from the kernel CSPRNG that another process cannot derive the
+            // anchor pathname and replace the copy after preflight.
+            let mut nonce = [0_u8; 16];
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut random| random.read_exact(&mut nonce))
+                .map_err(|error| format!("could not generate private anchor name: {error}"))?;
+            let dir = std::env::temp_dir().join(format!(
+                "unpack-{}",
+                nonce
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ));
             let mut builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {
