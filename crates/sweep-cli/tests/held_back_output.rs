@@ -186,3 +186,50 @@ fn review_with_groups_discloses_held_back_files_before_reviewing() {
     );
     assert_mixed_disclosure(&text);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tagged_counts_are_private_and_mixed_hold_advice_survives_scan_and_review() {
+    let root = TestDir(unique_temp("tags"));
+    fs::create_dir_all(&root.0).unwrap();
+    let secret = root.0.join("private-tagged.part");
+    write_file(&secret);
+    assert!(
+        Command::new("xattr")
+            .args([
+                "-w",
+                "com.apple.metadata:_kMDItemUserTags",
+                "private-tag-value"
+            ])
+            .arg(&secret)
+            .status()
+            .unwrap()
+            .success()
+    );
+    write_file(&root.0.join("ordinary.part"));
+    write_file(&root.0.join("fresh.pdf"));
+    for args in [vec![], vec!["review"]] {
+        let output = sweep_bin().args(args).arg(&root.0).output().unwrap();
+        let text = stdout(&output);
+        assert!(text.contains("1 Finder-tagged item"), "{text}");
+        assert!(text.contains("downloads have to finish"), "{text}");
+        assert!(text.contains("--since 0"), "{text}");
+        assert!(text.contains("--include-tagged"), "{text}");
+        assert!(!text.contains("private-tag"), "{text}");
+    }
+    let output = sweep_bin().arg(&root.0).arg("--json").output().unwrap();
+    let text = stdout(&output);
+    assert!(text.contains("\"tagged\":1"), "{text}");
+    assert!(text.contains("\"in_flight\":1"), "{text}");
+    assert!(!text.contains("private-tag"), "{text}");
+    let output = sweep_bin()
+        .arg(&root.0)
+        .args(["--json", "--include-tagged", "--since", "0"])
+        .output()
+        .unwrap();
+    let text = stdout(&output);
+    assert!(text.contains("\"tagged\":0"), "{text}");
+    assert!(text.contains("\"in_flight\":2"), "{text}");
+    assert!(stderr(&output).contains("WARNING: including Finder-tagged items"));
+    assert!(secret.exists());
+}

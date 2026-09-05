@@ -347,14 +347,16 @@ pub fn move_one_for_tests(from: &Path, to: &Path) -> io::Result<Method> {
 }
 
 /// A minimal, explicit cross-device copy on macOS: data and POSIX stat
-/// (mode, mtime) only. Deliberately not `fs::copy`.
+/// (mode, mtime) only. Finder tags are copied separately, by name, after the
+/// data copy succeeds. Deliberately not `fs::copy`.
 ///
 /// `fs::copy`'s own documentation states its macOS mapping to
 /// `fcopyfile`/`fclonefileat` is an implementation detail that "may change
 /// in the future" (doc.rust-lang.org/std/fs/fn.copy.html) -- not a
 /// contract. In practice it requests `COPYFILE_ALL`, which also copies the
 /// SOURCE's own pre-existing extended attributes (Finder tags, comments,
-/// any prior quarantine flag). sweep has no reason to propagate those.
+/// any prior quarantine flag). sweep only propagates the Finder tag xattr;
+/// Finder comments and every other xattr remain out of scope.
 ///
 /// This does not, and per issue #20 cannot, avoid every side effect on a
 /// destination that cannot store extended attributes (exFAT, FAT32):
@@ -430,6 +432,108 @@ fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// Preserve Finder tags across the one move shape that cannot be a rename.
+///
+/// The tag plist is copied opaquely and never decoded, rendered, or journaled.
+/// Finder comments have a different xattr name and are intentionally never
+/// queried or copied.
+#[cfg(target_os = "macos")]
+fn copy_finder_tag(from: &Path, to: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn getxattr(
+            path: *const core::ffi::c_char,
+            name: *const core::ffi::c_char,
+            value: *mut core::ffi::c_void,
+            size: usize,
+            position: u32,
+            options: i32,
+        ) -> isize;
+        fn setxattr(
+            path: *const core::ffi::c_char,
+            name: *const core::ffi::c_char,
+            value: *const core::ffi::c_void,
+            size: usize,
+            position: u32,
+            options: i32,
+        ) -> i32;
+    }
+    let from = CString::new(from.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    let to = CString::new(to.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    let name = c"com.apple.metadata:_kMDItemUserTags";
+    // SAFETY: the paths and xattr name are valid C strings; the null buffer
+    // has a zero length, so this call only asks the OS for the value length.
+    let len = unsafe {
+        getxattr(
+            from.as_ptr(),
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            XATTR_NOFOLLOW,
+        )
+    };
+    if len < 0 {
+        let err = io::Error::last_os_error();
+        // ENOATTR: this item simply has no Finder tag to preserve.
+        return if err.raw_os_error() == Some(ENOATTR) {
+            Ok(())
+        } else {
+            Err(err)
+        };
+    }
+    let mut value = vec![0_u8; len as usize];
+    // SAFETY: `value` owns len writable bytes, exactly the size requested.
+    let read = unsafe {
+        getxattr(
+            from.as_ptr(),
+            name.as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len(),
+            0,
+            XATTR_NOFOLLOW,
+        )
+    };
+    if read < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if read as usize != value.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "Finder tag xattr changed while it was being copied",
+        ));
+    }
+    // SAFETY: `value` remains valid for this call; setxattr only reads it.
+    if unsafe {
+        setxattr(
+            to.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+            XATTR_NOFOLLOW,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Darwin's `XATTR_NOFOLLOW`: preserve the xattr on the moved directory
+/// entry, never on a symlink target.
+#[cfg(target_os = "macos")]
+const XATTR_NOFOLLOW: i32 = 0x0001;
+
+/// `ENOATTR` from macOS SDK `usr/include/sys/errno.h`: the requested xattr
+/// is absent, which means there is no Finder tag to preserve.
+#[cfg(target_os = "macos")]
+const ENOATTR: i32 = 93;
+
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
     // One syscall, no crash window, refuses to clobber. See rename_excl.
     #[cfg(target_os = "macos")]
@@ -470,6 +574,11 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
             if src_md.len() != dst_md.len() {
                 let _ = fs::remove_file(to);
                 return Err(io::Error::other("cross-device copy size mismatch"));
+            }
+            #[cfg(target_os = "macos")]
+            if let Err(err) = copy_finder_tag(from, to) {
+                let _ = fs::remove_file(to);
+                return Err(err);
             }
             fs::remove_file(from)?;
             Ok(Method::CopyUnlink)
@@ -1019,6 +1128,102 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn copy_finder_tag_preserves_only_the_tag_xattr() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        unsafe extern "C" {
+            fn getxattr(
+                path: *const core::ffi::c_char,
+                name: *const core::ffi::c_char,
+                value: *mut core::ffi::c_void,
+                size: usize,
+                position: u32,
+                options: i32,
+            ) -> isize;
+            fn setxattr(
+                path: *const core::ffi::c_char,
+                name: *const core::ffi::c_char,
+                value: *const core::ffi::c_void,
+                size: usize,
+                position: u32,
+                options: i32,
+            ) -> i32;
+        }
+
+        fn set_attr(path: &Path, name: &str, value: &[u8]) {
+            let path = CString::new(path.as_os_str().as_bytes()).expect("path has no NUL");
+            let name = CString::new(name).expect("xattr name has no NUL");
+            // SAFETY: the C strings and value slice remain valid for setxattr.
+            assert_eq!(
+                unsafe {
+                    setxattr(
+                        path.as_ptr(),
+                        name.as_ptr(),
+                        value.as_ptr().cast(),
+                        value.len(),
+                        0,
+                        0,
+                    )
+                },
+                0,
+                "set test xattr"
+            );
+        }
+
+        fn attr_len(path: &Path, name: &str) -> io::Result<isize> {
+            let path = CString::new(path.as_os_str().as_bytes())
+                .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+            let name = CString::new(name)
+                .map_err(|_| io::Error::other("xattr name contains a NUL byte"))?;
+            // SAFETY: both arguments are valid C strings; a null buffer with
+            // zero size asks only for the attribute's length.
+            let result =
+                unsafe { getxattr(path.as_ptr(), name.as_ptr(), std::ptr::null_mut(), 0, 0, 0) };
+            if result < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(result)
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("etudes_finder_tag_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let from = dir.join("src");
+        let to = dir.join("dst");
+        fs::write(&from, b"source").expect("write source");
+        fs::write(&to, b"destination").expect("write destination");
+        set_attr(
+            &from,
+            "com.apple.metadata:_kMDItemUserTags",
+            b"opaque-tag-plist",
+        );
+        set_attr(
+            &from,
+            "com.apple.metadata:kMDItemFinderComment",
+            b"never copy this",
+        );
+
+        copy_finder_tag(&from, &to).expect("copy Finder tag");
+        assert_eq!(
+            attr_len(&to, "com.apple.metadata:_kMDItemUserTags").expect("tag length"),
+            b"opaque-tag-plist".len() as isize,
+            "the opaque Finder tag must survive"
+        );
+        assert_eq!(
+            attr_len(&to, "com.apple.metadata:kMDItemFinderComment")
+                .expect_err("comment must be absent")
+                .raw_os_error(),
+            Some(ENOATTR),
+            "Finder comments must not be copied"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_io_error_names_the_os_reason_without_naming_the_path() {
         let secret = std::path::Path::new("/nonexistent/TAX_RETURN_2024_SSN.pdf");
@@ -1190,6 +1395,7 @@ mod tests {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
             root_is_synced: false,
             allow_sync: false,
         };

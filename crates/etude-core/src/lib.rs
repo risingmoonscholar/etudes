@@ -3,8 +3,11 @@
 //! Zero dependencies. Nothing in this crate can open a socket, because there is
 //! no third-party code here at all.
 //!
-//! Scanning and classification read **filesystem metadata only** in v0.1:
-//! names, sizes, timestamps, and file type. They never open files for reading.
+//! Scanning and classification read **filesystem and Finder organization
+//! metadata only** in v0.1: names, sizes, timestamps, file type, and Finder
+//! tags. Default scans probe tag presence only; a cross-volume move copies a
+//! tag plist opaquely so the tag survives. They never open files for reading
+//! and never read Finder comments.
 //! The journal's edge-hash step does: it reads file bytes to detect changes
 //! before undo.
 

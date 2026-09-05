@@ -298,6 +298,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         skipped_in_flight: outcome.skipped_in_flight,
         skipped_package: outcome.skipped_package,
         skipped_unreadable: outcome.skipped_unreadable,
+        skipped_tagged: outcome.skipped_tagged,
         root_is_synced: outcome.root_is_synced,
         allow_sync: outcome.allow_sync,
     };
@@ -1023,6 +1024,7 @@ mod tests {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
             root_is_synced: false,
             allow_sync: false,
         }

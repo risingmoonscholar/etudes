@@ -36,6 +36,7 @@ FLAGS
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
+    --include-tagged  LOUD: organise Finder-tagged items; their tags are preserved
     --no-journal    apply without recording undo
     --version       print the version and exit
     --inspect-content  read text file contents to refuse MORE files
@@ -156,7 +157,7 @@ const LESSON: &[(&str, &str)] = &[
          Every file, and the signals that placed it. This is how you disagree\n\
          with a grouping instead of just distrusting it.\n\
          \n\
-         Contents were not read. The signals are names, sizes and dates.\n\
+         Contents were not read. The signals are filesystem and Finder organization metadata.\n\
          \n\
          The same plan comes in two other shapes:\n\
          \n\
@@ -381,6 +382,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--quiet", false),
             ("--explain", false),
             ("--allow-sync", false),
+            ("--include-tagged", false),
             ("--inspect-content", false),
             ("--since", true),
             ("--map", true),
@@ -394,6 +396,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--no-journal", false),
             ("--depth", true),
             ("--allow-sync", false),
+            ("--include-tagged", false),
             ("--since", true),
             ("--map", true),
         ],
@@ -402,6 +405,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         "review",
         &[
             ("--allow-sync", false),
+            ("--include-tagged", false),
             ("--no-journal", false),
             ("--depth", true),
             ("--since", true),
@@ -665,6 +669,7 @@ fn scan_and_plan(
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        include_tagged: has(args, "--include-tagged"),
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -715,7 +720,9 @@ fn scan_and_plan(
     match inspect::consent_interactive() {
         Ok(true) => {}
         Ok(false) => {
-            println!("  Contents were not read. Continuing on names and dates only.\n");
+            println!(
+                "  Contents were not read. Continuing on filesystem and Finder organization metadata.\n"
+            );
             return Ok((plan::build_mapped(&outcome, &maps), None));
         }
         Err(e) => {
@@ -737,6 +744,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Ok(v) => v,
         Err(code) => return code,
     };
+    print_include_tagged_warning(args);
 
     if plan.groups.is_empty() && has(args, "--json") {
         println!("{}", plan.to_json());
@@ -744,7 +752,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() {
         println!(
-            "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read  ·  sweep {}",
+            "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read  ·  sweep {}",
             plan.scanned,
             env!("CARGO_PKG_VERSION")
         );
@@ -761,7 +769,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         // "Nothing here needs organising", which denies what it just said.
         // A download in progress is something to organise later, whether it
         // arrived as a file or as a directory.
-        let held = plan.too_recent() + plan.in_flight() + plan.skipped_in_flight;
+        let held = plan.too_recent() + plan.in_flight() + plan.skipped_in_flight + plan.tagged();
         if held > 0 {
             println!();
             let recent = plan.too_recent();
@@ -789,20 +797,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // back. With one recent file and one .part beside it, that
             // sentence promised to include a download the flag cannot reach.
             let still_arriving = downloading + plan.skipped_in_flight;
-            match (recent > 0, still_arriving > 0) {
-                (true, false) => println!(
-                    "\nNothing else here needs organising. Run again later, or pass\n\
-                     --since 0 to include everything."
-                ),
-                (false, true) => println!(
-                    "\nNothing else here needs organising. These finish downloading on\n\
-                     their own; run again once they have."
-                ),
-                _ => println!(
-                    "\nNothing else here needs organising. --since 0 would include the\n\
-                     recent ones; the downloads have to finish first either way."
-                ),
-            }
+            print_hold_advice(recent, still_arriving, plan.tagged());
             println!("\nNothing has been moved.  Nothing left this machine.");
         } else {
             println!(
@@ -887,9 +882,19 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     let projects = p.skipped_project;
     let incomplete = p.skipped_in_flight;
     let packages = p.skipped_package;
+    let tagged = p.tagged();
 
     let doc_held = p.project_documents() + p.near_document().map(|(n, _)| n).unwrap_or(0);
-    if personal + recent + downloading + unclear + projects + incomplete + packages + doc_held == 0
+    if personal
+        + recent
+        + downloading
+        + unclear
+        + projects
+        + incomplete
+        + packages
+        + tagged
+        + doc_held
+        == 0
     {
         return;
     }
@@ -952,6 +957,40 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     } else if packages > 1 {
         println!("  {packages} folders were left alone because macOS treats each as a single item");
     }
+    if tagged == 1 {
+        println!("  1 Finder-tagged item was left alone (tag name not read)");
+    } else if tagged > 1 {
+        println!("  {tagged} Finder-tagged items were left alone (tag names not read)");
+    }
+}
+
+fn print_hold_advice(recent: usize, downloading: usize, tagged: usize) {
+    match (recent > 0, downloading > 0) {
+        (true, false) => println!(
+            "\nNothing else here needs organising. Run again later, or pass\n--since 0 to include the recent ones."
+        ),
+        (false, true) => println!(
+            "\nNothing else here needs organising. These finish downloading on\ntheir own; run again once they have."
+        ),
+        (true, true) => println!(
+            "\nNothing else here needs organising. --since 0 would include the\nrecent ones; the downloads have to finish first either way."
+        ),
+        (false, false) => println!("\nNothing else here needs organising."),
+    }
+    if tagged > 0 {
+        println!(
+            "Tagged items stay where they are unless --include-tagged is passed deliberately."
+        );
+    }
+}
+
+/// This opt-in changes the default custody rule, so make it visible even in
+/// quiet or machine-facing workflows. Tag values are never rendered or
+/// journaled; moves retain them by rename or copy them opaquely across volumes.
+fn print_include_tagged_warning(args: &[String]) {
+    if has(args, "--include-tagged") {
+        eprintln!("sweep: WARNING: including Finder-tagged items; existing tags will be preserved");
+    }
 }
 
 /// Say when a folder name came from an agent rather than from the files.
@@ -986,9 +1025,9 @@ fn print_agent_named_note(p: &plan::Plan) {
 fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     // This line must never claim more restraint than actually happened.
     let basis = if read_contents {
-        "names, dates, and the contents of some text files"
+        "filesystem and Finder organization metadata, and the contents of some text files"
     } else {
-        "names, sizes and dates only  ·  no contents read"
+        "filesystem and Finder organization metadata  ·  no contents read"
     };
     println!(
         "\nScanned {} items  ·  {basis}  ·  sweep {}\n",
@@ -1113,6 +1152,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        include_tagged: has(args, "--include-tagged"),
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -1130,13 +1170,15 @@ fn cmd_review(args: &[String]) -> ExitCode {
         }
     };
     let mut p = plan::build(&outcome);
+    print_include_tagged_warning(args);
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
     if p.groups.is_empty() {
-        if p.too_recent() + p.in_flight() > 0 {
-            println!(
-                "\nNothing else here needs organising. Run again later, or pass\n\
-                 --since 0 to include everything."
+        if p.too_recent() + p.in_flight() + p.skipped_in_flight + p.tagged() > 0 {
+            print_hold_advice(
+                p.too_recent(),
+                p.in_flight() + p.skipped_in_flight,
+                p.tagged(),
             );
         } else {
             println!("\nNothing here needs organising.");
@@ -1348,6 +1390,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        include_tagged: has(args, "--include-tagged"),
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -1385,6 +1428,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     let mut p = plan::build_mapped(&outcome, &maps);
+    print_include_tagged_warning(args);
     for g in &mut p.groups {
         g.accepted = match &only {
             Some(n) => &g.name == n,

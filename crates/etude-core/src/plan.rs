@@ -98,6 +98,8 @@ pub struct Plan {
     /// `scanned` is a floor, not a total: some part of the tree was
     /// completely invisible to this scan.
     pub skipped_unreadable: usize,
+    /// Tagged Finder items held back by the default scan. Count only.
+    pub skipped_tagged: usize,
     pub root_is_synced: bool,
     /// The `--allow-sync` this plan's scan was actually run with. Copied
     /// straight from `ScanOutcome::allow_sync`. NOT derived from
@@ -167,6 +169,13 @@ impl Plan {
             .iter()
             .filter(|(_, u)| *u == Untouched::NoClearGroup)
             .count()
+    }
+
+    /// Finder-tagged items left alone by the default policy. This is kept
+    /// separate from `untouched`: no paths or tag names are available to a
+    /// caller.
+    pub fn tagged(&self) -> usize {
+        self.skipped_tagged
     }
 
     pub fn moves(&self) -> usize {
@@ -241,6 +250,7 @@ impl Plan {
                     ("looks_personal", j::num(personal)),
                     ("by_category", by_category),
                     ("too_recent", j::num(self.too_recent())),
+                    ("tagged", j::num(self.tagged())),
                     ("unknown_extensions", {
                         // Counts only, per codex's review: paths for the
                         // unknowns already appear under no_clear_group_paths,
@@ -734,6 +744,7 @@ pub fn build_with_maps(
         skipped_in_flight: scan.skipped_in_flight,
         skipped_package: scan.skipped_package,
         skipped_unreadable: scan.skipped_unreadable,
+        skipped_tagged: scan.skipped_tagged,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
     }
@@ -815,6 +826,7 @@ mod tests {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
             root_is_synced: false,
             allow_sync: false,
         }

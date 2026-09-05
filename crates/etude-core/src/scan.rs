@@ -295,6 +295,10 @@ pub struct ScanConfig {
     /// it on, because "clear this folder" is meaningless if a directory stays
     /// behind. Added when stash became the second caller.
     pub whole_units: bool,
+    /// Include items carrying a Finder tag. By default a tag is treated as
+    /// organisation metadata the owner may be using, so tagged items stay put.
+    /// The tag's value is never decoded or retained.
+    pub include_tagged: bool,
 }
 
 impl Default for ScanConfig {
@@ -308,6 +312,7 @@ impl Default for ScanConfig {
             allow_sync: false,
             max_entries: 20_000,
             whole_units: false,
+            include_tagged: false,
         }
     }
 }
@@ -459,6 +464,9 @@ pub struct ScanOutcome {
     /// unaccounted for and MUST be disclosed, or "Scanned N items" silently
     /// claims completeness it does not have.
     pub skipped_unreadable: usize,
+    /// Items left alone because they have Finder tags. This is a count only:
+    /// tag values and item paths are deliberately not retained.
+    pub skipped_tagged: usize,
     /// Directories not entered because they hold a project marker.
     ///
     /// Distinct from `skipped_system`: this is not policy about WHERE the
@@ -706,6 +714,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced,
         allow_sync: cfg.allow_sync,
     };
@@ -804,7 +813,6 @@ fn walk(
             out.skipped_system += 1;
             continue;
         }
-
         let is_dir = meta.is_dir();
         let pkg = is_dir && (is_package(&name) || cfg.whole_units);
 
@@ -856,6 +864,12 @@ fn walk(
                 }
                 Ok(None) => {}
             }
+            // Preserve the established system/package/in-flight/project
+            // accounting above before applying the tag hold. The probe uses
+            // XATTR_NOFOLLOW, so it asks about this directory entry only.
+            if !cfg.include_tagged && hold_for_tag_probe(has_finder_tag(&path), out) {
+                continue;
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -864,6 +878,16 @@ fn walk(
                 }
             }
             walk(root, &path, depth + 1, cfg, out, visited)?;
+            continue;
+        }
+
+        // This is a file or an already-unit directory. Its preceding policy
+        // refusals, if any, have already kept their established accounting.
+        // A tagged .part file is held here before plan classification, keeping
+        // its path private. Opting in still leaves the in-flight refusal intact.
+        // Presence is enough; do not decode the plist, which could disclose
+        // tag names. Finder comments are never queried here.
+        if !cfg.include_tagged && hold_for_tag_probe(has_finder_tag(&path), out) {
             continue;
         }
 
@@ -885,15 +909,360 @@ fn walk(
     Ok(())
 }
 
+/// Apply the count-only tag policy to an already-made probe. Both the error
+/// predicate and the real macOS ACL syscall path are covered below.
+fn hold_for_tag_probe(probe: io::Result<bool>, out: &mut ScanOutcome) -> bool {
+    match probe {
+        Ok(true) => {
+            out.skipped_tagged += 1;
+            true
+        }
+        Ok(false) => false,
+        // Unknown is not "untagged". A permission or syscall error must hold
+        // the item just as an unreadable directory does.
+        Err(_) => {
+            out.skipped_unreadable += 1;
+            true
+        }
+    }
+}
+
 #[cfg(unix)]
 unsafe extern "C" {
     #[link_name = "getuid"]
     fn libc_getuid() -> u32;
 }
 
+/// Whether Finder attached at least one tag to this item.
+///
+/// This deliberately asks only for the length of the tag xattr. The value is
+/// a plist containing tag names and colours; reading it would exceed the
+/// count-only contract. Finder comments use a separate xattr and are never
+/// named by this implementation.
+#[cfg(target_os = "macos")]
+fn has_finder_tag(path: &Path) -> io::Result<bool> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    // SAFETY: both C strings are NUL-terminated and getxattr only receives a
+    // null value buffer with length zero, so it cannot write Rust memory.
+    unsafe {
+        let result = getxattr(
+            path.as_ptr(),
+            c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            XATTR_NOFOLLOW,
+        );
+        if result >= 0 {
+            Ok(true)
+        } else {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(ENOATTR) {
+                Ok(false)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn has_finder_tag(_: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+/// Darwin's `XATTR_NOFOLLOW`: inspect the directory entry, not a symlink
+/// target. Kept local rather than adding a libc dependency to this zero-dep
+/// crate.
+#[cfg(target_os = "macos")]
+const XATTR_NOFOLLOW: i32 = 0x0001;
+
+/// `ENOATTR` from macOS SDK `usr/include/sys/errno.h`: the requested xattr
+/// is absent. It is distinct from permission and I/O failures, which scan
+/// holds and counts as unreadable.
+#[cfg(target_os = "macos")]
+const ENOATTR: i32 = 93;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn getxattr(
+        path: *const std::ffi::c_char,
+        name: *const std::ffi::c_char,
+        value: *mut std::ffi::c_void,
+        size: usize,
+        position: u32,
+        options: i32,
+    ) -> isize;
+    #[cfg(test)]
+    fn setxattr(
+        path: *const std::ffi::c_char,
+        name: *const std::ffi::c_char,
+        value: *const std::ffi::c_void,
+        size: usize,
+        position: u32,
+        options: i32,
+    ) -> i32;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_comments_are_not_tags_and_tag_values_are_never_needed() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        fn set_metadata(path: &Path, name: &str, value: &[u8]) {
+            let path = CString::new(path.as_os_str().as_bytes()).expect("path has no NUL");
+            let name = CString::new(name).expect("xattr name has no NUL");
+            // SAFETY: both strings and the byte slice live through the call;
+            // setxattr only reads the supplied value bytes.
+            let result = unsafe {
+                setxattr(
+                    path.as_ptr(),
+                    name.as_ptr(),
+                    value.as_ptr().cast(),
+                    value.len(),
+                    0,
+                    0,
+                )
+            };
+            assert_eq!(result, 0, "could not set test Finder metadata");
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "sweep_finder_metadata_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("mkdir");
+        let comment_only = root.join("comment-only.pdf");
+        let tagged = root.join("tagged.pdf");
+        fs::write(&comment_only, b"x").expect("write comment fixture");
+        fs::write(&tagged, b"x").expect("write tag fixture");
+
+        // A Finder comment is deliberately unrelated to the tag decision.
+        // Its bytes would be private content-like metadata, so scan must not
+        // query it. A deliberately non-plist tag value proves only presence
+        // is consulted: decoding a tag name is neither needed nor allowed.
+        set_metadata(
+            &comment_only,
+            "com.apple.metadata:kMDItemFinderComment",
+            b"do not read this comment",
+        );
+        set_metadata(
+            &tagged,
+            "com.apple.metadata:_kMDItemUserTags",
+            b"not decoded",
+        );
+
+        let default = scan(
+            &root,
+            &ScanConfig {
+                grace: None,
+                ..ScanConfig::default()
+            },
+        )
+        .expect("scan");
+        assert_eq!(default.skipped_tagged, 1, "only the tagged item is held");
+        assert_eq!(default.entries.len(), 1, "the comment-only item is scanned");
+        assert_eq!(
+            default.entries[0].path,
+            comment_only.canonicalize().unwrap()
+        );
+
+        let included = scan(
+            &root,
+            &ScanConfig {
+                grace: None,
+                include_tagged: true,
+                ..ScanConfig::default()
+            },
+        )
+        .expect("scan with explicit tag opt-in");
+        assert_eq!(included.skipped_tagged, 0);
+        assert_eq!(included.entries.len(), 2);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tagged_directories_stop_descent_and_tag_probes_do_not_follow_symlinks() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        fn set_tag(path: &Path) {
+            let path = CString::new(path.as_os_str().as_bytes()).expect("path has no NUL");
+            let result = unsafe {
+                setxattr(
+                    path.as_ptr(),
+                    c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
+                    b"present".as_ptr().cast(),
+                    b"present".len(),
+                    0,
+                    0,
+                )
+            };
+            assert_eq!(result, 0, "could not set test Finder tag");
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "sweep_tag_boundaries_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let tagged_dir = root.join("tagged-folder");
+        let child = tagged_dir.join("movable.pdf");
+        let target = root.join("tagged-target.pdf");
+        let link = root.join("link-to-target.pdf");
+        fs::create_dir_all(&tagged_dir).expect("mkdir tagged directory");
+        fs::write(&child, b"child").expect("write child");
+        fs::write(&target, b"target").expect("write target");
+        set_tag(&tagged_dir);
+        set_tag(&target);
+        std::os::unix::fs::symlink(&target, &link).expect("make symlink");
+
+        assert!(
+            !has_finder_tag(&link).expect("probe link itself"),
+            "a target's tag must not be read through the symlink"
+        );
+
+        let outcome = scan(
+            &root,
+            &ScanConfig {
+                depth: 2,
+                grace: None,
+                ..ScanConfig::default()
+            },
+        )
+        .expect("scan");
+        assert_eq!(
+            outcome.skipped_tagged, 2,
+            "tagged directory and file are held"
+        );
+        assert!(
+            outcome
+                .entries
+                .iter()
+                .all(|entry| entry.path != child.canonicalize().unwrap()),
+            "a held tagged directory must not be descended into"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn finder_tag_acl_denial_is_held_by_full_scan() {
+        use std::process::Command;
+        let root = std::env::temp_dir().join(format!("sweep_tag_acl_{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let denied = root.join("denied-folder");
+        fs::create_dir_all(&denied).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = Command::new("chmod")
+                    .args(["-N"])
+                    .arg(self.0.join("denied-folder"))
+                    .status();
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        assert!(
+            Command::new("chmod")
+                .args(["+a", "everyone deny readextattr"])
+                .arg(&denied)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            has_finder_tag(&denied)
+                .expect_err("real ACL must deny getxattr")
+                .raw_os_error(),
+            Some(13)
+        );
+        // Whole units makes the directory itself a candidate, avoiding an
+        // unrelated read_dir denial masking the metadata syscall contract.
+        let outcome = scan(
+            &root,
+            &ScanConfig {
+                grace: None,
+                whole_units: true,
+                ..ScanConfig::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.skipped_unreadable, 1);
+        assert_eq!(outcome.skipped_tagged, 0);
+        assert!(outcome.entries.is_empty());
+    }
+
+    #[test]
+    fn scan_metadata_syscall_is_tag_only_and_never_requests_values() {
+        // Pin the syscall boundary as well as the behavioral comment fixture:
+        // a comment read whose result was discarded must fail this test too.
+        let source = include_str!("scan.rs");
+        let production = source.split("mod tests {").next().unwrap();
+        assert!(!production.contains("kMDItemFinderComment"));
+        assert!(!production.contains("listxattr("));
+        let apply = include_str!("apply.rs")
+            .split("mod tests {")
+            .next()
+            .unwrap();
+        assert!(!apply.contains("kMDItemFinderComment"));
+        assert!(!apply.contains("listxattr("));
+        let probe = production
+            .split("fn has_finder_tag(path:")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(not(target_os")
+            .next()
+            .unwrap();
+        assert_eq!(probe.matches("getxattr(").count(), 1);
+        assert!(probe.contains("c\"com.apple.metadata:_kMDItemUserTags\".as_ptr(),\n            std::ptr::null_mut(),\n            0,"));
+    }
+
+    #[test]
+    fn finder_tag_probe_permission_error_is_held_as_unreadable() {
+        let mut out = ScanOutcome {
+            root: std::env::temp_dir(),
+            grace: None,
+            entries: Vec::new(),
+            skipped_hidden: 0,
+            skipped_symlink: 0,
+            skipped_system: 0,
+            skipped_project: 0,
+            skipped_in_flight: 0,
+            skipped_package: 0,
+            skipped_unreadable: 0,
+            skipped_tagged: 0,
+            root_is_synced: false,
+            allow_sync: false,
+        };
+
+        assert!(hold_for_tag_probe(
+            Err(io::Error::from_raw_os_error(13)), // EACCES
+            &mut out
+        ));
+        assert_eq!(out.skipped_unreadable, 1);
+        assert_eq!(out.skipped_tagged, 0);
+    }
 
     // Every entry in both lists is tested by DERIVING the test from the list,
     // not by restating it. The project-file-extension space is large and

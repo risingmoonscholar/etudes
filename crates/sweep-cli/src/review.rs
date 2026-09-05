@@ -220,6 +220,7 @@ mod tests {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
             root_is_synced: false,
             allow_sync: false,
         }

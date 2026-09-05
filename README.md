@@ -1,12 +1,13 @@
 # etudes
 
 Three small command-line tools that tidy a folder without reading your private files.
+Sweep reads filesystem and Finder organization metadata, never file contents.
 
 **macOS only.**
 ```console
 $ sweep ~/Desktop
 
-Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
+Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no contents read
 
   Screenshots      34 files   named "Screenshot ..."
   Photos, Jan 15   27 files   camera names, taken within 3 days
@@ -66,7 +67,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 251 tests
+cargo test --all                # 257 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -122,6 +123,13 @@ with the partial data inside it.
 not a file to be filed. `--since 6h` narrows the window, `--since 0` turns it
 off, and an unreadable value is an error rather than a silent fallback to the
 default.
+
+**Finder-tagged items.** A Finder tag is organization metadata that may carry
+your own workflow, so sweep leaves tagged items alone by default and reports
+only how many it held back—not tag names or paths. `--include-tagged` is a
+loud opt-in to organize them; a move preserves the existing tag. Finder
+comments are never read. A tagged partial-download file counts as tagged by
+default; opting in still leaves it held as a download until it finishes.
 
 ```console
 $ sweep ~/Downloads

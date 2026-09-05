@@ -74,6 +74,7 @@ fn stash_plan(root: &Path) -> (Plan, usize) {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: out.skipped_unreadable,
+            skipped_tagged: out.skipped_tagged,
             root_is_synced: out.root_is_synced,
             allow_sync: out.allow_sync,
         },

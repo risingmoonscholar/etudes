@@ -354,6 +354,7 @@ fn apply_refuses_when_two_planned_destinations_collide() {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -429,6 +430,7 @@ fn apply_refuses_when_two_planned_destinations_are_nfc_nfd_of_same_name() {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -486,6 +488,7 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -506,6 +509,7 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -602,6 +606,7 @@ fn apply_refuses_synced_destination_when_allow_sync_was_never_granted() {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -658,6 +663,7 @@ fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: out.root_is_synced,
         allow_sync: out.allow_sync,
     };
@@ -729,6 +735,7 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: out.root_is_synced,
         allow_sync: out.allow_sync,
     };
@@ -1322,4 +1329,112 @@ fn files_sharing_a_word_are_split_by_what_they_are() {
     );
 
     cleanup(&root);
+}
+
+/// Supply a writable directory on a different real volume. The test refuses
+/// same-device fixtures; it never substitutes a simulated EXDEV result.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires ETUDE_TAG_TEST_VOLUME on a second mounted volume"]
+fn finder_tags_survive_cross_volume_move_and_journal_undo() {
+    use std::os::unix::fs::MetadataExt;
+    use std::process::Command;
+    let _g = lock();
+    let volume =
+        PathBuf::from(std::env::var_os("ETUDE_TAG_TEST_VOLUME").expect("second volume required"));
+    let root = std::env::temp_dir().join(format!("sweep_tag_roundtrip_{}", std::process::id()));
+    let dest = volume.join(format!("sweep_tag_roundtrip_{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&dest).unwrap();
+    struct Cleanup(PathBuf, PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.1);
+        }
+    }
+    let _cleanup = Cleanup(root.clone(), dest.clone());
+    assert_ne!(
+        fs::metadata(&root).unwrap().dev(),
+        fs::metadata(&dest).unwrap().dev()
+    );
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", root.join("state")) };
+    let from = root.join("tagged.pdf");
+    let to = dest.join("tagged.pdf");
+    fs::write(&from, b"synthetic file payload").unwrap();
+    let tag = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><array><string>Work\n6</string><string>Keep</string></array></plist>";
+    for (name, bytes) in [
+        ("com.apple.metadata:_kMDItemUserTags", tag.as_slice()),
+        (
+            "com.apple.metadata:kMDItemFinderComment",
+            b"private comment".as_slice(),
+        ),
+    ] {
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert!(
+            Command::new("xattr")
+                .args(["-wx", name, &hex])
+                .arg(&from)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fn tag_bytes(path: &std::path::Path) -> Vec<u8> {
+        let out = Command::new("xattr")
+            .args(["-px", "com.apple.metadata:_kMDItemUserTags"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let hex: String = String::from_utf8(out.stdout)
+            .unwrap()
+            .split_whitespace()
+            .collect();
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    fn no_comment(path: &std::path::Path) {
+        // Enumerate destination names only; never read a comment value.
+        let out = Command::new("xattr").arg(path).output().unwrap();
+        assert!(out.status.success());
+        assert!(
+            !String::from_utf8(out.stdout)
+                .unwrap()
+                .contains("kMDItemFinderComment")
+        );
+    }
+    assert_eq!(tag_bytes(&from), tag);
+    assert_eq!(
+        apply::move_one_for_tests(&from, &to).unwrap(),
+        Method::CopyUnlink
+    );
+    assert!(!from.exists());
+    assert_eq!(tag_bytes(&to), tag);
+    no_comment(&to);
+    let (size, mtime_secs, inode, edge_hash) = etude_core::journal::fingerprint(&to).unwrap();
+    let mut journal = Journal {
+        id: "tag-roundtrip".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        progress_tail_damaged: false,
+        entries: vec![Entry {
+            from: from.clone(),
+            to: to.clone(),
+            method: Method::CopyUnlink,
+            size,
+            mtime_secs,
+            inode,
+            edge_hash,
+            state: etude_core::journal::EntryState::Moved,
+        }],
+    };
+    journal.save_sealed(&TestSeal).unwrap();
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none(), "{:?}", report.error);
+    assert!(!to.exists());
+    assert_eq!(tag_bytes(&from), tag);
+    no_comment(&from);
 }

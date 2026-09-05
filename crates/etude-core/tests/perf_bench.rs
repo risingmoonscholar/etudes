@@ -62,6 +62,7 @@ fn build_bench_plan(root: &std::path::Path, n: usize) -> Plan {
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
         root_is_synced: false,
         allow_sync: false,
     }
@@ -104,4 +105,40 @@ fn apply_journal_overhead_2000_files() {
 
     let _ = fs::remove_dir_all(&base);
     unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+}
+
+#[test]
+#[ignore = "benchmark: creates 2000 files and compares metadata probe cost"]
+fn scan_finder_tag_probe_overhead_2000_files() {
+    use etude_core::scan::{ScanConfig, scan};
+    let root = std::env::temp_dir().join(format!("sweep_scan_bench_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    build_bench_plan(&root, N);
+    let mut elapsed = [std::time::Duration::ZERO; 2];
+    // Alternate order to reduce systematic warm-cache bias.
+    for round in 0..10 {
+        for slot in [round % 2, 1 - round % 2] {
+            let start = Instant::now();
+            let outcome = scan(
+                &root,
+                &ScanConfig {
+                    grace: None,
+                    include_tagged: slot == 1,
+                    ..ScanConfig::default()
+                },
+            )
+            .unwrap();
+            elapsed[slot] += start.elapsed();
+            assert_eq!(outcome.entries.len(), N);
+            assert_eq!(outcome.skipped_unreadable, 0);
+            assert_eq!(outcome.skipped_tagged, 0);
+        }
+    }
+    println!(
+        "N={N} mean scan: tag-probe={:.3}ms opt-in-no-probe={:.3}ms ratio={:.2}x",
+        elapsed[0].as_secs_f64() * 100.0,
+        elapsed[1].as_secs_f64() * 100.0,
+        elapsed[0].as_secs_f64() / elapsed[1].as_secs_f64()
+    );
+    fs::remove_dir_all(root).unwrap();
 }
