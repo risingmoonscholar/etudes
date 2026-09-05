@@ -1331,17 +1331,62 @@ fn files_sharing_a_word_are_split_by_what_they_are() {
     cleanup(&root);
 }
 
-/// Supply a writable directory on a different real volume. The test refuses
-/// same-device fixtures; it never substitutes a simulated EXDEV result.
+/// A second real volume for the cross-volume test. `ETUDE_TAG_TEST_VOLUME`
+/// names one if a person has it mounted; otherwise the test provisions a
+/// small APFS ramdisk itself and ejects it on drop. The test never runs on
+/// the same device and never substitutes a simulated EXDEV result: a machine
+/// that cannot provide a second volume fails this test rather than skipping
+/// the only move that copies tags.
+#[cfg(target_os = "macos")]
+struct SecondVolume {
+    path: PathBuf,
+    device: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+impl SecondVolume {
+    fn provision() -> SecondVolume {
+        use std::process::Command;
+        if let Some(v) = std::env::var_os("ETUDE_TAG_TEST_VOLUME") {
+            return SecondVolume { path: PathBuf::from(v), device: None };
+        }
+        let attach = Command::new("hdiutil")
+            .args(["attach", "-nomount", "ram://65536"])
+            .output()
+            .expect("hdiutil is part of macOS");
+        assert!(attach.status.success(), "could not create a ramdisk for the second volume");
+        let device = String::from_utf8_lossy(&attach.stdout)
+            .split_whitespace()
+            .next()
+            .expect("hdiutil prints the device")
+            .to_string();
+        let name = format!("sweeptagtest{}", std::process::id());
+        let erase = Command::new("diskutil")
+            .args(["erasevolume", "APFS", &name, &device])
+            .output()
+            .expect("diskutil is part of macOS");
+        assert!(erase.status.success(), "could not format the ramdisk: {}", String::from_utf8_lossy(&erase.stderr));
+        SecondVolume { path: PathBuf::from("/Volumes").join(name), device: Some(device) }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for SecondVolume {
+    fn drop(&mut self) {
+        if let Some(d) = &self.device {
+            let _ = std::process::Command::new("diskutil").args(["eject", d]).output();
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[test]
-#[ignore = "requires ETUDE_TAG_TEST_VOLUME on a second mounted volume"]
 fn finder_tags_survive_cross_volume_move_and_journal_undo() {
     use std::os::unix::fs::MetadataExt;
     use std::process::Command;
     let _g = lock();
-    let volume =
-        PathBuf::from(std::env::var_os("ETUDE_TAG_TEST_VOLUME").expect("second volume required"));
+    let second = SecondVolume::provision();
+    let volume = second.path.clone();
     let root = std::env::temp_dir().join(format!("sweep_tag_roundtrip_{}", std::process::id()));
     let dest = volume.join(format!("sweep_tag_roundtrip_{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
