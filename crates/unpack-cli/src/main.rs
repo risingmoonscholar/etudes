@@ -1365,6 +1365,8 @@ mod tests {
             b"select 1;\n"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn a_cleanup_failure_names_the_partial_extraction_and_its_location() {
         let dest =
             std::env::temp_dir().join(format!("unpack-cleanup-failure-{}", std::process::id()));
