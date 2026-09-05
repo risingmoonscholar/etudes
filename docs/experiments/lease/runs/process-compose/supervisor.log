@@ -1,0 +1,15 @@
+{"level":"debug","error":"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]","time":"2026-09-05T15:01:36-07:00","message":"Path not found for process compose config home"}
+{"level":"debug","error":"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]","time":"2026-09-05T15:01:36-07:00","message":"Path not found for process compose config home"}
+]0;process-compose: Mac.attlocal.net/lease-baseline-7tq9eq71[task-b	] {"event": "started", "pid": 40172, "pgid": 40172, "sid": 40171, "port": 61175, "mode": "ordinary", "child_pid": null}
+[task-a	] {"event": "started", "pid": 40173, "pgid": 40173, "sid": 40171, "port": 61176, "mode": "tree", "child_pid": 40175}
+[task-a	] {"event": "started", "pid": 40175, "pgid": 40173, "sid": 40171, "port": 61179, "mode": "ordinary", "child_pid": null}
+[task-a	] {"event": "exiting", "pid": 40175, "reason": "signal"}
+[task-a	] {"event": "exiting", "pid": 40173, "reason": "signal"}
+[escaped	] {"event": "started", "pid": 40367, "pgid": 40367, "sid": 40171, "port": 61200, "mode": "escaped", "child_pid": 40368}
+[escaped	] {"event": "started", "pid": 40368, "pgid": 40368, "sid": 40368, "port": 61201, "mode": "ordinary", "child_pid": null}
+[escaped	] {"event": "exiting", "pid": 40367, "reason": "signal"}
+[resistant	] {"event": "started", "pid": 40400, "pgid": 40400, "sid": 40171, "port": 61212, "mode": "ignore-term", "child_pid": null}
+[expiry	] {"event": "started", "pid": 40654, "pgid": 40654, "sid": 40171, "port": 61225, "mode": "ordinary", "child_pid": null}
+[expiry	] {"event": "exiting", "pid": 40654, "reason": "signal"}
+[task-a	] {"event": "started", "pid": 62799, "pgid": 62799, "sid": 40171, "port": 61247, "mode": "tree", "child_pid": 63094}
+[task-a	] {"event": "exiting", "pid": 62799, "reason": "signal"}

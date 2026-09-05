@@ -1,0 +1,56 @@
+{
+  "version": "0.5",
+  "processes": {
+    "source": {
+      "command": "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py --mode escaped",
+      "working_dir": "/tmp/lease-baseline-yjwzkwu5/escaped",
+      "shutdown": {
+        "signal": 15,
+        "timeout_seconds": 2
+      },
+      "readiness_probe": {
+        "exec": {
+          "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/probe.py"
+        },
+        "period_seconds": 1,
+        "failure_threshold": 100
+      }
+    },
+    "process_started": {
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; import datetime; Path('\"'\"'/tmp/lease-baseline-yjwzkwu5/process_started.receipt'\"'\"').write_text(datetime.datetime.now(datetime.timezone.utc).isoformat())'",
+      "working_dir": "/tmp/lease-baseline-yjwzkwu5",
+      "depends_on": {
+        "source": {
+          "condition": "process_started"
+        }
+      }
+    },
+    "process_healthy": {
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; import datetime; Path('\"'\"'/tmp/lease-baseline-yjwzkwu5/process_healthy.receipt'\"'\"').write_text(datetime.datetime.now(datetime.timezone.utc).isoformat())'",
+      "working_dir": "/tmp/lease-baseline-yjwzkwu5",
+      "depends_on": {
+        "source": {
+          "condition": "process_healthy"
+        }
+      }
+    },
+    "process_completed": {
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; import datetime; Path('\"'\"'/tmp/lease-baseline-yjwzkwu5/process_completed.receipt'\"'\"').write_text(datetime.datetime.now(datetime.timezone.utc).isoformat())'",
+      "working_dir": "/tmp/lease-baseline-yjwzkwu5",
+      "depends_on": {
+        "source": {
+          "condition": "process_completed"
+        }
+      }
+    },
+    "process_completed_successfully": {
+      "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; import datetime; Path('\"'\"'/tmp/lease-baseline-yjwzkwu5/process_completed_successfully.receipt'\"'\"').write_text(datetime.datetime.now(datetime.timezone.utc).isoformat())'",
+      "working_dir": "/tmp/lease-baseline-yjwzkwu5",
+      "depends_on": {
+        "source": {
+          "condition": "process_completed_successfully"
+        }
+      }
+    }
+  }
+}

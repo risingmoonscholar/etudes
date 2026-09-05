@@ -1,0 +1,411 @@
+[
+  {
+    "n": 176,
+    "time": "2026-09-05T22:03:51.155254+00:00",
+    "kind": "phase",
+    "name": "final-observations"
+  },
+  {
+    "n": 177,
+    "time": "2026-09-05T22:03:51.155503+00:00",
+    "kind": "http",
+    "label": "unrelated",
+    "url": "http://127.0.0.1:61171/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 178,
+    "time": "2026-09-05T22:03:51.155570+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40131",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40131 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 179,
+    "time": "2026-09-05T22:03:51.158173+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40131",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40131 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 180,
+    "time": "2026-09-05T22:03:51.158630+00:00",
+    "kind": "http",
+    "label": "task-a",
+    "url": "http://127.0.0.1:61176/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 181,
+    "time": "2026-09-05T22:03:51.158732+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40173",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40173 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 182,
+    "time": "2026-09-05T22:03:51.160967+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40173",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40173 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 183,
+    "time": "2026-09-05T22:03:51.161441+00:00",
+    "kind": "http",
+    "label": "task-a/child",
+    "url": "http://127.0.0.1:61179/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 184,
+    "time": "2026-09-05T22:03:51.161557+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40175",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40175 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 185,
+    "time": "2026-09-05T22:03:51.163945+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40175",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40175 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 186,
+    "time": "2026-09-05T22:03:51.164332+00:00",
+    "kind": "http",
+    "label": "task-b",
+    "url": "http://127.0.0.1:61175/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 187,
+    "time": "2026-09-05T22:03:51.164402+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40172",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40172 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 188,
+    "time": "2026-09-05T22:03:51.166819+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40172",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40172 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 189,
+    "time": "2026-09-05T22:03:51.167229+00:00",
+    "kind": "http",
+    "label": "escaped",
+    "url": "http://127.0.0.1:61200/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 190,
+    "time": "2026-09-05T22:03:51.167299+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40367",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40367 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 191,
+    "time": "2026-09-05T22:03:51.169567+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40367",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40367 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 192,
+    "time": "2026-09-05T22:03:51.170049+00:00",
+    "kind": "http",
+    "label": "escaped/child",
+    "url": "http://127.0.0.1:61201/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 193,
+    "time": "2026-09-05T22:03:51.170176+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40368",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40368 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 194,
+    "time": "2026-09-05T22:03:51.172353+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40368",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40368 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 195,
+    "time": "2026-09-05T22:03:51.172775+00:00",
+    "kind": "http",
+    "label": "resistant",
+    "url": "http://127.0.0.1:61212/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 196,
+    "time": "2026-09-05T22:03:51.172839+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40400",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40400 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 197,
+    "time": "2026-09-05T22:03:51.174981+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40400",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40400 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 198,
+    "time": "2026-09-05T22:03:51.175411+00:00",
+    "kind": "http",
+    "label": "expiry",
+    "url": "http://127.0.0.1:61225/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 199,
+    "time": "2026-09-05T22:03:51.175485+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40654",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40654 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 200,
+    "time": "2026-09-05T22:03:51.177610+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "40654",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 40654 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 201,
+    "time": "2026-09-05T22:03:51.178014+00:00",
+    "kind": "http",
+    "label": "replacement-incarnation",
+    "url": "http://127.0.0.1:61247/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 202,
+    "time": "2026-09-05T22:03:51.178090+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "62799",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 62799 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71"
+  },
+  {
+    "n": 203,
+    "time": "2026-09-05T22:03:51.180201+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "62799",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 62799 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-7tq9eq71",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 204,
+    "time": "2026-09-05T22:03:51.180553+00:00",
+    "kind": "spawn-result",
+    "name": "unrelated",
+    "pid": 40131,
+    "returncode": 0,
+    "stdout_stderr": "{\"event\": \"started\", \"pid\": 40131, \"pgid\": 40131, \"sid\": 40131, \"port\": 61171, \"mode\": \"ordinary\", \"child_pid\": null}\n{\"event\": \"exiting\", \"pid\": 40131, \"reason\": \"signal\"}\n"
+  },
+  {
+    "n": 205,
+    "time": "2026-09-05T22:03:51.181080+00:00",
+    "kind": "spawn-result",
+    "name": "supervisor",
+    "pid": 40171,
+    "returncode": -9,
+    "stdout_stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:36-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:36-07:00\",\"message\":\"Path not found for process compose config home\"}\n\u001b]0;process-compose: Mac.attlocal.net/lease-baseline-7tq9eq71\u0007[task-b\t] {\"event\": \"started\", \"pid\": 40172, \"pgid\": 40172, \"sid\": 40171, \"port\": 61175, \"mode\": \"ordinary\", \"child_pid\": null}\n[task-a\t] {\"event\": \"started\", \"pid\": 40173, \"pgid\": 40173, \"sid\": 40171, \"port\": 61176, \"mode\": \"tree\", \"child_pid\": 40175}\n[task-a\t] {\"event\": \"started\", \"pid\": 40175, \"pgid\": 40173, \"sid\": 40171, \"port\": 61179, \"mode\": \"ordinary\", \"child_pid\": null}\n[task-a\t] {\"event\": \"exiting\", \"pid\": 40175, \"reason\": \"signal\"}\n[task-a\t] {\"event\": \"exiting\", \"pid\": 40173, \"reason\": \"signal\"}\n[escaped\t] {\"event\": \"started\", \"pid\": 40367, \"pgid\": 40367, \"sid\": 40171, \"port\": 61200, \"mode\": \"escaped\", \"child_pid\": 40368}\n[escaped\t] {\"event\": \"started\", \"pid\": 40368, \"pgid\": 40368, \"sid\": 40368, \"port\": 61201, \"mode\": \"ordinary\", \"child_pid\": null}\n[escaped\t] {\"event\": \"exiting\", \"pid\": 40367, \"reason\": \"signal\"}\n[resistant\t] {\"event\": \"started\", \"pid\": 40400, \"pgid\": 40400, \"sid\": 40171, \"port\": 61212, \"mode\": \"ignore-term\", \"child_pid\": null}\n[expiry\t] {\"event\": \"started\", \"pid\": 40654, \"pgid\": 40654, \"sid\": 40171, \"port\": 61225, \"mode\": \"ordinary\", \"child_pid\": null}\n[expiry\t] {\"event\": \"exiting\", \"pid\": 40654, \"reason\": \"signal\"}\n[task-a\t] {\"event\": \"started\", \"pid\": 62799, \"pgid\": 62799, \"sid\": 40171, \"port\": 61247, \"mode\": \"tree\", \"child_pid\": 63094}\n[task-a\t] {\"event\": \"exiting\", \"pid\": 62799, \"reason\": \"signal\"}\n"
+  },
+  {
+    "n": 206,
+    "time": "2026-09-05T22:03:51.181520+00:00",
+    "kind": "spawn-result",
+    "name": "expiry-timer",
+    "pid": 40666,
+    "returncode": 0,
+    "stdout_stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:48-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:48-07:00\",\"message\":\"Path not found for process compose config home\"}\n\u001b]0;process-compose: Mac.attlocal.net/lease-baseline-7tq9eq71\u0007[expiry-timer\t] {\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:53-07:00\",\"message\":\"Path not found for process compose config home\"}\n[expiry-timer\t] {\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:53-07:00\",\"message\":\"Path not found for process compose config home\"}\n[expiry-timer\t] Successfully stopped: 'expiry'\n"
+  },
+  {
+    "n": 207,
+    "time": "2026-09-05T22:03:51.182121+00:00",
+    "kind": "spawn-result",
+    "name": "recovered-supervisor",
+    "pid": 68206,
+    "returncode": 0,
+    "stdout_stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:57-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:57-07:00\",\"message\":\"Path not found for process compose config home\"}\n\u001b]0;process-compose: Mac.attlocal.net/lease-baseline-7tq9eq71\u0007Project Completed. Press Ctrl+C to quit\n"
+  },
+  {
+    "n": 208,
+    "time": "2026-09-05T22:03:51.182379+00:00",
+    "kind": "complete",
+    "root": "/tmp/lease-baseline-7tq9eq71",
+    "note": "Observed receipts only; independent witness decides acceptance. No actual OS PID reuse was forced."
+  }
+]

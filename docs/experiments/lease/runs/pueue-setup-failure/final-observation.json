@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+    "-c",
+    "import json,subprocess,urllib.request,urllib.error\nfrom pathlib import Path\nroot=Path('/tmp/lease-baseline-gur295ov')\nident=json.loads((root/'unrelated'/'identity.json').read_text())\nurl='http://127.0.0.1:%s/'%ident['port']\ntry:\n with urllib.request.urlopen(url,timeout=1) as r: print(json.dumps({'url':url,'status':r.status,'body':r.read().decode()}))\nexcept Exception as e: print(json.dumps({'url':url,'error':str(e)}))\nargv=['/bin/ps','-p',str(ident['pid']),'-o','pid=,ppid=,pgid=,stat=,lstart=,comm=']\nr=subprocess.run(argv,text=True,capture_output=True)\nprint(json.dumps({'argv':argv,'returncode':r.returncode,'stdout':r.stdout,'stderr':r.stderr}))\n"
+  ],
+  "cwd": "/Users/festus/Documents/dev-projects/etudes-wt/lease-baseline",
+  "returncode": 0,
+  "stdout": "{\"url\": \"http://127.0.0.1:61353/\", \"error\": \"<urlopen error [Errno 61] Connection refused>\"}\n{\"argv\": [\"/bin/ps\", \"-p\", \"90057\", \"-o\", \"pid=,ppid=,pgid=,stat=,lstart=,comm=\"], \"returncode\": 1, \"stdout\": \"\", \"stderr\": \"\"}\n",
+  "stderr": ""
+}

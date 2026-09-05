@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+    "-c",
+    "import json,subprocess,urllib.request,urllib.error\nfrom pathlib import Path\nroot=Path('/tmp/lease-baseline-gur295ov')\nident=json.loads((root/'unrelated'/'identity.json').read_text())\nurl='http://127.0.0.1:%s/'%ident['port']\ntry:\n with urllib.request.urlopen(url,timeout=1) as r: print(json.dumps({'url':url,'status':r.status,'body':r.read().decode()}))\nexcept Exception as e: print(json.dumps({'url':url,'error':str(e)}))\nargv=['/bin/ps','-p',str(ident['pid']),'-o','pid=,ppid=,pgid=,stat=,lstart=,comm=']\nr=subprocess.run(argv,text=True,capture_output=True)\nprint(json.dumps({'argv':argv,'returncode':r.returncode,'stdout':r.stdout,'stderr':r.stderr}))\n"
+  ],
+  "cwd": "/Users/festus/Documents/dev-projects/etudes-wt/lease-baseline",
+  "returncode": 1,
+  "stdout": "{\"url\": \"http://127.0.0.1:61353/\", \"error\": \"<urlopen error [Errno 1] Operation not permitted>\"}\n",
+  "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 10, in <module>\n    r=subprocess.run(argv,text=True,capture_output=True)\n  File \"/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py\", line 555, in run\n    with Popen(*popenargs, **kwargs) as process:\n         ~~~~~^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py\", line 1039, in __init__\n    self._execute_child(args, executable, preexec_fn, close_fds,\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                        pass_fds, cwd, env,\n                        ^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n                        gid, gids, uid, umask,\n                        ^^^^^^^^^^^^^^^^^^^^^^\n                        start_new_session, process_group)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py\", line 1990, in _execute_child\n    raise child_exception_type(errno_num, err_msg, err_filename)\nPermissionError: [Errno 1] Operation not permitted: '/bin/ps'\n"
+}

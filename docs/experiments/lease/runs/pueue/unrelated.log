@@ -1,0 +1,2 @@
+{"event": "started", "pid": 93010, "pgid": 93010, "sid": 93010, "port": 61485, "mode": "ordinary", "child_pid": null}
+{"event": "exiting", "pid": 93010, "reason": "signal"}

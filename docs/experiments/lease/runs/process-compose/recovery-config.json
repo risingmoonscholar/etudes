@@ -1,0 +1,59 @@
+{
+  "version": "0.5",
+  "processes": {
+    "task-a": {
+      "command": "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py --mode tree",
+      "working_dir": "/tmp/lease-baseline-7tq9eq71/task-a",
+      "disabled": true,
+      "shutdown": {
+        "signal": 15,
+        "timeout_seconds": 2
+      }
+    },
+    "task-b": {
+      "command": "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py --mode ordinary",
+      "working_dir": "/tmp/lease-baseline-7tq9eq71/task-b",
+      "disabled": true,
+      "shutdown": {
+        "signal": 15,
+        "timeout_seconds": 2
+      },
+      "readiness_probe": {
+        "exec": {
+          "command": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/probe.py"
+        },
+        "period_seconds": 1,
+        "timeout_seconds": 2,
+        "failure_threshold": 100,
+        "success_threshold": 1
+      }
+    },
+    "escaped": {
+      "command": "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py --mode escaped",
+      "working_dir": "/tmp/lease-baseline-7tq9eq71/escaped",
+      "disabled": true,
+      "shutdown": {
+        "signal": 15,
+        "timeout_seconds": 2
+      }
+    },
+    "resistant": {
+      "command": "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py --mode ignore-term",
+      "working_dir": "/tmp/lease-baseline-7tq9eq71/resistant",
+      "disabled": true,
+      "shutdown": {
+        "signal": 15,
+        "timeout_seconds": 2
+      }
+    },
+    "expiry": {
+      "command": "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py --mode ordinary",
+      "working_dir": "/tmp/lease-baseline-7tq9eq71/expiry",
+      "disabled": true,
+      "shutdown": {
+        "signal": 15,
+        "timeout_seconds": 2
+      }
+    }
+  }
+}
