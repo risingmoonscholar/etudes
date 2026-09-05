@@ -66,7 +66,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 257 tests
+cargo test --all                # 261 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
