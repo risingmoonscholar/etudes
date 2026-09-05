@@ -1348,13 +1348,19 @@ impl SecondVolume {
     fn provision() -> SecondVolume {
         use std::process::Command;
         if let Some(v) = std::env::var_os("ETUDE_TAG_TEST_VOLUME") {
-            return SecondVolume { path: PathBuf::from(v), device: None };
+            return SecondVolume {
+                path: PathBuf::from(v),
+                device: None,
+            };
         }
         let attach = Command::new("hdiutil")
             .args(["attach", "-nomount", "ram://65536"])
             .output()
             .expect("hdiutil is part of macOS");
-        assert!(attach.status.success(), "could not create a ramdisk for the second volume");
+        assert!(
+            attach.status.success(),
+            "could not create a ramdisk for the second volume"
+        );
         let device = String::from_utf8_lossy(&attach.stdout)
             .split_whitespace()
             .next()
@@ -1365,8 +1371,15 @@ impl SecondVolume {
             .args(["erasevolume", "APFS", &name, &device])
             .output()
             .expect("diskutil is part of macOS");
-        assert!(erase.status.success(), "could not format the ramdisk: {}", String::from_utf8_lossy(&erase.stderr));
-        SecondVolume { path: PathBuf::from("/Volumes").join(name), device: Some(device) }
+        assert!(
+            erase.status.success(),
+            "could not format the ramdisk: {}",
+            String::from_utf8_lossy(&erase.stderr)
+        );
+        SecondVolume {
+            path: PathBuf::from("/Volumes").join(name),
+            device: Some(device),
+        }
     }
 }
 
@@ -1374,7 +1387,9 @@ impl SecondVolume {
 impl Drop for SecondVolume {
     fn drop(&mut self) {
         if let Some(d) = &self.device {
-            let _ = std::process::Command::new("diskutil").args(["eject", d]).output();
+            let _ = std::process::Command::new("diskutil")
+                .args(["eject", d])
+                .output();
         }
     }
 }
