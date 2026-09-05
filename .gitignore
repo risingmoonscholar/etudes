@@ -7,3 +7,5 @@ crates/graphify-out/
 # Evidence kept from a failing stress trial. Written into the workspace in
 # CI so the upload step can reach it; never intended to be committed.
 stress-evidence/
+__pycache__/
+*.pyc
