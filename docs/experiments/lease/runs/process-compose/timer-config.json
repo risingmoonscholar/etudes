@@ -1,0 +1,1 @@
+{"version": "0.5", "processes": {"expiry-timer": {"command": "sleep 4; process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop expiry", "working_dir": "/tmp/lease-baseline-7tq9eq71"}}}

@@ -1,0 +1,71 @@
+{
+  "unit": "lease-baseline",
+  "root": "/tmp/lease-baseline-yjwzkwu5",
+  "purpose": "synthetic inputs; no acceptance execution or verdict",
+  "worker_sha256": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+  "projects": [
+    {
+      "name": "task-a",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/task-a",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/task-a && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    },
+    {
+      "name": "task-b",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/task-b",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/task-b && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    },
+    {
+      "name": "unrelated",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/unrelated",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/unrelated && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    },
+    {
+      "name": "replacement",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/replacement",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/replacement && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    },
+    {
+      "name": "escaped",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/escaped",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/escaped && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    },
+    {
+      "name": "resistant",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/resistant",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/resistant && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    },
+    {
+      "name": "expiry",
+      "cwd": "/tmp/lease-baseline-yjwzkwu5/expiry",
+      "argv": [
+        "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+        "/tmp/lease-baseline-yjwzkwu5/worker.py"
+      ],
+      "shell_command": "cd /tmp/lease-baseline-yjwzkwu5/expiry && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-yjwzkwu5/worker.py"
+    }
+  ]
+}

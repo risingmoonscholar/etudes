@@ -1,0 +1,411 @@
+[
+  {
+    "n": 192,
+    "time": "2026-09-05T22:05:23.306999+00:00",
+    "kind": "phase",
+    "name": "final-observations"
+  },
+  {
+    "n": 193,
+    "time": "2026-09-05T22:05:23.307377+00:00",
+    "kind": "http",
+    "label": "unrelated",
+    "url": "http://127.0.0.1:61485/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 194,
+    "time": "2026-09-05T22:05:23.307670+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93010",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93010 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 195,
+    "time": "2026-09-05T22:05:23.311098+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93010",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93010 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 196,
+    "time": "2026-09-05T22:05:23.311622+00:00",
+    "kind": "http",
+    "label": "task-a",
+    "url": "http://127.0.0.1:61491/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 197,
+    "time": "2026-09-05T22:05:23.311877+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93177",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93177 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 198,
+    "time": "2026-09-05T22:05:23.314237+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93177",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93177 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 199,
+    "time": "2026-09-05T22:05:23.314733+00:00",
+    "kind": "http",
+    "label": "task-a/child",
+    "url": "http://127.0.0.1:61492/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 200,
+    "time": "2026-09-05T22:05:23.315023+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93179",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93179 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 201,
+    "time": "2026-09-05T22:05:23.317754+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93179",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93179 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 202,
+    "time": "2026-09-05T22:05:23.318244+00:00",
+    "kind": "http",
+    "label": "task-b",
+    "url": "http://127.0.0.1:61490/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 203,
+    "time": "2026-09-05T22:05:23.318344+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93178",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93178 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 204,
+    "time": "2026-09-05T22:05:23.320854+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "93178",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 93178 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 205,
+    "time": "2026-09-05T22:05:23.321335+00:00",
+    "kind": "http",
+    "label": "escaped",
+    "url": "http://127.0.0.1:61534/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 206,
+    "time": "2026-09-05T22:05:23.321501+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94585",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94585 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 207,
+    "time": "2026-09-05T22:05:23.324112+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94585",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94585 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 208,
+    "time": "2026-09-05T22:05:23.324640+00:00",
+    "kind": "http",
+    "label": "escaped/child",
+    "url": "http://127.0.0.1:61535/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 209,
+    "time": "2026-09-05T22:05:23.324752+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94586",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94586 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 210,
+    "time": "2026-09-05T22:05:23.327238+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94586",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94586 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 211,
+    "time": "2026-09-05T22:05:23.327653+00:00",
+    "kind": "http",
+    "label": "resistant",
+    "url": "http://127.0.0.1:61543/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 212,
+    "time": "2026-09-05T22:05:23.327786+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94629",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94629 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 213,
+    "time": "2026-09-05T22:05:23.330127+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94629",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94629 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 214,
+    "time": "2026-09-05T22:05:23.330599+00:00",
+    "kind": "http",
+    "label": "expiry",
+    "url": "http://127.0.0.1:61546/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 215,
+    "time": "2026-09-05T22:05:23.330680+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94638",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94638 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 216,
+    "time": "2026-09-05T22:05:23.333172+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "94638",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 94638 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 217,
+    "time": "2026-09-05T22:05:23.333530+00:00",
+    "kind": "http",
+    "label": "replacement",
+    "url": "http://127.0.0.1:61592/",
+    "status": null,
+    "body": "<urlopen error [Errno 61] Connection refused>"
+  },
+  {
+    "n": 218,
+    "time": "2026-09-05T22:05:23.333619+00:00",
+    "kind": "attempt",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "2764",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 2764 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed"
+  },
+  {
+    "n": 219,
+    "time": "2026-09-05T22:05:23.335919+00:00",
+    "kind": "command",
+    "argv": [
+      "/bin/ps",
+      "-p",
+      "2764",
+      "-o",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm="
+    ],
+    "shell": "/bin/ps -p 2764 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    "cwd": "/tmp/lease-baseline-sdqt90ed",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "n": 220,
+    "time": "2026-09-05T22:05:23.336491+00:00",
+    "kind": "spawn-result",
+    "name": "unrelated",
+    "pid": 93010,
+    "returncode": 0,
+    "stdout_stderr": "{\"event\": \"started\", \"pid\": 93010, \"pgid\": 93010, \"sid\": 93010, \"port\": 61485, \"mode\": \"ordinary\", \"child_pid\": null}\n{\"event\": \"exiting\", \"pid\": 93010, \"reason\": \"signal\"}\n"
+  },
+  {
+    "n": 221,
+    "time": "2026-09-05T22:05:23.336943+00:00",
+    "kind": "spawn-result",
+    "name": "supervisor",
+    "pid": 93030,
+    "returncode": -9,
+    "stdout_stderr": ""
+  },
+  {
+    "n": 222,
+    "time": "2026-09-05T22:05:23.337196+00:00",
+    "kind": "spawn-result",
+    "name": "recovered-supervisor",
+    "pid": 96752,
+    "returncode": -9,
+    "stdout_stderr": ""
+  },
+  {
+    "n": 223,
+    "time": "2026-09-05T22:05:23.337459+00:00",
+    "kind": "spawn-result",
+    "name": "empty-supervisor",
+    "pid": 99985,
+    "returncode": 0,
+    "stdout_stderr": ""
+  },
+  {
+    "n": 224,
+    "time": "2026-09-05T22:05:23.337730+00:00",
+    "kind": "complete",
+    "root": "/tmp/lease-baseline-sdqt90ed",
+    "note": "Observed receipts only; independent witness decides acceptance. No actual OS PID reuse was forced."
+  }
+]

@@ -1,0 +1,10 @@
+Error: 
+   0: [91mFailed to create pid file.[0m
+   1: [91mI/O error at path "/tmp/lease-baseline-gur295ov/runtime/pueue.pid" while creating pid file:
+      No such file or directory (os error 2)[0m
+
+Location:
+   [35mpueue/src/daemon/pid.rs[0m:[35m42[0m
+
+Backtrace omitted. Run with RUST_BACKTRACE=1 environment variable to display it.
+Run with RUST_BACKTRACE=full to include source snippets.

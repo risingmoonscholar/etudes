@@ -1,0 +1,408 @@
+{
+  "scope": "Local timestamp comparison only; not independent execution authentication or a lane verdict. Non-runtime decisions have no incumbent transcript counterpart. Original 35-line spool is preserved.",
+  "run_bounds": {
+    "process-compose": {
+      "first": "2026-09-05T22:01:35.599038+00:00",
+      "last": "2026-09-05T22:03:51.182379+00:00",
+      "records": 208
+    },
+    "pueue": {
+      "first": "2026-09-05T22:03:07.813239+00:00",
+      "last": "2026-09-05T22:05:23.337730+00:00",
+      "records": 224
+    },
+    "pueue-setup-failure": {
+      "first": "2026-09-05T22:02:30.553199+00:00",
+      "last": "2026-09-05T22:02:43.865918+00:00",
+      "records": 33
+    }
+  },
+  "runtime_decision_pairs": [
+    {
+      "spool_line": 7,
+      "decision_time": "2026-09-05T22:01:35.518930+00:00",
+      "chose": "run Process Compose on the generated temporary project and retain every command result",
+      "tool": "process-compose",
+      "receipt_n": 1,
+      "receipt_time": "2026-09-05T22:01:35.599038+00:00",
+      "receipt_kind": "generator",
+      "receipt": {
+        "n": 1,
+        "time": "2026-09-05T22:01:35.599038+00:00",
+        "kind": "generator",
+        "argv": [
+          "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+          "/Users/festus/Documents/dev-projects/etudes-wt/lease-baseline/docs/experiments/lease/synthetic/create.py"
+        ],
+        "env": {
+          "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+          "TMPDIR": "/tmp",
+          "LANG": "en_US.UTF-8"
+        },
+        "returncode": 0,
+        "stdout": "{\n  \"unit\": \"lease-baseline\",\n  \"root\": \"/tmp/lease-baseline-7tq9eq71\",\n  \"purpose\": \"synthetic inputs; no acceptance execution or verdict\",\n  \"worker_sha256\": \"0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc\",\n  \"projects\": [\n    {\n      \"name\": \"task-a\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/task-a\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/task-a && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    },\n    {\n      \"name\": \"task-b\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/task-b\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/task-b && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    },\n    {\n      \"name\": \"unrelated\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/unrelated\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/unrelated && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    },\n    {\n      \"name\": \"replacement\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/replacement\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/replacement && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    },\n    {\n      \"name\": \"escaped\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/escaped\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/escaped && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    },\n    {\n      \"name\": \"resistant\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/resistant\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/resistant && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    },\n    {\n      \"name\": \"expiry\",\n      \"cwd\": \"/tmp/lease-baseline-7tq9eq71/expiry\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-7tq9eq71/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-7tq9eq71/expiry && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-7tq9eq71/worker.py\"\n    }\n  ]\n}\n",
+        "stderr": ""
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 8,
+      "decision_time": "2026-09-05T22:01:38.455637+00:00",
+      "chose": "open the configured readiness gate and compare status with HTTP",
+      "tool": "process-compose",
+      "receipt_n": 40,
+      "receipt_time": "2026-09-05T22:01:38.460025+00:00",
+      "receipt_kind": "attempt",
+      "receipt": {
+        "n": 40,
+        "time": "2026-09-05T22:01:38.460025+00:00",
+        "kind": "attempt",
+        "argv": [
+          "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+          "-c",
+          "from pathlib import Path; Path('/tmp/lease-baseline-7tq9eq71/task-b/allow-ready').touch()"
+        ],
+        "shell": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; Path('\"'\"'/tmp/lease-baseline-7tq9eq71/task-b/allow-ready'\"'\"').touch()'",
+        "cwd": "/tmp/lease-baseline-7tq9eq71"
+      },
+      "decision_precedes_receipt": true,
+      "mapping_note": "Gate mutation; preceding ps was the observation before deciding, not the chosen action."
+    },
+    {
+      "spool_line": 9,
+      "decision_time": "2026-09-05T22:01:40.616900+00:00",
+      "chose": "stop task-a while independently probing task-b and unrelated",
+      "tool": "process-compose",
+      "receipt_n": 48,
+      "receipt_time": "2026-09-05T22:01:40.621691+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 48,
+        "time": "2026-09-05T22:01:40.621691+00:00",
+        "kind": "phase",
+        "name": "concurrency-and-tree-stop"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 10,
+      "decision_time": "2026-09-05T22:01:41.951178+00:00",
+      "chose": "run and cancel escaped fixture",
+      "tool": "process-compose",
+      "receipt_n": 65,
+      "receipt_time": "2026-09-05T22:01:41.955589+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 65,
+        "time": "2026-09-05T22:01:41.955589+00:00",
+        "kind": "phase",
+        "name": "escaped-cancellation"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 11,
+      "decision_time": "2026-09-05T22:01:44.466771+00:00",
+      "chose": "run and cancel resistant fixture",
+      "tool": "process-compose",
+      "receipt_n": 86,
+      "receipt_time": "2026-09-05T22:01:44.471486+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 86,
+        "time": "2026-09-05T22:01:44.471486+00:00",
+        "kind": "phase",
+        "name": "resistant-cancellation"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 12,
+      "decision_time": "2026-09-05T22:01:48.884190+00:00",
+      "chose": "configure a timer task that invokes the incumbent cancellation command after four seconds",
+      "tool": "process-compose",
+      "receipt_n": 100,
+      "receipt_time": "2026-09-05T22:01:48.889537+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 100,
+        "time": "2026-09-05T22:01:48.889537+00:00",
+        "kind": "phase",
+        "name": "explicit-expiry"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 13,
+      "decision_time": "2026-09-05T22:01:56.150902+00:00",
+      "chose": "replay a saved process-name stop after restarting that name",
+      "tool": "process-compose",
+      "receipt_n": 119,
+      "receipt_time": "2026-09-05T22:01:56.156836+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 119,
+        "time": "2026-09-05T22:01:56.156836+00:00",
+        "kind": "phase",
+        "name": "stale-reference"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 14,
+      "decision_time": "2026-09-05T22:01:57.519800+00:00",
+      "chose": "interrupt the directly launched supervisor with SIGKILL and restart using the same isolated state",
+      "tool": "process-compose",
+      "receipt_n": 135,
+      "receipt_time": "2026-09-05T22:01:57.525583+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 135,
+        "time": "2026-09-05T22:01:57.525583+00:00",
+        "kind": "phase",
+        "name": "interruption"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 15,
+      "decision_time": "2026-09-05T22:02:00.751867+00:00",
+      "chose": "shut down only the isolated supervisor and let escaped or orphaned workers reach their original bounded lifetime",
+      "tool": "process-compose",
+      "receipt_n": 160,
+      "receipt_time": "2026-09-05T22:02:00.757773+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 160,
+        "time": "2026-09-05T22:02:00.757773+00:00",
+        "kind": "phase",
+        "name": "cleanup"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 19,
+      "decision_time": "2026-09-05T22:03:07.736753+00:00",
+      "chose": "rerun the unchanged behavioral scenarios in a fresh temporary project",
+      "tool": "pueue",
+      "receipt_n": 1,
+      "receipt_time": "2026-09-05T22:03:07.813239+00:00",
+      "receipt_kind": "generator",
+      "receipt": {
+        "n": 1,
+        "time": "2026-09-05T22:03:07.813239+00:00",
+        "kind": "generator",
+        "argv": [
+          "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+          "/Users/festus/Documents/dev-projects/etudes-wt/lease-baseline/docs/experiments/lease/synthetic/create.py"
+        ],
+        "env": {
+          "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+          "TMPDIR": "/tmp",
+          "LANG": "en_US.UTF-8"
+        },
+        "returncode": 0,
+        "stdout": "{\n  \"unit\": \"lease-baseline\",\n  \"root\": \"/tmp/lease-baseline-sdqt90ed\",\n  \"purpose\": \"synthetic inputs; no acceptance execution or verdict\",\n  \"worker_sha256\": \"0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc\",\n  \"projects\": [\n    {\n      \"name\": \"task-a\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/task-a\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/task-a && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    },\n    {\n      \"name\": \"task-b\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/task-b\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/task-b && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    },\n    {\n      \"name\": \"unrelated\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/unrelated\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/unrelated && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    },\n    {\n      \"name\": \"replacement\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/replacement\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/replacement && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    },\n    {\n      \"name\": \"escaped\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/escaped\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/escaped && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    },\n    {\n      \"name\": \"resistant\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/resistant\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/resistant && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    },\n    {\n      \"name\": \"expiry\",\n      \"cwd\": \"/tmp/lease-baseline-sdqt90ed/expiry\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-sdqt90ed/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-sdqt90ed/expiry && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py\"\n    }\n  ]\n}\n",
+        "stderr": ""
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 20,
+      "decision_time": "2026-09-05T22:03:11.406566+00:00",
+      "chose": "open the configured readiness gate and compare status with HTTP",
+      "tool": "pueue",
+      "receipt_n": 51,
+      "receipt_time": "2026-09-05T22:03:11.411513+00:00",
+      "receipt_kind": "attempt",
+      "receipt": {
+        "n": 51,
+        "time": "2026-09-05T22:03:11.411513+00:00",
+        "kind": "attempt",
+        "argv": [
+          "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+          "-c",
+          "from pathlib import Path; Path('/tmp/lease-baseline-sdqt90ed/task-b/allow-ready').touch()"
+        ],
+        "shell": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; Path('\"'\"'/tmp/lease-baseline-sdqt90ed/task-b/allow-ready'\"'\"').touch()'",
+        "cwd": "/tmp/lease-baseline-sdqt90ed"
+      },
+      "decision_precedes_receipt": true,
+      "mapping_note": "Gate mutation; preceding ps was the observation before deciding, not the chosen action."
+    },
+    {
+      "spool_line": 21,
+      "decision_time": "2026-09-05T22:03:13.524450+00:00",
+      "chose": "stop task-a while independently probing task-b and unrelated",
+      "tool": "pueue",
+      "receipt_n": 59,
+      "receipt_time": "2026-09-05T22:03:13.530296+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 59,
+        "time": "2026-09-05T22:03:13.530296+00:00",
+        "kind": "phase",
+        "name": "concurrency-and-tree-stop"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 22,
+      "decision_time": "2026-09-05T22:03:14.631987+00:00",
+      "chose": "run and cancel escaped fixture",
+      "tool": "pueue",
+      "receipt_n": 76,
+      "receipt_time": "2026-09-05T22:03:14.637040+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 76,
+        "time": "2026-09-05T22:03:14.637040+00:00",
+        "kind": "phase",
+        "name": "escaped-cancellation"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 23,
+      "decision_time": "2026-09-05T22:03:16.812826+00:00",
+      "chose": "run and cancel resistant fixture",
+      "tool": "pueue",
+      "receipt_n": 97,
+      "receipt_time": "2026-09-05T22:03:16.818083+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 97,
+        "time": "2026-09-05T22:03:16.818083+00:00",
+        "kind": "phase",
+        "name": "resistant-cancellation"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 24,
+      "decision_time": "2026-09-05T22:03:19.202198+00:00",
+      "chose": "configure a timer task that invokes the incumbent cancellation command after four seconds",
+      "tool": "pueue",
+      "receipt_n": 111,
+      "receipt_time": "2026-09-05T22:03:19.206750+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 111,
+        "time": "2026-09-05T22:03:19.206750+00:00",
+        "kind": "phase",
+        "name": "explicit-expiry"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 25,
+      "decision_time": "2026-09-05T22:03:26.712933+00:00",
+      "chose": "interrupt the directly launched supervisor with SIGKILL and restart using the same isolated state",
+      "tool": "pueue",
+      "receipt_n": 131,
+      "receipt_time": "2026-09-05T22:03:26.718683+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 131,
+        "time": "2026-09-05T22:03:26.718683+00:00",
+        "kind": "phase",
+        "name": "interruption"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 26,
+      "decision_time": "2026-09-05T22:03:29.794428+00:00",
+      "chose": "remove only the documented synthetic state.json while the daemon is stopped",
+      "tool": "pueue",
+      "receipt_n": 149,
+      "receipt_time": "2026-09-05T22:03:29.799799+00:00",
+      "receipt_kind": "signal-attempt",
+      "receipt": {
+        "n": 149,
+        "time": "2026-09-05T22:03:29.799799+00:00",
+        "kind": "signal-attempt",
+        "pid": 96752,
+        "signal": 9,
+        "authority": "direct live Popen child"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 28,
+      "decision_time": "2026-09-05T22:03:31.887522+00:00",
+      "chose": "enqueue a replacement after documented state loss and replay the old task-zero reference",
+      "tool": "pueue",
+      "receipt_n": 161,
+      "receipt_time": "2026-09-05T22:03:31.892979+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 161,
+        "time": "2026-09-05T22:03:31.892979+00:00",
+        "kind": "phase",
+        "name": "stale-reference"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 29,
+      "decision_time": "2026-09-05T22:03:33.062414+00:00",
+      "chose": "shut down only the isolated supervisor and let escaped or orphaned workers reach their original bounded lifetime",
+      "tool": "pueue",
+      "receipt_n": 176,
+      "receipt_time": "2026-09-05T22:03:33.068434+00:00",
+      "receipt_kind": "phase",
+      "receipt": {
+        "n": 176,
+        "time": "2026-09-05T22:03:33.068434+00:00",
+        "kind": "phase",
+        "name": "cleanup"
+      },
+      "decision_precedes_receipt": true
+    },
+    {
+      "spool_line": 17,
+      "decision_time": "2026-09-05T22:02:30.463081+00:00",
+      "chose": "run Pueue with separate temporary state, socket, and projects",
+      "tool": "pueue-setup-failure",
+      "receipt_n": 1,
+      "receipt_time": "2026-09-05T22:02:30.553199+00:00",
+      "receipt_kind": "generator",
+      "receipt": {
+        "n": 1,
+        "time": "2026-09-05T22:02:30.553199+00:00",
+        "kind": "generator",
+        "argv": [
+          "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+          "/Users/festus/Documents/dev-projects/etudes-wt/lease-baseline/docs/experiments/lease/synthetic/create.py"
+        ],
+        "env": {
+          "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+          "TMPDIR": "/tmp",
+          "LANG": "en_US.UTF-8"
+        },
+        "returncode": 0,
+        "stdout": "{\n  \"unit\": \"lease-baseline\",\n  \"root\": \"/tmp/lease-baseline-gur295ov\",\n  \"purpose\": \"synthetic inputs; no acceptance execution or verdict\",\n  \"worker_sha256\": \"0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc\",\n  \"projects\": [\n    {\n      \"name\": \"task-a\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/task-a\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/task-a && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    },\n    {\n      \"name\": \"task-b\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/task-b\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/task-b && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    },\n    {\n      \"name\": \"unrelated\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/unrelated\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/unrelated && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    },\n    {\n      \"name\": \"replacement\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/replacement\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/replacement && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    },\n    {\n      \"name\": \"escaped\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/escaped\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/escaped && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    },\n    {\n      \"name\": \"resistant\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/resistant\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/resistant && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    },\n    {\n      \"name\": \"expiry\",\n      \"cwd\": \"/tmp/lease-baseline-gur295ov/expiry\",\n      \"argv\": [\n        \"/Library/Frameworks/Python.framework/Versions/3.14/bin/python3\",\n        \"/tmp/lease-baseline-gur295ov/worker.py\"\n      ],\n      \"shell_command\": \"cd /tmp/lease-baseline-gur295ov/expiry && /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-gur295ov/worker.py\"\n    }\n  ]\n}\n",
+        "stderr": ""
+      },
+      "decision_precedes_receipt": true
+    }
+  ],
+  "other_spool_lines": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    16,
+    18,
+    27,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35
+  ]
+}

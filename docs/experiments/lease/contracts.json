@@ -1,0 +1,68 @@
+{
+  "handoff": {
+    "path": "/Users/festus/Documents/Codex/2026-07-28/i/outputs/local-agent-capabilities-handoff.html",
+    "sha256": "cc992181c128882952242e9a6ab6f2d2383bcf84003eeb3a4ddb702505603060"
+  },
+  "source_archives": [
+    {
+      "url": "https://github.com/F1bonacc1/process-compose/archive/refs/tags/v1.122.0.tar.gz",
+      "sha256": "ec4fc618ccf88d1d049842cb873cfa08f8fbd8d4ee8eff6c3a1c020be8005157"
+    },
+    {
+      "url": "https://github.com/Nukesor/pueue/archive/refs/tags/v4.0.4.tar.gz",
+      "sha256": "236a47a1cc74721998f4de3eff5062efe8e73c56c05aa19e64fef2e5ee55700f"
+    }
+  ],
+  "inspected_sources": [
+    {
+      "path": "process-compose-1.122.0/src/app/process.go",
+      "sha256": "6f5a279ecb739db94b9f2d82de27ef6e37e9675c148baf19c858dbad51b816a0"
+    },
+    {
+      "path": "process-compose-1.122.0/src/types/process.go",
+      "sha256": "6a454b6371c8a26945b9e4da96b4c552957e2c505bc63618d00fea3631547932"
+    },
+    {
+      "path": "process-compose-1.122.0/schemas/process-compose-schema.json",
+      "sha256": "c277cb590428ff79d9f46497b2547631701b3e141469a7a414efe6a40566a5d6"
+    },
+    {
+      "path": "pueue-4.0.4/pueue_lib/src/settings.rs",
+      "sha256": "e6b177d2e14f41a817e2b0b0e1c14d28d9d93eebc121f804f7b59067ca71fd07"
+    },
+    {
+      "path": "pueue-4.0.4/pueue_lib/src/task.rs",
+      "sha256": "c61f42ccaff75ae3202c68e85aa2a298fddf756823945a66a2f4a042de37148d"
+    },
+    {
+      "path": "pueue-4.0.4/pueue/src/daemon/internal_state/state.rs",
+      "sha256": "2ba351a4093ad1208eb0f59e6386a31f2a9a84d03df36f21e226119c4439cfa8"
+    },
+    {
+      "path": "pueue-4.0.4/pueue/src/daemon/pid.rs",
+      "sha256": "6b6e9c6eb7eafd89e6f3d38b2ad4c18c2105092c19b4983efbbb0ecec44a9a67"
+    },
+    {
+      "path": "pueue-4.0.4/pueue/src/daemon/process_handler/kill.rs",
+      "sha256": "4c6668f02c5d2895f9b8e8cb37c99cba493d2e9f86432ec800d4b013f15af0e0"
+    },
+    {
+      "path": "pueue-4.0.4/pueue/src/daemon/network/message_handler/kill.rs",
+      "sha256": "6e25ee9a8425dea515cb444869978c063bbd679b62fe123d071579d32987dcfe"
+    },
+    {
+      "path": "pueue-4.0.4/pueue/src/process_helper/unix.rs",
+      "sha256": "b116d1660c3c64794d0f2246acda8851075000fdae48646ea762dbcad79befa3"
+    }
+  ],
+  "followup_sources": [
+    {
+      "path": "/tmp/lease-contract-p6njx58l/pueue-4.0.4/pueue/src/daemon/callbacks.rs",
+      "sha256": "f54c6741bac7381c590e72c767f814f45207c4b5167b15b56499abdaf4d2317c"
+    },
+    {
+      "path": "/tmp/lease-contract-p6njx58l/process-compose-1.122.0/src/types/process.go",
+      "sha256": "6a454b6371c8a26945b9e4da96b4c552957e2c505bc63618d00fea3631547932"
+    }
+  ]
+}

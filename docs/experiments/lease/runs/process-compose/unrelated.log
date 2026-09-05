@@ -1,0 +1,2 @@
+{"event": "started", "pid": 40131, "pgid": 40131, "sid": 40131, "port": 61171, "mode": "ordinary", "child_pid": null}
+{"event": "exiting", "pid": 40131, "reason": "signal"}

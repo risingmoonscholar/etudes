@@ -1,0 +1,11 @@
+{
+  "shared": {
+    "pueue_directory": "/tmp/lease-baseline-ruvl5kyf/state",
+    "runtime_directory": "/tmp/lease-baseline-ruvl5kyf/runtime",
+    "unix_socket_path": "/tmp/lease-baseline-ruvl5kyf/pq.sock",
+    "alias_file": "/tmp/lease-baseline-ruvl5kyf/aliases.yml"
+  },
+  "daemon": {
+    "callback": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-ruvl5kyf/callback.py \"{{ id }}\" \"{{ result }}\""
+  }
+}

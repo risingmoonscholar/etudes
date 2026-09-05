@@ -1,0 +1,2023 @@
+{
+  "unit": "lease-baseline",
+  "status": "incumbents measured; witness pending",
+  "author_verdict": null,
+  "base_head": "7e9089c5d45d115433ce3fac5bd6c4ac78ab3594",
+  "branch": "seat/lease-baseline",
+  "trace_hash": null,
+  "trace_note": "Seat trace still open; emit has no supported close/hash command. Spool snapshots and artifact hashes are not closed-trace evidence.",
+  "tools": [
+    {
+      "name": "Process Compose",
+      "version": "v1.122.0 (commit 23b0aca)",
+      "configuration": "runs/process-compose/initial-config.json",
+      "transcript": "runs/process-compose/transcript.jsonl",
+      "claims": [
+        {
+          "claim": "two tasks run concurrently and stopping one leaves the other and a synthetic unrelated listener unaffected",
+          "classification": "as shipped",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed bounded support",
+          "interpretation": "Task A (PID 40173) and task B (PID 40172) were simultaneously live. Stopping A removed its parent and ordinary child (PID 40175); both HTTP connections were refused and targeted ps returned exit 1 with empty output. Task B and the independently launched unrelated listener (PID 40131) still returned HTTP 200 with their original PIDs. The isolation settings and shutdown grace are explicit; concurrent startup and per-process stop are built-in behavior.",
+          "receipt_numbers": [
+            21,
+            23,
+            27,
+            31,
+            50,
+            51,
+            53,
+            54,
+            56,
+            57,
+            60,
+            64
+          ],
+          "commands": [
+            {
+              "n": 21,
+              "time": "2026-09-05T22:01:36.037562+00:00",
+              "kind": "spawn",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "-f",
+                "/tmp/lease-baseline-7tq9eq71/pc.yaml",
+                "--disable-dotenv",
+                "--keep-project",
+                "-t=false",
+                "up"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log -f /tmp/lease-baseline-7tq9eq71/pc.yaml --disable-dotenv --keep-project -t=false up",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "pid": 40171,
+              "log": "/tmp/lease-baseline-7tq9eq71/supervisor.log"
+            },
+            {
+              "n": 50,
+              "time": "2026-09-05T22:01:40.777545+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "task-a"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop task-a",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "Successfully stopped: 'task-a'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:40-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:40-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 53,
+              "time": "2026-09-05T22:01:41.801192+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "40173",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 40173 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 56,
+              "time": "2026-09-05T22:01:41.814245+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "40175",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 40175 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 64,
+              "time": "2026-09-05T22:01:41.915284+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "task-a",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get task-a -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"task-a\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Completed\",\n\t\t\"system_time\": \"-\",\n\t\t\"age\": 0,\n\t\t\"is_ready\": \"-\",\n\t\t\"has_ready_probe\": false,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 40173,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 0,\n\t\t\"cpu\": 0,\n\t\t\"is_running\": false,\n\t\t\"last_activity_time\": \"2026-09-05T15:01:40.767474-07:00\",\n\t\t\"process_start_time\": \"2026-09-05T15:01:36.055764-07:00\",\n\t\t\"process_ready_time\": \"2026-09-05T15:01:36.055764-07:00\",\n\t\t\"process_end_time\": \"2026-09-05T15:01:40.775849-07:00\"\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:41-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:41-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            }
+          ],
+          "observations": [
+            {
+              "n": 23,
+              "time": "2026-09-05T22:01:36.143273+00:00",
+              "kind": "http",
+              "label": "task-a",
+              "url": "http://127.0.0.1:61176/",
+              "status": 503,
+              "body": "{\"project\": \"task-a\", \"pid\": 40173, \"ready\": false}"
+            },
+            {
+              "n": 27,
+              "time": "2026-09-05T22:01:36.250046+00:00",
+              "kind": "http",
+              "label": "task-a/child",
+              "url": "http://127.0.0.1:61179/",
+              "status": 503,
+              "body": "{\"project\": \"child\", \"pid\": 40175, \"ready\": false}"
+            },
+            {
+              "n": 31,
+              "time": "2026-09-05T22:01:36.254058+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 503,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": false}"
+            },
+            {
+              "n": 51,
+              "time": "2026-09-05T22:01:41.785002+00:00",
+              "kind": "http",
+              "label": "task-a",
+              "url": "http://127.0.0.1:61176/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 54,
+              "time": "2026-09-05T22:01:41.803412+00:00",
+              "kind": "http",
+              "label": "task-a/child",
+              "url": "http://127.0.0.1:61179/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 57,
+              "time": "2026-09-05T22:01:41.816154+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": true}"
+            },
+            {
+              "n": 60,
+              "time": "2026-09-05T22:01:41.824077+00:00",
+              "kind": "http",
+              "label": "unrelated",
+              "url": "http://127.0.0.1:61171/",
+              "status": 200,
+              "body": "{\"project\": \"unrelated\", \"pid\": 40131, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            53,
+            56
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        },
+        {
+          "claim": "a stale record or PID reuse cannot authorize signaling a replacement process",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "A saved public reference, task-a, originally identified PID 40173. After that run stopped, process start task-a created PID 62799. Replaying the same stop reference returned success and the replacement endpoint disappeared; ps returned exit 1. The unrelated listener survived. This is a counterexample to stale public run references being generation-safe. It is not an OS PID-reuse observation, nor evidence that Process Compose signaled an independently launched unrelated PID. If the contract is narrowed to internal retained child handles only, that narrower PID-reuse property remains unproven.",
+          "receipt_numbers": [
+            121,
+            123,
+            126,
+            128,
+            129,
+            131,
+            132
+          ],
+          "commands": [
+            {
+              "n": 121,
+              "time": "2026-09-05T22:01:56.251654+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "start",
+                "task-a"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process start task-a",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "Process task-a started\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:56-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:56-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 128,
+              "time": "2026-09-05T22:01:56.463987+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "task-a"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop task-a",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "Successfully stopped: 'task-a'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:56-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:56-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 131,
+              "time": "2026-09-05T22:01:57.469571+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "62799",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 62799 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            }
+          ],
+          "observations": [
+            {
+              "n": 123,
+              "time": "2026-09-05T22:01:56.253597+00:00",
+              "kind": "http",
+              "label": "replacement-incarnation",
+              "url": "http://127.0.0.1:61247/",
+              "status": 503,
+              "body": "{\"project\": \"task-a\", \"pid\": 62799, \"ready\": false}"
+            },
+            {
+              "n": 126,
+              "time": "2026-09-05T22:01:56.258491+00:00",
+              "kind": "saved-reference",
+              "reference": "task-a",
+              "old_pid": 40173,
+              "new_pid": 62799
+            },
+            {
+              "n": 129,
+              "time": "2026-09-05T22:01:57.465737+00:00",
+              "kind": "http",
+              "label": "replacement-incarnation",
+              "url": "http://127.0.0.1:61247/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 132,
+              "time": "2026-09-05T22:01:57.470678+00:00",
+              "kind": "http",
+              "label": "unrelated",
+              "url": "http://127.0.0.1:61171/",
+              "status": 200,
+              "body": "{\"project\": \"unrelated\", \"pid\": 40131, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            131
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario",
+            "Actual OS PID reuse"
+          ]
+        },
+        {
+          "claim": "started is never reported as ready until the configured condition is observed",
+          "classification": "with modest configuration",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed bounded support",
+          "interpretation": "The configured exec readiness_probe performs HTTP GET on the worker endpoint and succeeds only on HTTP 200. While the gate was closed, the incumbent reported Running / Not Ready / has_ready_probe=true and HTTP returned 503. After the gate opened, it reported Ready, with process_ready_time after the gate command, and HTTP returned 200. This supports the configured case; finite sampling does not prove the universal word never.",
+          "receipt_numbers": [
+            36,
+            37,
+            40,
+            41,
+            44,
+            45
+          ],
+          "commands": [
+            {
+              "n": 36,
+              "time": "2026-09-05T22:01:38.410153+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "task-b",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get task-b -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"task-b\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Running\",\n\t\t\"system_time\": \"2s\",\n\t\t\"age\": 2224044834,\n\t\t\"is_ready\": \"Not Ready\",\n\t\t\"has_ready_probe\": true,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 40172,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 29622272,\n\t\t\"cpu\": 0.07501509279360169,\n\t\t\"is_running\": true,\n\t\t\"last_activity_time\": \"2026-09-05T15:01:36.105744-07:00\",\n\t\t\"process_start_time\": \"2026-09-05T15:01:36.05555-07:00\"\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:38-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:38-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 41,
+              "time": "2026-09-05T22:01:38.479102+00:00",
+              "kind": "command",
+              "argv": [
+                "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+                "-c",
+                "from pathlib import Path; Path('/tmp/lease-baseline-7tq9eq71/task-b/allow-ready').touch()"
+              ],
+              "shell": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; Path('\"'\"'/tmp/lease-baseline-7tq9eq71/task-b/allow-ready'\"'\"').touch()'",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 44,
+              "time": "2026-09-05T22:01:40.574922+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "task-b",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get task-b -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"task-b\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Running\",\n\t\t\"system_time\": \"4s\",\n\t\t\"age\": 4458578125,\n\t\t\"is_ready\": \"Ready\",\n\t\t\"has_ready_probe\": true,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 40172,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 29638656,\n\t\t\"cpu\": 0.07519654559573231,\n\t\t\"is_running\": true,\n\t\t\"last_activity_time\": \"2026-09-05T15:01:36.105744-07:00\",\n\t\t\"process_start_time\": \"2026-09-05T15:01:36.05555-07:00\",\n\t\t\"process_ready_time\": \"2026-09-05T15:01:39.149921-07:00\"\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:40-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:40-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            }
+          ],
+          "observations": [
+            {
+              "n": 37,
+              "time": "2026-09-05T22:01:38.411339+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 503,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": false}"
+            },
+            {
+              "n": 45,
+              "time": "2026-09-05T22:01:40.575960+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        },
+        {
+          "claim": "cancellation confirms which supported processes stopped and escaped descendants cannot be silently marked clean",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "Ordinary parent and child both stopped in claim 1. The resistant worker stopped after the configured two-second SIGTERM grace and fallback; its state had exit_code=-1. But escaped parent PID 40367 was reported Completed with exit_code=0 after Successfully stopped, while child PID 40368 in its own process group/session continued returning HTTP 503. No residual/escaped classification appeared in the task receipt. Completed here is the parent task state, not an upstream promise to kill every descendant; it is insufficient for the requested lease receipt.",
+          "receipt_numbers": [
+            77,
+            79,
+            80,
+            82,
+            83,
+            85,
+            94,
+            96,
+            97,
+            99
+          ],
+          "commands": [
+            {
+              "n": 77,
+              "time": "2026-09-05T22:01:42.305530+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "escaped"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop escaped",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "Successfully stopped: 'escaped'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:42-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:42-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 79,
+              "time": "2026-09-05T22:01:44.413784+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "escaped",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get escaped -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"escaped\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Completed\",\n\t\t\"system_time\": \"-\",\n\t\t\"age\": 0,\n\t\t\"is_ready\": \"-\",\n\t\t\"has_ready_probe\": false,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 40367,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 0,\n\t\t\"cpu\": 0,\n\t\t\"is_running\": false,\n\t\t\"last_activity_time\": \"2026-09-05T15:01:42.298206-07:00\",\n\t\t\"process_start_time\": \"2026-09-05T15:01:41.973436-07:00\",\n\t\t\"process_ready_time\": \"2026-09-05T15:01:41.973436-07:00\",\n\t\t\"process_end_time\": \"2026-09-05T15:01:42.304328-07:00\"\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:44-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:44-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 82,
+              "time": "2026-09-05T22:01:44.418996+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "40367",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 40367 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 85,
+              "time": "2026-09-05T22:01:44.423976+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "40368",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 40368 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "40368     1 40368 Ss   Sat Sep  5 15:01:42 2026     /Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python\n",
+              "stderr": ""
+            },
+            {
+              "n": 94,
+              "time": "2026-09-05T22:01:46.666558+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "resistant"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop resistant",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "Successfully stopped: 'resistant'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:44-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:44-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 96,
+              "time": "2026-09-05T22:01:48.847778+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "resistant",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get resistant -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"resistant\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Completed\",\n\t\t\"system_time\": \"-\",\n\t\t\"age\": 0,\n\t\t\"is_ready\": \"-\",\n\t\t\"has_ready_probe\": false,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": -1,\n\t\t\"pid\": 40400,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 0,\n\t\t\"cpu\": 0,\n\t\t\"is_running\": false,\n\t\t\"last_activity_time\": \"2026-09-05T15:01:44.529121-07:00\",\n\t\t\"process_start_time\": \"2026-09-05T15:01:44.488635-07:00\",\n\t\t\"process_ready_time\": \"2026-09-05T15:01:44.488635-07:00\",\n\t\t\"process_end_time\": \"2026-09-05T15:01:46.664996-07:00\"\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:48-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:48-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 99,
+              "time": "2026-09-05T22:01:48.850764+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "40400",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 40400 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            }
+          ],
+          "observations": [
+            {
+              "n": 80,
+              "time": "2026-09-05T22:01:44.414820+00:00",
+              "kind": "http",
+              "label": "escaped",
+              "url": "http://127.0.0.1:61200/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 83,
+              "time": "2026-09-05T22:01:44.420090+00:00",
+              "kind": "http",
+              "label": "escaped/child",
+              "url": "http://127.0.0.1:61201/",
+              "status": 503,
+              "body": "{\"project\": \"child\", \"pid\": 40368, \"ready\": false}"
+            },
+            {
+              "n": 97,
+              "time": "2026-09-05T22:01:48.848334+00:00",
+              "kind": "http",
+              "label": "resistant",
+              "url": "http://127.0.0.1:61212/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            }
+          ],
+          "failed_commands": [
+            82,
+            99
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        },
+        {
+          "claim": "supervisor interruption and explicit expiry exercise documented recovery",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "A separate synthetic Process Compose timer project ran sleep 4 followed by the scoped stop expiry CLI. Expiry PID 40654 stopped roughly four seconds after launch, well before the original 120-second worker backstop; task B and unrelated stayed live. Separately, SIGKILL of the directly held supervisor PID 40171 left task B answering HTTP 200. Restarting the same definitions with disabled=true prevented duplicate launches and yielded Disabled / pid=0 / is_running=false; stop refused and the old listener survived. The timer is modest shell/CLI configuration while supervisors are alive, not native durable lease expiry or restoration of prior ownership. No automatic reattachment/recovery guarantee was found in the inspected versioned contract. Durable expiry through supervisor loss is not satisfied by this recipe; crashing while the timer is pending was not measured.",
+          "receipt_numbers": [
+            107,
+            109,
+            110,
+            112,
+            113,
+            116,
+            136,
+            137,
+            138,
+            141,
+            143,
+            145,
+            146
+          ],
+          "commands": [
+            {
+              "n": 107,
+              "time": "2026-09-05T22:01:48.977399+00:00",
+              "kind": "spawn",
+              "argv": [
+                "process-compose",
+                "-f",
+                "/tmp/lease-baseline-7tq9eq71/timer.json",
+                "--disable-dotenv",
+                "--no-server",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/timer.log",
+                "-t=false",
+                "up"
+              ],
+              "shell": "process-compose -f /tmp/lease-baseline-7tq9eq71/timer.json --disable-dotenv --no-server -L /tmp/lease-baseline-7tq9eq71/timer.log -t=false up",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "pid": 40666,
+              "log": "/tmp/lease-baseline-7tq9eq71/expiry-timer.log"
+            },
+            {
+              "n": 109,
+              "time": "2026-09-05T22:01:56.071773+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "expiry",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get expiry -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"expiry\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Completed\",\n\t\t\"system_time\": \"-\",\n\t\t\"age\": 0,\n\t\t\"is_ready\": \"-\",\n\t\t\"has_ready_probe\": false,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 40654,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 0,\n\t\t\"cpu\": 0,\n\t\t\"is_running\": false,\n\t\t\"last_activity_time\": \"2026-09-05T15:01:53.193969-07:00\",\n\t\t\"process_start_time\": \"2026-09-05T15:01:48.907156-07:00\",\n\t\t\"process_ready_time\": \"2026-09-05T15:01:48.907156-07:00\",\n\t\t\"process_end_time\": \"2026-09-05T15:01:53.201733-07:00\"\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:56-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:56-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 112,
+              "time": "2026-09-05T22:01:56.076156+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "40654",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 40654 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 136,
+              "time": "2026-09-05T22:01:57.525844+00:00",
+              "kind": "signal-attempt",
+              "pid": 40171,
+              "signal": 9,
+              "authority": "direct live Popen child"
+            },
+            {
+              "n": 141,
+              "time": "2026-09-05T22:01:57.536162+00:00",
+              "kind": "spawn",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "-f",
+                "/tmp/lease-baseline-7tq9eq71/pc.yaml",
+                "--disable-dotenv",
+                "--keep-project",
+                "-t=false",
+                "up"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log -f /tmp/lease-baseline-7tq9eq71/pc.yaml --disable-dotenv --keep-project -t=false up",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "pid": 68206,
+              "log": "/tmp/lease-baseline-7tq9eq71/recovered-supervisor.log"
+            },
+            {
+              "n": 143,
+              "time": "2026-09-05T22:01:59.629955+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "task-b",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get task-b -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"task-b\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Disabled\",\n\t\t\"system_time\": \"-\",\n\t\t\"age\": 0,\n\t\t\"is_ready\": \"-\",\n\t\t\"has_ready_probe\": true,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 0,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 0,\n\t\t\"cpu\": 0,\n\t\t\"is_running\": false\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:59-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:59-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 145,
+              "time": "2026-09-05T22:01:59.652573+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "task-b"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop task-b",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "Failed to stop: 'task-b'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:59-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:59-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            }
+          ],
+          "observations": [
+            {
+              "n": 110,
+              "time": "2026-09-05T22:01:56.072420+00:00",
+              "kind": "http",
+              "label": "expiry",
+              "url": "http://127.0.0.1:61225/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 113,
+              "time": "2026-09-05T22:01:56.076928+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": true}"
+            },
+            {
+              "n": 116,
+              "time": "2026-09-05T22:01:56.086991+00:00",
+              "kind": "http",
+              "label": "unrelated",
+              "url": "http://127.0.0.1:61171/",
+              "status": 200,
+              "body": "{\"project\": \"unrelated\", \"pid\": 40131, \"ready\": true}"
+            },
+            {
+              "n": 137,
+              "time": "2026-09-05T22:01:57.529791+00:00",
+              "kind": "reaped",
+              "pid": 40171,
+              "returncode": -9
+            },
+            {
+              "n": 138,
+              "time": "2026-09-05T22:01:57.530614+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": true}"
+            },
+            {
+              "n": 146,
+              "time": "2026-09-05T22:02:00.654624+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            112,
+            145
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario",
+            "Crash while explicit expiry timer is pending"
+          ]
+        },
+        {
+          "claim": "missing ownership evidence produces refusal, not guessed cleanup",
+          "classification": "with modest configuration",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed bounded support",
+          "interpretation": "After supervisor loss, the replacement supervisor had definitions but no live child handle for task B. With disabled=true to avoid accidental relaunch, stop task-b returned exit 1 and Failed to stop; an unknown synthetic name also returned exit 1. The orphan task B endpoint remained live. This is bounded refusal evidence with modest recovery configuration, not a proof of every possible missing-identity or race condition.",
+          "receipt_numbers": [
+            143,
+            154,
+            156,
+            157
+          ],
+          "commands": [
+            {
+              "n": 143,
+              "time": "2026-09-05T22:01:59.629955+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "get",
+                "task-b",
+                "-o",
+                "json"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process get task-b -o json",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 0,
+              "stdout": "[\n\t{\n\t\t\"name\": \"task-b\",\n\t\t\"namespace\": \"default\",\n\t\t\"status\": \"Disabled\",\n\t\t\"system_time\": \"-\",\n\t\t\"age\": 0,\n\t\t\"is_ready\": \"-\",\n\t\t\"has_ready_probe\": true,\n\t\t\"restarts\": 0,\n\t\t\"exit_code\": 0,\n\t\t\"pid\": 0,\n\t\t\"is_elevated\": false,\n\t\t\"password_provided\": false,\n\t\t\"mem\": 0,\n\t\t\"cpu\": 0,\n\t\t\"is_running\": false\n\t}\n]",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:59-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:01:59-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 154,
+              "time": "2026-09-05T22:02:00.683627+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "task-b"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop task-b",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "Failed to stop: 'task-b'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:02:00-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:02:00-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            },
+            {
+              "n": 156,
+              "time": "2026-09-05T22:02:00.704788+00:00",
+              "kind": "command",
+              "argv": [
+                "process-compose",
+                "-U",
+                "-u",
+                "/tmp/lease-baseline-7tq9eq71/pc.sock",
+                "-L",
+                "/tmp/lease-baseline-7tq9eq71/pc.log",
+                "process",
+                "stop",
+                "unknown-synthetic-task"
+              ],
+              "shell": "process-compose -U -u /tmp/lease-baseline-7tq9eq71/pc.sock -L /tmp/lease-baseline-7tq9eq71/pc.log process stop unknown-synthetic-task",
+              "cwd": "/tmp/lease-baseline-7tq9eq71",
+              "returncode": 1,
+              "stdout": "Failed to stop: 'unknown-synthetic-task'\n",
+              "stderr": "{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:02:00-07:00\",\"message\":\"Path not found for process compose config home\"}\n{\"level\":\"debug\",\"error\":\"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-7tq9eq71/config-home /Library/Preferences /Library/Application Support /.config]\",\"time\":\"2026-09-05T15:02:00-07:00\",\"message\":\"Path not found for process compose config home\"}\n"
+            }
+          ],
+          "observations": [
+            {
+              "n": 157,
+              "time": "2026-09-05T22:02:00.705685+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61175/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 40172, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            154,
+            156
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Pueue",
+      "version": "4.0.4 (client and daemon)",
+      "configuration": "runs/pueue/initial-config.json",
+      "transcript": "runs/pueue/transcript.jsonl",
+      "claims": [
+        {
+          "claim": "two tasks run concurrently and stopping one leaves the other and a synthetic unrelated listener unaffected",
+          "classification": "with modest configuration",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed bounded support",
+          "interpretation": "Configured parallel 4 (the default group starts with one slot). Task IDs 0 and 1, PIDs 93177 and 93178, were simultaneously live. kill 0 returned an attempted-action receipt; subsequent HTTP refusal plus empty ps output/exit 1 showed the ordinary parent and child stopped. Task B and the unrelated listener PID 93010 retained HTTP 200 with their original PIDs. Four slots also leave capacity for the later timer task; no stress threshold was reduced.",
+          "receipt_numbers": [
+            28,
+            30,
+            32,
+            34,
+            38,
+            42,
+            61,
+            62,
+            64,
+            65,
+            67,
+            68,
+            71,
+            75
+          ],
+          "commands": [
+            {
+              "n": 28,
+              "time": "2026-09-05T22:03:09.019035+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "parallel",
+                "4"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never parallel 4",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "Parallel tasks setting for group \"default\" adjusted\n",
+              "stderr": ""
+            },
+            {
+              "n": 30,
+              "time": "2026-09-05T22:03:09.025265+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "add",
+                "-p",
+                "-w",
+                "/tmp/lease-baseline-sdqt90ed/task-a",
+                "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never add -p -w /tmp/lease-baseline-sdqt90ed/task-a 'exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "0\n",
+              "stderr": ""
+            },
+            {
+              "n": 32,
+              "time": "2026-09-05T22:03:09.030290+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "add",
+                "-p",
+                "-w",
+                "/tmp/lease-baseline-sdqt90ed/task-b",
+                "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never add -p -w /tmp/lease-baseline-sdqt90ed/task-b 'exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "1\n",
+              "stderr": ""
+            },
+            {
+              "n": 61,
+              "time": "2026-09-05T22:03:13.537280+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "kill",
+                "0"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 0",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "Tasks are being killed: 0\n",
+              "stderr": ""
+            },
+            {
+              "n": 64,
+              "time": "2026-09-05T22:03:14.553803+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "93177",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 93177 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 67,
+              "time": "2026-09-05T22:03:14.562106+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "93179",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 93179 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 75,
+              "time": "2026-09-05T22:03:14.585513+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"LANG\":\"en_US.UTF-8\",\"PUEUE_WORKER_ID\":\"0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"TMPDIR\":\"/tmp\",\"PUEUE_GROUP\":\"default\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\",\"end\":\"2026-09-05T15:03:13.752214-07:00\",\"result\":\"Killed\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"LANG\":\"en_US.UTF-8\",\"PUEUE_WORKER_ID\":\"1\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            }
+          ],
+          "observations": [
+            {
+              "n": 34,
+              "time": "2026-09-05T22:03:09.346887+00:00",
+              "kind": "http",
+              "label": "task-a",
+              "url": "http://127.0.0.1:61491/",
+              "status": 503,
+              "body": "{\"project\": \"task-a\", \"pid\": 93177, \"ready\": false}"
+            },
+            {
+              "n": 38,
+              "time": "2026-09-05T22:03:09.350890+00:00",
+              "kind": "http",
+              "label": "task-a/child",
+              "url": "http://127.0.0.1:61492/",
+              "status": 503,
+              "body": "{\"project\": \"child\", \"pid\": 93179, \"ready\": false}"
+            },
+            {
+              "n": 42,
+              "time": "2026-09-05T22:03:09.354060+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 503,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": false}"
+            },
+            {
+              "n": 62,
+              "time": "2026-09-05T22:03:14.543656+00:00",
+              "kind": "http",
+              "label": "task-a",
+              "url": "http://127.0.0.1:61491/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 65,
+              "time": "2026-09-05T22:03:14.554786+00:00",
+              "kind": "http",
+              "label": "task-a/child",
+              "url": "http://127.0.0.1:61492/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 68,
+              "time": "2026-09-05T22:03:14.563745+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": true}"
+            },
+            {
+              "n": 71,
+              "time": "2026-09-05T22:03:14.570959+00:00",
+              "kind": "http",
+              "label": "unrelated",
+              "url": "http://127.0.0.1:61485/",
+              "status": 200,
+              "body": "{\"project\": \"unrelated\", \"pid\": 93010, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            64,
+            67
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        },
+        {
+          "claim": "a stale record or PID reuse cannot authorize signaling a replacement process",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "After the documented synthetic state.json was removed while the daemon was stopped, the restarted empty queue assigned replacement PID 2764 task ID 0. Replaying the saved old task ID 0 returned Tasks are being killed: 0; the replacement endpoint disappeared and ps returned exit 1. Unrelated stayed alive. The old reference therefore lacks a durable queue-generation identity across state loss. This is task-ID reuse, not forced OS PID reuse, and the replacement was a newly incumbent-managed task rather than an independently launched unrelated worker.",
+          "receipt_numbers": [
+            163,
+            165,
+            169,
+            170,
+            172,
+            173
+          ],
+          "commands": [
+            {
+              "n": 163,
+              "time": "2026-09-05T22:03:31.899019+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "add",
+                "-p",
+                "-w",
+                "/tmp/lease-baseline-sdqt90ed/replacement",
+                "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never add -p -w /tmp/lease-baseline-sdqt90ed/replacement 'exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "0\n",
+              "stderr": ""
+            },
+            {
+              "n": 169,
+              "time": "2026-09-05T22:03:32.011440+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "kill",
+                "0"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 0",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "Tasks are being killed: 0\n",
+              "stderr": ""
+            },
+            {
+              "n": 172,
+              "time": "2026-09-05T22:03:33.017349+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "2764",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 2764 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            }
+          ],
+          "observations": [
+            {
+              "n": 165,
+              "time": "2026-09-05T22:03:32.001313+00:00",
+              "kind": "http",
+              "label": "replacement",
+              "url": "http://127.0.0.1:61592/",
+              "status": 503,
+              "body": "{\"project\": \"replacement\", \"pid\": 2764, \"ready\": false}"
+            },
+            {
+              "n": 170,
+              "time": "2026-09-05T22:03:33.014382+00:00",
+              "kind": "http",
+              "label": "replacement",
+              "url": "http://127.0.0.1:61592/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 173,
+              "time": "2026-09-05T22:03:33.018132+00:00",
+              "kind": "http",
+              "label": "unrelated",
+              "url": "http://127.0.0.1:61485/",
+              "status": 200,
+              "body": "{\"project\": \"unrelated\", \"pid\": 93010, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            172
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario",
+            "Actual OS PID reuse"
+          ]
+        },
+        {
+          "claim": "started is never reported as ready until the configured condition is observed",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "Task 1 was Running with identical start/enqueue timestamps both while HTTP returned 503 and after it returned 200. The inspected add options, TaskStatus, and settings offer no readiness condition or ready state. Thus there is no built-in configured readiness receipt to classify as ready after the condition. This is a missing capability, not a claim that Pueue printed a false Ready status. Adding a readiness/ownership wrapper would change the subject of the baseline.",
+          "receipt_numbers": [
+            30,
+            32,
+            47,
+            48,
+            51,
+            52,
+            55,
+            56
+          ],
+          "commands": [
+            {
+              "n": 30,
+              "time": "2026-09-05T22:03:09.025265+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "add",
+                "-p",
+                "-w",
+                "/tmp/lease-baseline-sdqt90ed/task-a",
+                "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never add -p -w /tmp/lease-baseline-sdqt90ed/task-a 'exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "0\n",
+              "stderr": ""
+            },
+            {
+              "n": 32,
+              "time": "2026-09-05T22:03:09.030290+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "add",
+                "-p",
+                "-w",
+                "/tmp/lease-baseline-sdqt90ed/task-b",
+                "exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never add -p -w /tmp/lease-baseline-sdqt90ed/task-b 'exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "1\n",
+              "stderr": ""
+            },
+            {
+              "n": 47,
+              "time": "2026-09-05T22:03:11.367239+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_WORKER_ID\":\"0\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"LANG\":\"en_US.UTF-8\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"PUEUE_WORKER_ID\":\"1\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_GROUP\":\"default\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"LANG\":\"en_US.UTF-8\",\"TMPDIR\":\"/tmp\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            },
+            {
+              "n": 52,
+              "time": "2026-09-05T22:03:11.431242+00:00",
+              "kind": "command",
+              "argv": [
+                "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+                "-c",
+                "from pathlib import Path; Path('/tmp/lease-baseline-sdqt90ed/task-b/allow-ready').touch()"
+              ],
+              "shell": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; Path('\"'\"'/tmp/lease-baseline-sdqt90ed/task-b/allow-ready'\"'\"').touch()'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 55,
+              "time": "2026-09-05T22:03:13.461006+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"LANG\":\"en_US.UTF-8\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_WORKER_ID\":\"0\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"TMPDIR\":\"/tmp\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_WORKER_ID\":\"1\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_GROUP\":\"default\",\"LANG\":\"en_US.UTF-8\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            }
+          ],
+          "observations": [
+            {
+              "n": 48,
+              "time": "2026-09-05T22:03:11.368228+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 503,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": false}"
+            },
+            {
+              "n": 56,
+              "time": "2026-09-05T22:03:13.462939+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        },
+        {
+          "claim": "cancellation confirms which supported processes stopped and escaped descendants cannot be silently marked clean",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "The ordinary tree and SIGTERM-resistant worker stopped under normal kill (SIGKILL/process-group behavior). For escaped task 2, kill returned Tasks are being killed: 2 and status became Done/result=Killed while its child PID 94586 continued serving HTTP 503 in its own group/session. The receipt had no per-descendant residual/unproven report. Killed is Pueue task status, not a claimed whole-machine cleanup contract; the required lease receipt is missing.",
+          "receipt_numbers": [
+            88,
+            90,
+            91,
+            93,
+            94,
+            96,
+            105,
+            107,
+            108,
+            110
+          ],
+          "commands": [
+            {
+              "n": 88,
+              "time": "2026-09-05T22:03:14.762268+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "kill",
+                "2"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 2",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "Tasks are being killed: 2\n",
+              "stderr": ""
+            },
+            {
+              "n": 90,
+              "time": "2026-09-05T22:03:16.769928+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"LANG\":\"en_US.UTF-8\",\"PUEUE_WORKER_ID\":\"0\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\",\"end\":\"2026-09-05T15:03:13.752214-07:00\",\"result\":\"Killed\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"LANG\":\"en_US.UTF-8\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"TMPDIR\":\"/tmp\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_GROUP\":\"default\",\"PUEUE_WORKER_ID\":\"1\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\"}}},\"2\":{\"id\":2,\"created_at\":\"2026-09-05T15:03:14.642711-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/escaped\",\"envs\":{\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_WORKER_ID\":\"0\",\"LANG\":\"en_US.UTF-8\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:14.642704-07:00\",\"start\":\"2026-09-05T15:03:14.658375-07:00\",\"end\":\"2026-09-05T15:03:14.961306-07:00\",\"result\":\"Killed\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            },
+            {
+              "n": 93,
+              "time": "2026-09-05T22:03:16.772517+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "94585",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 94585 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 96,
+              "time": "2026-09-05T22:03:16.776024+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "94586",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 94586 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "94586     1 94586 Ss   Sat Sep  5 15:03:14 2026     /Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python\n",
+              "stderr": ""
+            },
+            {
+              "n": 105,
+              "time": "2026-09-05T22:03:17.150091+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "kill",
+                "3"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 3",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "Tasks are being killed: 3\n",
+              "stderr": ""
+            },
+            {
+              "n": 107,
+              "time": "2026-09-05T22:03:19.162151+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"LANG\":\"en_US.UTF-8\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_WORKER_ID\":\"0\",\"TMPDIR\":\"/tmp\",\"PUEUE_GROUP\":\"default\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\",\"end\":\"2026-09-05T15:03:13.752214-07:00\",\"result\":\"Killed\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"PUEUE_GROUP\":\"default\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_WORKER_ID\":\"1\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"LANG\":\"en_US.UTF-8\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\"}}},\"2\":{\"id\":2,\"created_at\":\"2026-09-05T15:03:14.642711-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/escaped\",\"envs\":{\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"LANG\":\"en_US.UTF-8\",\"PUEUE_WORKER_ID\":\"0\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_GROUP\":\"default\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:14.642704-07:00\",\"start\":\"2026-09-05T15:03:14.658375-07:00\",\"end\":\"2026-09-05T15:03:14.961306-07:00\",\"result\":\"Killed\"}}},\"3\":{\"id\":3,\"created_at\":\"2026-09-05T15:03:16.823629-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ignore-term\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ignore-term\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/resistant\",\"envs\":{\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_WORKER_ID\":\"0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"LANG\":\"en_US.UTF-8\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:16.823623-07:00\",\"start\":\"2026-09-05T15:03:17.077787-07:00\",\"end\":\"2026-09-05T15:03:17.380631-07:00\",\"result\":\"Killed\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            },
+            {
+              "n": 110,
+              "time": "2026-09-05T22:03:19.165623+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "94629",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 94629 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            }
+          ],
+          "observations": [
+            {
+              "n": 91,
+              "time": "2026-09-05T22:03:16.770385+00:00",
+              "kind": "http",
+              "label": "escaped",
+              "url": "http://127.0.0.1:61534/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 94,
+              "time": "2026-09-05T22:03:16.773255+00:00",
+              "kind": "http",
+              "label": "escaped/child",
+              "url": "http://127.0.0.1:61535/",
+              "status": 503,
+              "body": "{\"project\": \"child\", \"pid\": 94586, \"ready\": false}"
+            },
+            {
+              "n": 108,
+              "time": "2026-09-05T22:03:19.162771+00:00",
+              "kind": "http",
+              "label": "resistant",
+              "url": "http://127.0.0.1:61543/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            }
+          ],
+          "failed_commands": [
+            93,
+            110
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        },
+        {
+          "claim": "supervisor interruption and explicit expiry exercise documented recovery",
+          "classification": "not at all",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed capability gap; see scope",
+          "interpretation": "A delayed task scheduled with --delay 4 invoked the scoped kill 4 command. Task 4 became Killed around 4.5 seconds after launch; timer task 5 became Success; ps/HTTP observations confirmed expiry before the worker backstop and survival of task B and unrelated. Separately, SIGKILL of the daemon left task B live. Restart with the same state changed task 1 from Running to Done/result=Killed although its endpoint still returned HTTP 200. This matches restore_state in the pinned source, which changes status without reattaching children. The timer recipe requires queue capacity and a live daemon; it is not native durable lease expiry. A pending-timer crash was not measured. The observed recovery does not provide truthful stopped/residual evidence.",
+          "receipt_numbers": [
+            119,
+            121,
+            122,
+            124,
+            125,
+            128,
+            132,
+            133,
+            134,
+            137,
+            139,
+            141,
+            142
+          ],
+          "commands": [
+            {
+              "n": 119,
+              "time": "2026-09-05T22:03:19.642429+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "add",
+                "--delay",
+                "4",
+                "-w",
+                "/tmp/lease-baseline-sdqt90ed",
+                "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 4"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never add --delay 4 -w /tmp/lease-baseline-sdqt90ed 'pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 4'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "New task added (id 5). It will be enqueued at 15:03:23\n",
+              "stderr": ""
+            },
+            {
+              "n": 121,
+              "time": "2026-09-05T22:03:26.656294+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"TMPDIR\":\"/tmp\",\"PUEUE_WORKER_ID\":\"0\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"LANG\":\"en_US.UTF-8\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_GROUP\":\"default\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\",\"end\":\"2026-09-05T15:03:13.752214-07:00\",\"result\":\"Killed\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"TMPDIR\":\"/tmp\",\"PUEUE_WORKER_ID\":\"1\",\"LANG\":\"en_US.UTF-8\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_GROUP\":\"default\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Running\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\"}}},\"2\":{\"id\":2,\"created_at\":\"2026-09-05T15:03:14.642711-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/escaped\",\"envs\":{\"TMPDIR\":\"/tmp\",\"PUEUE_GROUP\":\"default\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_WORKER_ID\":\"0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"LANG\":\"en_US.UTF-8\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:14.642704-07:00\",\"start\":\"2026-09-05T15:03:14.658375-07:00\",\"end\":\"2026-09-05T15:03:14.961306-07:00\",\"result\":\"Killed\"}}},\"3\":{\"id\":3,\"created_at\":\"2026-09-05T15:03:16.823629-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ignore-term\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ignore-term\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/resistant\",\"envs\":{\"LANG\":\"en_US.UTF-8\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_WORKER_ID\":\"0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"TMPDIR\":\"/tmp\",\"PUEUE_GROUP\":\"default\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:16.823623-07:00\",\"start\":\"2026-09-05T15:03:17.077787-07:00\",\"end\":\"2026-09-05T15:03:17.380631-07:00\",\"result\":\"Killed\"}}},\"4\":{\"id\":4,\"created_at\":\"2026-09-05T15:03:19.212410-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/expiry\",\"envs\":{\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"LANG\":\"en_US.UTF-8\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"PUEUE_WORKER_ID\":\"0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:19.212403-07:00\",\"start\":\"2026-09-05T15:03:19.495855-07:00\",\"end\":\"2026-09-05T15:03:24.032706-07:00\",\"result\":\"Killed\"}}},\"5\":{\"id\":5,\"created_at\":\"2026-09-05T15:03:19.641696-07:00\",\"original_command\":\"pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 4\",\"command\":\"pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 4\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed\",\"envs\":{\"LANG\":\"en_US.UTF-8\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_WORKER_ID\":\"2\",\"PUEUE_GROUP\":\"default\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:23.725137-07:00\",\"start\":\"2026-09-05T15:03:23.730548-07:00\",\"end\":\"2026-09-05T15:03:24.032711-07:00\",\"result\":\"Success\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            },
+            {
+              "n": 124,
+              "time": "2026-09-05T22:03:26.660004+00:00",
+              "kind": "command",
+              "argv": [
+                "/bin/ps",
+                "-p",
+                "94638",
+                "-o",
+                "pid=,ppid=,pgid=,stat=,lstart=,comm="
+              ],
+              "shell": "/bin/ps -p 94638 -o pid=,ppid=,pgid=,stat=,lstart=,comm=",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 132,
+              "time": "2026-09-05T22:03:26.718957+00:00",
+              "kind": "signal-attempt",
+              "pid": 93030,
+              "signal": 9,
+              "authority": "direct live Popen child"
+            },
+            {
+              "n": 137,
+              "time": "2026-09-05T22:03:26.725588+00:00",
+              "kind": "spawn",
+              "argv": [
+                "pueued",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml"
+              ],
+              "shell": "pueued -c /tmp/lease-baseline-sdqt90ed/pueue.yml",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "pid": 96752,
+              "log": "/tmp/lease-baseline-sdqt90ed/recovered-supervisor.log"
+            },
+            {
+              "n": 139,
+              "time": "2026-09-05T22:03:28.732180+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{\"0\":{\"id\":0,\"created_at\":\"2026-09-05T15:03:09.024552-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode tree\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-a\",\"envs\":{\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_WORKER_ID\":\"0\",\"LANG\":\"en_US.UTF-8\",\"TMPDIR\":\"/tmp\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_GROUP\":\"default\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:09.024494-07:00\",\"start\":\"2026-09-05T15:03:09.214071-07:00\",\"end\":\"2026-09-05T15:03:13.752214-07:00\",\"result\":\"Killed\"}}},\"1\":{\"id\":1,\"created_at\":\"2026-09-05T15:03:09.029726-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/task-b\",\"envs\":{\"PUEUE_GROUP\":\"default\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_WORKER_ID\":\"1\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"TMPDIR\":\"/tmp\",\"LANG\":\"en_US.UTF-8\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:09.029690-07:00\",\"start\":\"2026-09-05T15:03:09.223174-07:00\",\"end\":\"2026-09-05T15:03:26.729553-07:00\",\"result\":\"Killed\"}}},\"2\":{\"id\":2,\"created_at\":\"2026-09-05T15:03:14.642711-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode escaped\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/escaped\",\"envs\":{\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_GROUP\":\"default\",\"LANG\":\"en_US.UTF-8\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PUEUE_WORKER_ID\":\"0\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:14.642704-07:00\",\"start\":\"2026-09-05T15:03:14.658375-07:00\",\"end\":\"2026-09-05T15:03:14.961306-07:00\",\"result\":\"Killed\"}}},\"3\":{\"id\":3,\"created_at\":\"2026-09-05T15:03:16.823629-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ignore-term\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ignore-term\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/resistant\",\"envs\":{\"PUEUE_GROUP\":\"default\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"LANG\":\"en_US.UTF-8\",\"PUEUE_WORKER_ID\":\"0\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"TMPDIR\":\"/tmp\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:16.823623-07:00\",\"start\":\"2026-09-05T15:03:17.077787-07:00\",\"end\":\"2026-09-05T15:03:17.380631-07:00\",\"result\":\"Killed\"}}},\"4\":{\"id\":4,\"created_at\":\"2026-09-05T15:03:19.212410-07:00\",\"original_command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"command\":\"exec /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 /tmp/lease-baseline-sdqt90ed/worker.py --mode ordinary\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed/expiry\",\"envs\":{\"PUEUE_WORKER_ID\":\"0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_GROUP\":\"default\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"TMPDIR\":\"/tmp\",\"LANG\":\"en_US.UTF-8\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:19.212403-07:00\",\"start\":\"2026-09-05T15:03:19.495855-07:00\",\"end\":\"2026-09-05T15:03:24.032706-07:00\",\"result\":\"Killed\"}}},\"5\":{\"id\":5,\"created_at\":\"2026-09-05T15:03:19.641696-07:00\",\"original_command\":\"pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 4\",\"command\":\"pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 4\",\"path\":\"/private/tmp/lease-baseline-sdqt90ed\",\"envs\":{\"__CF_USER_TEXT_ENCODING\":\"0x1F5:0x0:0x0\",\"PATH\":\"/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\",\"PUEUE_WORKER_ID\":\"2\",\"TMPDIR\":\"/tmp\",\"LANG\":\"en_US.UTF-8\",\"XDG_CONFIG_HOME\":\"/tmp/lease-baseline-sdqt90ed/config-home\",\"PUEUE_GROUP\":\"default\"},\"group\":\"default\",\"dependencies\":[],\"priority\":0,\"label\":null,\"status\":{\"Done\":{\"enqueued_at\":\"2026-09-05T15:03:23.725137-07:00\",\"start\":\"2026-09-05T15:03:23.730548-07:00\",\"end\":\"2026-09-05T15:03:24.032711-07:00\",\"result\":\"Success\"}}}},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":4}}}\n",
+              "stderr": ""
+            },
+            {
+              "n": 141,
+              "time": "2026-09-05T22:03:28.737804+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "kill",
+                "1"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 1",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": "The command failed for tasks: 1\n"
+            }
+          ],
+          "observations": [
+            {
+              "n": 122,
+              "time": "2026-09-05T22:03:26.656905+00:00",
+              "kind": "http",
+              "label": "expiry",
+              "url": "http://127.0.0.1:61546/",
+              "status": null,
+              "body": "<urlopen error [Errno 61] Connection refused>"
+            },
+            {
+              "n": 125,
+              "time": "2026-09-05T22:03:26.660885+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": true}"
+            },
+            {
+              "n": 128,
+              "time": "2026-09-05T22:03:26.664891+00:00",
+              "kind": "http",
+              "label": "unrelated",
+              "url": "http://127.0.0.1:61485/",
+              "status": 200,
+              "body": "{\"project\": \"unrelated\", \"pid\": 93010, \"ready\": true}"
+            },
+            {
+              "n": 133,
+              "time": "2026-09-05T22:03:26.720320+00:00",
+              "kind": "reaped",
+              "pid": 93030,
+              "returncode": -9
+            },
+            {
+              "n": 134,
+              "time": "2026-09-05T22:03:26.721022+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": true}"
+            },
+            {
+              "n": 142,
+              "time": "2026-09-05T22:03:29.743688+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            124,
+            141
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario",
+            "Crash while explicit expiry timer is pending"
+          ]
+        },
+        {
+          "claim": "missing ownership evidence produces refusal, not guessed cleanup",
+          "classification": "as shipped",
+          "attempted": true,
+          "observed": true,
+          "verified": false,
+          "status": "observed bounded support",
+          "interpretation": "With the daemon stopped, only its documented private state.json was renamed to state.json.saved. Restart produced an empty tasks map. kill 1 returned exit 1, empty stdout, and The command failed for tasks: 1 on stderr. The orphan task B listener remained alive. A first restart with stale Running state also refused kill 1 after classifying it Killed. This is refusal for absent/non-running task ownership in the measured case; it does not make reused task IDs safe (claim 2).",
+          "receipt_numbers": [
+            150,
+            151,
+            152,
+            153,
+            155,
+            157,
+            158
+          ],
+          "commands": [
+            {
+              "n": 152,
+              "time": "2026-09-05T22:03:29.824572+00:00",
+              "kind": "command",
+              "argv": [
+                "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+                "-c",
+                "from pathlib import Path; Path('/tmp/lease-baseline-sdqt90ed/state/state.json').rename('/tmp/lease-baseline-sdqt90ed/state/state.json.saved')"
+              ],
+              "shell": "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -c 'from pathlib import Path; Path('\"'\"'/tmp/lease-baseline-sdqt90ed/state/state.json'\"'\"').rename('\"'\"'/tmp/lease-baseline-sdqt90ed/state/state.json.saved'\"'\"')'",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "",
+              "stderr": ""
+            },
+            {
+              "n": 153,
+              "time": "2026-09-05T22:03:29.826084+00:00",
+              "kind": "spawn",
+              "argv": [
+                "pueued",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml"
+              ],
+              "shell": "pueued -c /tmp/lease-baseline-sdqt90ed/pueue.yml",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "pid": 99985,
+              "log": "/tmp/lease-baseline-sdqt90ed/empty-supervisor.log"
+            },
+            {
+              "n": 155,
+              "time": "2026-09-05T22:03:31.833839+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "status",
+                "--json"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never status --json",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 0,
+              "stdout": "{\"tasks\":{},\"groups\":{\"default\":{\"status\":\"Running\",\"parallel_tasks\":1}}}\n",
+              "stderr": ""
+            },
+            {
+              "n": 157,
+              "time": "2026-09-05T22:03:31.839870+00:00",
+              "kind": "command",
+              "argv": [
+                "pueue",
+                "-c",
+                "/tmp/lease-baseline-sdqt90ed/pueue.yml",
+                "--color",
+                "never",
+                "kill",
+                "1"
+              ],
+              "shell": "pueue -c /tmp/lease-baseline-sdqt90ed/pueue.yml --color never kill 1",
+              "cwd": "/tmp/lease-baseline-sdqt90ed",
+              "returncode": 1,
+              "stdout": "",
+              "stderr": "The command failed for tasks: 1\n"
+            }
+          ],
+          "observations": [
+            {
+              "n": 150,
+              "time": "2026-09-05T22:03:29.801382+00:00",
+              "kind": "reaped",
+              "pid": 96752,
+              "returncode": -9
+            },
+            {
+              "n": 158,
+              "time": "2026-09-05T22:03:31.840654+00:00",
+              "kind": "http",
+              "label": "task-b",
+              "url": "http://127.0.0.1:61490/",
+              "status": 200,
+              "body": "{\"project\": \"task-b\", \"pid\": 93178, \"ready\": true}"
+            }
+          ],
+          "failed_commands": [
+            157
+          ],
+          "unproven": [
+            "Independent witness verdict",
+            "Universal/race coverage beyond the recorded finite scenario"
+          ]
+        }
+      ]
+    }
+  ],
+  "attempts": [
+    {
+      "tool": "Process Compose",
+      "entry_command": "python3 docs/experiments/lease/synthetic/run.py process-compose",
+      "driver_exit_status": 0,
+      "receipts": "runs/process-compose/transcript.jsonl"
+    },
+    {
+      "tool": "Pueue",
+      "entry_command": "python3 docs/experiments/lease/synthetic/run.py pueue",
+      "driver_exit_status": 1,
+      "receipts": "runs/pueue-setup-failure/transcript.jsonl",
+      "failure": "Configured runtime directory absent; daemon failed before managed tasks launched; preserved and repaired without reducing scenarios."
+    },
+    {
+      "tool": "Pueue",
+      "entry_command": "python3 docs/experiments/lease/synthetic/run.py pueue",
+      "driver_exit_status": 0,
+      "receipts": "runs/pueue/transcript.jsonl"
+    }
+  ],
+  "final_observations": [
+    "runs/process-compose/final-observations.json",
+    "runs/pueue/final-observations.json",
+    "runs/pueue-setup-failure/final-observation.json"
+  ],
+  "sandbox_denial": "The first final observation of the setup-failure listener was denied; the exact argv was replayed with authorized host access. Both outcomes are preserved.",
+  "review_followup": {
+    "author_verdict": null,
+    "independently_verified": false,
+    "observations": [
+      "runs/followup-process-compose/transcript.jsonl",
+      "runs/followup-pueue/transcript.jsonl",
+      "runs/review-followup/historical-residuals.jsonl"
+    ],
+    "artifact_comparison": "runs/review-followup/original-manifest-recomputation.json",
+    "timeline_comparison": "runs/review-followup/timeline.json",
+    "limitations": [
+      "historical full argv unavailable",
+      "actual OS PID reuse unproven",
+      "expiry pending across crash unproven",
+      "universal impossibility not established",
+      "closed trace authentication remains external"
+    ]
+  }
+}

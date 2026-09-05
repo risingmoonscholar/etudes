@@ -1,0 +1,69 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "branch",
+        "--show-current"
+      ],
+      "returncode": 0,
+      "stdout": "seat/lease-baseline\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "returncode": 0,
+      "stdout": "7e9089c5d45d115433ce3fac5bd6c4ac78ab3594\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--short"
+      ],
+      "returncode": 0,
+      "stdout": " A docs/experiments/lease/artifact-sha256.json\n A docs/experiments/lease/baseline.md\n A docs/experiments/lease/evidence.json\n A docs/experiments/lease/synthetic/README.md\n A docs/experiments/lease/synthetic/create.py\n?? .factory/\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/usr/bin/sw_vers"
+      ],
+      "returncode": 0,
+      "stdout": "ProductName:\t\tmacOS\nProductVersion:\t\t26.2\nBuildVersion:\t\t25C56\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/usr/bin/uname",
+        "-m"
+      ],
+      "returncode": 0,
+      "stdout": "arm64\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "emit",
+        "--help"
+      ],
+      "returncode": 0,
+      "stdout": "usage: emit [-h] [--kind {observation,decision,intervention}] [--saw SAW]\n            [--chose CHOSE] [--because BECAUSE] [--expected EXPECTED]\n            [--id STEP] [--needs NEEDS]\n            [statement ...]\n\nRecord one decision in this run's trace, as you make it.\n\npositional arguments:\n  statement             one line, if you prefer\n\noptions:\n  -h, --help            show this help message and exit\n  --kind {observation,decision,intervention}\n                        observation: something you saw. decision: something\n                        you chose. intervention: something you changed.\n  --saw SAW             what you observed before choosing\n  --chose CHOSE         the action you took\n  --because BECAUSE     why, at the time\n  --expected EXPECTED   what you expect to happen. Say it BEFORE you find out.\n  --id STEP             name this step, at the moment you start it\n  --needs NEEDS         earlier step ids this step depends on; comma-\n                        separated, repeatable\n",
+      "stderr": ""
+    }
+  ],
+  "instruction_source": "Current user task message; these quotations are transcribed, not an independently signed seat contract.",
+  "instruction_quotes": [
+    "RUN THE INCUMBENTS. Process Compose and Pueue are the SUBJECT of this unit, not its witnesses: start them, drive them through each of the six claims on the synthetic projects, and record what you observed.",
+    "The seat contract's 'you do not run the tests' means the lane's own witnesses (cargo test, the claims checker), which run after you; it does not mean 'execute nothing'.",
+    "Leave your work uncommitted. Committing is the operator's call, and a commit made here has to be undone before the work can be reviewed as a diff.",
+    "You do not run the tests, and you do not decide whether this passed. A witness you cannot reach runs afterwards."
+  ],
+  "trace_status": "open; emit spools decisions until seat closure; no supported close or digest option in emit --help",
+  "trace_hash": null
+}

@@ -1,0 +1,6 @@
+{"level":"debug","error":"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-yjwzkwu5/config-home /Library/Preferences /Library/Application Support /.config]","time":"2026-09-05T15:15:57-07:00","message":"Path not found for process compose config home"}
+{"level":"debug","error":"could not locate `process-compose` in any of the following paths: [/tmp/lease-baseline-yjwzkwu5/config-home /Library/Preferences /Library/Application Support /.config]","time":"2026-09-05T15:15:57-07:00","message":"Path not found for process compose config home"}
+]0;process-compose: Mac.attlocal.net/lease-baseline-yjwzkwu5[source	] {"event": "started", "pid": 80016, "pgid": 80016, "sid": 80015, "port": 62799, "mode": "escaped", "child_pid": 80019}
+[source	] {"event": "started", "pid": 80019, "pgid": 80019, "sid": 80019, "port": 62801, "mode": "ordinary", "child_pid": null}
+[source	] {"event": "exiting", "pid": 80016, "reason": "signal"}
+Project Completed. Press Ctrl+C to quit

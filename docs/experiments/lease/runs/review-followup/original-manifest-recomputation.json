@@ -1,0 +1,246 @@
+{
+  "time": "2026-09-05T22:14:29.613171+00:00",
+  "purpose": "artifact byte comparison, not lane acceptance",
+  "files": [
+    {
+      "path": "baseline.md",
+      "expected": "b71e46417d83b53d29fe09e6b665bcdfdd35a99a7eb8f4998292c77ddfab1a4b",
+      "observed": "b71e46417d83b53d29fe09e6b665bcdfdd35a99a7eb8f4998292c77ddfab1a4b",
+      "match": true
+    },
+    {
+      "path": "contracts.json",
+      "expected": "f588afef1c9f8e6ac68a966526eb7a201fe17b3b5b0325545417c5f10fff185f",
+      "observed": "f588afef1c9f8e6ac68a966526eb7a201fe17b3b5b0325545417c5f10fff185f",
+      "match": true
+    },
+    {
+      "path": "decision-spool.jsonl",
+      "expected": "c0df19ec207b612fd1d6c16b2963b960e7198373748ef797e4c81c06acc37234",
+      "observed": "c0df19ec207b612fd1d6c16b2963b960e7198373748ef797e4c81c06acc37234",
+      "match": true
+    },
+    {
+      "path": "evidence.json",
+      "expected": "b86d91751979f4eab0a1af3d9657bbc620c285f989a4362cfd0bb7ce5facb499",
+      "observed": "b86d91751979f4eab0a1af3d9657bbc620c285f989a4362cfd0bb7ce5facb499",
+      "match": true
+    },
+    {
+      "path": "provenance.json",
+      "expected": "1e0f084bf4a9b3d78791714b37ddc4ffa6910a509ef0e29a4fa2a5a118a49e07",
+      "observed": "1e0f084bf4a9b3d78791714b37ddc4ffa6910a509ef0e29a4fa2a5a118a49e07",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/driver.log",
+      "expected": "71e10311f8455508b62d1bab2c8c9a30edd858c62eb2e8073c81cb5ca1554dc3",
+      "observed": "71e10311f8455508b62d1bab2c8c9a30edd858c62eb2e8073c81cb5ca1554dc3",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/expiry-timer.log",
+      "expected": "0d967c08e1371bbff94c95281ad205e47ed69c7c35968a7c436a2019f3ba42c2",
+      "observed": "0d967c08e1371bbff94c95281ad205e47ed69c7c35968a7c436a2019f3ba42c2",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/final-observations.json",
+      "expected": "d408cae7a0714d2dcbfa77bbd043be7e07f55c85a521fbac882659914a10774d",
+      "observed": "d408cae7a0714d2dcbfa77bbd043be7e07f55c85a521fbac882659914a10774d",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/initial-config.json",
+      "expected": "3f295bbb731cde6a3025b140019be85327189676b66b199e2c642a66026b346c",
+      "observed": "3f295bbb731cde6a3025b140019be85327189676b66b199e2c642a66026b346c",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/manifest.json",
+      "expected": "977a81b2feda508bb25ae131b81db95dfc1e0bc5c10b0aa6de9bee64f8667110",
+      "observed": "977a81b2feda508bb25ae131b81db95dfc1e0bc5c10b0aa6de9bee64f8667110",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/probe.py",
+      "expected": "dcab889cef46ed69d2dfc389aa46b5c8b2aa332fe704a3c85dcf0ab7082c95d1",
+      "observed": "dcab889cef46ed69d2dfc389aa46b5c8b2aa332fe704a3c85dcf0ab7082c95d1",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/recovered-supervisor.log",
+      "expected": "3b103c08001c1fac64033703b35387e36bd9061ffbd617c2d56e872b548892d7",
+      "observed": "3b103c08001c1fac64033703b35387e36bd9061ffbd617c2d56e872b548892d7",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/recovery-config.json",
+      "expected": "fba0d0b5cbf60747f5376dd7b31a9b14e987c9279d8c4ca8e0e69b941e8ca1d0",
+      "observed": "fba0d0b5cbf60747f5376dd7b31a9b14e987c9279d8c4ca8e0e69b941e8ca1d0",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/supervisor.log",
+      "expected": "f766db6da3ae8cf08c86ee5ff74a23fd9f96456070fee0444c88c2cf449e5ae1",
+      "observed": "f766db6da3ae8cf08c86ee5ff74a23fd9f96456070fee0444c88c2cf449e5ae1",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/timer-config.json",
+      "expected": "f32ea320563af562c2a6ac533ab0fa8d1e9c239c1fbfdfba884c4517ae940791",
+      "observed": "f32ea320563af562c2a6ac533ab0fa8d1e9c239c1fbfdfba884c4517ae940791",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/transcript.jsonl",
+      "expected": "f18ecf218eba396716cbf67b3c5e8f3d05e13e16e7acb2b71aea34305cfcd320",
+      "observed": "f18ecf218eba396716cbf67b3c5e8f3d05e13e16e7acb2b71aea34305cfcd320",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/unrelated.log",
+      "expected": "b83eb1fc0821fd18e627bfa24559e61bb5c9eba1d3509e9e6250faec1edd3cb0",
+      "observed": "b83eb1fc0821fd18e627bfa24559e61bb5c9eba1d3509e9e6250faec1edd3cb0",
+      "match": true
+    },
+    {
+      "path": "runs/process-compose/worker.py",
+      "expected": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+      "observed": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/driver.log",
+      "expected": "423da58d90693ec4aa9bb604034049d4a3e227e74bb4871b1c03177b2e62ffa1",
+      "observed": "423da58d90693ec4aa9bb604034049d4a3e227e74bb4871b1c03177b2e62ffa1",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/empty-supervisor.log",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "observed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/final-observations.json",
+      "expected": "b8ce9226154231595e491aa2ac87b8e13c7bde6544ffa519ebf304a08bf6aee1",
+      "observed": "b8ce9226154231595e491aa2ac87b8e13c7bde6544ffa519ebf304a08bf6aee1",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/initial-config.json",
+      "expected": "ba4edd1070376907ce6908b4441640c45f582abdaec48f1547bad60ba6917eb1",
+      "observed": "ba4edd1070376907ce6908b4441640c45f582abdaec48f1547bad60ba6917eb1",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/manifest.json",
+      "expected": "be4a4f54d7d35f22f0bd7a349a8f85ec71315e93103ad1bf1e0772e3b1ff5bac",
+      "observed": "be4a4f54d7d35f22f0bd7a349a8f85ec71315e93103ad1bf1e0772e3b1ff5bac",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/recovered-supervisor.log",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "observed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/state-before-loss.json",
+      "expected": "daed4eea309b7b7165a658ca509f30dd622752479295eda78d21a91a7d83a726",
+      "observed": "daed4eea309b7b7165a658ca509f30dd622752479295eda78d21a91a7d83a726",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/supervisor.log",
+      "expected": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "observed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/transcript.jsonl",
+      "expected": "5f8842804515b91d0c5fb9048de708b41cf4e612ff6ad43ff9b78dae9002753f",
+      "observed": "5f8842804515b91d0c5fb9048de708b41cf4e612ff6ad43ff9b78dae9002753f",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/unrelated.log",
+      "expected": "59cba61780631cf88e9373c5f361917af73092dd2691e39953269863a2c3af66",
+      "observed": "59cba61780631cf88e9373c5f361917af73092dd2691e39953269863a2c3af66",
+      "match": true
+    },
+    {
+      "path": "runs/pueue/worker.py",
+      "expected": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+      "observed": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/driver.log",
+      "expected": "b9eae95997a5854d9a8f6f104d4340717a7cde8dbc982981517913aefdf1284c",
+      "observed": "b9eae95997a5854d9a8f6f104d4340717a7cde8dbc982981517913aefdf1284c",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/final-observation-sandbox-denied.json",
+      "expected": "54a355acdac51394637a5271210c454b1ffafe459acc40bdcc1d84f22dd57e76",
+      "observed": "54a355acdac51394637a5271210c454b1ffafe459acc40bdcc1d84f22dd57e76",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/final-observation.json",
+      "expected": "e82c2ab0de6ed858ceaccdc98290bedfd79f9badf36c9ea09f30e28f1a0bca26",
+      "observed": "e82c2ab0de6ed858ceaccdc98290bedfd79f9badf36c9ea09f30e28f1a0bca26",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/initial-config.json",
+      "expected": "e47243f3bd632739e50f6fbf6f8b6d01f93ce8c586d8e1226e50baa5dd724d8d",
+      "observed": "e47243f3bd632739e50f6fbf6f8b6d01f93ce8c586d8e1226e50baa5dd724d8d",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/manifest.json",
+      "expected": "673fe744c9fc29e247e859655ec506d08898fdd65eb47ff23bb0b88ad4e199d5",
+      "observed": "673fe744c9fc29e247e859655ec506d08898fdd65eb47ff23bb0b88ad4e199d5",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/supervisor.log",
+      "expected": "18394ee86436c62b77f188d230cad104cc1df9dc5f51ee659fd97ad6959bc9d8",
+      "observed": "18394ee86436c62b77f188d230cad104cc1df9dc5f51ee659fd97ad6959bc9d8",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/transcript.jsonl",
+      "expected": "0f7f71bf6a8cc1f1744ae1adb67e1e8ea1b8519d59003b8d3e767cc93600e4ba",
+      "observed": "0f7f71bf6a8cc1f1744ae1adb67e1e8ea1b8519d59003b8d3e767cc93600e4ba",
+      "match": true
+    },
+    {
+      "path": "runs/pueue-setup-failure/worker.py",
+      "expected": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+      "observed": "0d1798ecb42606e759794c32bbccbea85f02dbc7d14d5cc94ddcd2af29ff16cc",
+      "match": true
+    },
+    {
+      "path": "synthetic/README.md",
+      "expected": "7ecf27c20bc090326b19d51259d63b06936d86b8fab73c89f33f24c394ebf3ec",
+      "observed": "7ecf27c20bc090326b19d51259d63b06936d86b8fab73c89f33f24c394ebf3ec",
+      "match": true
+    },
+    {
+      "path": "synthetic/create.py",
+      "expected": "9f7e4a0784cef8a8f4549cb14a97efb7803ab82b7a8abd85c4eecc1bb6aaf445",
+      "observed": "9f7e4a0784cef8a8f4549cb14a97efb7803ab82b7a8abd85c4eecc1bb6aaf445",
+      "match": true
+    },
+    {
+      "path": "synthetic/run.py",
+      "expected": "f0a3841954d4502bc9c6499c10efe34d4730d1c378519a0cc6a22e27d3740554",
+      "observed": "f0a3841954d4502bc9c6499c10efe34d4730d1c378519a0cc6a22e27d3740554",
+      "match": true
+    }
+  ]
+}

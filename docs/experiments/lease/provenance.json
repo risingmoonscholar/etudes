@@ -1,0 +1,131 @@
+{
+  "captured_at": "2026-09-05T22:20:52.929880+00:00",
+  "scope": "Final unit inventory after all review artifacts exist; self and manifest paths inventoried without self-referential hashes. Uncommitted and unsigned.",
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "branch",
+        "--show-current"
+      ],
+      "returncode": 0,
+      "stdout": "seat/lease-baseline\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "returncode": 0,
+      "stdout": "7e9089c5d45d115433ce3fac5bd6c4ac78ab3594\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--short",
+        "--untracked-files=all"
+      ],
+      "returncode": 0,
+      "stdout": " A docs/experiments/lease/artifact-sha256.json\n A docs/experiments/lease/baseline.md\n A docs/experiments/lease/contracts.json\n A docs/experiments/lease/decision-spool.jsonl\n A docs/experiments/lease/evidence.json\n A docs/experiments/lease/provenance.json\n A docs/experiments/lease/review-decision-spool.jsonl\n A docs/experiments/lease/runs/followup-process-compose/config.json\n A docs/experiments/lease/runs/followup-process-compose/manifest.json\n A docs/experiments/lease/runs/followup-process-compose/probe.py\n A docs/experiments/lease/runs/followup-process-compose/process_completed.receipt\n A docs/experiments/lease/runs/followup-process-compose/process_completed_successfully.receipt\n A docs/experiments/lease/runs/followup-process-compose/process_healthy.receipt\n A docs/experiments/lease/runs/followup-process-compose/process_started.receipt\n A docs/experiments/lease/runs/followup-process-compose/supervisor.log\n A docs/experiments/lease/runs/followup-process-compose/transcript.jsonl\n A docs/experiments/lease/runs/followup-process-compose/worker.py\n A docs/experiments/lease/runs/followup-pueue/callback.py\n A docs/experiments/lease/runs/followup-pueue/callback.receipt\n A docs/experiments/lease/runs/followup-pueue/config.json\n A docs/experiments/lease/runs/followup-pueue/manifest.json\n A docs/experiments/lease/runs/followup-pueue/supervisor.log\n A docs/experiments/lease/runs/followup-pueue/transcript.jsonl\n A docs/experiments/lease/runs/followup-pueue/worker.py\n A docs/experiments/lease/runs/process-compose/driver.log\n A docs/experiments/lease/runs/process-compose/expiry-timer.log\n A docs/experiments/lease/runs/process-compose/final-observations.json\n A docs/experiments/lease/runs/process-compose/initial-config.json\n A docs/experiments/lease/runs/process-compose/manifest.json\n A docs/experiments/lease/runs/process-compose/probe.py\n A docs/experiments/lease/runs/process-compose/recovered-supervisor.log\n A docs/experiments/lease/runs/process-compose/recovery-config.json\n A docs/experiments/lease/runs/process-compose/supervisor.log\n A docs/experiments/lease/runs/process-compose/timer-config.json\n A docs/experiments/lease/runs/process-compose/transcript.jsonl\n A docs/experiments/lease/runs/process-compose/unrelated.log\n A docs/experiments/lease/runs/process-compose/worker.py\n A docs/experiments/lease/runs/pueue-setup-failure/driver.log\n A docs/experiments/lease/runs/pueue-setup-failure/final-observation-sandbox-denied.json\n A docs/experiments/lease/runs/pueue-setup-failure/final-observation.json\n A docs/experiments/lease/runs/pueue-setup-failure/initial-config.json\n A docs/experiments/lease/runs/pueue-setup-failure/manifest.json\n A docs/experiments/lease/runs/pueue-setup-failure/supervisor.log\n A docs/experiments/lease/runs/pueue-setup-failure/transcript.jsonl\n A docs/experiments/lease/runs/pueue-setup-failure/worker.py\n A docs/experiments/lease/runs/pueue/driver.log\n A docs/experiments/lease/runs/pueue/empty-supervisor.log\n A docs/experiments/lease/runs/pueue/final-observations.json\n A docs/experiments/lease/runs/pueue/initial-config.json\n A docs/experiments/lease/runs/pueue/manifest.json\n A docs/experiments/lease/runs/pueue/recovered-supervisor.log\n A docs/experiments/lease/runs/pueue/state-before-loss.json\n A docs/experiments/lease/runs/pueue/supervisor.log\n A docs/experiments/lease/runs/pueue/transcript.jsonl\n A docs/experiments/lease/runs/pueue/unrelated.log\n A docs/experiments/lease/runs/pueue/worker.py\n A docs/experiments/lease/runs/review-followup/historical-residuals.jsonl\n A docs/experiments/lease/runs/review-followup/original-manifest-recomputation.json\n A docs/experiments/lease/runs/review-followup/provenance-before-review.json\n A docs/experiments/lease/runs/review-followup/timeline.json\n A docs/experiments/lease/synthetic/README.md\n A docs/experiments/lease/synthetic/create.py\n A docs/experiments/lease/synthetic/followup.py\n A docs/experiments/lease/synthetic/observe_previous.py\n A docs/experiments/lease/synthetic/run.py\n?? .factory/actions.jsonl\n?? .factory/emit.jsonl\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/usr/bin/sw_vers"
+      ],
+      "returncode": 0,
+      "stdout": "ProductName:\t\tmacOS\nProductVersion:\t\t26.2\nBuildVersion:\t\t25C56\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/usr/bin/uname",
+        "-m"
+      ],
+      "returncode": 0,
+      "stdout": "arm64\n",
+      "stderr": ""
+    }
+  ],
+  "instruction_source": "Current user task message; these quotations are transcribed, not an independently signed seat contract.",
+  "instruction_quotes": [
+    "RUN THE INCUMBENTS. Process Compose and Pueue are the SUBJECT of this unit, not its witnesses: start them, drive them through each of the six claims on the synthetic projects, and record what you observed.",
+    "The seat contract's 'you do not run the tests' means the lane's own witnesses (cargo test, the claims checker), which run after you; it does not mean 'execute nothing'.",
+    "Leave your work uncommitted. Committing is the operator's call, and a commit made here has to be undone before the work can be reviewed as a diff.",
+    "You do not run the tests, and you do not decide whether this passed. A witness you cannot reach runs afterwards."
+  ],
+  "trace_hash": null,
+  "trace_status": "open; review-decision-spool.jsonl ends before final digest emission; external witness must retain emitted manifest digest",
+  "artifact_inventory": [
+    "artifact-sha256.json",
+    "baseline.md",
+    "contracts.json",
+    "decision-spool.jsonl",
+    "evidence.json",
+    "provenance.json",
+    "review-decision-spool.jsonl",
+    "runs/followup-process-compose/config.json",
+    "runs/followup-process-compose/manifest.json",
+    "runs/followup-process-compose/probe.py",
+    "runs/followup-process-compose/process_completed.receipt",
+    "runs/followup-process-compose/process_completed_successfully.receipt",
+    "runs/followup-process-compose/process_healthy.receipt",
+    "runs/followup-process-compose/process_started.receipt",
+    "runs/followup-process-compose/supervisor.log",
+    "runs/followup-process-compose/transcript.jsonl",
+    "runs/followup-process-compose/worker.py",
+    "runs/followup-pueue/callback.py",
+    "runs/followup-pueue/callback.receipt",
+    "runs/followup-pueue/config.json",
+    "runs/followup-pueue/manifest.json",
+    "runs/followup-pueue/supervisor.log",
+    "runs/followup-pueue/transcript.jsonl",
+    "runs/followup-pueue/worker.py",
+    "runs/process-compose/driver.log",
+    "runs/process-compose/expiry-timer.log",
+    "runs/process-compose/final-observations.json",
+    "runs/process-compose/initial-config.json",
+    "runs/process-compose/manifest.json",
+    "runs/process-compose/probe.py",
+    "runs/process-compose/recovered-supervisor.log",
+    "runs/process-compose/recovery-config.json",
+    "runs/process-compose/supervisor.log",
+    "runs/process-compose/timer-config.json",
+    "runs/process-compose/transcript.jsonl",
+    "runs/process-compose/unrelated.log",
+    "runs/process-compose/worker.py",
+    "runs/pueue-setup-failure/driver.log",
+    "runs/pueue-setup-failure/final-observation-sandbox-denied.json",
+    "runs/pueue-setup-failure/final-observation.json",
+    "runs/pueue-setup-failure/initial-config.json",
+    "runs/pueue-setup-failure/manifest.json",
+    "runs/pueue-setup-failure/supervisor.log",
+    "runs/pueue-setup-failure/transcript.jsonl",
+    "runs/pueue-setup-failure/worker.py",
+    "runs/pueue/driver.log",
+    "runs/pueue/empty-supervisor.log",
+    "runs/pueue/final-observations.json",
+    "runs/pueue/initial-config.json",
+    "runs/pueue/manifest.json",
+    "runs/pueue/recovered-supervisor.log",
+    "runs/pueue/state-before-loss.json",
+    "runs/pueue/supervisor.log",
+    "runs/pueue/transcript.jsonl",
+    "runs/pueue/unrelated.log",
+    "runs/pueue/worker.py",
+    "runs/review-followup/historical-residuals.jsonl",
+    "runs/review-followup/original-manifest-recomputation.json",
+    "runs/review-followup/provenance-before-review.json",
+    "runs/review-followup/timeline.json",
+    "synthetic/README.md",
+    "synthetic/create.py",
+    "synthetic/followup.py",
+    "synthetic/observe_previous.py",
+    "synthetic/run.py"
+  ],
+  "original_snapshot": "runs/review-followup/provenance-before-review.json"
+}
