@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Local Agent Capabilities · Specifications &amp; Prioritization</title>
+<style>
+:root{--ink:#172326;--muted:#58666a;--paper:#f5f4ef;--card:#fffefa;--line:#d6ddda;--accent:#075e56;--wash:#e9f2ed;--amber:#845411}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1420px;margin:auto;padding:46px 38px 70px}h1{font-size:clamp(30px,4vw,48px);line-height:1.13;letter-spacing:-1.6px;margin:12px 0 18px;max-width:1000px}h2{font-size:24px;line-height:1.25;letter-spacing:-.5px;margin:0 0 12px}h3{font-size:20px;line-height:1.3;margin:0}
+p{margin:0 0 12px}.eyebrow{font-size:12px;letter-spacing:1.8px;text-transform:uppercase;font-weight:750;color:var(--accent)}.lede{font-size:20px;max-width:940px;line-height:1.5}.meta{color:var(--muted);font-size:13px}.nav{display:flex;flex-wrap:wrap;gap:8px;margin:24px 0}.nav a,button{border:1px solid var(--line);border-radius:7px;padding:7px 12px;text-decoration:none;color:var(--ink);background:var(--card);font:inherit;font-size:13px;cursor:pointer}.nav a:hover,button:hover{border-color:var(--accent);color:var(--accent)}a{color:var(--accent);text-underline-offset:3px}a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid #bf7b2c;outline-offset:3px}
+section{margin-top:38px;scroll-margin-top:18px}.callout{border-left:4px solid var(--accent);background:var(--wash);padding:17px 20px;margin:22px 0}.callout strong{color:var(--accent)}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:19px}.tile .big{font-size:25px;font-weight:750;letter-spacing:-.7px}.tile p:last-child{margin-bottom:0}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+table{width:100%;border-collapse:collapse;text-align:left}th{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);background:#edf0eb;padding:12px 13px;vertical-align:bottom}td{padding:14px 13px;border-top:1px solid var(--line);vertical-align:top}tbody tr:hover{background:#f5f8f3}.ranking{min-width:1010px}.ranking td:nth-child(2){min-width:190px}.ranking td:last-child{min-width:240px}.num{text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}.score{font-size:21px;font-weight:800;color:var(--accent)}.small{font-size:12px;color:var(--muted)}.badge{display:inline-block;font-size:11px;line-height:1.4;font-weight:750;padding:4px 8px;border-radius:4px;background:var(--wash);color:var(--accent);text-transform:uppercase;letter-spacing:.5px}.note{color:var(--muted);font-size:13px;margin-top:10px}.weights{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}.weight{flex:1 1 180px;padding:12px 14px;border:1px solid var(--line);border-radius:7px;background:var(--card)}.weight strong{font-size:24px;color:var(--accent);display:block}.weight span{font-size:13px}
+details{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:16px 0;overflow:hidden}summary{padding:19px 22px;cursor:pointer;display:list-item;list-style-position:inside;font-size:18px;font-weight:750}summary .small{font-weight:400;display:block;margin:5px 0 0 18px}.detail-body{padding:0 22px 22px}.spec-table{table-layout:fixed}.spec-table th{width:21%;text-transform:none;letter-spacing:0;font-size:13px;vertical-align:top;background:#f0f3ee;border-top:1px solid var(--line)}.spec-table td{overflow-wrap:anywhere}ul,ol{padding-left:20px;margin:0}li+li{margin-top:6px}code{font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#eef1ec;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#142b2b;color:#e6f0eb;padding:16px;border-radius:7px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-height:480px;overflow:auto}
+pre code{background:none;color:inherit;padding:0}.sources li{font-size:12px;overflow-wrap:anywhere}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.status{color:var(--accent);font-size:13px;min-height:21px}.footer{border-top:1px solid var(--line);padding-top:18px;margin-top:38px;color:var(--muted);font-size:12px}.wide-table{min-width:730px}
+@media(max-width:760px){main{padding:26px 17px 42px}.grid{grid-template-columns:1fr}.lede{font-size:17px}.spec-table th{width:29%}td,th{padding:11px 10px}summary{padding:15px}.detail-body{padding:0 12px 15px}.weight{flex-basis:140px}h1{letter-spacing:-1px}}
+@media print{body{background:#fff;font-size:10px}main{max-width:none;padding:0}h1{font-size:30px}h2{font-size:19px}section{margin-top:22px}.nav,.toolbar,.status{display:none}.table-wrap{overflow:visible}.ranking,.wide-table{min-width:0}td,th{padding:7px}.ranking td:nth-child(2),.ranking td:last-child{min-width:0}.score{font-size:16px}.grid{gap:8px}.tile{padding:10px}details{break-inside:auto}summary{padding:12px}.detail-body{padding:0 10px 12px}tr{break-inside:avoid}pre{max-height:none;background:#eee;color:#111}.sources{font-size:9px}#machine-json{display:none}a{color:inherit}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<div class="eyebrow">Études / local execution research</div>
+<h1>Give agents bounded actions.<br>Make their effects checkable.</h1>
+<p class="lede">A concrete handoff for choosing and validating the next local capabilities beyond file utilities: processes, database changes, settings, diagnostics, and controlled failures.</p>
+<p class="meta">Specification 1.1.0 · Prepared 5 September 2026 · Reweighted toward recurring utility · Proposed scopes and editorial scores · No implementation or certification implied</p>
+<nav class="nav" aria-label="Document sections">
+<a href="#ranking">Weighted ranking</a><a href="#specifications">Specifications</a><a href="#contract">Shared contract</a><a href="#workflow">Agent workflow</a><a href="#languages">Languages</a><a href="#machine">Machine handoff</a>
+</nav>
+</header>
+<div class="callout"><strong>First action:</strong> baseline <b>lease</b> against existing process tools using synthetic projects. Establish a real ownership-and-cleanup gap before implementation. Each candidate advances through its own protocol; no ranking authorizes broad machine access.</div>
+<div class="grid">
+<div class="tile"><div class="eyebrow">Adoption / daily use</div><p class="big">lease</p><p>Reliable process ownership, readiness, and cleanup for delegated tasks.</p></div>
+<div class="tile"><div class="eyebrow">Closest custody extension</div><p class="big">rows</p><p>Selected data changes with minimal disclosure and conflict-aware recovery.</p></div>
+<div class="tile"><div class="eyebrow">Highest utility per context byte</div><p class="big">probe</p><p>One scoped diagnostic fact, answered without dumping the machine into context.</p></div>
+</div>
+<section id="ranking"><h2>01 / Weighted ranking</h2>
+<p>Scores prioritize experiments. They are hypotheses to test against existing tools and actual usage. Recurring utility dominates at 50%. Demo potential is retained at 10% as a soft ordering influence and the first tie-break; it cannot lift a low-utility candidate over a high-utility one. Maintainability remains a major constraint.</p>
+<div id="weights" class="weights"></div>
+<div class="table-wrap"><table class="ranking"><caption class="small" style="text-align:left;padding:12px 13px">All component scores use 1–5; higher is better. M = ease of maintenance. Weighted total = Σ(weight × score ÷ 5).</caption><thead><tr><th class="num">Rank</th><th>Candidate / resource</th><th class="num">U<br>50%</th><th class="num">Demo<br>10%</th><th class="num">M<br>20%</th><th class="num">Fit<br>15%</th><th class="num">Diff.<br>5%</th><th class="num">/ 100</th><th>Disposition</th></tr></thead><tbody id="ranking-body"></tbody></table></div>
+<p class="note">Tie-break: demo, then maintainability, then capability fit, then ID. Under the 1.1.0 weighting probe rises to second on recurring utility and maintainability, ahead of rows; probe is still a component-first experiment and its disposition, not its rank, governs whether it becomes a standalone tool. A failed acceptance gate cannot be offset by a high score.</p>
+</section>
+<section id="specifications"><h2>02 / Candidate specifications</h2>
+<p>Each specification separates what the tool can observe, what it returns to the agent, and what it may change. Commands are proposed interfaces. Expand a candidate for its complete implementation boundary.</p>
+<div class="toolbar"><button type="button" id="expand">Expand all specifications</button><button type="button" id="collapse">Collapse all specifications</button><button type="button" id="print">Print / save PDF</button></div>
+<div id="candidate-specs"></div></section>
+<section id="contract"><h2>03 / Shared execution contract</h2><p>The host enforces authority. Each tool narrows its own operation and produces evidence within that boundary. An unrestricted agent remains unrestricted even when these commands are available.</p>
+<div class="table-wrap"><table class="wide-table"><thead><tr><th style="width:19%">Area</th><th>Required behavior</th></tr></thead><tbody id="contract-body"></tbody></table></div>
+</section>
+<section id="workflow"><h2>04 / Automated framework workflow</h2><p>The first automated task is evidence gathering. Advance a candidate only after its load-bearing claim survives a locked protocol. Use the host's existing authorization; this document does not expand it.</p>
+<div class="table-wrap"><table class="wide-table"><thead><tr><th style="width:16%">Phase</th><th>Required output</th><th>Advance when</th><th>Stop / redirect when</th></tr></thead><tbody id="workflow-body"></tbody></table></div>
+<div class="callout"><strong>Required handoff outputs:</strong> baseline.md · protocol.md · evidence/results.json · synthetic demo recipe · decision.md. A protocol sets supported OS versions, test cases, and measurement thresholds before implementation.</div>
+</section>
+<section id="languages"><h2>05 / Language choices</h2><p>Choose the implementation that removes concrete work. Cross-language tools share contracts and result schemas; they do not need a common runtime.</p><div class="table-wrap"><table class="wide-table"><thead><tr><th>Language</th><th>Good uses</th><th>Reason</th><th>Boundary</th></tr></thead><tbody id="languages-body"></tbody></table></div>
+</section>
+<section id="deferred"><h2>06 / Deferred scope</h2><div class="table-wrap"><table class="wide-table"><thead><tr><th>Item</th><th>Why it is outside this handoff</th></tr></thead><tbody id="deferred-body"></tbody></table></div></section>
+<section id="machine"><h2>07 / Machine-readable handoff</h2><p>The complete specification is embedded in <code>script#handoff-spec[type="application/json"]</code>. The sibling <a href="local-agent-capabilities-spec.json">JSON file</a> contains identical data. Frameworks should parse that object directly.</p>
+<div class="toolbar"><button type="button" id="copy-json">Copy specification JSON</button><button type="button" id="copy-prompt">Copy handoff prompt</button></div><p id="copy-status" class="status" role="status" aria-live="polite"></p>
+<p><b>Suggested instruction to the receiving agent:</b></p><pre id="handoff-prompt"></pre>
+<details id="machine-json"><summary>Inspect the complete JSON</summary><div class="detail-body"><pre id="json-view"></pre></div></details>
+</section>
+<div class="footer">Self-contained HTML document. No external assets, analytics, network requests, or automatic downloads. Source links are references for subsequent baseline verification; candidate evidence has not been measured. All interfaces refer to the same implementation whether called by an agent or manually.</div>
+<noscript><p>This document renders its tables from embedded JSON. Enable JavaScript or open the sibling local-agent-capabilities-spec.json file to read the complete handoff.</p></noscript>
+</main>
+<script id="handoff-spec" type="application/json">{
+  "schema_version": "1.1.0",
+  "prepared_on": "2026-09-05",
+  "title": "Local Agent Capabilities — Specifications & Prioritization",
+  "document_status": "Proposed research and implementation handoff; no candidate is certified or implemented by this document.",
+  "thesis": "Turn open-ended agent intent into bounded local operations with deterministic decision rules, minimal observation and disclosure, explicit refusals, and checkable effects.",
+  "context": {
+    "file_family": [
+      "sweep",
+      "stash",
+      "unpack",
+      "scrub",
+      "pack",
+      "carry"
+    ],
+    "precedent": "sweep: the agent supplies organizational judgment; the tool limits observation and executes a validated organization plan. Bespoke macOS schemes should reuse explicitly permitted tags and existing layout without inferring private content.",
+    "interfaces": "CLI for agents and terminal users; optional manual native/Finder interfaces call the same implementation and contract. There are no separate human and agent tool families.",
+    "excluded_from_current_scope": [
+      "face (tabled)",
+      "DAW implementation",
+      "new general sandbox",
+      "universal GUI automation",
+      "cloud service"
+    ],
+    "status_note": "Existing file tools and their current repository status have not been re-audited for this handoff.",
+    "interpretation": "Names and CLI syntax below are proposals. No CLI shown here should be assumed installed."
+  },
+  "scoring": {
+    "status": "Editorial hypotheses, not measurements of adoption, performance, security, or implementation completeness.",
+    "scale": "Integer 1–5. Higher is better in every column; maintenance 5 means easiest to maintain.",
+    "formula": "sum(weight_percent * score / 5), on a 0–100 scale",
+    "weights": [
+      {
+        "id": "utility",
+        "label": "Recurring utility",
+        "weight_percent": 50,
+        "rationale": "How often a delegated local task benefits from the operation. Dominant criterion: a tool earns its place by recurring use, not by presentation."
+      },
+      {
+        "id": "demo",
+        "label": "Demo / sharing potential",
+        "weight_percent": 10,
+        "rationale": "A short, understandable demonstration with observable results. Retained as a soft ordering influence only; it cannot lift a low-utility candidate over a high-utility one."
+      },
+      {
+        "id": "maintenance",
+        "label": "Maintainability",
+        "weight_percent": 20,
+        "rationale": "Small supported surface, stable dependencies, manageable platform and compatibility work."
+      },
+      {
+        "id": "fit",
+        "label": "Bounded-capability fit",
+        "weight_percent": 15,
+        "rationale": "How clearly observation, disclosure, mutation, verification, and recovery can be specified."
+      },
+      {
+        "id": "differentiation",
+        "label": "Differentiation",
+        "weight_percent": 5,
+        "rationale": "Evidence of a useful gap beyond existing projects."
+      }
+    ],
+    "tie_break": [
+      "demo descending",
+      "maintenance descending",
+      "fit descending",
+      "id ascending"
+    ],
+    "gate_rule": "Scores prioritize experiments only. An unresolved critical acceptance gate prevents implementation/release advancement regardless of score.",
+    "changes": "Record score changes with new evidence and a new specification version. Lock candidate-specific performance and usability thresholds before implementation; do not move them to meet results. 1.1.0 (2026-09-05): reweighted. Recurring utility raised 30 -> 50 and demo lowered 30 -> 10; maintenance 25 -> 20, fit 10 -> 15, differentiation 5. Component scores are unchanged; only the weighting moved. Demo now orders softly and breaks ties rather than competing with utility. Rationale: demo weight is a go-to-market bet, and it is not currently spendable. Effect: probe 3 -> 2, rows 2 -> 3."
+  },
+  "shared_contract": [
+    {
+      "area": "Authority",
+      "requirement": "The host framework supplies authorization and enforces filesystem/network boundaries. This specification, a recipe, a plan ID, or a task label does not grant authority or sandbox an unrestricted agent."
+    },
+    {
+      "area": "Observation",
+      "requirement": "Declare exact resources and fields needed by each operation. Read no broader inventory merely for convenience. Distinguish bytes touched by an engine from values selected, interpreted, or disclosed."
+    },
+    {
+      "area": "Disclosure",
+      "requirement": "Define output separately from input access. Return the smallest useful structured result. Raw logs, row values, environment values, and preference dumps require explicit scope; do not assume they are safe to forward to a model."
+    },
+    {
+      "area": "Network",
+      "requirement": "Declare none, loopback-only, or explicit endpoints per operation. All first spikes are local. Process launch does not itself prevent child network or filesystem access; compose with the host sandbox when restrictions are required."
+    },
+    {
+      "area": "Determinism",
+      "requirement": "Fixed validated inputs, policy version, and relevant observed state yield defined decisions. Scheduling, process output, and OS timing remain variable; record observations and report uncertainty."
+    },
+    {
+      "area": "Plan/apply",
+      "requirement": "Where meaningful, bind apply to the reviewed target, scope, policy version, and relevant preconditions. Revalidate at apply. Refuse material drift instead of silently recomputing a different action."
+    },
+    {
+      "area": "Recovery",
+      "requirement": "Define recovery per operation. Undo detects intervening edits; cancellation reports what actually stopped. Do not promise universal undo or a cross-resource atomic transaction."
+    },
+    {
+      "area": "Evidence",
+      "requirement": "Receipts distinguish attempted, observed, verified, failed, and unproven. Self-reported zero counters are not independent evidence of no access. Verify claims with appropriate tests or OS enforcement."
+    },
+    {
+      "area": "Persistent state",
+      "requirement": "State what is persisted, why, where, and for how long. Store sensitive recovery material with appropriate local protection. No remote caching, telemetry, or automatic uploading."
+    },
+    {
+      "area": "CLI",
+      "requirement": "Versioned JSON results and explicit stderr/progress behavior. Proposed exit convention: 0 completed; 1 nothing to do; 2 refused/unsupported; 3 execution or incomplete-recovery error. Individual commands must document exact mapping."
+    },
+    {
+      "area": "Implementation",
+      "requirement": "Use direct APIs or explicit executable/argv construction. No arbitrary recipe hooks in the initial schema. Invoking a program safely does not make that program's behavior safe."
+    },
+    {
+      "area": "Interfaces",
+      "requirement": "Native/manual interfaces and agent adapters call the same core. No duplicate custody logic. Extract shared infrastructure only after implemented tools demonstrate repeated requirements."
+    }
+  ],
+  "result_envelope": {
+    "schema_version": "1",
+    "tool": "<tool>",
+    "tool_version": "<version>",
+    "operation_id": "<opaque-id>",
+    "status": "done | nothing_to_do | refused | incomplete | error",
+    "reason_code": "<stable-code-or-null>",
+    "scope": "<declared-resource-handles>",
+    "observations": "<minimal-operation-specific-facts>",
+    "effects": "<attempted-and-observed-changes>",
+    "verification": "<named-claims-with-pass-fail-unproven>",
+    "recovery": "<availability-id-and-conflicts>",
+    "disclosure": "<returned-fields-and-retention-policy>"
+  },
+  "workflow": [
+    {
+      "phase": "1. Resolve workspace",
+      "output": "Read applicable AGENTS.md, locate the target repository, inspect its actual status and dependency policy.",
+      "advance": "Work only within the host's granted authorization; preserve existing work. Use the repo knowledge graph first when required.",
+      "stop": "Missing target repository or authorization for a required effect."
+    },
+    {
+      "phase": "2. Establish baseline",
+      "output": "Run an existing implementation on synthetic representative cases. Record capability coverage, setup burden, failures, and gaps.",
+      "advance": "A concrete missing property matters in the user's workflow.",
+      "stop": "An existing tool satisfies the contract with modest configuration: integrate or contribute instead."
+    },
+    {
+      "phase": "3. Lock protocol",
+      "output": "Candidate protocol: supported targets, observation/disclosure policy, fixtures, expected effects, failure cases, demo script, measurement thresholds.",
+      "advance": "Commit protocol before candidate implementation; define thresholds from baseline and user needs.",
+      "stop": "Load-bearing claim cannot be observed or tested within the supported environment."
+    },
+    {
+      "phase": "4. Build bounded spike",
+      "output": "Smallest implementation exercising the load-bearing claim. Record platform/runtime versions and deviations.",
+      "advance": "All critical claim tests pass; unsupported cases fail closed with explicit output.",
+      "stop": "Unsafe action, excessive disclosure, unreliable recovery, or widening scope to rescue a weak idea."
+    },
+    {
+      "phase": "5. Independently verify",
+      "output": "Witness output, machine-readable results, counterexamples, residual limitations, baseline comparison, and a synthetic demo.",
+      "advance": "Evidence actually exercises the claimed boundary; failed and unproven remain separate.",
+      "stop": "A successful happy path is the only evidence, or the same implementation both asserts and 'proves' the claim."
+    },
+    {
+      "phase": "6. Decide",
+      "output": "Decision record: implement, integrate, revise-and-retest, or reject; include reasons and unchanged/changed scores.",
+      "advance": "Implementation follows a passed protocol and the active work authorization.",
+      "stop": "Do not publish, install globally, mutate user data, or add background startup merely because this handoff exists."
+    }
+  ],
+  "framework_handoff": {
+    "first_action": "Start with lease baseline evaluation against Process Compose and Pueue; assess Portless only for routing needs. Use synthetic projects, not personal files.",
+    "parallelism": "Do not launch all candidate implementations. Resolve one load-bearing experiment at a time unless the user explicitly authorizes parallel work.",
+    "selection_rule": "Highest weighted candidate with satisfied prerequisites is the next experiment. Candidate disposition overrides any assumption that rank automatically authorizes a standalone product.",
+    "required_outputs": [
+      "baseline.md",
+      "protocol.md (locked before implementation)",
+      "evidence/results.json",
+      "demo recipe using synthetic inputs",
+      "decision.md"
+    ],
+    "result_states": [
+      "unexamined",
+      "baseline_checked",
+      "protocol_locked",
+      "spike_running",
+      "witnessed",
+      "implementation_ready",
+      "integrate_existing",
+      "revise",
+      "rejected",
+      "blocked"
+    ],
+    "unresolved_choices": [
+      "Select the actual implementation repository and branch before edits.",
+      "Choose supported OS versions in the protocol.",
+      "Choose sensitive-state retention before collecting real recovery data."
+    ]
+  },
+  "candidates": [
+    {
+      "id": "lease",
+      "name": "lease",
+      "disposition": "Baseline + bounded prototype; first experiment",
+      "pitch": "An agent can stop what it started without killing unrelated work.",
+      "resource": "Processes and task lifecycle",
+      "scores": {
+        "utility": 5,
+        "demo": 4,
+        "maintenance": 3,
+        "fit": 5,
+        "differentiation": 3
+      },
+      "language": "Go",
+      "language_reason": "Process supervision, timers, concurrent I/O, and local coordination fit Go well. OS-specific process identity and containment still require deliberate implementation.",
+      "job": "Start a project or worker, wait for explicit readiness, inspect its state, and clean up the processes belonging to that task.",
+      "commands": [
+        "lease start --task checkout --ready http://127.0.0.1:4100/health -- npm run dev -- --port 4100",
+        "lease status --task checkout --json",
+        "lease stop --task checkout"
+      ],
+      "observes": [
+        "Explicit executable, argv, working directory, and selected environment entries.",
+        "Launch identities, supported descendants/process groups, liveness, and an explicit local readiness endpoint.",
+        "Bounded process output only under declared capture policy; readiness alone must not return raw logs."
+      ],
+      "changes": [
+        "Launch and signal processes for which current ownership can be established.",
+        "Maintain scoped task state and optional bounded logs.",
+        "Expiry only when explicitly configured; expiry and grace behavior form part of the task contract."
+      ],
+      "emits": [
+        "Opaque task/run IDs, started/ready/exited states, readiness evidence, exit outcome.",
+        "Cancellation attempted versus confirmed; residual/unproven processes.",
+        "No general environment dump or unrelated process arguments."
+      ],
+      "persists": "Minimal launch/identity records and configured lease policy. Log retention is opt-in and bounded. Define recovery if supervisor state is lost.",
+      "scope": [
+        "One supported OS first; ordinary foreground children and a documented process-group model.",
+        "Explicit executable/argv and readiness condition.",
+        "Two simultaneous tasks, independent cancellation, interruption/restart recovery."
+      ],
+      "excludes": [
+        "General sandboxing or a guarantee that launched code is harmless.",
+        "Arbitrary process adoption, killing by port/name alone, unrelated process cleanup.",
+        "Worktree creation, package installation, DB provisioning, cross-host scheduling, UI dashboard."
+      ],
+      "acceptance": [
+        "Two tasks run concurrently; stopping one leaves the other and a synthetic unrelated listener unaffected.",
+        "A stale record/PID reuse cannot authorize signaling a replacement process.",
+        "Started is never reported as ready until the configured condition is observed.",
+        "Cancellation confirms which supported processes stopped; escaped or unobservable descendants cannot be silently marked clean.",
+        "Supervisor interruption and explicit expiry exercise the documented recovery behavior.",
+        "Missing ownership evidence produces refusal, not guessed cleanup."
+      ],
+      "demo": "Show two running projects. Stop or expire one task; the second continues. Inject a stale ownership record and demonstrate refusal to terminate the unrelated process.",
+      "baseline": "Process Compose for lifecycle/health/namespaces/API; Pueue for tasks; Portless for named local routing.",
+      "kill": "Integrate an incumbent if it meets the ownership, disclosure, and cleanup contract with modest configuration. Reject broad all-descendant cleanup claims if the chosen OS mechanism cannot enforce or observe them.",
+      "maintenance_risks": [
+        "PID reuse and detached children",
+        "Process identity across supervisor crashes",
+        "Different cancellation mechanisms across operating systems"
+      ],
+      "evidence_status": "Hypothesis. Incumbent capabilities were reviewed; no comparative execution or prototype has been measured.",
+      "sources": [
+        "https://github.com/F1bonacc1/process-compose",
+        "https://github.com/Nukesor/pueue",
+        "https://github.com/vercel-labs/portless",
+        "https://pkg.go.dev/os/exec"
+      ],
+      "weighted_score": 82,
+      "rank": 1,
+      "weighted_total": 88.0
+    },
+    {
+      "id": "probe",
+      "name": "probe",
+      "disposition": "Implement useful checks inside lease first; standalone identity remains conditional",
+      "pitch": "Answer the diagnostic question without dumping the machine into context.",
+      "resource": "Specific local diagnostic facts",
+      "scores": {
+        "utility": 5,
+        "demo": 2,
+        "maintenance": 4,
+        "fit": 5,
+        "differentiation": 2
+      },
+      "language": "Go",
+      "language_reason": "Small OS adapters, structured output, and distribution fit Go. Rust is equally reasonable if shared existing code reduces work.",
+      "job": "Check one explicitly scoped fact: executable availability/version, a port, environment-variable presence, or writeability of a selected path.",
+      "commands": [
+        "probe executable node",
+        "probe port 4100",
+        "probe env DATABASE_URL --presence",
+        "probe writable ./build"
+      ],
+      "observes": [
+        "Only the requested environment key, executable, endpoint, or path.",
+        "Executable checks declare whether they merely resolve a path or actually run a pinned/resolved program.",
+        "A writeability test distinguishes permission inspection from an active bounded write probe."
+      ],
+      "changes": [
+        "No mutation for passive checks.",
+        "If an active write probe is requested, create and remove a unique temporary item inside the selected target and verify cleanup."
+      ],
+      "emits": [
+        "Minimal booleans/status/version facts with stable reason codes.",
+        "No secret values, full environment, broad process arguments, or unrelated path inventory.",
+        "Unknown/unproven when the requested fact cannot be established."
+      ],
+      "persists": "No state by default; a requested diagnostic receipt contains only the disclosed facts.",
+      "scope": [
+        "Four small check types with explicit semantics and versioned JSON.",
+        "Reuse as lease preflight/readiness checks where appropriate.",
+        "Passive checks as default; active probes explicitly identified."
+      ],
+      "excludes": [
+        "Automatic diagnosis of every framework.",
+        "General log collection, secret inspection, automatic fixes or package installs.",
+        "An unbounded machine inventory disguised as diagnostics."
+      ],
+      "acceptance": [
+        "Known sentinel environment values never appear in output or errors.",
+        "A port query does not disclose unrelated process arguments.",
+        "A passive check produces no writes.",
+        "Active probe cleanup is verified and cleanup failure is reported.",
+        "Missing/unsupported facts remain unknown rather than guessed.",
+        "Requested scope does not expand to other projects or the whole environment."
+      ],
+      "demo": "A broken synthetic app is diagnosed from four scoped facts. Show that a sentinel secret and unrelated process arguments never enter the agent-visible result.",
+      "baseline": "Compare direct shell checks and project-specific doctors; assess whether a standalone binary adds value beyond lease helpers.",
+      "kill": "Keep as a module if independent adoption is weak or value depends on a large framework-specific adapter catalog.",
+      "maintenance_risks": [
+        "Small differences in OS fact APIs",
+        "Executable/version probing can execute code",
+        "Active versus passive check semantics"
+      ],
+      "evidence_status": "Hypothesis. Scoring favors maintainability; independent demand is unmeasured.",
+      "sources": [
+        "https://github.com/laravel/doctor",
+        "https://pkg.go.dev/os/exec"
+      ],
+      "weighted_score": 74,
+      "rank": 2,
+      "weighted_total": 87.0
+    },
+    {
+      "id": "rows",
+      "name": "rows",
+      "disposition": "Protocol + one-operation spike after lease evaluation",
+      "pitch": "Change a selected column without exposing the rest of the database to the agent.",
+      "resource": "User-managed local SQLite data",
+      "scores": {
+        "utility": 4,
+        "demo": 4,
+        "maintenance": 3,
+        "fit": 5,
+        "differentiation": 4
+      },
+      "language": "Rust + SQLite",
+      "language_reason": "Reuse transaction/recovery discipline and SQLite's native authorizer/session facilities through rusqlite. Use a pinned, tested SQLite build where required features are enabled.",
+      "job": "Perform a declared, bounded transformation on a selected table/column, preview its extent, apply exactly the reviewed change, and undo with conflict detection.",
+      "commands": [
+        "rows plan app.sqlite --table orders --column status --replace pending_review=review --max-rows 500",
+        "rows apply <plan-id>",
+        "rows undo <operation-id>"
+      ],
+      "observes": [
+        "Explicit database/schema and allowlisted tables, columns, and key fields needed by the operation.",
+        "Local engine page reads can include other bytes; distinguish physical reads from selected values.",
+        "Schema/trigger/constraint properties required to establish supported behavior."
+      ],
+      "changes": [
+        "Only the approved row transformation within a transaction.",
+        "Protected local recovery material containing prior values where required.",
+        "Fail on precondition drift, unsupported side effects, or transaction failure."
+      ],
+      "emits": [
+        "Target table/column when authorized, affected counts, operation ID and verification outcome.",
+        "No sample rows, unrelated column values, or raw SQL errors containing sensitive data by default.",
+        "Recovery conflicts summarized without disclosing entire rows."
+      ],
+      "persists": "Undo needs prior values. Define protected local storage and retention explicitly; durable undo is not compatible with a claim of zero persisted content.",
+      "scope": [
+        "SQLite only, user-managed database, supported ordinary tables with usable non-null declared primary keys.",
+        "Start with one exact-value replacement on one column, a maximum affected-row bound, and no arbitrary SQL.",
+        "Account for constraints and refuse triggers/virtual tables/other behaviors not covered by the initial protocol."
+      ],
+      "excludes": [
+        "Other applications' private databases or undocumented schemas.",
+        "Arbitrary SQL, ATTACH, loadable extensions, schema migrations, remote databases.",
+        "Unqualified row-level confidentiality claims from output filtering alone.",
+        "Blind replay over intervening edits."
+      ],
+      "acceptance": [
+        "An allowed column changes while sentinel values in unrelated columns are never returned.",
+        "The row bound is enforced before commit, including indirect effects if any are supported.",
+        "Relevant state drift between plan and apply is refused.",
+        "Undo restores the tool's change while preserving an unrelated subsequent edit.",
+        "A conflicting later edit makes undo refuse; it is never overwritten.",
+        "Unsupported schemas, triggers, null-key cases, or extensions fail closed.",
+        "Crash/transaction tests verify database consistency and honest recovery status."
+      ],
+      "demo": "On synthetic order data, preview and apply a bulk status change. Add an unrelated edit; undo preserves it. Add a conflicting edit and show refusal.",
+      "baseline": "Compare a short SQLite transaction plus authorizer/session APIs with the proposed CLI; establish the value of reusable policy, restricted output, and recovery.",
+      "kill": "Stop if common target schemas need unrestricted SQL/trigger behavior, if observation restrictions cannot be honored, or if a simple existing wrapper already provides the required contract.",
+      "maintenance_risks": [
+        "SQLite feature/build configuration",
+        "Schema restrictions and indirect effects",
+        "Sensitive recovery records",
+        "Concurrent application/undo preconditions"
+      ],
+      "evidence_status": "Hypothesis. SQLite supplies relevant APIs, but these do not themselves constitute the proposed product or prove its safety.",
+      "sources": [
+        "https://sqlite.org/c3ref/set_authorizer.html",
+        "https://sqlite.org/sessionintro.html",
+        "https://github.com/rusqlite/rusqlite"
+      ],
+      "weighted_score": 77,
+      "rank": 3,
+      "weighted_total": 79.0
+    },
+    {
+      "id": "tweak",
+      "name": "tweak",
+      "disposition": "Feasibility study of a small supported settings catalog",
+      "pitch": "Let an agent change your setup with a precise, conflict-aware way back.",
+      "resource": "Selected macOS preferences",
+      "scores": {
+        "utility": 4,
+        "demo": 5,
+        "maintenance": 2,
+        "fit": 4,
+        "differentiation": 2
+      },
+      "language": "Swift; Rust core with a native bridge is an alternative",
+      "language_reason": "Apple framework access dominates this work. A direct native implementation can reduce bridging complexity; Go is not the default choice here.",
+      "job": "Preview and apply a small explicit settings profile, verify supported effects, and restore the previous state without erasing later user decisions.",
+      "commands": [
+        "tweak plan --profile development",
+        "tweak apply <plan-id>",
+        "tweak undo <operation-id>"
+      ],
+      "observes": [
+        "Only declared preference domains/keys and their existence, type, value, and necessary scope.",
+        "Only app/OS state required to verify the supported setting.",
+        "No whole-machine defaults export or broad preference dump."
+      ],
+      "changes": [
+        "Only allowlisted settings with tested adapters.",
+        "A journal of original presence/value and what the operation set.",
+        "Any required app reload/restart must be declared separately in the operation."
+      ],
+      "emits": [
+        "Selected keys and before/after values only when within disclosure scope.",
+        "Stored versus observed-effective state; restart requirements and unsupported status.",
+        "Undo conflicts when current state differs from the state the operation wrote."
+      ],
+      "persists": "Prior selected settings, including absence versus explicit values, with a scoped local journal.",
+      "scope": [
+        "A handful of typed Finder/Dock or other settings proven on named OS versions.",
+        "Each adapter implements read, validate, write, verify, and conflict-aware restore.",
+        "Select the catalog in the protocol; no listed profile is assumed implemented."
+      ],
+      "excludes": [
+        "A universal macOS setup manager.",
+        "Private/undocumented keys without an explicit supported-version test contract.",
+        "Security-policy changes, permission bypasses, software installation, whole-profile restoration.",
+        "UI scripting fallbacks that silently widen access."
+      ],
+      "acceptance": [
+        "Every setting has typed read/write/verify/restore behavior on supported OS versions.",
+        "Absent and explicitly set defaults restore correctly.",
+        "Stored preference success is not substituted for visible/effective success.",
+        "Intervening manual changes cause scoped restore conflicts.",
+        "A partially applied multi-setting profile reports partial state and per-setting recovery; no false global atomicity.",
+        "Unknown keys and unsupported OS versions refuse."
+      ],
+      "demo": "Apply a small visible setup profile, make a manual change, then undo. The original settings return while the later manual change is preserved or explicitly reported as a conflict.",
+      "baseline": "Compare defaults/native preference APIs and Macrift's manifest/undo behavior.",
+      "kill": "Do not expand if useful settings mostly require undocumented behavior, disruptive restarts, or broad UI automation; use an existing settings tool if its recovery contract is sufficient.",
+      "maintenance_risks": [
+        "OS-version drift",
+        "Undocumented settings",
+        "Stored versus effective state",
+        "Application reload side effects"
+      ],
+      "evidence_status": "Hypothesis. No settings catalog has passed a feasibility protocol.",
+      "sources": [
+        "https://support.apple.com/guide/terminal/edit-property-lists-apda49a1bb2-577e-4721-8f25-ffc0836f6997/2.15/mac/26",
+        "https://github.com/emylfy/macrift"
+      ],
+      "weighted_score": 74,
+      "rank": 4,
+      "weighted_total": 72.0
+    },
+    {
+      "id": "failure-scenarios",
+      "name": "Failure scenarios",
+      "disposition": "Integrate existing tools first; no new engine authorized by priority",
+      "pitch": "Give an agent a repeatable failure and a checkable recovery test.",
+      "resource": "Explicit local test connections or browser routes",
+      "scores": {
+        "utility": 4,
+        "demo": 5,
+        "maintenance": 2,
+        "fit": 3,
+        "differentiation": 1
+      },
+      "language": "Go for a protocol proxy; TypeScript for browser-only scenarios",
+      "language_reason": "Go suits concurrent network I/O; TS suits Playwright integration. Choose one boundary and reuse the existing engine.",
+      "job": "Apply a declared local failure sequence, run assertions, remove injected faults, and report recovery evidence.",
+      "commands": [
+        "Use the verified CLI/API of the chosen incumbent; do not invent a new CLI before baseline evaluation."
+      ],
+      "observes": [
+        "Only explicitly routed test traffic and declared assertions.",
+        "Capture status/timing facts by default; payload capture requires explicit scope.",
+        "Concurrent request ordering and timings are recorded rather than assumed deterministic."
+      ],
+      "changes": [
+        "Only the chosen proxy/routes and synthetic test environment.",
+        "Temporary latency/errors/disconnections within the declared scenario."
+      ],
+      "emits": [
+        "Scenario identity/version, injected events, observed assertions, recovery and cleanup status.",
+        "No production request bodies, tokens, or automatic remote report upload."
+      ],
+      "persists": "Minimal local scenario results; sensitive payload retention disabled by default.",
+      "scope": [
+        "One local HTTP/TCP proxy or one browser route boundary.",
+        "Synthetic app, explicit request-matching rules, a short deterministic injection sequence.",
+        "Assert user-visible recovery separately from successful fault injection."
+      ],
+      "excludes": [
+        "Machine-wide network disruption.",
+        "Production targets, transparent TLS interception, broad packet capture.",
+        "A new chaos framework, generic agent runtime, or proxy plus browser engine in the same spike."
+      ],
+      "acceptance": [
+        "Only routed synthetic traffic is affected.",
+        "The declared failure sequence is observed; concurrency ambiguities are surfaced.",
+        "Application recovery assertions run independently of injection success.",
+        "Cleanup removes the injected behavior and verifies normal test traffic.",
+        "Interruption produces honest residual-state reporting.",
+        "No payload or credential is disclosed by default."
+      ],
+      "demo": "A synthetic checkout fails under a timeout/error sequence. Apply a fix and rerun the same scenario; show measured recovery and cleanup.",
+      "baseline": "Toxiproxy and fault for network scenarios; Playwright for browser interception.",
+      "kill": "Do not create a new engine if existing tools satisfy scope, assertions, and report needs. A narrow recipe/evidence adapter may be sufficient.",
+      "maintenance_risks": [
+        "Crowded category",
+        "TLS and protocol expansion",
+        "Timing/concurrency claims",
+        "Payload sensitivity"
+      ],
+      "evidence_status": "Incumbents already expose significant parts of this scope. Novelty and incremental value require evidence.",
+      "sources": [
+        "https://github.com/Shopify/toxiproxy",
+        "https://fault-project.com/reference/cli-commands/",
+        "https://playwright.dev/docs/network"
+      ],
+      "weighted_score": 71,
+      "rank": 5,
+      "weighted_total": 68.0
+    }
+  ],
+  "languages": [
+    {
+      "language": "Rust",
+      "use": "File custody, recovery, bounded SQLite operations, binary-format work.",
+      "reason": "Reuse the existing engineering base; explicit resource/state handling and native libraries.",
+      "avoid": "Rewriting working Go code solely for theoretical performance."
+    },
+    {
+      "language": "Go",
+      "use": "Process supervisors, scoped diagnostics, local services, protocol proxies.",
+      "reason": "Concurrent I/O and standard-library plumbing support a compact implementation.",
+      "avoid": "Assuming the runtime automatically supplies process containment or child-process safety."
+    },
+    {
+      "language": "TypeScript",
+      "use": "Browser operations, web views, browser-based demos, thin adapters.",
+      "reason": "Use browser-native ecosystems and Playwright directly.",
+      "avoid": "Adding a browser UI or Node dependency to an otherwise complete native CLI without a product need."
+    },
+    {
+      "language": "Python",
+      "use": "Experiments, synthetic corpora, reference implementations, adversarial harnesses.",
+      "reason": "Quick measurements and strong analysis/test tooling.",
+      "avoid": "Packaging a broad scientific runtime into a tiny public utility without a concrete reason."
+    },
+    {
+      "language": "C",
+      "use": "Established libraries, native ABI boundaries, small low-level components.",
+      "reason": "Direct access to existing OS/library APIs.",
+      "avoid": "Writing a new database, parser, or crypto implementation when an established one exists."
+    },
+    {
+      "language": "Swift",
+      "use": "macOS framework integration, preferences, native selection/capture/presentation.",
+      "reason": "Direct Apple API access can remove bridging complexity.",
+      "avoid": "Promising cross-platform behavior from macOS-specific adapters."
+    }
+  ],
+  "deferred": [
+    {
+      "item": "Universal sandbox",
+      "reason": "Large compatibility/security surface; integrate a host boundary.",
+      "source": "https://github.com/anthropic-experimental/sandbox-runtime"
+    },
+    {
+      "item": "General GUI automation",
+      "reason": "Broad app/accessibility compatibility; existing projects already cover much of it.",
+      "source": "https://github.com/openclaw/Peekaboo"
+    },
+    {
+      "item": "Generic process dashboard",
+      "reason": "Does not establish the narrow ownership claim by itself.",
+      "source": "https://github.com/F1bonacc1/process-compose"
+    },
+    {
+      "item": "Shared framework/DSL",
+      "reason": "Extract only after real tools demonstrate repeated contracts; avoid encoding arbitrary workflows prematurely.",
+      "source": null
+    },
+    {
+      "item": "face",
+      "reason": "Remains tabled; it is not a prerequisite for any capability.",
+      "source": null
+    }
+  ]
+}</script>
+<script>
+"use strict";
+const spec = JSON.parse(document.getElementById("handoff-spec").textContent);
+const esc = value => String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const list = values => "<ul>"+values.map(v=>"<li>"+esc(v)+"</li>").join("")+"</ul>";
+const row = (label,html) => "<tr><th scope='row'>"+esc(label)+"</th><td>"+html+"</td></tr>";
+document.getElementById("weights").innerHTML=spec.scoring.weights.map(w=>"<div class='weight'><strong>"+w.weight_percent+"%</strong><span>"+esc(w.label)+"</span></div>").join("");
+document.getElementById("ranking-body").innerHTML=spec.candidates.map(c=>"<tr><td class='num'>"+c.rank+"</td><td><a href='#spec-"+c.id+"' data-open='"+c.id+"'><b>"+esc(c.name)+"</b></a><div class='small'>"+esc(c.resource)+"</div></td>"+spec.scoring.weights.map(w=>"<td class='num'>"+c.scores[w.id]+"</td>").join("")+"<td class='num score'>"+c.weighted_score+"</td><td>"+esc(c.disposition)+"<div class='small'>"+esc(c.language)+"</div></td></tr>").join("");
+document.getElementById("candidate-specs").innerHTML=spec.candidates.map((c,i)=>{
+ const fields=[
+ ["Job / promise","<b>"+esc(c.pitch)+"</b><p>"+esc(c.job)+"</p>"],
+ ["Language",esc(c.language)+"<p class='small'>"+esc(c.language_reason)+"</p>"],
+ ["Proposed commands","<pre><code>"+esc(c.commands.join("\n"))+"</code></pre>"],
+ ["Observes",list(c.observes)],["May change",list(c.changes)],["Returns to agent",list(c.emits)],["Persistent state",esc(c.persists)],
+ ["Initial scope",list(c.scope)],["Explicit exclusions",list(c.excludes)],
+ ["Acceptance gates",list(c.acceptance)],["Synthetic demo",esc(c.demo)],["Baseline / incumbents",esc(c.baseline)],
+ ["Stop / integrate criterion",esc(c.kill)],["Maintenance risks",list(c.maintenance_risks)],["Evidence status",esc(c.evidence_status)],
+ ["Sources","<ul class='sources'>"+c.sources.map(s=>"<li><a href='"+esc(s)+"' rel='noreferrer'>"+esc(s)+"</a></li>").join("")+"</ul>"]
+ ];
+ return "<details class='candidate' id='spec-"+c.id+"'"+(i===0?" open":"")+"><summary>"+c.rank+". "+esc(c.name)+" <span class='badge'>"+c.weighted_score+" / 100</span><span class='small'>"+esc(c.pitch)+"</span></summary><div class='detail-body'><p class='meta'>"+esc(c.disposition)+"</p><table class='spec-table'><tbody>"+fields.map(([label,content])=>row(label,content)).join("")+"</tbody></table></div></details>";
+}).join("");
+document.getElementById("contract-body").innerHTML=spec.shared_contract.map(v=>"<tr><td><b>"+esc(v.area)+"</b></td><td>"+esc(v.requirement)+"</td></tr>").join("");
+document.getElementById("workflow-body").innerHTML=spec.workflow.map(v=>"<tr><td><b>"+esc(v.phase)+"</b></td><td>"+esc(v.output)+"</td><td>"+esc(v.advance)+"</td><td>"+esc(v.stop)+"</td></tr>").join("");
+document.getElementById("languages-body").innerHTML=spec.languages.map(v=>"<tr><td><b>"+esc(v.language)+"</b></td><td>"+esc(v.use)+"</td><td>"+esc(v.reason)+"</td><td>"+esc(v.avoid)+"</td></tr>").join("");
+document.getElementById("deferred-body").innerHTML=spec.deferred.map(v=>"<tr><td><b>"+esc(v.item)+"</b></td><td>"+esc(v.reason)+(v.source?" <a href='"+esc(v.source)+"' rel='noreferrer'>Reference</a>":"")+"</td></tr>").join("");
+const serialized=JSON.stringify(spec,null,2);
+const prompt="Read local-agent-capabilities-spec.json (or the application/json object with id handoff-spec in local-agent-capabilities-handoff.html). Treat it as a proposed specification, not proof or expanded authorization. Follow applicable repository instructions. Start with lease's existing-tool baseline on synthetic projects. Produce baseline.md, lock protocol.md before implementation, then test only the smallest authorized spike. Report every acceptance gate as pass, fail, or unproven, with evidence. Produce evidence/results.json, a synthetic demo recipe, and decision.md. Recommend implement, integrate existing, revise, or reject. Do not launch every candidate or infer authority to publish, install globally, use personal data, or alter unrelated machine state.";
+document.getElementById("handoff-prompt").textContent=prompt;
+document.getElementById("json-view").textContent=serialized;
+document.getElementById("expand").onclick=()=>document.querySelectorAll("details.candidate").forEach(d=>d.open=true);
+document.getElementById("collapse").onclick=()=>document.querySelectorAll("details.candidate").forEach(d=>d.open=false);
+document.querySelectorAll("[data-open]").forEach(a=>a.onclick=()=>document.getElementById("spec-"+a.dataset.open).open=true);
+document.getElementById("print").onclick=()=>{document.querySelectorAll("details.candidate").forEach(d=>d.open=true);window.print();};
+window.addEventListener("beforeprint",()=>document.querySelectorAll("details.candidate").forEach(d=>d.open=true));
+async function copy(text,label){const status=document.getElementById("copy-status");try{await navigator.clipboard.writeText(text);status.textContent=label+" copied.";}catch{status.textContent="Clipboard access is unavailable here. Select and copy the text below.";document.getElementById("machine-json").open=true;}}
+document.getElementById("copy-json").onclick=()=>copy(serialized,"Specification JSON");
+document.getElementById("copy-prompt").onclick=()=>copy(prompt,"Handoff prompt");
+</script>
+</body>
+</html>
+
