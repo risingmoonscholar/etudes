@@ -120,6 +120,19 @@ pub fn apply(
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
 ) -> Result<ApplyReport, ApplyError> {
+    apply_with_before_move_for_tests(plan, tool, sealer, fail_at, |_, _| {})
+}
+
+/// Deterministic fault injection after the tag probe, immediately before a move.
+/// Production callers use [`apply`], which supplies a no-op hook.
+#[doc(hidden)]
+pub fn apply_with_before_move_for_tests(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    mut before_move: impl FnMut(usize, &Path),
+) -> Result<ApplyReport, ApplyError> {
     let id = journal_id(plan);
     let mut j = Journal {
         id: id.clone(),
@@ -203,6 +216,7 @@ pub fn apply(
             }
             break;
         }
+        before_move(i, &from);
         let method = move_one(&from, &to).map_err(ApplyError::Io)?;
         j.entries[i].method = method;
         j.entries[i].state = EntryState::Moved;
@@ -211,6 +225,26 @@ pub fn apply(
         // journal was written before the loop; rewriting it here was O(n²).
         if let Some(sl) = sealer {
             j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
+        }
+        // Finder may tag the inode between the source probe and rename.
+        // Record the successful move first so a failed probe or return is
+        // still undoable. Never overwrite an origin recreated in this gap.
+        if !plan.include_tagged && crate::scan::has_finder_tag(&to).map_err(ApplyError::Io)? {
+            move_one(&to, &from).map_err(ApplyError::Io)?;
+            j.entries[i].state = EntryState::Reversed;
+            if let Some(sl) = sealer {
+                j.record_undone(i, sl).map_err(ApplyError::Journal)?;
+            }
+            moved -= 1;
+            held_tagged = 1;
+            for remaining in &j.entries[i + 1..] {
+                if crate::scan::has_finder_tag(&remaining.from).map_err(ApplyError::Io)? {
+                    held_tagged += 1;
+                }
+            }
+            // The returned entry starts undo's descending progress stream.
+            // Stop here; earlier moves remain undoable without new formats.
+            break;
         }
     }
 

@@ -1604,3 +1604,162 @@ fn apply_rechecks_tags_after_journal_preparation_and_honours_scan_consent() {
         cleanup(&root);
     }
 }
+
+/// No sleep: the hook runs after the source tag probe and before rename.
+#[cfg(target_os = "macos")]
+#[test]
+fn tag_between_probe_and_rename_returns_and_journals_the_item() {
+    use etude_core::journal::EntryState;
+    use std::process::Command;
+
+    let _g = lock();
+    for include_tagged in [false, true] {
+        for journaled in [false, true] {
+            let (root, _, mut p) = setup("tag-during-rename");
+            p.include_tagged = include_tagged;
+            let source = p.groups[0].members[1].clone();
+            let destination = root
+                .join(&p.groups[0].name)
+                .join(source.file_name().unwrap());
+            let mut injected = false;
+            let report = apply::apply_with_before_move_for_tests(
+                &p,
+                "sweep",
+                if journaled { Some(&TestSeal) } else { None },
+                None,
+                |i, path| {
+                    if i == 1 {
+                        assert_eq!(path, source);
+                        assert!(
+                            !Command::new("xattr")
+                                .args(["-p", "com.apple.metadata:_kMDItemUserTags"])
+                                .arg(path)
+                                .output()
+                                .unwrap()
+                                .status
+                                .success()
+                        );
+                        assert!(
+                            Command::new("xattr")
+                                .args([
+                                    "-w",
+                                    "com.apple.metadata:_kMDItemUserTags",
+                                    "raced-private-tag"
+                                ])
+                                .arg(path)
+                                .status()
+                                .unwrap()
+                                .success()
+                        );
+                        injected = true;
+                    }
+                },
+            )
+            .unwrap();
+            assert!(injected);
+            assert_eq!(report.held_tagged, usize::from(!include_tagged));
+            assert_eq!(report.moved, if include_tagged { p.moves() } else { 1 });
+            assert_eq!(source.exists(), !include_tagged);
+            assert_eq!(destination.exists(), include_tagged);
+            let tag_path = if include_tagged {
+                &destination
+            } else {
+                &source
+            };
+            let tag = Command::new("xattr")
+                .args(["-p", "com.apple.metadata:_kMDItemUserTags"])
+                .arg(tag_path)
+                .output()
+                .unwrap();
+            assert!(tag.status.success());
+            assert_eq!(
+                String::from_utf8(tag.stdout).unwrap().trim(),
+                "raced-private-tag"
+            );
+            if journaled {
+                let mut journal =
+                    Journal::load_sealed("sweep", &report.journal_id, &TestSeal).unwrap();
+                assert_eq!(
+                    journal.entries[1].state,
+                    if include_tagged {
+                        EntryState::Moved
+                    } else {
+                        EntryState::Reversed
+                    }
+                );
+                if !include_tagged {
+                    assert!(
+                        journal.entries[2..]
+                            .iter()
+                            .all(|e| e.state == EntryState::Planned)
+                    );
+                }
+                let undone = apply::undo(&mut journal, &TestSeal);
+                assert!(undone.error.is_none(), "{:?}", undone.error);
+                assert_eq!(undone.restored, report.moved);
+                let mut reloaded =
+                    Journal::load_sealed("sweep", &report.journal_id, &TestSeal).unwrap();
+                let again = apply::undo(&mut reloaded, &TestSeal);
+                assert!(again.error.is_none());
+                assert_eq!(again.restored, 0);
+                assert!(
+                    p.groups
+                        .iter()
+                        .flat_map(|g| &g.members)
+                        .all(|path| path.exists())
+                );
+            }
+            cleanup(&root);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn raced_tag_return_refuses_an_occupied_origin() {
+    use etude_core::journal::{EntryState, Sealer};
+    use std::process::Command;
+
+    struct OccupyOrigin(PathBuf);
+    impl Sealer for OccupyOrigin {
+        fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+            if plaintext.starts_with(b"done\t1\t") {
+                fs::write(&self.0, b"new occupant").unwrap();
+            }
+            TestSeal.seal(plaintext)
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            TestSeal.open(sealed)
+        }
+    }
+    let _g = lock();
+    let (root, _, p) = setup("tag-return-collision");
+    let source = p.groups[0].members[1].clone();
+    let destination = root
+        .join(&p.groups[0].name)
+        .join(source.file_name().unwrap());
+    let original = fs::read(&source).unwrap();
+    let seal = OccupyOrigin(source.clone());
+    let error =
+        apply::apply_with_before_move_for_tests(&p, "sweep", Some(&seal), None, |i, path| {
+            if i == 1 {
+                assert!(
+                    Command::new("xattr")
+                        .args(["-w", "com.apple.metadata:_kMDItemUserTags", "raced-tag"])
+                        .arg(path)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+        })
+        .unwrap_err();
+    assert!(matches!(error, ApplyError::Io(_)));
+    assert_eq!(fs::read(&source).unwrap(), b"new occupant");
+    assert_eq!(fs::read(&destination).unwrap(), original);
+    let ids = etude_core::journal::ids_by_recency("sweep").unwrap();
+    assert_eq!(ids.len(), 1);
+    let journal = Journal::load_sealed("sweep", &ids[0], &seal).unwrap();
+    assert_eq!(journal.entries[1].state, EntryState::Moved);
+    cleanup(&root);
+}

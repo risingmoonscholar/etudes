@@ -8,6 +8,7 @@ printf 'synthetic tagged report\n' > "$F/tagged.pdf"
 xattr -w com.apple.metadata:_kMDItemUserTags 'Work\n6' "$F/tagged.pdf"
 
 CODE=0; OUT=$("$STASH" "$F" 2>&1) || CODE=$?
+printf '%s\n' "$OUT"
 if [ "$CODE" = 2 ] && grep -q 'could not store the key' <<<"$OUT"; then
   unproven "stash can clear a tagged item" "the host keychain refused the journal key"
 elif [ "$CODE" != 0 ]; then

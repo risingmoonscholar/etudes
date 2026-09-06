@@ -19,6 +19,7 @@ xattr -w com.apple.metadata:_kMDItemUserTags "$TAG" "$F/filed.pdf"
 # --- the plan reports a count, never a name --------------------------------
 MAP=(--since 0)
 PLAN=$("$SWEEP" "$F" --json "${MAP[@]}" 2>&1) || true
+printf '%s\n' "$PLAN"
 grep -q '"tagged": *1' <<<"$PLAN" \
   && pass "the plan counts one tagged item held back" \
   || fail "the plan did not report one held tagged item: $(head -c 300 <<<"$PLAN")"
@@ -40,6 +41,7 @@ for i in 1 2 3 4 5 6; do printf 'synthetic report %s\n' "$i" > "$G/report-$i.pdf
 printf 'synthetic invoice text\n' > "$G/filed.pdf"
 xattr -w com.apple.metadata:_kMDItemUserTags "$TAG" "$G/filed.pdf"
 OUT=$("$SWEEP" apply "$G" --yes "${MAP[@]}" --include-tagged 2>&1) || true
+printf '%s\n' "$OUT"
 grep -q "WARNING: including Finder-tagged" <<<"$OUT" && pass "--include-tagged is loud" || fail "--include-tagged was silent: $OUT"
 [ ! -f "$G/filed.pdf" ] && pass "and organised the tagged file with its group" || fail "--include-tagged left the tagged file: $OUT"
 MOVED=$(find "$G" -mindepth 2 -name filed.pdf -type f | head -1)

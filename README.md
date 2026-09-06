@@ -67,7 +67,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 261 tests passed, 2 benchmarks ignored (macOS)
+cargo test --all                # 263 tests passed, 2 benchmarks ignored (macOS)
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -151,7 +151,10 @@ files alone, never to choose a destination.
 Sweep rechecks Finder tags immediately before each move. If an item was
 tagged after the scan, it holds that item, stops further moves, and reports
 a count with exit 2 so the changed plan can be reviewed. `--include-tagged`
-explicitly permits those moves too. Earlier moves remain undoable.
+explicitly permits those moves too. After each move, sweep checks the destination
+again. If a tag appeared between the check and the move, sweep returns the item
+to its origin, counts it as held, records the return in the journal, and stops
+with exit 2. Earlier moves remain undoable.
 
 `stash` has a different boundary: it clears a folder for a screen share, so it
 also moves Finder-tagged items and says the folder is clear only after they
