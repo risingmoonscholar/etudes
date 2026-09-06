@@ -1740,7 +1740,7 @@ fn raced_tag_return_refuses_an_occupied_origin() {
         .join(source.file_name().unwrap());
     let original = fs::read(&source).unwrap();
     let seal = OccupyOrigin(source.clone());
-    let error =
+    let report =
         apply::apply_with_before_move_for_tests(&p, "sweep", Some(&seal), None, |i, path| {
             if i == 1 {
                 assert!(
@@ -1753,13 +1753,79 @@ fn raced_tag_return_refuses_an_occupied_origin() {
                 );
             }
         })
-        .unwrap_err();
-    assert!(matches!(error, ApplyError::Io(_)));
+        .unwrap();
+    assert_eq!(report.tagged_not_returned, 1);
+    assert_eq!(report.held_tagged, 0);
+    assert_eq!(report.moved, 2);
+    assert!(report.return_error.is_some());
     assert_eq!(fs::read(&source).unwrap(), b"new occupant");
     assert_eq!(fs::read(&destination).unwrap(), original);
     let ids = etude_core::journal::ids_by_recency("sweep").unwrap();
     assert_eq!(ids.len(), 1);
-    let journal = Journal::load_sealed("sweep", &ids[0], &seal).unwrap();
+    let mut journal = Journal::load_sealed("sweep", &ids[0], &seal).unwrap();
     assert_eq!(journal.entries[1].state, EntryState::Moved);
+    let undone = apply::undo(&mut journal, &seal);
+    assert_eq!(
+        undone.skipped_changed,
+        vec![destination.canonicalize().unwrap()]
+    );
+    assert_eq!(journal.entries[1].state, EntryState::Moved);
+    assert_eq!(fs::read(&source).unwrap(), b"new occupant");
+    assert_eq!(fs::read(&destination).unwrap(), original);
+    cleanup(&root);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn raced_tag_return_journal_failure_reports_actual_location() {
+    use etude_core::journal::{EntryState, Sealer};
+    use std::process::Command;
+    struct FailReturn;
+    impl Sealer for FailReturn {
+        fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+            if plaintext.starts_with(b"undone\t") {
+                return Err("injected return record failure");
+            }
+            TestSeal.seal(plaintext)
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            TestSeal.open(sealed)
+        }
+    }
+    let _g = lock();
+    let (root, _, p) = setup("tag-return-journal-failure");
+    let source = p.groups[0].members[1].clone();
+    let destination = root
+        .join(&p.groups[0].name)
+        .join(source.file_name().unwrap());
+    let original = fs::read(&source).unwrap();
+    let report =
+        apply::apply_with_before_move_for_tests(&p, "sweep", Some(&FailReturn), None, |i, path| {
+            if i == 1 {
+                assert!(
+                    Command::new("xattr")
+                        .args(["-w", "com.apple.metadata:_kMDItemUserTags", "raced-tag"])
+                        .arg(path)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+        })
+        .unwrap();
+    assert_eq!(report.held_tagged, 1);
+    assert_eq!(report.tagged_not_returned, 0);
+    assert_eq!(report.moved, 1);
+    assert!(report.return_error.is_none());
+    assert!(report.return_journal_error.is_some());
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert!(!destination.exists());
+    let mut journal = Journal::load_sealed("sweep", &report.journal_id, &TestSeal).unwrap();
+    assert_eq!(journal.entries[1].state, EntryState::Moved);
+    let undone = apply::undo(&mut journal, &TestSeal);
+    assert!(undone.error.is_none(), "{:?}", undone.error);
+    assert_eq!(fs::read(&source).unwrap(), original);
+    let reloaded = Journal::load_sealed("sweep", &report.journal_id, &TestSeal).unwrap();
+    assert_eq!(reloaded.entries[1].state, EntryState::Reversed);
     cleanup(&root);
 }

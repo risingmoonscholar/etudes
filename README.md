@@ -3,6 +3,8 @@
 Three small command-line tools that tidy a folder with deliberate boundaries.
 Sweep decides from filesystem and Finder organization metadata only; it never reads file contents to decide. When it moves a file it reads the first and last 4 KiB, so undo can tell if that file changed.
 
+If an item tagged during a move cannot be returned, Sweep leaves it at its destination, reports it separately as an item that could not be returned, retains any move journal for undo, and stops with exit 2.
+
 **macOS only.**
 ```console
 $ sweep ~/Desktop
@@ -67,7 +69,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 263 tests passed, 2 benchmarks ignored (macOS)
+cargo test --all                # 265 tests passed, 2 benchmarks ignored (macOS)
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -154,7 +156,12 @@ a count with exit 2 so the changed plan can be reviewed. `--include-tagged`
 explicitly permits those moves too. After each move, sweep checks the destination
 again. If a tag appeared between the check and the move, sweep returns the item
 to its origin, counts it as held, records the return in the journal, and stops
-with exit 2. Earlier moves remain undoable.
+with exit 2. An occupied origin is never overwritten: the item remains at its
+destination and is counted separately as not returned, with its move recorded
+for undo. If recording a successful return fails, sweep reports that the item
+is back at its origin and warns that the journal needs reconciliation by undo.
+With `--no-journal`, neither move nor return is recorded. Earlier journaled
+moves remain undoable.
 
 `stash` has a different boundary: it clears a folder for a screen share, so it
 also moves Finder-tagged items and says the folder is clear only after they

@@ -1334,33 +1334,49 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
     ) {
-        Ok(r) => {
-            println!("\nMoved {} files.", r.moved);
-            if r.held_tagged > 0 {
-                println!(
-                    "{} Finder-tagged items were left alone at move time. Further moves stopped; re-run to review the changed plan.",
-                    r.held_tagged
-                );
-            }
-            match r.journal_path {
-                Some(jp) => {
-                    println!("Undo with: sweep undo");
-                    println!("Encrypted journal: {}", jp.display());
-                }
-                None => println!("No journal was written. This cannot be undone."),
-            }
-            println!("\nNothing left this machine.");
-            if r.held_tagged > 0 {
-                ExitCode::from(2)
-            } else {
-                ExitCode::SUCCESS
-            }
-        }
+        Ok(r) => report_apply(r),
         Err(e) => {
             refuse_apply(&e);
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
             apply_exit_code(&e)
         }
+    }
+}
+
+fn report_apply(r: etude_core::apply::ApplyReport) -> ExitCode {
+    println!("\nMoved {} files.", r.moved);
+    if r.held_tagged + r.tagged_not_returned > 0 {
+        println!(
+            "{} Finder-tagged items were left alone at move time. Further moves stopped; re-run to review the changed plan.",
+            r.held_tagged
+        );
+    }
+    if r.tagged_not_returned > 0 {
+        println!(
+            "{} Finder-tagged items could not be returned and remain at their destinations. Further moves stopped.",
+            r.tagged_not_returned
+        );
+    }
+    if let Some(error) = &r.return_error {
+        eprintln!("sweep: return refused: {error}");
+    }
+    if let Some(error) = &r.return_journal_error {
+        eprintln!(
+            "sweep: the item is back at its origin, but recording its return failed: {error}. Undo can reconcile the earlier move record."
+        );
+    }
+    match r.journal_path {
+        Some(jp) => {
+            println!("Undo with: sweep undo");
+            println!("Encrypted journal: {}", jp.display());
+        }
+        None => println!("No journal was written. This cannot be undone."),
+    }
+    println!("\nNothing left this machine.");
+    if r.held_tagged + r.tagged_not_returned > 0 {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
@@ -2499,5 +2515,33 @@ mod tests {
                 "`-x` was ignored by {cmd:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tag_return_report_tests {
+    use super::*;
+    use etude_core::apply::ApplyReport;
+
+    #[test]
+    fn occupied_origin_and_unrecorded_return_exit_with_counts() {
+        assert_eq!(
+            report_apply(ApplyReport {
+                moved: 2,
+                tagged_not_returned: 1,
+                return_error: Some(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
+                ..Default::default()
+            }),
+            ExitCode::from(2)
+        );
+        assert_eq!(
+            report_apply(ApplyReport {
+                moved: 1,
+                held_tagged: 1,
+                return_journal_error: Some(etude_core::journal::JournalError::Seal("injected")),
+                ..Default::default()
+            }),
+            ExitCode::from(2)
+        );
     }
 }

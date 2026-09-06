@@ -101,6 +101,11 @@ pub struct ApplyReport {
     pub moved: usize,
     /// Items tagged after planning and held at move time. Count only.
     pub held_tagged: usize,
+    /// Tagged during the move but still at the destination after return failed.
+    pub tagged_not_returned: usize,
+    pub return_error: Option<io::Error>,
+    /// A physical return succeeded but its progress record failed.
+    pub return_journal_error: Option<crate::journal::JournalError>,
     pub journal_id: String,
     pub journal_path: Option<PathBuf>,
 }
@@ -184,6 +189,7 @@ pub fn apply_with_before_move_for_tests(
             held_tagged: 0,
             journal_id: id,
             journal_path: None,
+            ..Default::default()
         });
     }
 
@@ -194,6 +200,9 @@ pub fn apply_with_before_move_for_tests(
 
     let mut moved = 0usize;
     let mut held_tagged = 0usize;
+    let mut tagged_not_returned = 0;
+    let mut return_error = None;
+    let mut return_journal_error = None;
     for i in 0..j.entries.len() {
         if fail_at == Some(i) {
             return Err(ApplyError::Injected(i));
@@ -230,16 +239,20 @@ pub fn apply_with_before_move_for_tests(
         // Record the successful move first so a failed probe or return is
         // still undoable. Never overwrite an origin recreated in this gap.
         if !plan.include_tagged && crate::scan::has_finder_tag(&to).map_err(ApplyError::Io)? {
-            move_one(&to, &from).map_err(ApplyError::Io)?;
-            j.entries[i].state = EntryState::Reversed;
-            if let Some(sl) = sealer {
-                j.record_undone(i, sl).map_err(ApplyError::Journal)?;
-            }
-            moved -= 1;
-            held_tagged = 1;
-            for remaining in &j.entries[i + 1..] {
-                if crate::scan::has_finder_tag(&remaining.from).map_err(ApplyError::Io)? {
-                    held_tagged += 1;
+            // Keep the durable Moved entry if the exclusive return refuses.
+            // Count physical outcomes before attempting any journal update.
+            match move_one(&to, &from) {
+                Ok(_) => {
+                    moved -= 1;
+                    held_tagged = 1;
+                    j.entries[i].state = EntryState::Reversed;
+                    if let Some(sl) = sealer {
+                        return_journal_error = j.record_undone(i, sl).err();
+                    }
+                }
+                Err(error) => {
+                    tagged_not_returned = 1;
+                    return_error = Some(error);
                 }
             }
             // The returned entry starts undo's descending progress stream.
@@ -251,6 +264,9 @@ pub fn apply_with_before_move_for_tests(
     Ok(ApplyReport {
         moved,
         held_tagged,
+        tagged_not_returned,
+        return_error,
+        return_journal_error,
         journal_id: id,
         journal_path: sealer.map(|_| j.path()),
     })
