@@ -221,6 +221,7 @@ mod tests {
             skipped_package: 0,
             skipped_unreadable: 0,
             skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: false,
         }

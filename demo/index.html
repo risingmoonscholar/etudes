@@ -155,7 +155,7 @@ declared in the artifact, and nothing else is touched.</p>
 
 <h3>Check the claims yourself</h3>
 <div class="term"><span class="cmd">cargo test --all</span>
-258 tests
+261 tests passed · 2 benchmarks ignored (macOS)
 
 <span class="cmd">scripts/no-network-test.sh</span>
 the same suite, with socket(2) denied by the OS</div>
@@ -177,11 +177,12 @@ I run it by hand, and it drafts rather than posts. The open issues are its outpu
 carries its own attribution, and the wording in them is the agent's rather than mine.</p>
 
 <div class="term"><span class="cmd">bash stress/run.sh</span>
-38 scenarios · pass / FAIL / unproven, counted separately
-exit 0 pass · 1 fail · 2 nothing proven</div>
-<p class="note">The failures are real and left open on purpose. A repository that argues
-for honest reporting and hides its own defect list would be making the opposite argument.
-<a href="https://github.com/risingmoonscholar/etudes/issues">Read them</a>. They include a
+41 scenarios · pass / FAIL / unproven, counted separately
+exit codes: 0 pass · 1 fail · 2 nothing proven · 3 run already active</div>
+<p class="note">The known-failure baseline lists one scenario; observed failures and unproven
+checks depend on the host and races. Harness totals are counted per assertion,
+not per scenario. The baseline gates on failing scenario names, not a count.
+<a href="https://github.com/risingmoonscholar/etudes/issues">Read them</a>. The tracker also records resolved defects, including a
 data-loss bug introduced by one of my own fixes.</p>
 
 <p>This is what I have an agent doing on a small project. If it is missing something

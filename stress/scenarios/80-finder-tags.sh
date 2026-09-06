@@ -55,3 +55,70 @@ fi
 [ -f "$G/filed.pdf" ] && pass "undo restored the tagged file" || fail "undo did not restore the tagged file"
 xattr -p com.apple.metadata:_kMDItemUserTags "$G/filed.pdf" 2>/dev/null | grep -q "Work" \
   && pass "with its tag" || fail "undo lost the tag"
+
+# --- change the Finder tag after review has planned, before it applies ------
+# A real PTY satisfies review's existing terminal gate. Wait for the final
+# approval prompt, tag a planned source, then approve that same in-memory plan.
+python3 - "$SWEEP" "$W" <<'PY'
+import os, pathlib, pty, select, subprocess, sys, time
+binary, work = sys.argv[1:]
+for include in (False, True):
+    folder = pathlib.Path(work) / ('late-include' if include else 'late-hold')
+    folder.mkdir()
+    for i in range(6):
+        (folder / f'report-{i}.pdf').write_text('synthetic report\n')
+    tagged = folder / 'report-0.pdf'
+    master, slave = pty.openpty()
+    args = [binary, 'review', str(folder), '--since', '0', '--no-journal']
+    if include:
+        args.append('--include-tagged')
+    process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave)
+    os.close(slave)
+    transcript = bytearray()
+    accepted = tagged_after_plan = False
+    deadline = time.monotonic() + 20
+    try:
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                transcript.extend(chunk)
+            if not accepted and b'[a]ccept' in transcript:
+                os.write(master, b'a\n')
+                accepted = True
+            if not tagged_after_plan and b'proceed? [y/N]' in transcript:
+                subprocess.run(['xattr', '-w', 'com.apple.metadata:_kMDItemUserTags',
+                                'private-late-tag', str(tagged)], check=True)
+                tagged_after_plan = True
+                os.write(master, b'y\n')
+        code = process.wait(timeout=2)
+        text = transcript.decode(errors='replace')
+        print(text)
+        assert tagged_after_plan, 'review never reached the planned approval point'
+        assert code == (0 if include else 2), f'unexpected exit {code}'
+        assert tagged.exists() == (not include), 'late tag policy was not honoured'
+        if include:
+            assert (folder / 'Documents' / 'report-1.pdf').exists(), 'untagged peers did not move'
+        if not include:
+            assert '1 Finder-tagged items were left alone at move time.' in text
+            assert 'report-0.pdf' not in text and 'private-late-tag' not in text
+        else:
+            tag = subprocess.check_output(['xattr', '-p', 'com.apple.metadata:_kMDItemUserTags',
+                                          str(folder / 'Documents' / tagged.name)])
+            assert tag.strip() == b'private-late-tag', 'late tag lost during override move'
+        print('    ok       late Finder tag ' + ('moves with explicit consent and survives' if include
+                                               else 'is held and counted after review; changed plan exits 2'))
+    except Exception as error:
+        print(f'    FAIL     late Finder tag review: {error}')
+        print(transcript.decode(errors='replace'))
+        raise
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
+PY

@@ -355,6 +355,7 @@ fn apply_refuses_when_two_planned_destinations_collide() {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -431,6 +432,7 @@ fn apply_refuses_when_two_planned_destinations_are_nfc_nfd_of_same_name() {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -489,6 +491,7 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -510,6 +513,7 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -607,6 +611,7 @@ fn apply_refuses_synced_destination_when_allow_sync_was_never_granted() {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: false,
         allow_sync: false,
     };
@@ -664,6 +669,7 @@ fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: out.root_is_synced,
         allow_sync: out.allow_sync,
     };
@@ -736,6 +742,7 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: false,
         root_is_synced: out.root_is_synced,
         allow_sync: out.allow_sync,
     };
@@ -1497,4 +1504,103 @@ fn finder_tags_survive_cross_volume_move_and_journal_undo() {
     assert!(!to.exists());
     assert_eq!(tag_bytes(&from), tag);
     no_comment(&from);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn apply_rechecks_tags_after_journal_preparation_and_honours_scan_consent() {
+    use etude_core::journal::Sealer;
+    use std::cell::Cell;
+    use std::process::Command;
+
+    struct TagOnSeal {
+        path: PathBuf,
+        tagged: Cell<bool>,
+    }
+    impl Sealer for TagOnSeal {
+        fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+            if !self.tagged.replace(true) {
+                assert!(
+                    Command::new("xattr")
+                        .args([
+                            "-w",
+                            "com.apple.metadata:_kMDItemUserTags",
+                            "late-private-tag"
+                        ])
+                        .arg(&self.path)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            TestSeal.seal(plaintext)
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            TestSeal.open(sealed)
+        }
+    }
+
+    let _g = lock();
+    for include_tagged in [false, true] {
+        let (root, _, _) = setup(if include_tagged {
+            "late-tag-include"
+        } else {
+            "late-tag-hold"
+        });
+        let scanned = scan::scan(
+            &root,
+            &ScanConfig {
+                include_tagged,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut p = plan::build(&scanned);
+        for group in &mut p.groups {
+            group.accepted = true;
+        }
+        assert_eq!(p.include_tagged, include_tagged);
+        let source = p.groups[0].members[1].clone();
+        let destination = p
+            .root
+            .join(&p.groups[0].name)
+            .join(source.file_name().unwrap());
+        let seal = TagOnSeal {
+            path: source.clone(),
+            tagged: Cell::new(false),
+        };
+        let report = apply::apply(&p, "sweep", Some(&seal), None).unwrap();
+        assert!(seal.tagged.get());
+        assert_eq!(report.held_tagged, usize::from(!include_tagged));
+        assert_eq!(report.moved, if include_tagged { p.moves() } else { 1 });
+        assert_eq!(source.exists(), !include_tagged);
+        assert_eq!(destination.exists(), include_tagged);
+        let tagged_path = if include_tagged {
+            &destination
+        } else {
+            &source
+        };
+        let tag = Command::new("xattr")
+            .args(["-p", "com.apple.metadata:_kMDItemUserTags"])
+            .arg(tagged_path)
+            .output()
+            .unwrap();
+        assert!(tag.status.success());
+        assert_eq!(
+            String::from_utf8(tag.stdout).unwrap().trim(),
+            "late-private-tag"
+        );
+        let mut journal = Journal::load_sealed("sweep", &report.journal_id, &seal).unwrap();
+        let undone = apply::undo(&mut journal, &seal);
+        assert!(undone.error.is_none(), "{:?}", undone.error);
+        assert_eq!(undone.restored, report.moved);
+        assert!(
+            p.groups
+                .iter()
+                .flat_map(|group| &group.members)
+                .all(|path| path.exists())
+        );
+        assert!(source.exists());
+        cleanup(&root);
+    }
 }

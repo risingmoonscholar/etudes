@@ -302,6 +302,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         skipped_package: outcome.skipped_package,
         skipped_unreadable: outcome.skipped_unreadable,
         skipped_tagged: outcome.skipped_tagged,
+        include_tagged: outcome.include_tagged,
         root_is_synced: outcome.root_is_synced,
         allow_sync: outcome.allow_sync,
     };
@@ -1028,6 +1029,7 @@ mod tests {
             skipped_package: 0,
             skipped_unreadable: 0,
             skipped_tagged: 0,
+            include_tagged: true,
             root_is_synced: false,
             allow_sync: false,
         }

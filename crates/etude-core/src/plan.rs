@@ -100,6 +100,8 @@ pub struct Plan {
     pub skipped_unreadable: usize,
     /// Tagged Finder items held back by the default scan. Count only.
     pub skipped_tagged: usize,
+    /// Explicit consent carried from scan through apply.
+    pub include_tagged: bool,
     pub root_is_synced: bool,
     /// The `--allow-sync` this plan's scan was actually run with. Copied
     /// straight from `ScanOutcome::allow_sync`. NOT derived from
@@ -745,6 +747,7 @@ pub fn build_with_maps(
         skipped_package: scan.skipped_package,
         skipped_unreadable: scan.skipped_unreadable,
         skipped_tagged: scan.skipped_tagged,
+        include_tagged: scan.include_tagged,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
     }
@@ -827,6 +830,7 @@ mod tests {
             skipped_package: 0,
             skipped_unreadable: 0,
             skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: false,
         }

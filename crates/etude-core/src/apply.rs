@@ -99,6 +99,8 @@ impl std::fmt::Display for ApplyError {
 #[derive(Debug, Default)]
 pub struct ApplyReport {
     pub moved: usize,
+    /// Items tagged after planning and held at move time. Count only.
+    pub held_tagged: usize,
     pub journal_id: String,
     pub journal_path: Option<PathBuf>,
 }
@@ -166,6 +168,7 @@ pub fn apply(
     if j.entries.is_empty() {
         return Ok(ApplyReport {
             moved: 0,
+            held_tagged: 0,
             journal_id: id,
             journal_path: None,
         });
@@ -177,6 +180,7 @@ pub fn apply(
     }
 
     let mut moved = 0usize;
+    let mut held_tagged = 0usize;
     for i in 0..j.entries.len() {
         if fail_at == Some(i) {
             return Err(ApplyError::Injected(i));
@@ -184,6 +188,20 @@ pub fn apply(
         let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent).map_err(ApplyError::Io)?;
+        }
+        // Revalidate after all preparation, immediately before the move.
+        // Only the tag attribute's presence is queried; errors refuse and
+        // neither tag names nor held paths enter the public report.
+        if !plan.include_tagged && crate::scan::has_finder_tag(&from).map_err(ApplyError::Io)? {
+            held_tagged = 1;
+            // A done-frame stream must remain an uninterrupted prefix.
+            // Refuse the changed plan rather than skipping a journal entry.
+            for remaining in &j.entries[i + 1..] {
+                if crate::scan::has_finder_tag(&remaining.from).map_err(ApplyError::Io)? {
+                    held_tagged += 1;
+                }
+            }
+            break;
         }
         let method = move_one(&from, &to).map_err(ApplyError::Io)?;
         j.entries[i].method = method;
@@ -198,6 +216,7 @@ pub fn apply(
 
     Ok(ApplyReport {
         moved,
+        held_tagged,
         journal_id: id,
         journal_path: sealer.map(|_| j.path()),
     })
@@ -1396,6 +1415,7 @@ mod tests {
             skipped_package: 0,
             skipped_unreadable: 0,
             skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: false,
         };

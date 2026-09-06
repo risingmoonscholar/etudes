@@ -67,7 +67,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 258 tests
+cargo test --all                # 261 tests passed, 2 benchmarks ignored (macOS)
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -142,10 +142,16 @@ $ sweep ~/Downloads
 
 ### What it does not protect
 
-In its ordinary, name-and-metadata-only mode, `sweep` never reads your files,
-and that has a cost worth stating plainly. The separately consented
+In its ordinary metadata-only mode, `sweep` never reads file contents to
+decide, and that has a cost worth stating plainly. Moves read the first and
+last 4 KiB for undo change detection. The separately consented
 `--inspect-content` mode is the exception: it reads text only to leave more
 files alone, never to choose a destination.
+
+Sweep rechecks Finder tags immediately before each move. If an item was
+tagged after the scan, it holds that item, stops further moves, and reports
+a count with exit 2 so the changed plan can be reviewed. `--include-tagged`
+explicitly permits those moves too. Earlier moves remain undoable.
 
 `stash` has a different boundary: it clears a folder for a screen share, so it
 also moves Finder-tagged items and says the folder is clear only after they
@@ -231,18 +237,21 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 38 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 41 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 38 scenarios, 1 of them failing
+bash stress/run.sh        # 41 scenarios; reports passed, failed and unproven assertions
 ```
 
-The one failing scenario is real and it is [filed](../../issues), with a
-reproduction. It fails on purpose so the reproduction does not rot, and CI
-fails only when the number gets worse:
+The known-failure set in `stress/baseline.txt` records 1 of them failing,
+[filed](../../issues) with a reproduction. This is a baseline, not a claim
+that every run has exactly one failure: results depend on the host and races.
+CI compares failing scenario names against that set and fails on a new name;
+it does not gate on a failure count. The harness reports assertion totals
+for passed, failed and unproven checks separately:
 
 | | |
 |---|---|

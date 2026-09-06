@@ -1336,6 +1336,12 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
     ) {
         Ok(r) => {
             println!("\nMoved {} files.", r.moved);
+            if r.held_tagged > 0 {
+                println!(
+                    "{} Finder-tagged items were left alone at move time. Further moves stopped; re-run to review the changed plan.",
+                    r.held_tagged
+                );
+            }
             match r.journal_path {
                 Some(jp) => {
                     println!("Undo with: sweep undo");
@@ -1344,7 +1350,11 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
                 None => println!("No journal was written. This cannot be undone."),
             }
             println!("\nNothing left this machine.");
-            ExitCode::SUCCESS
+            if r.held_tagged > 0 {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            }
         }
         Err(e) => {
             refuse_apply(&e);

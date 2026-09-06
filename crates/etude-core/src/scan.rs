@@ -467,6 +467,8 @@ pub struct ScanOutcome {
     /// Items left alone because they have Finder tags. This is a count only:
     /// tag values and item paths are deliberately not retained.
     pub skipped_tagged: usize,
+    /// Explicit consent carried from scan through apply.
+    pub include_tagged: bool,
     /// Directories not entered because they hold a project marker.
     ///
     /// Distinct from `skipped_system`: this is not policy about WHERE the
@@ -715,6 +717,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         skipped_package: 0,
         skipped_unreadable: 0,
         skipped_tagged: 0,
+        include_tagged: cfg.include_tagged,
         root_is_synced,
         allow_sync: cfg.allow_sync,
     };
@@ -940,7 +943,7 @@ unsafe extern "C" {
 /// count-only contract. Finder comments use a separate xattr and are never
 /// named by this implementation.
 #[cfg(target_os = "macos")]
-fn has_finder_tag(path: &Path) -> io::Result<bool> {
+pub(crate) fn has_finder_tag(path: &Path) -> io::Result<bool> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
@@ -971,7 +974,7 @@ fn has_finder_tag(path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn has_finder_tag(_: &Path) -> io::Result<bool> {
+pub(crate) fn has_finder_tag(_: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
@@ -1252,6 +1255,7 @@ mod tests {
             skipped_package: 0,
             skipped_unreadable: 0,
             skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: false,
         };
