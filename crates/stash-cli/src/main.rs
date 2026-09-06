@@ -47,8 +47,9 @@ USAGE
 DURATION
     30m  2h  3d  1w        default: no deadline, restore whenever
 
-stash moves everything sweep can see, including the files sweep would refuse
-to organise. Hidden items are left in place, and it says how many.
+stash moves everything sweep can see, including Finder-tagged items and the
+files sweep would refuse to organise. Hidden items are left in place, and it
+says how many.
 That is deliberate: clearing a folder for a screen share means clearing it.
 Everything is reversible, and stash prints what it took.";
 
@@ -250,8 +251,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         depth: 1,
         allow_sync: true,
         // Clearing a folder means clearing it: directories and symlinks move
-        // too, as whole units.
+        // too, as whole units. Tags are a sweep custody boundary, not a stash
+        // one: stash must make its "is clear" report literally true.
         whole_units: true,
+        include_tagged: true,
         ..Default::default()
     };
     let outcome = match scan::scan(path, &cfg) {

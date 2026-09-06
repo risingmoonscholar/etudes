@@ -51,6 +51,9 @@ fn stash_plan(root: &Path) -> (Plan, usize) {
         depth: 1,
         allow_sync: true,
         whole_units: true,
+        // Keep this mirror explicit: stash clears tagged entries while the
+        // shared scanner's default remains sweep's safe hold.
+        include_tagged: true,
         ..Default::default()
     };
     let out = scan::scan(root, &cfg).expect("scan");
@@ -107,6 +110,58 @@ fn the_folder_is_actually_empty_afterwards() {
 
     assert_eq!(r.moved, count);
     assert_eq!(visible(&root), 0, "items remained visible after stashing");
+    cleanup(&root);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_tagged_item_is_stashed_before_the_folder_is_reported_clear() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    unsafe extern "C" {
+        fn setxattr(
+            path: *const std::ffi::c_char,
+            name: *const std::ffi::c_char,
+            value: *const std::ffi::c_void,
+            size: usize,
+            position: u32,
+            options: i32,
+        ) -> i32;
+    }
+
+    let _g = lock();
+    let root = setup("tagged-clear");
+    let tagged = root.join("tagged.pdf");
+    fs::write(&tagged, b"stash me too").expect("tagged fixture");
+    let path = CString::new(tagged.as_os_str().as_bytes()).expect("tagged path");
+    // Presence is sufficient to model a Finder tag; scan must never decode it.
+    let result = unsafe {
+        setxattr(
+            path.as_ptr(),
+            c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
+            b"not decoded".as_ptr().cast(),
+            b"not decoded".len(),
+            0,
+            0,
+        )
+    };
+    assert_eq!(result, 0, "could not set test Finder tag");
+
+    let (plan, count) = stash_plan(&root);
+    assert!(
+        plan.groups[0]
+            .members
+            .contains(&tagged.canonicalize().unwrap())
+    );
+    let report = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+
+    assert_eq!(report.moved, count);
+    assert_eq!(
+        visible(&root),
+        0,
+        "a tagged item made the clear report false"
+    );
     cleanup(&root);
 }
 

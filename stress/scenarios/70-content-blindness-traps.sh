@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Content-blindness traps: facsimile files whose CONTENT contradicts their NAME.
 #
-# Every scan banner claims "no contents read". This scenario makes that claim
-# falsifiable rather than trusted. Each trap routes one way by name and the
-# opposite way by content, so a sweep that ever reads a file routes it wrongly
-# and the trap fires.
+# Every default scan banner claims "no contents read to decide". This scenario
+# makes that claim falsifiable rather than trusted. Each trap routes one way by
+# name and the opposite way by content, so a default sweep that ever reads a
+# file routes it wrongly and the trap fires.
 #
 # Two of the traps are unfakeable:
 #

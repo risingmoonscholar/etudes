@@ -752,7 +752,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() {
         println!(
-            "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read  ·  sweep {}",
+            "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
             plan.scanned,
             env!("CARGO_PKG_VERSION")
         );
@@ -1027,7 +1027,7 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     let basis = if read_contents {
         "filesystem and Finder organization metadata, and the contents of some text files"
     } else {
-        "filesystem and Finder organization metadata  ·  no contents read"
+        "filesystem and Finder organization metadata  ·  no contents read to decide"
     };
     println!(
         "\nScanned {} items  ·  {basis}  ·  sweep {}\n",

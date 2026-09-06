@@ -1,13 +1,13 @@
 # etudes
 
-Three small command-line tools that tidy a folder without reading your private files.
-Sweep reads filesystem and Finder organization metadata, never file contents.
+Three small command-line tools that tidy a folder with deliberate boundaries.
+Sweep decides from filesystem and Finder organization metadata only; it never reads file contents to decide. When it moves a file it reads the first and last 4 KiB, so undo can tell if that file changed.
 
 **macOS only.**
 ```console
 $ sweep ~/Desktop
 
-Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no contents read
+Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no contents read to decide
 
   Screenshots      34 files   named "Screenshot ..."
   Photos, Jan 15   27 files   camera names, taken within 3 days
@@ -142,7 +142,14 @@ $ sweep ~/Downloads
 
 ### What it does not protect
 
-`sweep` never reads your files, and that has a cost worth stating plainly.
+In its ordinary, name-and-metadata-only mode, `sweep` never reads your files,
+and that has a cost worth stating plainly. The separately consented
+`--inspect-content` mode is the exception: it reads text only to leave more
+files alone, never to choose a destination.
+
+`stash` has a different boundary: it clears a folder for a screen share, so it
+also moves Finder-tagged items and says the folder is clear only after they
+move. Their Finder tags survive the move. Finder comments remain out of scope.
 
 A project *document* -- a `.blend`, an `.flp`, an `.als` -- references its
 assets relative to itself and freely upward, out of its own folder. Sweep
