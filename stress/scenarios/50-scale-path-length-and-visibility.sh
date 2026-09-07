@@ -16,7 +16,7 @@
 #      the actual thing under test here.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 
 # ======================================================================
 # Part 1: near-PATH_MAX: correctness, not refusal

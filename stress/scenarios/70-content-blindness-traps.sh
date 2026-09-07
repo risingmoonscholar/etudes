@@ -17,7 +17,7 @@
 # All content is fabricated facsimile. No real record of anyone's exists here.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"
 mkdir -p "$D"
 

@@ -30,7 +30,7 @@ cleanup() {
   detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
-on_exit cleanup
+trap cleanup EXIT
 
 W=$(workdir)
 OUTER="$W/outer"

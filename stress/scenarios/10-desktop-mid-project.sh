@@ -6,7 +6,7 @@
 # Nothing here is real. The tree is generated and removed on exit.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"; mkdir -p "$D"
 
 # The habit: screenshots accumulate daily.

@@ -64,7 +64,7 @@ print(g["name"])
 '
 }
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 
 OUTSIDE="$W/outside"
 mkdir -p "$OUTSIDE"
