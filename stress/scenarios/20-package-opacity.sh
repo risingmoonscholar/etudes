@@ -12,7 +12,7 @@
 # contents must never appear anywhere in a plan.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/Desktop"
 APP="$D/Northwind Deck.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

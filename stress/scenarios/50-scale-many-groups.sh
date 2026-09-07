@@ -18,7 +18,7 @@
 #   - the listing stays one line per group and does not blow up
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/many"; mkdir -p "$D"
 
 PER_FAMILY=200

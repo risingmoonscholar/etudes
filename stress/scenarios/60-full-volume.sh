@@ -30,7 +30,7 @@ cleanup() {
   [ -n "$IMG" ] && [ -f "$IMG" ] && rm -f "$IMG"
   [ -n "${W:-}" ] && rm -rf "$W"
 }
-trap cleanup EXIT
+on_exit cleanup
 
 W=$(workdir)
 IMG="$W/full.dmg"

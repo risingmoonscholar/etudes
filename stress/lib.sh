@@ -92,8 +92,67 @@ assert_intact() {
 # does.
 export SWEEP_GRACE_SECS=0
 
+# Sourcing this file twice resets FAILED, ON_EXIT and the trap it installs,
+# silently discarding whatever the first sourcing had already recorded --
+# the fourth way a real failure could vanish, and the only one that is not
+# a property of the trap: no trap can protect a variable the second source
+# is about to overwrite before the trap even runs again. Refuse it outright.
+if [ -n "${_ETUDES_LIB_SOURCED:-}" ]; then
+  echo "    FAIL     stress/lib.sh sourced twice in one shell; this discards" >&2
+  echo "             any failure already recorded. A scenario must source it" >&2
+  echo "             exactly once." >&2
+  exit 1
+fi
+_ETUDES_LIB_SOURCED=1
+
 export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
-trap 'rm -rf "$ETUDE_STATE_DIR"' EXIT
+
+# A scenario's exit status must answer the same question its printed output
+# answers. Before issue #95, fail() counted and printed but left $? alone, so
+# a scenario run outside stress/run.sh ended 0 with FAIL lines on screen; any
+# other caller -- a git hook, a CI step, an editor task, an agent checking one
+# scenario -- read that as a pass.
+#
+# Two things this handler must get right, both found by driving it against
+# real failure paths rather than trusting a green run:
+#
+# 1. Bash EXIT traps do not stack: a scenario writing `trap 'rm -rf "$W"' EXIT`
+#    REPLACES this one. 33 of the 38 scenarios here did exactly that, which
+#    made the status below unreachable for almost every scenario. So a
+#    scenario registers its cleanup with on_exit instead of setting its own
+#    trap, and this file owns the one trap that runs them all.
+#
+# 2. The failure result must be captured BEFORE any registered cleanup runs,
+#    not read fresh afterward. A cleanup that itself touches FAILED --
+#    directly, or by sourcing lib.sh again in a helper, or by any other means
+#    -- must not be able to erase a real failure by resetting the counter on
+#    its way out. Snapshotting the count at trap-entry, before the cleanup
+#    loop, removes that path entirely rather than trusting cleanup code not
+#    to touch a variable it has no reason to touch.
+declare -a _ETUDES_ON_EXIT=()
+on_exit() { _ETUDES_ON_EXIT+=("$1"); }
+
+_etudes_finish() {
+  local status=$? had_failures=$FAILED
+  local i
+  # Cleanups run in a SUBSHELL: `eval` in the current shell would let one
+  # call `exit` itself and terminate this whole function before it decides
+  # anything, which is exactly how a cleanup registered with `on_exit "exit
+  # 0"` used to hide a real failure. A subshell's `exit` ends only the
+  # subshell; nothing it does can skip the decision below.
+  for (( i=${#_ETUDES_ON_EXIT[@]}-1; i>=0; i-- )); do
+    ( eval "${_ETUDES_ON_EXIT[$i]}" ) || true
+  done
+  rm -rf "$ETUDE_STATE_DIR"
+  if [ "$status" != "0" ]; then
+    echo "    FAIL     scenario exited $status before finishing. It did not run to completion"
+  fi
+  # A failed assertion outranks a clean last command, and is decided from the
+  # snapshot taken before cleanup ran, not from FAILED as cleanup left it.
+  if [ "$had_failures" -gt 0 ]; then exit 1; fi
+  exit "$status"
+}
+trap _etudes_finish EXIT
 
 # A scratch tree, unique per scenario, removed on exit.
 workdir() {

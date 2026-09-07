@@ -11,7 +11,7 @@
 # provider it will actually meet most often on this OS.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 
 # Build the exact real macOS path shape for each provider, all under our own
 # scratch tree so nothing touches a real home directory.

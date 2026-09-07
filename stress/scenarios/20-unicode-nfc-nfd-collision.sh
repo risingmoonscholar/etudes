@@ -16,7 +16,7 @@ if ! require python3 "constructs byte-exact NFC vs NFD filenames"; then
   exit 0
 fi
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/Desktop"
 mkdir -p "$D/ClientA" "$D/ClientB"
 

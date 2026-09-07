@@ -14,7 +14,7 @@
 #     to its size.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/tree"; mkdir -p "$D"
 
 # --- zero-byte files, a real group of them ---------------------------
