@@ -16,7 +16,7 @@
 #      whichever one loses the race?
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D1="$W/D1"; D2="$W/D2"
 mkdir -p "$D1" "$D2"
 

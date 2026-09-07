@@ -33,7 +33,7 @@ for i in range(n):
 PY
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/Desktop"
 build_filler "$D"
 

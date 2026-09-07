@@ -23,7 +23,7 @@
 #      not a live reproduction.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/flat"; mkdir -p "$D"
 
 N=9999

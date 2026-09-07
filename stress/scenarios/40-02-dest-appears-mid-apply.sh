@@ -48,7 +48,7 @@ print(g["name"])
 '
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 
 CTRL="$W/control/Desktop"; build_tree "$CTRL"
 T0_START=$(now_ms)

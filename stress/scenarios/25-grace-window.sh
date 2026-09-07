@@ -15,7 +15,7 @@
 #     folder as tidy while holding things back
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/Desktop"; mkdir -p "$D"
 
 # Four documents, all written now. With a one-hour window every one is inside.

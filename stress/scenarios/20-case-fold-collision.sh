@@ -11,7 +11,7 @@
 # in the collision check itself, not in Unicode handling.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir); on_exit 'rm -rf "$W"'
 D="$W/Desktop"
 mkdir -p "$D/ClientA" "$D/ClientB"
 
