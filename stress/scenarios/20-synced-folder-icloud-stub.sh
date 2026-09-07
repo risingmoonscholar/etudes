@@ -14,7 +14,7 @@
 # time, which is the same reason sweep's own detectors stay single-purpose.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 
 # --- Detection breadth: every documented marker refuses by default ---
 for provider in "Dropbox" "OneDrive" "Sync.com" "pCloud Drive"; do

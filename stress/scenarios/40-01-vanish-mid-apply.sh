@@ -55,7 +55,7 @@ print(m[idx])
 '
 }
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 
 # Calibrate: how long does an uninterrupted apply take on a tree this size,
 # on this host, right now? Everything else is timed off this measurement

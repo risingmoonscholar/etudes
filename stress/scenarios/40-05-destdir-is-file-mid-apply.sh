@@ -39,7 +39,7 @@ for _ in range(5):
 print(s)"
 }
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 DA="$W/a/Desktop"; mkdir -p "$DA"
 for i in $(seq 1 8); do : > "$DA/widget_$(letters "$i").txt"; done
 BLOCKER_CONTENT="I-AM-A-FILE-NOT-A-DIRECTORY-$$"

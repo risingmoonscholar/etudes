@@ -17,7 +17,7 @@
 # whose organisation apply will then always refuse to write.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 
 for provider in "Dropbox" "Google Drive" "OneDrive"; do
   d="$W/$provider/Projects"

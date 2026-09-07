@@ -45,7 +45,7 @@ cleanup() {
   [ -n "${D:-}" ] && chmod 755 "$D" 2>/dev/null
   rm -rf "$W" 2>/dev/null
 }
-on_exit cleanup
+trap cleanup EXIT
 
 CTRL="$W/control/Desktop"; build_tree "$CTRL"
 T0_START=$(now_ms)

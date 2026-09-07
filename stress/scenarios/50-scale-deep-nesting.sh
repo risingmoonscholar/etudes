@@ -11,7 +11,7 @@
 # from 1 to 8, and that 0 and 9 are refused outright rather than clamped.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/root"; mkdir -p "$D"
 
 # Level 0 is the root itself; levels 1..10 are L1/L2/.../L10 nested. Every

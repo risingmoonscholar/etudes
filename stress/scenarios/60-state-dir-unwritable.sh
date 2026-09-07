@@ -20,7 +20,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 # whole point is that it can't be), but the parent must still be restored to
 # writable so removal doesn't fail.
 cleanup_extra() { chmod 0700 "$W_PARENT" 2>/dev/null; rm -rf "$ETUDE_STATE_DIR" "$W_PARENT" 2>/dev/null; }
-on_exit 'cleanup_extra'
+trap 'cleanup_extra' EXIT
 
 if [ ! -d "$W_PARENT" ] || [ -w "$W_PARENT" ]; then
   unproven "unwritable state dir: apply refuses rather than silently dropping the journal" \

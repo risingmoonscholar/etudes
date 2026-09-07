@@ -13,7 +13,7 @@
 # fraction of the folder without saying so).
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); on_exit 'rm -rf "$W"'
+W=$(workdir); trap 'rm -rf "$W"' EXIT
 
 build_flat() {  # build_flat DIR N
   local dir="$1" n="$2" i padded
