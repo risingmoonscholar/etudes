@@ -1,6 +1,6 @@
 //! Filesystem walk with the safety rules for untrusted trees.
 //!
-//! Metadata only. `scan` never opens a file for reading.
+//! No content reads. Regular document markers are opened only to check access.
 
 use std::collections::HashSet;
 use std::fs;
@@ -140,17 +140,9 @@ const ROOT_MARKERS: &[&str] = &[
 /// Measured: project/scenes/main.blend beside project/textures/*.png, swept at
 /// depth 4, moved all three textures and broke every reference to them.
 ///
-/// ACTED ON at the scan root since 0.5.1: a document marker at the top level
-/// holds the document and its reference families (Media, Images, Scripts,
-/// Data) instead of refusing -- see the plan's loose-document pass. In CHILD
-/// directories a document still behaves like a root marker: the folder
-/// holding it is stepped over and the scan continues.
-///
-/// The remaining gap is #49's: a document in a subfolder referencing assets
-/// upward, out of its own folder, at depth. The contagious whole-scan refusal
-/// that would close it was reviewed and rejected -- one .flp in Downloads
-/// made Downloads unsweepable, which removes the tool from the folder it
-/// exists for.
+/// A document holds reference-family files and directory units in its own
+/// folder and its immediate parent. This bounded scope preserves loose
+/// invoices in Downloads without descending arbitrarily through projects.
 const DOCUMENT_MARKERS: &[&str] = &[
     ".song", ".als", ".ptx", ".sesx", ".flp", ".rpp", ".prproj", ".aep", ".drp", ".veg", ".blend",
     ".c4d",
@@ -256,6 +248,126 @@ fn project_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
         }
     }
     Ok(None)
+}
+
+// A scope is monotone during a walk: later probes can only add protection.
+#[derive(Default)]
+struct DocumentScope {
+    marker: Option<String>,
+    unreadable: bool,
+}
+
+impl DocumentScope {
+    fn merge(&mut self, other: Self) {
+        self.unreadable |= other.unreadable;
+        if let Some(marker) = other.marker
+            && self.marker.as_ref().is_none_or(|old| marker < *old)
+        {
+            self.marker = Some(marker);
+        }
+    }
+}
+
+fn check_access(path: &Path, meta: &fs::Metadata) -> Result<(), Unreadable> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Honour an explicit no-read mode even under elevated privileges.
+        let mode = meta.permissions().mode();
+        if mode & 0o444 == 0 || (meta.is_dir() && mode & 0o111 == 0) {
+            return Err(Unreadable);
+        }
+    }
+    if meta.is_file() {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            #[cfg(target_os = "macos")]
+            options.custom_flags(0x100 | 0x4); // O_NOFOLLOW | O_NONBLOCK
+            #[cfg(not(target_os = "macos"))]
+            options.custom_flags(0x20000 | 0x800); // O_NOFOLLOW | O_NONBLOCK
+        }
+        options.open(path).map_err(|_| Unreadable)?;
+    }
+    Ok(())
+}
+
+fn document_scope(root: &Path, dir: &Path) -> DocumentScope {
+    let probe = || -> Result<Option<String>, Unreadable> {
+        let meta = fs::symlink_metadata(dir).map_err(|_| Unreadable)?;
+        if !meta.is_dir() {
+            return Err(Unreadable);
+        }
+        check_access(dir, &meta)?;
+        let mut markers = Vec::new();
+        for item in fs::read_dir(dir).map_err(|_| Unreadable)? {
+            let item = item.map_err(|_| Unreadable)?;
+            if !is_document_marker(&item.file_name().to_string_lossy()) {
+                continue;
+            }
+            let meta = fs::symlink_metadata(item.path()).map_err(|_| Unreadable)?;
+            if meta.is_dir() {
+                continue;
+            }
+            // Symlinks and special files are markers by name; never open them.
+            check_access(&item.path(), &meta)?;
+            markers.push(
+                item.path()
+                    .strip_prefix(root)
+                    .unwrap_or(&item.path())
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        markers.sort();
+        Ok(markers.into_iter().next())
+    };
+    match probe() {
+        Ok(marker) => DocumentScope {
+            marker,
+            unreadable: false,
+        },
+        Err(Unreadable) => DocumentScope {
+            marker: None,
+            unreadable: true,
+        },
+    }
+}
+
+fn reference_file(e: &Entry) -> bool {
+    !crate::classify::is_screenshot(e)
+        && crate::classify::type_family(&e.ext)
+            .is_some_and(|family| ["Media", "Images", "Scripts", "Data"].contains(&family))
+}
+
+fn hold_scope(out: &mut ScanOutcome, start: usize, dir: &Path, scope: &DocumentScope) {
+    if scope.marker.is_none() && !scope.unreadable {
+        return;
+    }
+    let candidates = out.entries.split_off(start);
+    for e in candidates {
+        let document = !e.is_dir && is_document_marker(&e.name);
+        let nested = e.path.parent() != Some(dir);
+        let link = fs::symlink_metadata(&e.path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(true);
+        if document || nested || e.is_dir || link || reference_file(&e) {
+            if scope.unreadable {
+                out.skipped_unreadable += 1;
+            } else {
+                let reason = if document {
+                    crate::Untouched::ProjectDocument
+                } else {
+                    crate::Untouched::NearProjectDocument(scope.marker.clone().unwrap())
+                };
+                out.project_holds.push((e.path, reason));
+            }
+        } else {
+            out.entries.push(e);
+        }
+    }
 }
 
 /// Roots under which cloud sync agents operate. Presence triggers a refusal
@@ -444,6 +556,8 @@ pub struct ScanOutcome {
     /// leave-it-alone decisions are made.
     pub grace: Option<std::time::Duration>,
     pub entries: Vec<Entry>,
+    /// Shared document holds, excluded from the candidates of every caller.
+    pub project_holds: Vec<(PathBuf, crate::Untouched)>,
     /// Paths refused during the walk, for the "what was inspected" report.
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
@@ -699,6 +813,7 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         root: root.clone(),
         grace: cfg.grace,
         entries: Vec::new(),
+        project_holds: Vec::new(),
         skipped_hidden: 0,
         skipped_symlink: 0,
         skipped_system: 0,
@@ -750,11 +865,52 @@ fn walk(
         }
     };
 
+    let start = out.entries.len();
+    let mut scope = DocumentScope::default();
+    let mut items = Vec::new();
+    let mut children = Vec::new();
     for item in rd {
         let item = match item {
-            Ok(i) => i,
-            Err(_) => continue,
+            Ok(item) => item,
+            Err(_) => {
+                scope.unreadable = true;
+                continue;
+            }
         };
+        items.push(item);
+    }
+    // Snapshot first: probing one child must not make another disappear from
+    // the enumeration that supplies our traversal and final recheck paths.
+    items.sort_by_key(|item| item.file_name());
+    scope.merge(document_scope(root, dir));
+    for item in &items {
+        let name = item.file_name().to_string_lossy().into_owned();
+        if !is_hidden(&name)
+            && !never_enter(&name)
+            && item.file_type().map(|t| t.is_dir()).unwrap_or(true)
+            && !is_package(&name)
+            && !name_matches(&name, BUNDLE_MARKERS)
+            && !IN_FLIGHT_SUFFIXES
+                .iter()
+                .any(|s| name.to_ascii_lowercase().ends_with(s))
+        {
+            #[cfg(test)]
+            BEFORE_CHILD_DOCUMENT_PROBE.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().take() {
+                    hook(&item.path());
+                }
+            });
+            children.push(item.path());
+            scope.merge(document_scope(root, &item.path()));
+        }
+    }
+    #[cfg(test)]
+    AFTER_DOCUMENT_PROBE.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook(dir);
+        }
+    });
+    for item in items {
         let path = item.path();
         let name = item.file_name().to_string_lossy().into_owned();
 
@@ -779,16 +935,8 @@ fn walk(
                 });
                 continue;
             }
-            // A symlink is followed only if its target stays inside root.
-            match path.canonicalize() {
-                Ok(target) if target.starts_with(root) && target != *root => {
-                    // In-root symlink: still skipped in v0.1. Moving a symlink
-                    // and moving its target are different operations and the
-                    // plan cannot express the difference yet.
-                    out.skipped_symlink += 1;
-                }
-                _ => out.skipped_symlink += 1,
-            }
+            // Sweep skips links without resolving their targets.
+            out.skipped_symlink += 1;
             continue;
         }
 
@@ -808,6 +956,19 @@ fn walk(
         let is_dir = meta.is_dir();
         let pkg = is_dir && (is_package(&name) || cfg.whole_units);
 
+        if is_dir && cfg.whole_units {
+            match project_marker_in(&path) {
+                Ok(Some(_)) => {
+                    out.skipped_project += 1;
+                    continue;
+                }
+                Err(Unreadable) => {
+                    out.skipped_unreadable += 1;
+                    continue;
+                }
+                Ok(None) => {}
+            }
+        }
         if is_dir && !pkg {
             // A child directory holding a project marker is not entered. The
             // root check alone was not enough: it protects someone standing
@@ -882,7 +1043,22 @@ fn walk(
             is_package: pkg,
         });
     }
+    // Repeat every pre-scan path, including one that disappeared and returned.
+    // Filtering after traversal also retracts assets visited before a holder.
+    scope.merge(document_scope(root, dir));
+    for child in children {
+        scope.merge(document_scope(root, &child));
+    }
+    hold_scope(out, start, dir, &scope);
     Ok(())
+}
+
+#[cfg(test)]
+type ProbeHook = Box<dyn FnOnce(&Path)>;
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CHILD_DOCUMENT_PROBE: std::cell::RefCell<Option<ProbeHook>> = const { std::cell::RefCell::new(None) };
+    static AFTER_DOCUMENT_PROBE: std::cell::RefCell<Option<ProbeHook>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(unix)]
@@ -1049,20 +1225,9 @@ mod tests {
         }
     }
 
-    /// A document marker below the root does NOT refuse the scan, and that
-    /// is a known gap -- see issue #49.
-    ///
-    /// This pins behaviour the project knows is incomplete, so that changing
-    /// it is a deliberate act. A .blend references //../textures/wood.png, so
-    /// stepping over scenes/ leaves wood.png collected and moved. Measured
-    /// four ways, all reproducing.
-    ///
-    /// The complete rule -- refuse any scan with a document marker anywhere
-    /// below it -- was built, reviewed and rejected: one .flp made a whole
-    /// Downloads folder unsweepable, which removes the tool from the folder it
-    /// exists for. When #49 lands, this test flips.
+    /// A child document holds reference files without refusing the scan.
     #[test]
-    fn a_document_marker_below_the_root_does_not_yet_refuse_the_scan() {
+    fn a_document_marker_below_the_root_holds_reference_files() {
         let base = std::env::temp_dir().join(format!("sweep_doc_gap_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(base.join("scenes")).expect("mkdir");
@@ -1077,7 +1242,7 @@ mod tests {
             grace: None,
             ..ScanConfig::default()
         };
-        let got = scan(&base, &cfg).expect("today this is swept, not refused");
+        let got = scan(&base, &cfg).expect("document holds do not refuse the scan");
         assert_eq!(
             got.skipped_project, 1,
             "the folder holding main.blend should still be stepped over"
@@ -1088,10 +1253,8 @@ mod tests {
         let plan = crate::plan::build(&got);
         let grouped: usize = plan.groups.iter().map(|g| g.members.len()).sum();
         assert_eq!(
-            grouped, 3,
-            "the known gap in #49 has closed -- the textures beside main.blend \
-             are no longer grouped. That is good: update this test to assert \
-             the refusal instead of the gap"
+            grouped, 0,
+            "the document must hold its sibling reference files"
         );
 
         let _ = fs::remove_dir_all(&base);
@@ -1306,3 +1469,7 @@ mod tests {
         )));
     }
 }
+
+#[cfg(test)]
+#[path = "project_document_hold.rs"]
+mod project_document_hold;

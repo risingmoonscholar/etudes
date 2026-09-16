@@ -4,7 +4,8 @@
 //! no third-party code here at all.
 //!
 //! Scanning and classification read **filesystem metadata only** in v0.1:
-//! names, sizes, timestamps, and file type. They never open files for reading.
+//! names, sizes, timestamps, and file type. Regular document markers are
+//! opened to check access, without reading their contents.
 //! The journal's edge-hash step does: it reads file bytes to detect changes
 //! before undo.
 

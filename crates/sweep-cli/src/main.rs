@@ -1391,6 +1391,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             None => true,
         };
     }
+    print_unreadable_warning(&p);
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
     if p.moves() == 0 {
