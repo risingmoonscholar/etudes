@@ -289,7 +289,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             members,
             accepted: true,
         }],
-        untouched: Vec::new(),
+        untouched: outcome.project_holds.clone(),
         scanned: outcome.entries.len(),
         skipped_hidden: outcome.skipped_hidden,
         skipped_symlink: outcome.skipped_symlink,
@@ -319,6 +319,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                         ("holding", j::str(&holding_name(deadline))),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into())),
                         ("skipped_hidden", j::num(outcome.skipped_hidden)),
+                        ("skipped_unreadable", j::num(outcome.skipped_unreadable)),
                     ])
                 );
                 return ExitCode::SUCCESS;

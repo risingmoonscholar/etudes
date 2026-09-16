@@ -73,4 +73,18 @@ else
   fail "Finder fixture: an extracted file differed from its archived source bytes"
 fi
 
+# A project archive preserves the relative layout that the scanner protects.
+PROJECT="$W/project-source"
+mkdir -p "$PROJECT/scenes" "$PROJECT/textures"
+printf 'document a' > "$PROJECT/scenes/a.blend"
+printf 'document b' > "$PROJECT/scenes/b.blend"
+printf 'texture' > "$PROJECT/textures/wood.png"
+(cd "$PROJECT" && zip -qr "$W/project.zip" scenes textures)
+assert_exit 0 "unpack extracts a project with sibling assets" -- "$UNPACK" "$W/project.zip" --into "$W/project-out"
+for path in scenes/a.blend scenes/b.blend textures/wood.png; do
+  cmp -s "$PROJECT/$path" "$W/project-out/$path" \
+    && pass "project unpack preserved $path and its bytes" \
+    || fail "project unpack changed $path or its bytes"
+done
+
 exit 0

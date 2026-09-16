@@ -458,7 +458,7 @@ pub fn build_with_maps(
     mut inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
 ) -> Plan {
-    let mut untouched: Vec<(PathBuf, Untouched)> = Vec::new();
+    let mut untouched: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
     let mut remaining: Vec<&Entry> = Vec::new();
 
     // Pass 1: the refusal detectors. Run first, remove from all others.
@@ -808,6 +808,7 @@ mod tests {
             grace: None,
             root: PathBuf::from("/fixture"),
             entries,
+            project_holds: Vec::new(),
             skipped_hidden: 0,
             skipped_symlink: 0,
             skipped_system: 0,
