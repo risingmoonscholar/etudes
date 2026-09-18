@@ -22,6 +22,8 @@ cd "$root"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+export ETUDE_STATE_DIR="$work/state"
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
 echo "building release binaries"
 cargo build --release --quiet

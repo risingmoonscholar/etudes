@@ -41,6 +41,10 @@ FLAGS
     --inspect-content  read text file contents to refuse MORE files
                        (asks first; never affects where anything moves)
 
+KEY
+    ETUDE_JOURNAL_KEY  64 hex digits (32 random bytes), overrides the keychain.
+                       Retain the same key for undo; see README for setup.
+
 Only `apply` moves anything. Files that look like personal records are
 never moved, in any mode.";
 
@@ -1078,10 +1082,10 @@ fn sealer() -> Option<KeychainSeal> {
     match etude_keep::key() {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
-            refuse("could not get the journal key from the keychain", &e);
+            refuse("could not get the journal key", &e);
             eprintln!(
                 "Refusing to write an unencrypted journal.\n\
-                 Re-run with --no-journal to proceed without undo."
+                 The only alternative is --no-journal; it removes undo."
             );
             None
         }
@@ -1416,16 +1420,30 @@ fn cmd_apply(args: &[String]) -> ExitCode {
 }
 
 /// The newest sweep journal that still has entries to reverse.
-fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::Journal> {
-    let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
-    ids.into_iter()
-        .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
-        // Same reason as journal_is_fully_undone: a journal whose records were
-        // lost has nothing marked Moved, yet its files are at their
-        // destinations. Skipping it here hides it from undo entirely.
-        .find(|j| {
-            j.entries.iter().any(|e| e.is_moved()) || etude_core::apply::unrecorded_moves(j) > 0
-        })
+fn newest_undoable(
+    sl: &dyn etude_core::journal::Sealer,
+) -> Result<Option<etude_core::Journal>, etude_core::journal::JournalError> {
+    sweep_journal_matching(sl, |_| true)
+}
+
+fn sweep_journal_matching(
+    sl: &dyn etude_core::journal::Sealer,
+    matches: impl Fn(&etude_core::Journal) -> bool,
+) -> Result<Option<etude_core::Journal>, etude_core::journal::JournalError> {
+    let ids = match etude_core::journal::candidates_by_recency("sweep") {
+        Ok(ids) => ids,
+        Err(etude_core::journal::JournalError::NotFound) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for id in ids {
+        // An unreadable newer journal may describe the same files. Never
+        // skip it and restore an older operation under a different key.
+        let j = id.load("sweep", sl)?;
+        if matches(&j) && !journal_is_fully_undone(&j) {
+            return Ok(Some(j));
+        }
+    }
+    Ok(None)
 }
 
 /// Find the newest sweep journal whose root is `target` and that still has
@@ -1440,18 +1458,10 @@ fn newest_undoable(sl: &dyn etude_core::journal::Sealer) -> Option<etude_core::J
 fn sweep_journal_for_root(
     sl: &dyn etude_core::journal::Sealer,
     target: &Path,
-) -> Option<etude_core::Journal> {
-    let ids = etude_core::journal::ids_by_recency("sweep").ok()?;
-    ids.into_iter()
-        .filter_map(|id| etude_core::Journal::load_sealed("sweep", &id, sl).ok())
-        .find(|j| {
-            // Same filesystem question as the no-argument route. A journal
-            // whose records were lost has nothing marked Moved while its files
-            // are at their destinations; filtering on is_moved alone hides it
-            // and the caller is told no apply of this folder is reversible.
-            (j.entries.iter().any(|e| e.is_moved()) || etude_core::apply::unrecorded_moves(j) > 0)
-                && j.root.canonicalize().is_ok_and(|root| root == target)
-        })
+) -> Result<Option<etude_core::Journal>, etude_core::journal::JournalError> {
+    sweep_journal_matching(sl, |j| {
+        j.root.canonicalize().is_ok_and(|root| root == target)
+    })
 }
 
 fn cmd_undo(args: &[String]) -> ExitCode {
@@ -1477,8 +1487,12 @@ fn cmd_undo(args: &[String]) -> ExitCode {
             return ExitCode::from(3);
         };
         return match sweep_journal_for_root(&sl, &target) {
-            Some(mut j) => finish_undo(&mut j, &sl),
-            None => {
+            Err(e) => {
+                refuse("could not select an undo journal; no files were moved", &e);
+                ExitCode::from(3)
+            }
+            Ok(Some(mut j)) => finish_undo(&mut j, &sl),
+            Ok(None) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
                     target.display()
@@ -1494,8 +1508,13 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    if let Some(mut j) = newest_undoable(&sl) {
-        return finish_undo(&mut j, &sl);
+    match newest_undoable(&sl) {
+        Ok(Some(mut j)) => return finish_undo(&mut j, &sl),
+        Ok(None) => {}
+        Err(e) => {
+            refuse("could not select an undo journal; no files were moved", &e);
+            return ExitCode::from(3);
+        }
     }
     let mut j = match etude_core::Journal::latest_sealed("sweep", &sl) {
         Ok(j) => j,
@@ -1698,6 +1717,12 @@ fn forget_shared_key_consent() -> bool {
 }
 
 fn destroy_shared_key() -> ExitCode {
+    if std::env::var_os("ETUDE_JOURNAL_KEY").is_some() {
+        eprintln!(
+            "sweep: a supplied key is in use. Remove every retained copy yourself; forget cannot destroy it."
+        );
+        return ExitCode::from(2);
+    }
     if etude_keep::destroy_key() {
         println!("Destroyed the journal key in the keychain.");
         println!("Undo is no longer possible for any past run.");
@@ -1774,7 +1799,7 @@ sweep {v}
 
   What is on this machine
     journals held          {count} in {dir}
-    journal encryption     XChaCha20-Poly1305, key in the login keychain
+    journal encryption     XChaCha20-Poly1305, keychain or ETUDE_JOURNAL_KEY
     journal path synced    {synced}
     journal expiry         {ttl} days
 

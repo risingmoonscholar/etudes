@@ -40,6 +40,7 @@ USAGE
     stash status [PATH]             what is stashed, and when it is due back
     stash status --all              every stash this machine's journals know,
                                     paths redacted; --paths shows them
+    --no-journal                    stash without undo; pop cannot restore
     --json                          machine-readable output (for agents)
     --version                       print the version and exit
     stash help
@@ -47,10 +48,14 @@ USAGE
 DURATION
     30m  2h  3d  1w        default: no deadline, restore whenever
 
+KEY
+    ETUDE_JOURNAL_KEY  64 hex digits (32 random bytes), overrides the keychain.
+                       Retain the same key for undo; see README for setup.
+
 stash moves everything sweep can see, including the files sweep would refuse
 to organise. Hidden items are left in place, and it says how many.
 That is deliberate: clearing a folder for a screen share means clearing it.
-Everything is reversible, and stash prints what it took.";
+With a journal, everything is reversible. stash prints what it took.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -107,7 +112,7 @@ fn main() -> ExitCode {
 
 /// Flags that may lead the argument list. Anything else there is a typo, and a
 /// typo must not stash the current directory.
-const STASH_FLAGS: &[&str] = &["--for", "--json"];
+const STASH_FLAGS: &[&str] = &["--for", "--json", "--no-journal"];
 
 /// Every command, and every flag reachable from it. Same construction as
 /// sweep's COMMAND_FLAGS and for the same reason: the leading-flag guard
@@ -116,7 +121,7 @@ const STASH_FLAGS: &[&str] = &["--for", "--json"];
 /// early. A tool cannot offer automation a contract while accepting any
 /// misspelling of it.
 const COMMAND_FLAGS: &[(&str, &[&str])] = &[
-    ("", &["--for", "--json"]),
+    ("", &["--for", "--json", "--no-journal"]),
     ("pop", &["--if-due"]),
     ("status", &["--json", "--all", "--paths"]),
 ];
@@ -303,10 +308,21 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     };
 
     let json = flag(args, "--json");
-    let Some(sl) = sealer() else {
-        return ExitCode::from(2);
+    let sl = if flag(args, "--no-journal") {
+        eprintln!("stash: --no-journal removes undo. stash pop cannot restore this operation.");
+        None
+    } else {
+        let Some(sl) = sealer() else {
+            return ExitCode::from(2);
+        };
+        Some(sl)
     };
-    match etude_core::apply::apply(&plan, "stash", Some(&sl), None) {
+    match etude_core::apply::apply(
+        &plan,
+        "stash",
+        sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
+        None,
+    ) {
         Ok(r) => {
             if json {
                 use etude_core::json as j;
@@ -326,13 +342,15 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             }
             println!("\nStashed {} items.", r.moved);
             println!("{} is clear.\n", path.display());
-            match deadline {
-                Some(t) => {
-                    println!("  Due back: {}", human_time(t));
-                    println!("  stash does not run in the background. Run `stash pop`,");
-                    println!("  or `stash status` to see what is overdue.");
+            if sl.is_some() {
+                match deadline {
+                    Some(t) => {
+                        println!("  Due back: {}", human_time(t));
+                        println!("  stash does not run in the background. Run `stash pop`,");
+                        println!("  or `stash status` to see what is overdue.");
+                    }
+                    None => println!("  No deadline. Restore with: stash pop"),
                 }
-                None => println!("  No deadline. Restore with: stash pop"),
             }
             if outcome.skipped_hidden > 0 {
                 println!(
@@ -349,7 +367,13 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("stash: {e}");
-            eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
+            if sl.is_some() {
+                eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
+            } else {
+                eprintln!(
+                    "Nothing further was moved. --no-journal removed undo; restore files manually."
+                );
+            }
             apply_exit_code(&e)
         }
     }
@@ -394,24 +418,21 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
     !j.entries.iter().any(|e| e.is_moved())
 }
 
-/// Load a journal by id, warning to stderr rather than silently vanishing it
-/// when the failure is a damaged journal (not simply absent). Without this,
-/// a truncated journal reads as "no stash here" instead of "a stash exists
-/// and can't be trusted". This is the same half-load-as-silence shape as
-/// issue #3, just one layer up. `load_sealed` now refuses damaged journals
-/// loudly. But `.ok()` at this call site was throwing that refusal away.
+/// Load an enumerated journal, warning on every failure. Even NotFound is
+/// a barrier here: a journal that disappeared after discovery may describe
+/// a newer operation on the same files. It cannot authorize skipping ahead.
 fn load_or_warn(
     tool: &str,
-    id: &str,
+    candidate: &etude_core::journal::JournalCandidate,
     sealer: &dyn etude_core::journal::Sealer,
     damaged: &mut bool,
 ) -> Option<etude_core::Journal> {
-    match etude_core::Journal::load_sealed(tool, id, sealer) {
+    let id = &candidate.id;
+    match candidate.load(tool, sealer) {
         Ok(j) => Some(j),
-        Err(etude_core::journal::JournalError::NotFound) => None,
         Err(e) => {
             *damaged = true;
-            eprintln!("{tool}: journal {id} is damaged and was skipped: {e}");
+            eprintln!("{tool}: journal {id} is unreadable or damaged: {e}");
             None
         }
     }
@@ -429,24 +450,33 @@ fn journal_for_root(
     target: &Path,
 ) -> (Option<etude_core::Journal>, bool) {
     let mut damaged = false;
-    let ids = match etude_core::journal::ids_by_recency(tool) {
+    let ids = match etude_core::journal::candidates_by_recency(tool) {
         Ok(ids) => ids,
-        Err(_) => return (None, false),
+        Err(etude_core::journal::JournalError::NotFound) => return (None, false),
+        Err(e) => {
+            eprintln!("{tool}: could not discover journals: {e}");
+            return (None, true);
+        }
     };
-    let found = ids
-        .into_iter()
-        .filter_map(|id| load_or_warn(tool, &id, sealer, &mut damaged))
-        .find(|j| {
-            j.root
+    for id in ids {
+        let j = load_or_warn(tool, &id, sealer, &mut damaged);
+        if damaged {
+            return (None, true);
+        }
+        if let Some(j) = j
+            && j.root
                 .canonicalize()
                 .is_ok_and(|root| root == target && find_holding(&root).is_some())
-        });
-    (found, damaged)
+        {
+            return (Some(j), false);
+        }
+    }
+    (None, false)
 }
 
 fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<PathBuf> {
     let mut damaged = false;
-    etude_core::journal::ids_by_recency(tool)
+    etude_core::journal::candidates_by_recency(tool)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|id| load_or_warn(tool, &id, sealer, &mut damaged))
@@ -459,10 +489,6 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     let Some(sl) = sealer() else {
         return ExitCode::from(2);
     };
-    if let Err(e) = etude_core::journal::ids_by_recency("stash") {
-        eprintln!("stash: {e}");
-        return ExitCode::from(1);
-    }
     let named = args.iter().skip(1).find(|a| !a.starts_with('-'));
     let path = named
         .map(|p| PathBuf::from(expand_tilde(p)))
@@ -972,7 +998,9 @@ fn sealer() -> Option<KeychainSeal> {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             eprintln!("stash: {e}");
-            eprintln!("Refusing to record a stash in the clear.");
+            eprintln!(
+                "Refusing to record a stash in the clear. The only alternative is --no-journal; it removes undo."
+            );
             None
         }
     }
@@ -1049,8 +1077,8 @@ mod tests {
     #[test]
     fn a_mistyped_leading_flag_is_not_treated_as_consent_to_stash() {
         // `stash --version` used to empty the current directory, because any
-        // leading flag meant "stash here". Only these two may lead.
-        assert_eq!(STASH_FLAGS, &["--for", "--json"]);
+        // leading flag meant "stash here". Only these declared flags may lead.
+        assert_eq!(STASH_FLAGS, &["--for", "--json", "--no-journal"]);
         for typo in ["--dry-run", "--yes", "-n", "--all", "--force"] {
             assert!(
                 !STASH_FLAGS.contains(&typo),

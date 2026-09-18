@@ -420,9 +420,28 @@ impl Journal {
     /// are still accepted. Framed parse is tried first; any failure falls back
     /// to opening the whole file as one sealed blob (the pre-framing format).
     pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
-        let p = state_dir().join(format!("{tool}-{id}.journal"));
-        let raw = fs::read(&p).map_err(|_| JournalError::NotFound)?;
+        let path = state_dir().join(format!("{tool}-{id}.journal"));
+        let metadata = fs::symlink_metadata(&path).map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                JournalError::NotFound
+            } else {
+                JournalError::Io(e)
+            }
+        })?;
+        JournalCandidate {
+            path,
+            metadata,
+            id: id.to_string(),
+        }
+        .load(tool, sealer)
+    }
 
+    fn decode_sealed(
+        tool: &str,
+        id: &str,
+        raw: &[u8],
+        sealer: &dyn Sealer,
+    ) -> Result<Journal, JournalError> {
         // Current format: 4-byte LE length + sealed base (+ optional progress).
         if raw.len() >= 4 {
             let base_len = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
@@ -439,7 +458,7 @@ impl Journal {
         }
 
         // Legacy: whole file is one unframed sealed blob (no progress frames).
-        let plain = sealer.open(&raw).map_err(JournalError::Seal)?;
+        let plain = sealer.open(raw).map_err(JournalError::Seal)?;
         let text = String::from_utf8(plain).map_err(|_| JournalError::Malformed("not utf-8"))?;
         let mut j = Journal::decode(&text)?;
         j.id = id.to_string();
@@ -585,8 +604,11 @@ impl Journal {
 
     /// Most recent sealed journal **written by `tool`**, by modification time.
     pub fn latest_sealed(tool: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
-        let id = latest_id(tool)?;
-        Journal::load_sealed(tool, &id, sealer)
+        candidates_by_recency(tool)?
+            .into_iter()
+            .next()
+            .ok_or(JournalError::NotFound)?
+            .load(tool, sealer)
     }
 
     fn write_bytes(&self, bytes: &[u8]) -> Result<(), JournalError> {
@@ -662,25 +684,80 @@ pub fn prune_expired() -> usize {
 
 /// Newest journal id written by `tool`, by modification time.
 pub fn latest_id(tool: &str) -> Result<String, JournalError> {
-    let prefix = format!("{tool}-");
-    let dir = state_dir();
-    let mut best: Option<(SystemTime, String)> = None;
-    for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
-        let Ok(e) = e else { continue };
-        let name = e.file_name().to_string_lossy().into_owned();
-        let Some(stem) = name.strip_suffix(".journal") else {
-            continue;
-        };
-        let Some(id) = stem.strip_prefix(&prefix) else {
-            continue;
-        };
-        let Ok(md) = e.metadata() else { continue };
-        let Ok(t) = md.modified() else { continue };
-        if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
-            best = Some((t, id.to_string()));
-        }
+    ids_by_recency(tool)?
+        .into_iter()
+        .next()
+        .ok_or(JournalError::NotFound)
+}
+
+/// Discovery records the exact regular file whose timestamp establishes order.
+/// Loading validates that identity on the opened descriptor and again after
+/// reading; a replaced path or changed file cannot supply different history.
+pub struct JournalCandidate {
+    path: PathBuf,
+    metadata: fs::Metadata,
+    pub id: String,
+}
+
+fn same_journal(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        a.is_file()
+            && b.is_file()
+            && a.dev() == b.dev()
+            && a.ino() == b.ino()
+            && a.len() == b.len()
+            && a.mtime() == b.mtime()
+            && a.mtime_nsec() == b.mtime_nsec()
+            && a.ctime() == b.ctime()
+            && a.ctime_nsec() == b.ctime_nsec()
     }
-    best.map(|(_, id)| id).ok_or(JournalError::NotFound)
+    #[cfg(not(unix))]
+    {
+        let _ = (a, b);
+        false
+    }
+}
+
+impl JournalCandidate {
+    pub fn load(&self, tool: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
+        let changed = || JournalError::Malformed("journal changed after discovery");
+        if !self.metadata.is_file() {
+            return Err(changed());
+        }
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        // Do not follow a replacement symlink or block on a replacement FIFO.
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Darwin SDK sys/fcntl.h.
+            const O_NOFOLLOW: i32 = 0x100;
+            const O_NONBLOCK: i32 = 0x4;
+            options.custom_flags(O_NOFOLLOW | O_NONBLOCK);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(0x20000 | 0x800);
+        }
+        let mut file = options.open(&self.path).map_err(JournalError::Io)?;
+        if !same_journal(&self.metadata, &file.metadata().map_err(JournalError::Io)?) {
+            return Err(changed());
+        }
+        let mut raw = Vec::new();
+        file.read_to_end(&mut raw).map_err(JournalError::Io)?;
+        if !same_journal(&self.metadata, &file.metadata().map_err(JournalError::Io)?)
+            || !same_journal(
+                &self.metadata,
+                &fs::symlink_metadata(&self.path).map_err(JournalError::Io)?,
+            )
+        {
+            return Err(changed());
+        }
+        Journal::decode_sealed(tool, &self.id, &raw, sealer)
+    }
 }
 
 /// Every id for journals written by `tool`, newest-first by modification time.
@@ -688,11 +765,25 @@ pub fn latest_id(tool: &str) -> Result<String, JournalError> {
 /// across all of them to find the journal for a specific folder, not just the
 /// newest.
 pub fn ids_by_recency(tool: &str) -> Result<Vec<String>, JournalError> {
+    Ok(candidates_by_recency(tool)?
+        .into_iter()
+        .map(|candidate| candidate.id)
+        .collect())
+}
+
+pub fn candidates_by_recency(tool: &str) -> Result<Vec<JournalCandidate>, JournalError> {
     let prefix = format!("{tool}-");
     let dir = state_dir();
     let mut journals = Vec::new();
-    for e in fs::read_dir(&dir).map_err(|_| JournalError::NotFound)? {
-        let Ok(e) = e else { continue };
+    let entries = fs::read_dir(&dir).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            JournalError::NotFound
+        } else {
+            JournalError::Io(e)
+        }
+    })?;
+    for e in entries {
+        let e = e.map_err(JournalError::Io)?;
         let name = e.file_name().to_string_lossy().into_owned();
         let Some(stem) = name.strip_suffix(".journal") else {
             continue;
@@ -700,14 +791,31 @@ pub fn ids_by_recency(tool: &str) -> Result<Vec<String>, JournalError> {
         let Some(id) = stem.strip_prefix(&prefix) else {
             continue;
         };
-        let Ok(md) = e.metadata() else { continue };
-        let Ok(t) = md.modified() else { continue };
-        journals.push((t, id.to_string()));
+        // A symlink, directory, or missing metadata cannot establish a
+        // journal's position in history. Never silently omit that barrier.
+        let md = fs::symlink_metadata(e.path()).map_err(JournalError::Io)?;
+        if !md.is_file() {
+            return Err(JournalError::Malformed("journal is not a regular file"));
+        }
+        let t = md.modified().map_err(JournalError::Io)?;
+        journals.push((
+            t,
+            JournalCandidate {
+                path: e.path(),
+                metadata: md,
+                id: id.to_string(),
+            },
+        ));
     }
     if journals.is_empty() {
         return Err(JournalError::NotFound);
     }
     journals.sort_by(|(a, _), (b, _)| b.cmp(a));
+    if journals.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(JournalError::Malformed(
+            "journal modification times are ambiguous",
+        ));
+    }
     Ok(journals.into_iter().map(|(_, id)| id).collect())
 }
 
@@ -815,6 +923,84 @@ mod tests {
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    #[cfg(unix)]
+    fn discovery_binds_the_file_subsequently_read() {
+        use std::os::unix::fs::symlink;
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("journal_identity_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, p: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(p.to_vec())
+            }
+            fn open(&self, p: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(p.to_vec())
+            }
+        }
+        let journal = Journal {
+            id: "identity".into(),
+            tool: "test".into(),
+            root: dir.join("root"),
+            ..Journal::default()
+        };
+        for fault in [
+            "unchanged",
+            "replace",
+            "rewrite",
+            "symlink",
+            "missing",
+            "fifo",
+        ] {
+            let path = journal.path();
+            let _ = fs::remove_file(&path);
+            journal.save_sealed(&Identity).unwrap();
+            let candidate = candidates_by_recency("test").unwrap().remove(0);
+            let bytes = fs::read(&path).unwrap();
+            match fault {
+                "replace" => {
+                    let replacement = dir.join("replacement");
+                    fs::write(&replacement, &bytes).unwrap();
+                    fs::rename(replacement, &path).unwrap();
+                }
+                "rewrite" => {
+                    // Same length and valid framing: metadata must detect it,
+                    // rather than relying on a later decode error.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    fs::write(&path, &bytes).unwrap();
+                }
+                "symlink" => {
+                    let target = dir.join("target");
+                    fs::write(&target, &bytes).unwrap();
+                    fs::remove_file(&path).unwrap();
+                    symlink(target, &path).unwrap();
+                }
+                "missing" => fs::remove_file(&path).unwrap(),
+                "fifo" => {
+                    fs::remove_file(&path).unwrap();
+                    assert!(
+                        std::process::Command::new("mkfifo")
+                            .arg(&path)
+                            .status()
+                            .unwrap()
+                            .success()
+                    );
+                }
+                _ => {}
+            }
+            let result = candidate.load("test", &Identity);
+            if fault == "unchanged" {
+                assert_eq!(result.unwrap().root, journal.root);
+            } else {
+                assert!(result.is_err(), "{fault} must refuse before decoding");
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn expired_journals_are_pruned_and_fresh_ones_are_kept() {

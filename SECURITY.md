@@ -35,8 +35,23 @@ earlier versions got it wrong in opposite directions — one dropped symlinked
 markers, one resolved a target outside the scan root.
 
 **Journals are encrypted.** XChaCha20-Poly1305 from RustCrypto, a 256-bit key
-in the login keychain and never on disk, a fresh random 192-bit nonce per
-write.
+from the login keychain by default, a fresh random 192-bit nonce per write.
+`ETUDE_JOURNAL_KEY` explicitly supplies the same 256-bit key material without
+accessing the keychain. It requires exactly 64 ASCII hex digits and rejects
+invalid values without fallback. It is not a password derivation interface;
+the caller must generate a random key and retain it securely for undo.
+Supplied keys can be exposed through environment inspection, inherited child
+processes, or shell tracing. They are not stored by the tools and cannot be
+destroyed by `sweep forget`. See the README for generation and restoration.
+Neither key source permits an unencrypted journal. Explicit `--no-journal`
+writes no journal and removes undo.
+
+Undo and pop also refuse when journal discovery or reads fail, when a journal
+entry is not a regular file, or when journals have identical modification times
+and their order cannot be established. They do not guess which operation is newer.
+Journal reads also check the discovered file identity against the opened file
+before and after reading, refusing replacements or changes during that interval.
+This check does not serialize concurrent undo operations.
 
 **`--json` discloses less than the human output.** For files that look like
 personal records it carries counts by category and never the paths.
