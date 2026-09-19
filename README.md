@@ -216,13 +216,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 40 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 41 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 40 scenarios, 1 of them failing
+bash stress/run.sh        # 41 scenarios, 1 of them failing
 ```
 
 The one failing scenario is real and it is [filed](../../issues), with a
@@ -241,6 +241,18 @@ by its position in the journal rather than by guessing from inodes.
 
 There is also an `unproven` count, kept separate from the passes on purpose. A
 hazard that could not be exercised on this machine is not a hazard that passed.
+
+A scenario can also run directly against built release binaries:
+
+```sh
+BIN="$PWD/target/release" SCENARIO=85-scenario-exit-status bash stress/scenarios/85-scenario-exit-status.sh
+bash scripts/check-scenario-outcomes.sh  # compare direct runs, the batch, and the origin/main runner
+```
+
+The harness records assertions separately from stdout. Failed assertions produce
+exit 1 even after `exit 0`, cleanup, command substitution, or `exec`. Subshells
+still have their own shell counters; their assertion records reach the wrapper.
+Runs with only unproven assertions exit 2; a run with no assertions fails.
 
 ## Layout
 

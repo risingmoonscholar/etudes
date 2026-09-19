@@ -34,6 +34,12 @@ echo "building release binaries"
 cargo build --release --quiet || { echo "build failed"; exit 1; }
 export BIN="$PWD/target/release"
 
+# The scenario wrapper and this runner use one record format and one verdict
+# function.  Sourcing with SCENARIO=run defines helpers without wrapping this
+# coordinator itself.
+SCENARIO=run BIN="$BIN" source stress/lib.sh
+trap 'rm -f "$LOCK"; eval "$_stress_state_cleanup"' EXIT
+
 # Sweeps up whatever a previous SIGKILLed run left mounted. Nothing inside a
 # killed process can do this for itself -- see sweep_orphaned_volumes in
 # lib.sh for why -- so it runs once here, before any scenario, rather than
@@ -49,17 +55,35 @@ for s in stress/scenarios/*.sh; do
   [ -n "$filter" ] && [[ "$name" != *"$filter"* ]] && continue
   echo ""
   echo "── $name"
-  out=$(SCENARIO="$name" bash "$s" 2>&1)
-  echo "$out"
-  p=$(grep -c '^    ok ' <<<"$out"); f=$(grep -c '^    FAIL ' <<<"$out"); u=$(grep -c '^    unproven ' <<<"$out")
-  # Silence is not success. A scenario that asserted nothing did not run.
-  if [ $((p + f + u)) -eq 0 ]; then
-    echo "    FAIL     this scenario produced no assertions at all. It did not run"
-    f=1
+  record=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-run-record-XXXXXX")
+  transcript=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-transcript-XXXXXX")
+  exec 197>>"$record"
+  # A nonzero pipeline must not invoke the inherited ERR trap before we
+  # save PIPESTATUS: that trap can replace an unproven child's 2 with 1.
+  if STRESS_RESULT_FD=197 SCENARIO="$name" bash "$s" 2>&1 | tee "$transcript"; then
+    child_status=${PIPESTATUS[0]}
+  else
+    child_status=${PIPESTATUS[0]}
   fi
+  # Optional machine-readable observation of the actual pipeline child status.
+  # Keep it separate from assertion counts and the human-readable transcript.
+  if [ -n "${STRESS_STATUS_FD:-}" ]; then
+    printf '%s\t%d\n' "$name" "$child_status" >&"$STRESS_STATUS_FD" || exit 1
+  fi
+  exec 197>&-
+  unset STRESS_RESULT_FD
+  stress_outcome "$record" "$child_status"; scenario_status=$?
+  rm -f "$record"
+  p=$STRESS_PASSED; f=$STRESS_FAILED; u=$STRESS_UNPROVEN
+  # Diagnostics retain the assertion text; counts and verdict use the record.
+  visible_f=$(grep -c '^    FAIL ' "$transcript" || true)
+  if [ "$f" -gt "$visible_f" ]; then
+    echo "    FAIL     $((f - visible_f)) failure(s) recorded outside visible assertion output"
+  fi
+  rm -f "$transcript"
   TOTAL_P=$((TOTAL_P+p)); TOTAL_F=$((TOTAL_F+f)); TOTAL_U=$((TOTAL_U+u))
-  while IFS= read -r l; do [ -n "$l" ] && ALL_FAIL+=("$l"); done < <(grep '^    FAIL ' <<<"$out" | sed "s/^    FAIL *//;s|^|$name: |")
-  while IFS= read -r l; do [ -n "$l" ] && ALL_UNPROVEN+=("$l"); done < <(grep '^    unproven ' <<<"$out" | sed "s/^    unproven *//;s|^|$name: |")
+  [ "$f" -gt 0 ] && ALL_FAIL+=("$name: $f recorded failure(s)")
+  [ "$u" -gt 0 ] && ALL_UNPROVEN+=("$name: $u assertion(s) not proven")
 done
 
 echo ""

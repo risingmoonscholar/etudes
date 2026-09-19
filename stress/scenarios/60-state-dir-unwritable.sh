@@ -3,24 +3,19 @@
 # tool must refuse to proceed rather than applying without a journal --
 # silently losing undo is exactly the failure this tool must not have.
 #
-# This overrides the harness's own ETUDE_STATE_DIR (which lib.sh sets to a
-# fresh writable tempdir per scenario) via ETUDE_STATE_DIR_OVERRIDE, which
-# lib.sh reads before making its choice. Was XDG_STATE_HOME_OVERRIDE before
-# issue #23 moved the harness's own isolation mechanism off that removed
-# fallback. The read-only parent directory is restored to writable in the
-# trap so the harness's own cleanup can still remove it.
-W_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-statedir-parent-XXXXXX")
-export ETUDE_STATE_DIR_OVERRIDE="$W_PARENT/state"
-chmod 0500 "$W_PARENT"
-
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-# Chains onto lib.sh's own EXIT trap (which removes $ETUDE_STATE_DIR) rather
-# than replacing it -- that directory was never actually created here (the
-# whole point is that it can't be), but the parent must still be restored to
-# writable so removal doesn't fail.
+# This must be after source: the direct-run wrapper re-execs the scenario at
+# source time, so pre-source filesystem setup would leak from the outer shell.
+W_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-statedir-parent-XXXXXX")
+export ETUDE_STATE_DIR_OVERRIDE="$W_PARENT/state"
+export ETUDE_STATE_DIR="$ETUDE_STATE_DIR_OVERRIDE"
+chmod 0500 "$W_PARENT"
+
+# Restore permissions before removing the unwritable parent. Also remove
+# the original harness state directory, bound before the override changed.
 cleanup_extra() { chmod 0700 "$W_PARENT" 2>/dev/null; rm -rf "$ETUDE_STATE_DIR" "$W_PARENT" 2>/dev/null; }
-trap 'cleanup_extra' EXIT
+trap "cleanup_extra; $_stress_state_cleanup" EXIT
 
 if [ ! -d "$W_PARENT" ] || [ -w "$W_PARENT" ]; then
   unproven "unwritable state dir: apply refuses rather than silently dropping the journal" \
