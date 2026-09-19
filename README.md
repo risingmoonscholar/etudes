@@ -216,13 +216,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 39 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 40 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 39 scenarios, 1 of them failing
+bash stress/run.sh        # 40 scenarios, 1 of them failing
 ```
 
 The one failing scenario is real and it is [filed](../../issues), with a
@@ -241,6 +241,25 @@ by its position in the journal rather than by guessing from inodes.
 
 There is also an `unproven` count, kept separate from the passes on purpose. A
 hazard that could not be exercised on this machine is not a hazard that passed.
+
+A scenario can also run directly against built release binaries:
+
+```sh
+BIN="$PWD/target/release" SCENARIO=85-scenario-exit-status bash stress/scenarios/85-scenario-exit-status.sh
+bash scripts/check-scenario-outcomes.sh  # compare direct runs, the batch, and the origin/main runner
+```
+
+The harness records assertions separately from stdout. Failed assertions produce
+exit 1 even after `exit 0`, cleanup, command substitution, or `exec`. Subshells
+still have their own shell counters; their assertion records reach the wrapper.
+Runs with only unproven assertions exit 2; a run with no assertions fails.
+After a successful or unproven assertion, an ordinary nonzero final command
+without a failed assertion is normalized; signal deaths remain failures.
+
+Scenarios are trusted code: they must preserve the wrapper environment and stay
+in its process group. A pre-set `STRESS_WRAP_DEPTH` with no record descriptor
+runs unwrapped with a warning, so that bypass has no verdict guarantee. SIGKILL
+of the wrapper itself cannot be forwarded to its children or cleaned up.
 
 ## Layout
 

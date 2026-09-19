@@ -31,7 +31,7 @@ trap 'code=$?; if [ "$code" != "0" ]; then echo "    FAIL     scenario exited $c
 # 127 is `command not found`: a typo or a missing tool, never a deliberate
 # outcome. That is the shape of a scenario that is broken rather than failing.
 set -E
-trap 'c=$?; [ "$c" = "127" ] && echo "    FAIL     command not found at line $LINENO. The scenario is broken, not the tool"' ERR
+trap 'c=$?; if [ "$c" = 127 ]; then fail "command not found at line $LINENO. The scenario is broken, not the tool"; fi' ERR
 
 PASSED=0; FAILED=0; UNPROVEN=0
 FAIL_LINES=(); UNPROVEN_LINES=()
@@ -41,9 +41,16 @@ FAIL_LINES=(); UNPROVEN_LINES=()
 BIN="${BIN:?BIN must point at target/release}"
 SWEEP="$BIN/sweep"; STASH="$BIN/stash"; UNPACK="$BIN/unpack"; MKFX="$BIN/mkfx"
 
-pass()     { PASSED=$((PASSED+1)); printf '    ok       %s\n' "$1"; }
-fail()     { FAILED=$((FAILED+1)); FAIL_LINES+=("$SCENARIO: $1"); printf '    FAIL     %s\n' "$1"; }
-unproven() { UNPROVEN=$((UNPROVEN+1)); UNPROVEN_LINES+=("$SCENARIO: $1 ($2)"); printf '    unproven %s (%s)\n' "$1" "$2"; }
+_stress_record() {
+  # FD 199 is opened and immediately unlinked by the direct-run wrapper.
+  # A scenario sees only the descriptor, never a replaceable record pathname.
+  if [ -n "${STRESS_WRAP_DEPTH:-}" ]; then
+    printf '%s\n' "$1" 2>/dev/null >&199 || true
+  fi
+}
+pass()     { PASSED=$((PASSED+1)); _stress_record "ok"; printf '    ok       %s\n' "$1"; }
+fail()     { FAILED=$((FAILED+1)); _stress_record "FAIL"; [ -n "${STRESS_WRAPPER_PID:-}" ] && kill -USR1 "$STRESS_WRAPPER_PID" 2>/dev/null || true; FAIL_LINES+=("$SCENARIO: $1"); printf '    FAIL     %s\n' "$1"; }
+unproven() { UNPROVEN=$((UNPROVEN+1)); UNPROVEN_LINES+=("$SCENARIO: $1 ($2)"); _stress_record "unproven"; printf '    unproven %s (%s)\n' "$1" "$2"; }
 
 # assert_eq EXPECTED ACTUAL LABEL
 assert_eq() {
@@ -93,7 +100,9 @@ assert_intact() {
 export SWEEP_GRACE_SECS=0
 
 export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
-trap 'rm -rf "$ETUDE_STATE_DIR"' EXIT
+# Bind the chosen directory now: scenarios may later change the override.
+printf -v _stress_state_cleanup 'rm -rf -- %q' "$ETUDE_STATE_DIR"
+trap "$_stress_state_cleanup" EXIT
 
 # A scratch tree, unique per scenario, removed on exit.
 workdir() {
@@ -123,7 +132,9 @@ workdir() {
 # and every mount registered here is detached in the right order regardless
 # of how many times the scenario re-attaches under the same or different
 # paths.
-declare -a REGISTERED_MOUNTS=()
+if ! declare -p REGISTERED_MOUNTS >/dev/null 2>&1; then
+  declare -a REGISTERED_MOUNTS=()
+fi
 register_mount() {
   REGISTERED_MOUNTS+=("$1")
 }
@@ -222,3 +233,70 @@ require() {  # require CMD REASON: mark unproven and return 1 if missing
   unproven "$2" "$1 not available on this host"
   return 1
 }
+
+# Read the assertion record exactly once and derive both the displayed counts
+# and the status from it.  run.sh calls this same function after each child.
+stress_outcome() {
+  local record="$1" child_status="$2" line
+  STRESS_PASSED=0; STRESS_FAILED=0; STRESS_UNPROVEN=0
+  while IFS= read -r line; do
+    case "$line" in
+      ok) STRESS_PASSED=$((STRESS_PASSED + 1));;
+      FAIL) STRESS_FAILED=$((STRESS_FAILED + 1));;
+      unproven) STRESS_UNPROVEN=$((STRESS_UNPROVEN + 1));;
+    esac
+    if [ -n "${STRESS_RESULT_FD:-}" ]; then printf '%s\n' "$line" >&"$STRESS_RESULT_FD"; fi
+  done < "$record"
+  # A failed conditional at the end of a scenario is not a failed assertion.
+  # Preserve signal deaths, and use USR1 only as a fallback for a lost record.
+  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || [ "$child_status" -ge 128 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
+    STRESS_FAILED=1
+    [ -z "${STRESS_RESULT_FD:-}" ] || printf 'FAIL\n' >&"$STRESS_RESULT_FD"
+  fi
+  [ "$STRESS_FAILED" -gt 0 ] && return 1
+  [ "$STRESS_PASSED" -eq 0 ] && return 2
+  return 0
+}
+
+# Direct execution needs an owner outside the scenario shell: command
+# substitutions and subshells cannot change the parent's counters.  Re-source
+# the scenario as a background job in its own process group, keeping only an
+# unlinked high-fd assertion record in common.
+# Depth is the recursion stop; fd 199 is only the record channel. Trusted
+# scenarios must not forge the guard, truncate the record or escape the group.
+# SIGKILL of this wrapper cannot be forwarded or cleaned up.
+if [ -n "${STRESS_WRAP_DEPTH:-}" ]; then
+  if ! { true >&199; } 2>/dev/null; then
+    echo 'stress/lib.sh: wrapper record fd 199 is absent; running unwrapped' >&2
+  fi
+elif [ "${SCENARIO:-}" != run ]; then
+  _stress_record_file=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-record-XXXXXX") || exit 1
+  exec 198<&- 199>&-
+  exec 198<"$_stress_record_file"
+  exec 199>>"$_stress_record_file"
+  rm -f "$_stress_record_file"
+  export STRESS_WRAP_DEPTH=1 STRESS_WRAPPER_PID=$$
+  STRESS_WRAPPER_FAILED=0
+  trap 'STRESS_WRAPPER_FAILED=1; _stress_wait_interrupted=1' USR1
+  _stress_forward() {
+    _stress_wait_interrupted=1
+    kill -"$1" -- "-$_stress_child" 2>/dev/null || true
+  }
+  trap '_stress_forward INT' INT
+  trap '_stress_forward TERM' TERM
+  trap '_stress_forward HUP' HUP
+  trap '_stress_forward QUIT' QUIT
+  set -m
+  /bin/bash "$0" "$@" <&0 &
+  _stress_child=$!
+  # USR1 interrupts wait (158 on macOS); wait again until the job is reaped.
+  while :; do
+    _stress_wait_interrupted=0
+    wait "$_stress_child"; _stress_child_status=$?
+    [ "$_stress_wait_interrupted" -eq 0 ] && break
+  done
+  kill -TERM -- "-$_stress_child" 2>/dev/null || true
+  kill -KILL -- "-$_stress_child" 2>/dev/null || true
+  stress_outcome /dev/fd/198 "$_stress_child_status"
+  exit $?
+fi
