@@ -8,7 +8,7 @@
 //!
 //! - XChaCha20-Poly1305 from RustCrypto. Not hand-rolled; a hand-rolled cipher
 //!   in a privacy tool would be a worse bug than no cipher at all.
-//! - A 256-bit key lives in the **login keychain**, never on disk.
+//! - A 256-bit key comes from **ETUDE_JOURNAL_KEY** or the login keychain.
 //! - The key reaches `security` over **stdin**, never `argv`, because process
 //!   arguments are readable with `ps`.
 //! - A fresh random 192-bit nonce per write. XChaCha's nonce is large enough
@@ -36,6 +36,7 @@ const SECURITY_BIN: &str = "/usr/bin/security";
 #[derive(Debug)]
 pub enum KeepError {
     Keychain(String),
+    SuppliedKey,
     Crypto(&'static str),
     Malformed(&'static str),
 }
@@ -43,6 +44,10 @@ pub enum KeepError {
 impl std::fmt::Display for KeepError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            KeepError::SuppliedKey => write!(
+                f,
+                "ETUDE_JOURNAL_KEY must contain exactly 64 ASCII hex digits (32 random bytes)"
+            ),
             KeepError::Keychain(m) => write!(f, "keychain: {m}"),
             // Never distinguish "wrong key" from "tampered" to a caller that
             // might print it; both mean the same thing operationally.
@@ -69,6 +74,21 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 
 /// Read the key from the keychain, creating one on first use.
 pub fn key() -> Result<[u8; 32], KeepError> {
+    key_from(std::env::var("ETUDE_JOURNAL_KEY"), keychain_key)
+}
+
+fn key_from(
+    supplied: Result<String, std::env::VarError>,
+    keychain: impl FnOnce() -> Result<[u8; 32], KeepError>,
+) -> Result<[u8; 32], KeepError> {
+    match supplied {
+        Ok(value) => supplied_key(&value),
+        Err(std::env::VarError::NotUnicode(_)) => Err(KeepError::SuppliedKey),
+        Err(std::env::VarError::NotPresent) => keychain(),
+    }
+}
+
+fn keychain_key() -> Result<[u8; 32], KeepError> {
     if let Some(k) = read_key()? {
         return Ok(k);
     }
@@ -83,6 +103,16 @@ pub fn key() -> Result<[u8; 32], KeepError> {
             "key did not survive a write/read round trip".into(),
         )),
     }
+}
+
+// Validate bytes before slicing: non-ASCII hex must refuse, never panic.
+fn supplied_key(value: &str) -> Result<[u8; 32], KeepError> {
+    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(KeepError::SuppliedKey);
+    }
+    unhex(value)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(KeepError::SuppliedKey)
 }
 
 fn getrandom_fill(buf: &mut [u8]) -> Result<(), KeepError> {
@@ -159,6 +189,10 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
 /// gone. Including when it was already absent. After a confirmed destroy,
 /// existing journals are unreadable by anyone.
 pub fn destroy_key() -> bool {
+    // The caller owns supplied keys; do not destroy an unrelated keychain key.
+    if std::env::var_os("ETUDE_JOURNAL_KEY").is_some() {
+        return false;
+    }
     // A missing /usr/bin/security cannot have deleted anything, so report
     // failure rather than claiming a destroy that never happened.
     let Ok(mut cmd) = security() else {
@@ -332,6 +366,48 @@ mod tests {
         assert_ne!(
             a, b,
             "identical ciphertext for identical input, nonce reuse"
+        );
+    }
+}
+
+#[cfg(test)]
+mod supplied_key_tests {
+    use super::*;
+
+    #[test]
+    fn supplied_key_works_with_unavailable_keychain() {
+        let unavailable = || Err(KeepError::Keychain("unavailable".into()));
+        assert!(key_from(Err(std::env::VarError::NotPresent), unavailable).is_err());
+        let key = key_from(Ok("aB".repeat(32)), || {
+            panic!("keychain must not be called")
+        })
+        .unwrap();
+        assert_eq!(key, [0xab; 32]);
+        let ciphertext = seal(&key, b"private journal").unwrap();
+        assert_ne!(&ciphertext, b"private journal");
+        assert_eq!(open(&key, &ciphertext).unwrap(), b"private journal");
+    }
+
+    #[test]
+    fn invalid_supplied_keys_never_fall_back_or_panic() {
+        for value in [
+            "".into(),
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "gg".repeat(32),
+            "é".repeat(32),
+            format!("{}\n", "ab".repeat(32)),
+        ] {
+            assert!(key_from(Ok(value), || panic!("invalid key must not fall back")).is_err());
+        }
+        assert!(
+            key_from(
+                Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                    "invalid"
+                ))),
+                || panic!("no fallback")
+            )
+            .is_err()
         );
     }
 }

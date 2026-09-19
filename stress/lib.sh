@@ -92,6 +92,10 @@ assert_intact() {
 # does.
 export SWEEP_GRACE_SECS=0
 
+# Each scenario owns its key as well as its state directory. No dependency on
+# the host login keychain, and no fixture journal encrypted with a real key.
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+
 export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
 trap 'rm -rf "$ETUDE_STATE_DIR"' EXIT
 

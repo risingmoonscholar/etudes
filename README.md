@@ -66,7 +66,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 272 tests
+cargo test --all                # 275 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -216,13 +216,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 39 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 40 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 39 scenarios, 1 of them failing
+bash stress/run.sh        # 40 scenarios, 1 of them failing
 ```
 
 The one failing scenario is real and it is [filed](../../issues), with a
@@ -247,7 +247,7 @@ hazard that could not be exercised on this machine is not a hazard that passed.
 ```
 crates/
   etude-core/    scan, plan, apply, journal-first undo, zero dependencies
-  etude-keep/    journal encryption (XChaCha20-Poly1305, key in the keychain)
+  etude-keep/    journal encryption (XChaCha20-Poly1305, keychain or supplied key)
   etude-read/    content inspection, mlock'd, zeroed, never persisted
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
@@ -268,3 +268,46 @@ to be asked. Nothing here starts at login.
 Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 Apache-2.0.
+
+## Encrypted undo without a login keychain
+
+Both `sweep` and `stash` accept `ETUDE_JOURNAL_KEY`: exactly 64 ASCII hex
+characters encoding a randomly generated 256-bit key. When set, it is used
+instead of the login keychain. An empty, malformed, or non-Unicode value is
+refused; it never falls back to another key or to a plaintext journal.
+
+For a temporary session, generate a key with the operating system's secure
+random source, then keep the same environment for apply and restore:
+
+```sh
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+sweep apply /path/to/folder --yes
+sweep undo /path/to/folder
+stash /path/to/another-folder
+stash pop /path/to/another-folder
+```
+
+Keep a durable copy in your secret manager if you need undo after that shell
+closes. Supply that same key through the environment on later runs. Do not
+use a password, repeat a short value, or generate a fresh key before undo.
+The tools validate the encoding and size; they cannot measure the randomness
+of a supplied secret. Do not paste a literal key into command arguments or
+shell history, print it in logs, or enable shell tracing while supplying it.
+Child processes inherit environment variables, and code running as you may
+be able to read them. Unset the variable when the session is finished.
+
+The encrypted journal format and cipher are unchanged. `sweep forget` cannot
+destroy a supplied key and refuses key destruction while the variable is set;
+you must remove all retained copies yourself. Losing the key loses undo.
+Use a separate `ETUDE_STATE_DIR` for each key if you maintain multiple keys.
+Undo/pop refuse to search past an unreadable newer journal, even for a named
+folder, because it could describe a newer operation on those same files.
+
+If key acquisition fails, the only way to move files without a journal is
+explicit `--no-journal` on `sweep apply` or `stash`. This writes no journal
+and removes undo; `stash pop` cannot restore an unjournaled stash. Files then
+need to be restored manually.
+
+Undo and pop also refuse when journal discovery or reads fail, when a journal
+entry is not a regular file, or when journals have identical modification times
+and their order cannot be established. They do not guess which operation is newer.

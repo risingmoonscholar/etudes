@@ -13,6 +13,8 @@
 # so each trial execs the binary directly from a fresh `bash -c`, minimising
 # the shell's own descriptor footprint before the limit is applied.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+# This scenario deliberately strains the keychain, not the supplied-key path.
+unset ETUDE_JOURNAL_KEY
 
 D=$(workdir)
 # Kept under 1040 so no filename accidentally contains "1040" or "1099" --
