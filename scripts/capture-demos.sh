@@ -22,6 +22,9 @@ cd "$root"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+
+# The demonstration must not use the user's journals or depend on login-keychain
+# access. Exercise the supported supplied-key path with disposable fixture state.
 export ETUDE_STATE_DIR="$work/state"
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
@@ -119,7 +122,8 @@ payload = {
     "version": version,
     "versions": versions,
     "note": ("Real stdout from binaries built out of this tree, run against the "
-             "synthetic mkfx fixture. Not hand-written."),
+             "synthetic mkfx fixture with temporary journal state and a disposable "
+             "supplied key. Not hand-written; does not test login-keychain access."),
     "substitution_rule": ("The temporary directory the fixture was built in is "
                           "rendered as ~/Desktop. No other edit is made to captured "
                           "output. The real path is a mktemp name and is not recorded."),

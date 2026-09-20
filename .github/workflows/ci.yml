@@ -61,6 +61,11 @@ jobs:
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
 
+      - name: Release checks reject missing tags and false success
+        run: python3 -m unittest discover -s scripts -p 'test_check_release.py' -v
+      - name: Install and exercise the local release candidate
+        run: python3 scripts/check-release.py --candidate
+
       # The public tracker is a product surface. This reads every issue, every
       # comment, and every prior version GitHub still serves, and fails when
       # one reads as a working session rather than a defect report. It runs

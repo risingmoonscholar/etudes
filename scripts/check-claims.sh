@@ -78,15 +78,10 @@ ttl_actual=$(grep -oE 'TTL_DAYS: u64 = [0-9]+' crates/etude-core/src/journal.rs 
 [ -z "$ttl_actual" ] && { echo "FAIL could not read TTL_DAYS from journal.rs"; exit 1; }
 claim CHANGELOG.md 'pruned after [0-9]+ days' '[0-9]+' "TTL days" "$ttl_actual"
 
-# The version the readme tells people to install, against the newest tag.
-# A release that moves without this line moving sends every new user to the
-# previous version, and nothing else would notice: the command still works,
-# it just installs something older than the docs describe.
-# The tools version separately now -- sweep matures, stash and unpack are
-# static -- so "newest tag" stopped being one question. The check that
-# replaces it is stronger: for each tool, the tag its install line pins must
-# match the version its OWN manifest declares. A release that bumps a
-# manifest without moving the install line, or vice versa, fails here.
+# Internal consistency only: the advertised pin matches its CLI manifest.
+# This does not establish publication. check-release.py --published verifies
+# remote tag existence, installation and the installed binary's behavior.
+# Candidate PRs may name pending tags; README must identify them as candidates.
 check_pin() {
   local crate="$1" manifest="$2"
   local ver tag_line
@@ -97,7 +92,7 @@ check_pin() {
     return
   fi
   if grep -qE -- "v$ver $crate\$" <<<"$tag_line"; then
-    ok "README.md installs $crate at v$ver, which its manifest declares"
+    ok "README.md pin for $crate matches manifest v$ver (publication not checked)"
   else
     bad "README.md installs '$tag_line' but $manifest declares $ver"
   fi
