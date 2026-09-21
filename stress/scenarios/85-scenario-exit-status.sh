@@ -17,6 +17,7 @@ if [ -n "${EXIT_STATUS_ARM:-}" ]; then
     fail_exec) fail 'failure before exec'; exec true;;
     killed) pass 'started before SIGKILL'; kill -9 $$;;
     false_tail) pass 'assertion passed before false conditional'; false; exit $?;;
+    abort_after_pass) pass 'setup passed before deliberate abort'; exit 42;;
     only_unproven) unproven 'requires unavailable host capability' 'deliberate';;
     mixed) pass 'available check'; unproven 'unavailable check' 'deliberate';;
     cleanup_exit) trap 'FAILED=0; exit 0' EXIT; fail 'cleanup must not hide failure';;
@@ -46,7 +47,8 @@ env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD EXIT_STATUS_A
 STRESS_WRAP_DEPTH=1 EXIT_STATUS_ARM=unwrapped SCENARIO=85-unwrapped BIN="$BIN" bash -c 'exec 199>&-; exec bash "$1"' -- "$SELF" >/dev/null 2>&1
 [ "$?" -eq 0 ] && pass 'scenario exit status: missing wrapper fd runs unwrapped' || fail 'scenario exit status: missing wrapper fd did not run'
 
-run_arm false_tail 0
+run_arm false_tail 1
+run_arm abort_after_pass 1
 run_arm only_unproven 2
 run_arm mixed 0
 run_arm cleanup_exit 1

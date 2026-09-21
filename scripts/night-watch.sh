@@ -8,9 +8,8 @@
 # about this project has to be checkable, and a bot that posts unread numbers
 # is the opposite of that.
 #
-# It reuses scripts/stress-ratchet.sh rather than re-deriving anything: the
-# ratchet already knows the baseline and already decides what counts as a
-# regression.
+# It reuses scripts/stress-ratchet.sh rather than re-deriving anything: every
+# failed assertion is a result to investigate.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -19,7 +18,6 @@ DRAFT=0
 
 out=$(bash scripts/stress-ratchet.sh 2>&1); code=$?
 
-baseline=$(grep -vE '^\s*#|^\s*$' stress/baseline.txt | head -1 | tr -d ' ')
 actual=$(grep -cE '^    FAIL ' <<<"$out")
 passed=$(grep -cE '^    ok ' <<<"$out")
 unproven=$(grep -cE '^    unproven ' <<<"$out")
@@ -28,12 +26,12 @@ scenarios=$(ls stress/scenarios/*.sh 2>/dev/null | wc -l | tr -d ' ')
 echo "night watch: $(date '+%Y-%m-%d')"
 echo "  scenarios  $scenarios"
 echo "  passed     $passed"
-echo "  failed     $actual  (baseline $baseline)"
+echo "  failed     $actual"
 echo "  unproven   $unproven"
 
 case "$code" in
-  0) echo "  verdict    nothing new broke" ;;
-  1) echo "  verdict    SOMETHING CHANGED. read the failures above" ;;
+  0) echo "  verdict    every executed assertion passed" ;;
+  1) echo "  verdict    FAILED. read the failures above" ;;
   2) echo "  verdict    the suite did not really run; nothing was proven" ;;
 esac
 
@@ -53,7 +51,7 @@ if [ "$DRAFT" = "1" ] && [ "$code" = "1" ]; then
   {
     echo "draft, not posted. verify every number before this goes anywhere."
     echo
-    echo "the stress suite moved: $actual failures against a baseline of $baseline."
+    echo "the stress suite has $actual failing assertions."
     echo
     grep -E '^    FAIL ' <<<"$out" | sed 's/^    FAIL /- /' | head -5
     echo

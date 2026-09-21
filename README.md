@@ -226,16 +226,11 @@ apply, 50,000-file trees, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 41 scenarios, 1 of them failing
+bash stress/run.sh        # 41 scenarios
 ```
 
-The one failing scenario is real and it is [filed](../../issues), with a
-reproduction. It fails on purpose so the reproduction does not rot, and CI
-fails only when the number gets worse:
-
-| | |
-|---|---|
-| [#12](../../issues/12) | 10,000 files takes about a minute with the journal on. A measurement rather than a defect, kept failing so the number stays visible. |
+Every failed assertion is actionable. Timing is recorded as a measurement, but
+it cannot exempt an integrity assertion in the same scenario.
 
 The best story in the tracker is closed: an earlier fix swapped `rename` for
 `link` plus `unlink` to stop silent overwrites, and that opened a crash window

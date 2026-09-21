@@ -8,7 +8,7 @@
 # skip. An earlier version had the scenario count baked into the pattern that
 # located the claim --
 #
-#     grep -oE '33 scenarios, [0-9]+ of them failing' README.md
+#     grep -oE '[0-9]+ scenarios' README.md
 #
 # -- so when the count went from 33 to 36, the pattern stopped matching, the
 # result was empty, and an `if [ -n "$claimed" ]` guard skipped the check
@@ -68,10 +68,6 @@ scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
 for f in README.md demo/index.html; do
   claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 done
-
-# How many of them are known to fail, from the baseline the ratchet uses.
-failing_known=$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' stress/baseline.txt | tr -d ' ')
-claim README.md '[0-9]+ of them failing' '[0-9]+' "failing scenarios" "$failing_known"
 
 # The journal TTL: defined once in code, restated in the changelog.
 ttl_actual=$(grep -oE 'TTL_DAYS: u64 = [0-9]+' crates/etude-core/src/journal.rs | grep -oE '[0-9]+$')

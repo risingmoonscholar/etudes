@@ -72,6 +72,31 @@ assert_intact() {
   else fail "$3: expected $2 files, found $n. FILES WERE LOST"; fi
 }
 
+# snapshot_tree DIR OUT: capture names, kinds, bytes and link targets without
+# following links.  This is the default oracle for movement and refusal cases;
+# a file count alone cannot distinguish a missing file from a duplicate.
+snapshot_tree() {
+  python3 "$(dirname "${BASH_SOURCE[0]}")/snapshot.py" "$1" > "$2"
+}
+
+# assert_snapshot_eq BEFORE AFTER LABEL
+assert_snapshot_eq() {
+  if cmp -s "$1" "$2"; then
+    pass "$3"
+  else
+    fail "$3: filesystem manifest changed (before=$1 after=$2)"
+  fi
+}
+
+# assert_snapshot_ne BEFORE AFTER LABEL
+assert_snapshot_ne() {
+  if cmp -s "$1" "$2"; then
+    fail "$3: filesystem manifest did not change"
+  else
+    pass "$3"
+  fi
+}
+
 # Journals go to a scratch state directory, never the real one.
 #
 # ETUDE_STATE_DIR redirects where journals are written while leaving HOME
@@ -238,18 +263,19 @@ require() {  # require CMD REASON: mark unproven and return 1 if missing
 # and the status from it.  run.sh calls this same function after each child.
 stress_outcome() {
   local record="$1" child_status="$2" line
-  STRESS_PASSED=0; STRESS_FAILED=0; STRESS_UNPROVEN=0
+  STRESS_PASSED=0; STRESS_FAILED=0; STRESS_UNPROVEN=0; STRESS_COMPLETED=0
   while IFS= read -r line; do
     case "$line" in
       ok) STRESS_PASSED=$((STRESS_PASSED + 1));;
       FAIL) STRESS_FAILED=$((STRESS_FAILED + 1));;
       unproven) STRESS_UNPROVEN=$((STRESS_UNPROVEN + 1));;
+      complete) STRESS_COMPLETED=1;;
     esac
     if [ -n "${STRESS_RESULT_FD:-}" ]; then printf '%s\n' "$line" >&"$STRESS_RESULT_FD"; fi
   done < "$record"
   # A failed conditional at the end of a scenario is not a failed assertion.
   # Preserve signal deaths, and use USR1 only as a fallback for a lost record.
-  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || [ "$child_status" -ge 128 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
+  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || [ "$child_status" -ne 0 ] || [ "$STRESS_COMPLETED" -ne 1 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
     STRESS_FAILED=1
     [ -z "${STRESS_RESULT_FD:-}" ] || printf 'FAIL\n' >&"$STRESS_RESULT_FD"
   fi
@@ -295,6 +321,9 @@ elif [ "${SCENARIO:-}" != run ]; then
     wait "$_stress_child"; _stress_child_status=$?
     [ "$_stress_wait_interrupted" -eq 0 ] && break
   done
+  if [ "$_stress_child_status" -eq 0 ]; then
+    printf 'complete\n' >&199
+  fi
   kill -TERM -- "-$_stress_child" 2>/dev/null || true
   kill -KILL -- "-$_stress_child" 2>/dev/null || true
   stress_outcome /dev/fd/198 "$_stress_child_status"
