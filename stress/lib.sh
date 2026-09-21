@@ -283,7 +283,10 @@ stress_outcome() {
   done < "$record"
   # A failed conditional at the end of a scenario is not a failed assertion.
   # Preserve signal deaths, and use USR1 only as a fallback for a lost record.
-  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || [ "$child_status" -ne 0 ] || [ "$STRESS_COMPLETED" -ne 1 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
+  # Exit 2 is the wrapper's explicit all-unproven verdict.  It is incomplete
+  # coverage, not an assertion failure; preserve it so the runner can report
+  # that distinction. Any other nonzero child status is an unexpected abort.
+  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || { [ "$child_status" -ne 0 ] && [ "$child_status" -ne 2 ]; } || [ "$STRESS_COMPLETED" -ne 1 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
     STRESS_FAILED=1
     [ -z "${STRESS_RESULT_FD:-}" ] || printf 'FAIL\n' >&"$STRESS_RESULT_FD"
   fi
