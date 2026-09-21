@@ -97,6 +97,23 @@ run_bounded() {
   python3 "$(dirname "${BASH_SOURCE[0]}")/bounded.py" --timeout-ms "$timeout_ms" --evidence "$evidence" "$@"
 }
 
+# set_mtime_relative SECONDS PATH...: use the current clock rather than a
+# calendar date in a fixture. Positive seconds mean the past; negative values
+# mean the future. Python avoids platform-specific touch date syntax.
+set_mtime_relative() {
+  local seconds="$1"
+  shift
+  python3 - "$seconds" "$@" <<'PY'
+import os
+import sys
+import time
+
+when = time.time() - int(sys.argv[1])
+for path in sys.argv[2:]:
+    os.utime(path, (when, when))
+PY
+}
+
 # assert_snapshot_eq BEFORE AFTER LABEL
 assert_snapshot_eq() {
   if cmp -s "$1" "$2"; then

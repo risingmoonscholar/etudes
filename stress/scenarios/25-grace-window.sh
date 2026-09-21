@@ -47,7 +47,7 @@ fi
 # Backdate the files past the window, then READ one. If the window used atime,
 # reading would re-protect it -- which is how a Spotlight reindex would freeze
 # a whole folder forever.
-for i in 1 2 3 4; do touch -t 202601010900 "$D/paper_$i.pdf"; done
+set_mtime_relative 7200 "$D"/paper_*.pdf
 cat "$D/paper_1.pdf" > /dev/null
 
 OUT2=$(SWEEP_GRACE_SECS=3600 "$SWEEP" "$D" 2>&1)
@@ -59,7 +59,7 @@ fi
 
 # --- in flight, regardless of age ---------------------------------------
 : > "$D/movie.mp4.part"
-touch -t 202601010900 "$D/movie.mp4.part"
+set_mtime_relative 7200 "$D/movie.mp4.part"
 
 OUT3=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$D" 2>&1)
 if grep -q "still in progress" <<<"$OUT3"; then
@@ -82,7 +82,7 @@ assert_eq "False" "$MOVED" "the in-flight download is in no group"
 # ordinary: clock skew, restored backups, unpacked archives, network volumes.
 FUT="$W/future"; mkdir -p "$FUT"
 for n in 1 2 3; do : > "$FUT/report_$n.pdf"; done
-touch -t 203001010900 "$FUT"/report_*.pdf
+set_mtime_relative -86400 "$FUT"/report_*.pdf
 FUT_OUT=$("$SWEEP" "$FUT" --since 0 2>&1)
 if grep -qE '^  Documents' <<<"$FUT_OUT"; then
   pass "--since 0 means zero for a file dated in the future too"
