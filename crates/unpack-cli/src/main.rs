@@ -517,19 +517,22 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         _ => {}
     }
 
-    if let Err(e) = std::fs::create_dir_all(&dest) {
-        // The OS text, not the Rust category -- "Permission denied
-        // (os error 13)" tells a user what to do; "permission denied"
-        // alone is the same words with the errno thrown away, and
-        // "uncategorized error" tells them nothing at all.
-        eprintln!("unpack: cannot create the target ({e})");
-        return ExitCode::from(3);
-    }
-    match extract(pinned.path(), fmt, &dest, budget) {
+    // Extract into a private sibling, then publish it with one rename.  A
+    // SIGKILL cannot run cleanup and may leave the system extractor alive;
+    // staging keeps that orphan's partial tree out of the requested path so a
+    // retry is never refused because a half-extraction already exists.
+    let staging = match staging_destination(&dest) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("unpack: cannot prepare the target ({e})");
+            return ExitCode::from(3);
+        }
+    };
+    match extract(pinned.path(), fmt, &staging, budget) {
         Err(e) => {
             eprintln!(
                 "unpack: extraction failed ({e}). {}",
-                cleanup_destination(&dest).message()
+                cleanup_destination(&staging).message()
             );
             return ExitCode::from(3);
         }
@@ -537,7 +540,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             // Remove what landed before the cap was hit. A partial extraction
             // left behind is the mess this tool exists to avoid, and it is
             // worse here than usual: the user did not choose to start it.
-            let cleanup = cleanup_destination(&dest);
+            let cleanup = cleanup_destination(&staging);
             let Breach::Total(n) = breach;
             eprintln!(
                 "unpack: stopped at {}, which is more than this extraction was given.\n\
@@ -558,11 +561,18 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
 
     // --- 5. tidy -----------------------------------------------------------
-    let removed = remove_junk(&dest);
+    let removed = remove_junk(&staging);
     let flattened = match safety::wrapper_dir(&entries) {
-        Some(w) => flatten(&dest, &w),
+        Some(w) => flatten(&staging, &w),
         None => false,
     };
+    if let Err(error) = std::fs::rename(&staging, &dest) {
+        eprintln!(
+            "unpack: could not publish the extracted tree ({error}). {}",
+            cleanup_destination(&staging).message()
+        );
+        return ExitCode::from(3);
+    }
 
     if flag(args, "--json") {
         use etude_core::json as j;
@@ -1001,6 +1011,32 @@ fn extract(
         cmd.stdout(f);
     }
     run_bounded(cmd, dest, budget)
+}
+
+/// Reserve a private sibling of `dest` for an in-progress extraction.
+///
+/// The directory is created, rather than merely named, before the extractor
+/// starts. That makes uniqueness an OS-enforced property and gives a crash a
+/// harmless place to strand an orphaned system extractor.
+fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
+    let parent = dest.parent().unwrap_or(Path::new("."));
+    let name = dest.file_name().unwrap_or_default().to_string_lossy();
+    for _ in 0..128 {
+        let mut nonce = [0_u8; 16];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut random| random.read_exact(&mut nonce))
+            .map_err(|error| format!("could not generate staging name: {error}"))?;
+        let candidate = parent.join(format!(
+            ".{name}.unpack-{}.partial",
+            nonce.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+        ));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("could not reserve a unique staging directory".into())
 }
 
 /// Construct the complete extractor command.

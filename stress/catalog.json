@@ -43,5 +43,6 @@
   {"id":"60-undo-progress-lost-on-volume-hazard","tier":"platform","capability":"hdiutil-apfs","contract":"A partial undo persists progress and resumes after a volume hazard.","disposition":"keep"},
   {"id":"70-content-blindness-traps","tier":"fast","capability":"fifo","contract":"Name-only planning avoids content reads and hostile archive members refuse safely.","disposition":"keep"},
   {"id":"80-finder-unpack","tier":"fast","capability":"zip","contract":"Ordinary archive listing and extraction preserve exact paths and bytes.","disposition":"keep"},
+  {"id":"80-interrupted-extraction","tier":"load","capability":"signals","contract":"Killed unpack never publishes a partial target and retry extracts the exact archive.","disposition":"keep"},
   {"id":"85-scenario-exit-status","tier":"fast","capability":"shell","contract":"The scenario wrapper propagates failure, signal, and completion status.","disposition":"keep"}
 ]
