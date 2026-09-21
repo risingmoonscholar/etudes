@@ -47,7 +47,7 @@ IMG="$W/inner.dmg"
 INNER="$OUTER/aaa_innervol"
 mkdir -p "$OUTER" "$INNER"
 
-if ! hdiutil create -size 64m -fs ExFAT -volname CopyMtimeStress "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 64m ExFAT CopyMtime; then
   unproven "cross-device copy: content, mtime and no sidecar in-plan" "hdiutil create failed on this host"
   exit 0
 fi
@@ -76,37 +76,75 @@ done
 touch -t 202001010000 "$INNER"/IMG_104*.jpg
 MTIME_BEFORE=$(stat -f %m "$INNER/IMG_1041.jpg")
 
-PLAN_OUT=$("$SWEEP" "$OUTER" --depth 2 2>&1)
-if echo "$PLAN_OUT" | grep -q "Photos"; then
-  pass "cross-device copy: plan groups the camera-named files"
+# Derive the actual group name from the plan rather than assuming a display
+# label. The planner includes the capture date (`Photos, Jan 1` for this
+# fixture), so checking `$OUTER/Photos` made the copy and mtime assertions
+# inspect a path sweep never promised to create.
+PLAN_JSON="$W/plan.json"
+"$SWEEP" "$OUTER" --depth 2 --json > "$PLAN_JSON"
+GROUP_NAME=$(python3 - "$PLAN_JSON" "$INNER" <<'PY'
+import json
+import pathlib
+import sys
+
+plan = json.load(open(sys.argv[1]))
+# `workdir` may begin at macOS's /var symlink while sweep emits canonical
+# /private/var member paths. Compare the same canonical spelling that the
+# plan records; this still requires the group to contain exactly the fixture.
+inner = pathlib.Path(sys.argv[2]).resolve()
+expected = {str(inner / f"IMG_104{n}.jpg") for n in (1, 2, 3)}
+matches = [
+    group["name"] for group in plan.get("groups", [])
+    if set(group.get("members", [])) == expected
+]
+if len(matches) != 1:
+    raise SystemExit(
+        f"expected exactly one group containing only the fixture files; got {matches!r}"
+    )
+print(matches[0])
+PY
+)
+if [ -n "$GROUP_NAME" ]; then
+  pass "cross-device copy: plan groups exactly the camera-named fixture files"
 else
-  fail "cross-device copy: plan did not group the files: $PLAN_OUT"
+  fail "cross-device copy: plan did not produce one group for the fixture files"
 fi
+DEST_DIR="$OUTER/$GROUP_NAME"
 
+# This fixture contains only the camera-named files under test. Applying the
+# full plan avoids relying on a display label as a selector contract.
 assert_exit 0 "cross-device copy: apply exits 0, moving the exFAT files onto OUTER" \
-  -- "$SWEEP" apply "$OUTER" --only Photos --yes --depth 2
+  -- "$SWEEP" apply "$OUTER" --yes --depth 2
 
-# The destination is $OUTER/Photos/, on the OUTER device -- not still inside
-# aaa_innervol. Confirming that directly is part of proving this is a real
-# cross-device move: if these files were still under aaa_innervol, apply
-# would have done a same-device no-op, not the copy this scenario exists to
-# check.
+# The destination comes from the real plan and is on the OUTER device -- not
+# still inside aaa_innervol. Confirming that directly is part of proving this
+# is a real cross-device move: if these files were still under aaa_innervol,
+# apply would have done a same-device no-op, not the copy this scenario exists
+# to check.
 CONTENT_OK=1
 MTIME_OK=1
 STILL_ON_SOURCE_VOLUME=0
+ON_OUTER_VOLUME=1
 for n in 1 2 3; do
-  f="$OUTER/Photos/IMG_104$n.jpg"
+  f="$DEST_DIR/IMG_104$n.jpg"
   if [ ! -f "$f" ]; then
     CONTENT_OK=0
     MTIME_OK=0
+    ON_OUTER_VOLUME=0
     continue
   fi
   [ "$(cat "$f")" = "photo $n" ] || CONTENT_OK=0
   [ "$(stat -f %m "$f")" = "$MTIME_BEFORE" ] || MTIME_OK=0
+  [ "$(stat -f %d "$f")" = "$DEV_OUTER" ] || ON_OUTER_VOLUME=0
   [ -f "$INNER/IMG_104$n.jpg" ] && STILL_ON_SOURCE_VOLUME=1
 done
 if [ "$STILL_ON_SOURCE_VOLUME" = 1 ]; then
   fail "cross-device copy: a source file is still present on the exFAT volume after apply -- this did not exercise a real move"
+fi
+if [ "$ON_OUTER_VOLUME" = 1 ]; then
+  pass "cross-device copy: every destination file is on the outer device"
+else
+  fail "cross-device copy: a destination file is absent or not on the outer device"
 fi
 if [ "$CONTENT_OK" = 1 ]; then
   pass "cross-device copy: every file's content survived the copy intact"
