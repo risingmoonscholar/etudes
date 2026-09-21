@@ -22,6 +22,8 @@ if [ -n "${EXIT_STATUS_ARM:-}" ]; then
     mixed) pass 'available check'; unproven 'unavailable check' 'deliberate';;
     cleanup_exit) trap 'FAILED=0; exit 0' EXIT; fail 'cleanup must not hide failure';;
     resource) test -d "$ETUDE_STATE_DIR" && test -n "$(env | grep '^ETUDE_STATE_DIR=')" && pass 'state exported before any helper';;
+    newline_name) d="$ETUDE_STATE_DIR/newline"; mkdir -p "$d"; : > "$d/one
+two.txt"; assert_intact "$d" 1 'newline-containing filename counts as one file';;
     reload) fail 'failure before reload'; source "$ROOT/stress/lib.sh"; pass 'continued after reload';;
     arguments) assert_eq preserved "${1:-missing}" 'wrapper preserves script arguments';;
     bounded_timeout) run_bounded 50 "$ETUDE_STATE_DIR/bounded.json" -- sh -c 'sleep 2'; assert_eq 124 "$?" 'bounded helper reports a deadline'; python3 - "$ETUDE_STATE_DIR/bounded.json" <<'PY'
@@ -73,6 +75,7 @@ run_arm only_unproven 2
 run_arm mixed 0
 run_arm cleanup_exit 1
 run_arm resource 0
+run_arm newline_name 0
 run_arm reload 1
 run_arm arguments 0
 run_arm bounded_timeout 0

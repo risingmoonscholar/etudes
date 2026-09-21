@@ -73,9 +73,25 @@ assert_exit() {
   else fail "$label: wanted exit $want, got $got (${out%%$'\n'*})"; fi
 }
 
-# assert_intact DIR N LABEL: nothing was destroyed
+# assert_intact DIR N LABEL: nothing was destroyed. Count directory entries,
+# never printed paths: a filename containing a newline is one file, not two.
 assert_intact() {
-  local n; n=$(find "$1" -type f 2>/dev/null | wc -l | tr -d ' ')
+  local n; n=$(python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+count = 0
+for root, dirs, files in os.walk(sys.argv[1], followlinks=False):
+    for name in files:
+        try:
+            if stat.S_ISREG(os.lstat(os.path.join(root, name)).st_mode):
+                count += 1
+        except FileNotFoundError:
+            pass
+print(count)
+PY
+)
   if [ "$n" = "$2" ]; then pass "$3 ($n files intact)"
   else fail "$3: expected $2 files, found $n. FILES WERE LOST"; fi
 }
