@@ -19,18 +19,19 @@ from this branch, not a release certification or independent-review result.
 
 ## Local evidence
 
-The final fast-tier run at `d404fbf` completed on this host with **611 passed,
-0 failed, 1 unproven**. The unproven assertion was the NFC/NFD cross-device
-copy fallback, which this host could not exercise. The run explicitly reported
-the 7 load and 8 platform contracts as not run, rather than treating them as
-passes. Targeted checks also cover the updated harness, sync-stub contract,
-interruption cases, grace-window case, group/cap consolidations, and the
-1,100-file timing smoke run.
+The current fast-tier run at `6f67bdc` completed on this host with **621
+passed, 0 failed, 1 unproven**. The unproven assertion was the NFC/NFD
+cross-device copy fallback, which this host could not exercise. The result
+explicitly named the 9 load and 8 platform contracts as not run.
 
-The timing smoke run on Darwin/arm64 measured 1,100 files: build 0.05 s, plan
-0.12 s, apply 5.17 s, undo 5.06 s, verification 0.06 s, cleanup 0.03 s. The
-default load scenario remains 9,999 files; the smoke setting validates the
-measurement path without presenting itself as the load result.
+The load tier completed with **103 passed, 0 failed, 0 unproven**. Its
+9,999-file timing case measured: build 4.44 s, plan 2.00 s, apply 76.69 s,
+undo 58.73 s, verification 0.30 s, cleanup 0.28 s. That is the load evidence;
+the earlier 1,100-file run only validated the measurement path.
+
+The platform tier completed its descriptor-limit contract with **10 passed**.
+The seven disk-image contracts were all **unproven** because this host could
+not create an `hdiutil` image. They were reported as unproven, not as passes.
 
 ## Guide checkpoint audit
 
@@ -41,18 +42,19 @@ measurement path without presenting itself as the load result.
 | Shared helpers | `snapshot.py` records paths, kinds, modes, payload digests, and link targets. `bounded.py` owns and reaps a process group. Failed cases retain their transcript, assertions, process record, and snapshots. |
 | Movement and recovery | Desktop and interrupted-undo scenarios assert real changes, protected paths, and exact recovery. Local no-op, dropped-movement, and false-recovery mutants are rejected. |
 | Races | The repaired race scenarios record their intervention before judging safety; missed timing windows report unproven. Their waits are bounded and every runner case has an outer per-case deadline. |
-| Cost | Load cases use contract-sized fixtures and phase timing. The 1,100-file smoke run exercises the 9,999-file measurement path without claiming it is the load result. |
+| Cost | Load cases use contract-sized fixtures and phase timing. The 9,999-file run supplies the load evidence; the earlier 1,100-file smoke run only exercises the measurement path. |
 | Consolidation | Mapping and document-scope behavior are separate scenario contracts; grace timing is relative; provider-plan checks compare manifests. |
 | Scheduling | The catalog drives fast, load, and platform tiers. The CI selection self-test distinguishes an explicitly inapplicable docs-only PR from a source change and from scheduled/manual full runs. |
 | Maintenance | `CONTRIBUTING.md` carries the six review questions. Result bundles identify revision, runner, skipped contracts, failures, unproven work, and slowest cases. |
 
 ## Coverage that remains host-dependent
 
-Platform scenarios need real APFS/exFAT images, read-only media, full-volume
-conditions, case-sensitive APFS, or descriptor-limit support. A missing
-capability reports `unproven`; it is not counted as a pass. The local
-cross-volume run could not create its APFS image, so it remains unproven on
-this host.
+Seven platform scenarios still need a host that can create real disk images:
+case-sensitive collision, cross-device copy and rename fallback, exFAT
+fallback, full-volume behavior, read-only media, and undo recovery on a volume
+hazard. `hdiutil create` failed on this host, so each was recorded as
+`unproven`. The descriptor-limit contract did run and passed. Missing
+capability is never counted as a pass.
 
 Independent review is also not claimed here. Factory-core recovery is outside
 this change; release certification or publication still requires a successful
