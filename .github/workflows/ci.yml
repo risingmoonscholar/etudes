@@ -179,21 +179,7 @@ jobs:
           echo "files changed:"
           printf '%s\n' "$changed" | sed 's/^/  /'
 
-          # Conservative on purpose. Anything that could reach the binaries or
-          # the harness runs the suite; only files that provably cannot are
-          # skipped. A wrong answer here is a green check that checked
-          # nothing, so the list of things it skips is short and explicit
-          # rather than a list of things it catches.
-          # `command grep`, not `grep`: a shell that wraps grep with something
-          # else can change what -qv means. Verified under bash, which is what
-          # `run:` uses.
-          if printf '%s\n' "$changed" | command grep -qvE '^(README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|\.gitignore)'; then
-            echo "run=yes" >> "$GITHUB_OUTPUT"
-            echo "reason=the diff touches something outside documentation" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=no" >> "$GITHUB_OUTPUT"
-            echo "reason=every changed path is documentation" >> "$GITHUB_OUTPUT"
-          fi
+          printf '%s\n' "$changed" | bash scripts/stress-ci-scope.sh "${{ github.event_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Say what was decided
         run: |
@@ -205,6 +191,9 @@ jobs:
             echo "This check is green because nothing in the diff can reach the"
             echo "tools or the harness, not because the suite passed."
           fi
+
+      - name: Stress CI scope still distinguishes code from documentation
+        run: bash scripts/stress-ci-scope.sh --self-test
 
       - uses: dtolnay/rust-toolchain@stable
         if: steps.scope.outputs.run == 'yes'
