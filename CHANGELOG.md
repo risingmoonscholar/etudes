@@ -31,10 +31,11 @@ independent review is claimed here.
   exit codes expose failures to callers. Release installation checks distinguish
   local candidates from public tags and exercise the installed binaries.
 
-The extraction budget remains a polled soft limit. Private extraction staging,
-atomic publication and complete structured mutation receipts are not part of
-these candidates. Existing journal encryption and the 0/1/2/3 exit-code
-convention remain unchanged.
+The extraction budget remains a polled soft limit. Extraction now uses private
+staging and atomic publication, so an interrupted extraction never publishes a
+partial requested destination. Complete structured mutation receipts are not
+part of these candidates. Existing journal encryption and the 0/1/2/3
+exit-code convention remain unchanged.
 
 ### unpack 0.5.2 source changes — not published
 

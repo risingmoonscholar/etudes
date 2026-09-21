@@ -245,6 +245,38 @@ grep -q -- "--list" <<<"$SYM_OUT" \
   || fail "the refusal offered no next move: $SYM_OUT"
 [ ! -d "$UNP/out-sym" ] && pass "and nothing was written" || fail "a refused archive created its target"
 
+# Exercise the ZIP path separately. `zip -y` records the link itself rather
+# than its target, so this is the same forbidden member type through unzip's
+# listing/extraction path. The archive digest and absent output prove refusal
+# did not mutate either side of the operation.
+if command -v zip >/dev/null 2>&1; then
+  (cd "$UNP/stage" && zip -qy "$UNP/sym.zip" shortcut ordinary.txt) || fail "could not build ZIP symlink fixture"
+  ZIP_BEFORE=$(shasum -a 256 "$UNP/sym.zip" | awk '{print $1}')
+  CODE=0; ZIP_OUT=$("$UNPACK" "$UNP/sym.zip" --into "$UNP/out-sym-zip" 2>&1) || CODE=$?
+  assert_eq 2 "$CODE" "a ZIP carrying a symlink is refused"
+  grep -q "symlink: shortcut" <<<"$ZIP_OUT" \
+    && pass "the ZIP refusal names the member and its kind" \
+    || fail "the ZIP symlink refusal did not name the member: $ZIP_OUT"
+  [ ! -d "$UNP/out-sym-zip" ] && pass "the refused ZIP wrote no target" || fail "a refused ZIP created its target"
+  ZIP_AFTER=$(shasum -a 256 "$UNP/sym.zip" | awk '{print $1}')
+  assert_eq "$ZIP_BEFORE" "$ZIP_AFTER" "the refused ZIP source archive stayed byte-identical"
+else
+  unproven "ZIP symlink refusal" "zip is unavailable on this host"
+fi
+
+# A normal ZIP reaches the extractor itself. Together with the refused ZIP
+# above, this makes a missing or broken `unzip` command a visible stress
+# failure instead of a metadata-only green result.
+if command -v zip >/dev/null 2>&1; then
+  mkdir -p "$UNP/zip-ok"; printf 'ordinary ZIP payload\n' > "$UNP/zip-ok/ordinary.txt"
+  (cd "$UNP/zip-ok" && zip -q "$UNP/ok.zip" ordinary.txt) || fail "could not build ordinary ZIP fixture"
+  CODE=0; "$UNPACK" "$UNP/ok.zip" --into "$UNP/out-ok-zip" >/dev/null 2>&1 || CODE=$?
+  assert_eq 0 "$CODE" "an ordinary ZIP still extracts"
+  cmp -s "$UNP/zip-ok/ordinary.txt" "$UNP/out-ok-zip/ordinary.txt" \
+    && pass "and its ZIP payload landed byte-identical" \
+    || fail "the ordinary ZIP payload did not land intact"
+fi
+
 # setuid, from a real archive.  Do not depend on the host filesystem allowing
 # us to create a setuid inode: APFS and mount policy can clear the bit without
 # reporting an error.  Write the tar header directly, then prove the listing
