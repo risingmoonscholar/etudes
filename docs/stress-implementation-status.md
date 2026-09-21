@@ -11,7 +11,7 @@ from this branch, not a release certification or independent-review result.
 | Movement and recovery | Desktop, allowed-sync, package, state-directory, hostile-name, and interrupted-undo cases compare filesystem manifests rather than only counts or output. |
 | Races | Source deletion, destination collision, symlink replacement, growing writers, directory blockers, and permission changes record an independent intervention witness before judging the result. |
 | Cost | The fixed 1.5 GiB cross-volume payload, 50k duplicate cap fixture, 1,450-file group fixture, and repeated signal timing guesses were replaced by contract-sized or bounded probes. |
-| Scheduling | The catalog assigns every scenario to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline. |
+| Scheduling | The catalog assigns all 42 scenarios to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline. A tiered result names every catalogued contract it did not run. |
 | Evidence | Failure-only transcripts and assertion records are retained; CI uploads them with the generated result bundle. |
 
 ## Local evidence
