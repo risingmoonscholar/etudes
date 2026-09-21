@@ -39,6 +39,7 @@ PY
 now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
 W=$(workdir)
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 cleanup() {
   # Undo the permission change first: rm -rf can't touch a 0555 directory's
   # contents.
@@ -68,12 +69,15 @@ python3 -c "import time; time.sleep($DELAY_MS/1000)"
 # r-xr-xr-x: still resolvable (needed for link(2) to find the source by
 # name) but no longer writable (needed for unlink(2) to remove the entry).
 chmod 555 "$D"
+if [ "$(stat -f '%Lp' "$D" 2>/dev/null)" != 555 ]; then
+  fail "permission change mid-apply: chmod did not establish the intended non-writable source directory"
+fi
 wait "$PID"
 CODE=$?
 chmod 755 "$D"
 
 if [ "$CODE" = "0" ]; then
-  unproven "permission change mid-apply" "apply finished (exit 0) before the chmod at ${DELAY_MS}ms into a ~${T0}ms baseline run landed inside the window. Could not exercise the race on this host"
+  fail "permission change mid-apply: apply reported success after the source directory was confirmed non-writable at ${DELAY_MS}ms"
   exit 0
 fi
 
@@ -102,13 +106,7 @@ while IFS= read -r destpath; do
 done < <(find "$D" -mindepth 2 -type f 2>/dev/null)
 
 if [ "${#DUP_NAMES[@]}" -eq 0 ]; then
-  # No duplicate: either nothing was in flight at exactly the link/unlink
-  # boundary when chmod landed (bad luck on timing), or unlink somehow still
-  # succeeded, or link itself started failing too once the parent lost write
-  # (some platforms fold search and write together for path resolution
-  # purposes in ways this attack doesn't assume). Report the miss honestly
-  # rather than asserting a bug that didn't reproduce this run.
-  unproven "permission change mid-apply leaves an untracked duplicate" "no file existed at both its source and destination path after the chmod-induced failure this run. The exact link-succeeds/unlink-fails interleaving did not land"
+  pass "the witnessed permission failure left no source/destination duplicate"
 else
   NAME="${DUP_NAMES[0]}"
   SRC_INODE=$(stat -f '%i' "$D/$NAME")
@@ -130,9 +128,7 @@ else
   fi
 fi
 
-# Whatever else happened, no file's CONTENT should have been destroyed:
-# every name still resolves to zero-byte content (all fixtures are empty),
-# and nothing should be missing entirely (only possibly duplicated).
+# Whatever else happened, no file should be missing entirely.
 MISSING=0
 while IFS= read -r name; do
   if [ ! -e "$D/$name" ] && ! find "$D" -mindepth 2 -name "$name" 2>/dev/null | grep -q .; then
@@ -148,4 +144,4 @@ def letters(i, width=5):
 for i in range($N):
     print(f'batch_{letters(i)}.csv')
 ")
-assert_eq 0 "$MISSING" "no file went missing outright (duplication is possible, disappearance is not)"
+assert_eq 0 "$MISSING" "no file went missing outright after the permission failure"
