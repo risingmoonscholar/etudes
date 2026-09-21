@@ -27,6 +27,20 @@ The timing smoke run on Darwin/arm64 measured 1,100 files: build 0.05 s, plan
 default load scenario remains 9,999 files; the smoke setting validates the
 measurement path without presenting itself as the load result.
 
+## Guide checkpoint audit
+
+| Guide stage | Evidence in this branch |
+| --- | --- |
+| Inventory | `stress/catalog.json` has one disposition, tier, capability, and contract for each of the 43 tracked scenarios. `scripts/check-stress-catalog.py` rejects missing, duplicate, or invalid rows. |
+| Reporting | `stress/lib.sh` records pass, fail, unproven, and completion separately. `85-scenario-exit-status.sh` falsifies hidden failures, aborted cases, signal death, and all-unproven cases. |
+| Shared helpers | `snapshot.py` records paths, kinds, modes, payload digests, and link targets. `bounded.py` owns and reaps a process group. Failed cases retain their transcript, assertions, process record, and snapshots. |
+| Movement and recovery | Desktop and interrupted-undo scenarios assert real changes, protected paths, and exact recovery. Local no-op, dropped-movement, and false-recovery mutants are rejected. |
+| Races | The repaired race scenarios record their intervention before judging safety; missed timing windows report unproven. Their waits are bounded and every runner case has an outer per-case deadline. |
+| Cost | Load cases use contract-sized fixtures and phase timing. The 1,100-file smoke run exercises the 9,999-file measurement path without claiming it is the load result. |
+| Consolidation | Mapping and document-scope behavior are separate scenario contracts; grace timing is relative; provider-plan checks compare manifests. |
+| Scheduling | The catalog drives fast, load, and platform tiers. The CI selection self-test distinguishes an explicitly inapplicable docs-only PR from a source change and from scheduled/manual full runs. |
+| Maintenance | `CONTRIBUTING.md` carries the six review questions. Result bundles identify revision, runner, skipped contracts, failures, unproven work, and slowest cases. |
+
 ## Coverage that remains host-dependent
 
 Platform scenarios need real APFS/exFAT images, read-only media, full-volume
