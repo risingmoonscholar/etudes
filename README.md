@@ -241,6 +241,11 @@ by its position in the journal rather than by guessing from inodes.
 There is also an `unproven` count, kept separate from the passes on purpose. A
 hazard that could not be exercised on this machine is not a hazard that passed.
 
+Each run writes a compact JSON bundle under `stress/results/` (or
+`STRESS_RESULTS_DIR`): one row per case with its contract, capability, tier,
+duration, verdict, child exit, and any retained failure evidence. CI uploads
+that bundle with failure-only transcripts and assertion records.
+
 A scenario can also run directly against built release binaries:
 
 ```sh
