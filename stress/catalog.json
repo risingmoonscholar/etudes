@@ -16,6 +16,7 @@
   {"id":"30-journal-supplied-key","tier":"fast","capability":"filesystem","contract":"Supplied keys seal journals and unreadable newer history blocks unsafe selection.","disposition":"keep"},
   {"id":"30-journal-truncation","tier":"fast","capability":"filesystem","contract":"Truncated journals refuse or recover without changing unrecorded files.","disposition":"keep"},
   {"id":"30-kill-mid-undo","tier":"load","capability":"signals","contract":"A killed undo resumes to the exact original tree.","disposition":"keep"},
+  {"id":"30-same-root-contention","tier":"fast","capability":"filesystem","contract":"Concurrent applies on one root leave an honest, loss-free, exactly recoverable state.","disposition":"keep"},
   {"id":"30-sigkill-mid-apply","tier":"load","capability":"signals","contract":"A killed apply leaves every file recoverable without duplication or loss.","disposition":"keep"},
   {"id":"40-01-vanish-mid-apply","tier":"fast","capability":"filesystem","contract":"A witnessed source deletion fails honestly and preserves every survivor.","disposition":"keep"},
   {"id":"40-02-dest-appears-mid-apply","tier":"fast","capability":"filesystem","contract":"A witnessed destination intruder is never overwritten.","disposition":"keep"},
