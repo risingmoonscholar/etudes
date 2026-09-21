@@ -158,21 +158,71 @@ fi
 #     content reading on: it must NOT finish.
 F="$W/Fifo"; mkdir -p "$F"
 for i in 1 2 3 4 5; do : > "$F/quarter_report_$i.txt"; done
-if mkfifo "$F/quarter_report_9.txt" 2>/dev/null && command -v script >/dev/null 2>&1; then
-  { sleep 1; echo y; sleep 30; } \
-    | script -q /dev/null "$SWEEP" "$F" --inspect-content --json >/dev/null 2>&1 &
-  ipid=$!
-  w=0
-  while kill -0 "$ipid" 2>/dev/null && [ "$w" -lt 12 ]; do sleep 1; w=$((w+1)); done
-  if kill -0 "$ipid" 2>/dev/null; then
-    pkill -P "$ipid" 2>/dev/null; kill -9 "$ipid" 2>/dev/null; wait "$ipid" 2>/dev/null
-    pass "INSTRUMENT 2: with --inspect-content the same FIFO BLOCKS the scan. Trap 5's completion is therefore evidence, not decoration"
-  else
-    wait "$ipid" 2>/dev/null
-    fail "INSTRUMENT 2: a content-reading scan finished over a FIFO. The FIFO trap cannot detect a content read, so trap 5 proves nothing"
-  fi
+if mkfifo "$F/quarter_report_9.txt" 2>/dev/null; then
+  # Give the real product process a PTY, wait until it has asked for consent,
+  # answer yes, and then inspect *that PID*. A terminal-wrapper PID remaining
+  # alive is not evidence that sweep reached a FIFO read.
+  FIFO_STATUS="$W/fifo-positive-control.json"
+  python3 - "$SWEEP" "$F" "$FIFO_STATUS" <<'PY'
+import json
+import os
+import select
+import signal
+import sys
+import time
+
+sweep, root, status_path = sys.argv[1:]
+pid, fd = os.forkpty()
+if pid == 0:
+    os.execv(sweep, [sweep, root, "--inspect-content", "--json"])
+
+def finish(result, detail):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
+    with open(status_path, "w") as output:
+        json.dump({"result": result, "detail": detail}, output)
+
+deadline = time.monotonic() + 5
+seen = b""
+while time.monotonic() < deadline:
+    readable, _, _ = select.select([fd], [], [], 0.1)
+    if readable:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            finish("exited-before-consent", seen.decode("utf-8", "replace"))
+            raise SystemExit
+        seen += chunk
+        if b"read file contents?" in seen:
+            os.write(fd, b"y\n")
+            break
+    waited, _ = os.waitpid(pid, os.WNOHANG)
+    if waited:
+        finish("exited-before-consent", seen.decode("utf-8", "replace"))
+        raise SystemExit
+else:
+    finish("no-consent-prompt", seen.decode("utf-8", "replace"))
+    raise SystemExit
+
+time.sleep(3)
+waited, wait_status = os.waitpid(pid, os.WNOHANG)
+if waited:
+    finish("completed", f"wait status {wait_status}")
+else:
+    finish("blocked", "real sweep PID remained alive three seconds after consent")
+PY
+  case "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"])' "$FIFO_STATUS" 2>/dev/null)" in
+    blocked) pass "INSTRUMENT 2: the real --inspect-content sweep process remained blocked after consent on the FIFO" ;;
+    completed) fail "INSTRUMENT 2: a content-reading sweep completed over a FIFO. The FIFO trap cannot detect a content read" ;;
+    *) unproven "INSTRUMENT 2: FIFO positive control" "could not reach and observe the real sweep process at its consent/read boundary" ;;
+  esac
 else
-  unproven "INSTRUMENT 2: FIFO positive control" "mkfifo or script(1) unavailable"
+  unproven "INSTRUMENT 2: FIFO positive control" "mkfifo unavailable"
 fi
 
 # --- unpack refuses members it cannot safely create --------------------------
