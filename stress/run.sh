@@ -63,6 +63,9 @@ tier="${STRESS_TIER:-all}"
 case "$tier" in all|fast|load|platform) ;; *) echo "unknown STRESS_TIER: $tier"; exit 2;; esac
 TOTAL_P=0; TOTAL_F=0; TOTAL_U=0
 ALL_FAIL=(); ALL_UNPROVEN=()
+CASE_TIMEOUT_MS="${STRESS_CASE_TIMEOUT_MS:-300000}"
+case "$CASE_TIMEOUT_MS" in ''|*[!0-9]*) echo "invalid STRESS_CASE_TIMEOUT_MS: $CASE_TIMEOUT_MS"; exit 2;; esac
+[ "$CASE_TIMEOUT_MS" -gt 0 ] || { echo "STRESS_CASE_TIMEOUT_MS must be positive"; exit 2; }
 
 # Runtime facts belong to a generated bundle, not the checked-in catalog.
 # Keeping one line per completed case lets CI retain a small, useful artifact
@@ -95,13 +98,29 @@ PY
   started_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
   record=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-run-record-XXXXXX")
   transcript=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-transcript-XXXXXX")
+  process_evidence="$RUN_DIR/$name.process.json"
   exec 197>>"$record"
-  # A nonzero pipeline must not invoke the inherited ERR trap before we
-  # save PIPESTATUS: that trap can replace an unproven child's 2 with 1.
-  if STRESS_RESULT_FD=197 SCENARIO="$name" bash "$s" 2>&1 | tee "$transcript"; then
-    child_status=${PIPESTATUS[0]}
+  # Each case executes in the bounded helper's owned session. Disable nested
+  # job control so the direct-run wrapper stays in that session and is reaped
+  # with every descendant on timeout or interruption.
+  if STRESS_RESULT_FD=197 SCENARIO="$name" STRESS_NO_JOB_CONTROL=1 \
+      python3 stress/bounded.py --timeout-ms "$CASE_TIMEOUT_MS" --evidence "$process_evidence" --pass-fd 197 -- bash "$s"; then
+    bounded_status=0
   else
-    child_status=${PIPESTATUS[0]}
+    bounded_status=$?
+  fi
+  python3 - "$process_evidence" "$transcript" <<'PY'
+import json
+import pathlib
+import sys
+
+result = json.load(open(sys.argv[1]))
+pathlib.Path(sys.argv[2]).write_text(result["stdout"] + result["stderr"])
+print(result["stdout"] + result["stderr"], end="")
+PY
+  child_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["exit"])' "$process_evidence")
+  if [ "$bounded_status" -eq 124 ]; then
+    echo "    FAIL     case deadline ${CASE_TIMEOUT_MS}ms expired; process group was reaped"
   fi
   # Optional machine-readable observation of the actual pipeline child status.
   # Keep it separate from assertion counts and the human-readable transcript.
@@ -125,8 +144,9 @@ PY
     mkdir -p "$RUN_DIR/$evidence"
     mv "$record" "$RUN_DIR/$evidence/assertions.tsv"
     mv "$transcript" "$RUN_DIR/$evidence/transcript.txt"
+    mv "$process_evidence" "$RUN_DIR/$evidence/process.json"
   else
-    rm -f "$record" "$transcript"
+    rm -f "$record" "$transcript" "$process_evidence"
   fi
   printf '%s\t%d\t%d\t%d\t%d\t%d\t%s\n' \
     "$name" "$p" "$f" "$u" "$duration_ms" "$child_status" "$evidence" >> "$RESULT_ROWS"

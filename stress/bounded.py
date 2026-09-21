@@ -16,6 +16,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout-ms", type=int, required=True)
     parser.add_argument("--evidence", required=True)
+    parser.add_argument("--pass-fd", type=int, action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.timeout_ms <= 0 or not args.command or args.command[0] != "--":
@@ -24,7 +25,7 @@ def main() -> int:
     started = time.monotonic_ns()
     child = subprocess.Popen(
         args.command[1:], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True,
+        start_new_session=True, pass_fds=tuple(args.pass_fd),
     )
     timed_out = False
     interrupted_by = None

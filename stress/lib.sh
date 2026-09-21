@@ -366,7 +366,9 @@ elif [ "${SCENARIO:-}" != run ]; then
   trap '_stress_forward TERM' TERM
   trap '_stress_forward HUP' HUP
   trap '_stress_forward QUIT' QUIT
-  set -m
+  # The batch runner already owns a process group for its case. Job control
+  # would put this child in a different group and let it escape that reaper.
+  [ "${STRESS_NO_JOB_CONTROL:-0}" = 1 ] || set -m
   /bin/bash "$0" "$@" <&0 &
   _stress_child=$!
   # USR1 interrupts wait (158 on macOS); wait again until the job is reaped.
