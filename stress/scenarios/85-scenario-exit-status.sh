@@ -30,16 +30,20 @@ result = json.load(open(sys.argv[1]))
 assert result['timed_out'] is True and result['signal'] == 9 and result['duration_ms'] < 1000, result
 PY
       pass 'bounded helper records timeout, signal, duration, and output evidence';;
-    catalog_rejects) python3 - "$ROOT/stress/catalog.json" "$ETUDE_STATE_DIR/missing.json" "$ETUDE_STATE_DIR/duplicate.json" <<'PY'
+    catalog_rejects) python3 - "$ROOT/stress/catalog.json" "$ETUDE_STATE_DIR/missing.json" "$ETUDE_STATE_DIR/duplicate.json" "$ETUDE_STATE_DIR/invalid-disposition.json" <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1]))
 json.dump(rows[1:], open(sys.argv[2], 'w'))
 json.dump(rows + [rows[0]], open(sys.argv[3], 'w'))
+rows[0]['disposition'] = 'mystery'
+json.dump(rows, open(sys.argv[4], 'w'))
 PY
       python3 "$ROOT/scripts/check-stress-catalog.py" --catalog "$ETUDE_STATE_DIR/missing.json" >/dev/null 2>&1; missing=$?
       python3 "$ROOT/scripts/check-stress-catalog.py" --catalog "$ETUDE_STATE_DIR/duplicate.json" >/dev/null 2>&1; duplicate=$?
+      python3 "$ROOT/scripts/check-stress-catalog.py" --catalog "$ETUDE_STATE_DIR/invalid-disposition.json" >/dev/null 2>&1; invalid_disposition=$?
       assert_eq 1 "$missing" 'catalog rejects a missing tracked scenario'
-      assert_eq 1 "$duplicate" 'catalog rejects a duplicate scenario id';;
+      assert_eq 1 "$duplicate" 'catalog rejects a duplicate scenario id'
+      assert_eq 1 "$invalid_disposition" 'catalog rejects an invalid disposition';;
     unwrapped) pass 'missing wrapper fd runs the scenario body unwrapped'; exit 0;;
   esac
   exit 0

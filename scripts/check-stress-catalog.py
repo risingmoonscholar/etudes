@@ -20,7 +20,7 @@ tracked = {
 seen = set()
 errors = []
 for row in catalog:
-    required = ("id", "tier", "capability", "contract")
+    required = ("id", "tier", "capability", "contract", "disposition")
     if any(not isinstance(row.get(key), str) or not row[key].strip() for key in required):
         errors.append(f"invalid catalog row: {row!r}")
         continue
@@ -29,6 +29,8 @@ for row in catalog:
     seen.add(row["id"])
     if row["tier"] not in {"fast", "load", "platform"}:
         errors.append(f"{row['id']}: invalid tier {row['tier']!r}")
+    if row["disposition"] not in {"keep", "repair", "merge", "split", "retire"}:
+        errors.append(f"{row['id']}: invalid disposition {row['disposition']!r}")
 if tracked - seen:
     errors.append("missing catalog rows: " + ", ".join(sorted(tracked - seen)))
 if seen - tracked:
