@@ -29,9 +29,9 @@ two.txt"; assert_intact "$d" 1 'newline-containing filename counts as one file';
     bounded_timeout) run_bounded 50 "$ETUDE_STATE_DIR/bounded.json" -- sh -c 'sleep 2'; assert_eq 124 "$?" 'bounded helper reports a deadline'; python3 - "$ETUDE_STATE_DIR/bounded.json" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
-assert result['timed_out'] is True and result['signal'] == 9 and result['duration_ms'] < 1000, result
+assert result['timed_out'] is True and result['signal'] == 9 and result['reaped'] is True and result['duration_ms'] < 1000, result
 PY
-      pass 'bounded helper records timeout, signal, duration, and output evidence';;
+      pass 'bounded helper records timeout, signal, duration, output evidence, and reaping';;
     catalog_rejects) python3 - "$ROOT/stress/catalog.json" "$ETUDE_STATE_DIR/missing.json" "$ETUDE_STATE_DIR/duplicate.json" "$ETUDE_STATE_DIR/invalid-disposition.json" <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1]))
