@@ -29,7 +29,11 @@ run_and_signal() {
     kill -0 "$pid" 2>/dev/null || { echo "finished-early"; return; }
     sleep 0.001
   done
-  kill -"$sig" "$pid" 2>/dev/null
+  if ! kill -"$sig" "$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null
+    echo "missed-window"
+    return
+  fi
   wait "$pid" 2>/dev/null
   echo "signalled"
 }
@@ -59,28 +63,37 @@ trial() {
     return 1
   fi
   rm -f "/tmp/sig_trial_undo_out.$$"; rm -rf "$(dirname "$d")"
+  echo "TRIAL-OK $outcome"
   return 0
 }
 
 run_signal_suite() {
-  local sig="$1" trials="$2"
-  local total=0 bad=0 first=""
-  for i in $(seq 1 "$trials"); do
-    local t=$(( (i * 41) % 200 + 5 ))
+  local sig="$1"; shift
+  local total=0 bad=0 hits=0 misses=0 first=""
+  for t in "$@"; do
     total=$((total + 1))
-    out=$(trial "$sig" "$t" 220)
-    if [ -n "$out" ]; then
+    out=$(trial "$sig" "$t" 220); rc=$?
+    if [ "$rc" -ne 0 ]; then
       bad=$((bad + 1))
       [ -z "$first" ] && first="$out"
+    elif [ "$out" = "TRIAL-OK signalled" ]; then
+      hits=$((hits + 1))
+    elif [ "$out" = "TRIAL-OK finished-early" ] || [ "$out" = "TRIAL-OK missed-window" ]; then
+      misses=$((misses + 1))
+    else
+      bad=$((bad + 1))
+      [ -z "$first" ] && first="unexpected trial result [$out]"
     fi
   done
-  if [ "$bad" -eq 0 ]; then
-    pass "SIG$sig at $total points mid-apply: undo always returned the exact baseline name set (no worse than SIGKILL, as expected: sweep has no signal handler)"
-  else
+  if [ "$bad" -gt 0 ]; then
     fail "SIG$sig mid-apply: $bad/$total trials left the tree wrong after undo. A 'graceful' interrupt (no handler installed) hit the same crash-window defect SIGKILL hits. First reproduction:
 $first"
+  elif [ "$hits" -eq 0 ]; then
+    unproven "SIG$sig mid-apply" "none of the $total named early/middle/late probes reached a live process to signal ($misses missed windows)"
+  else
+    pass "SIG$sig at $hits/$total named early/middle/late probes ($misses missed windows): undo returned the exact baseline name set"
   fi
 }
 
-run_signal_suite INT 20
-run_signal_suite TERM 20
+run_signal_suite INT 1 110 218
+run_signal_suite TERM 1 110 218

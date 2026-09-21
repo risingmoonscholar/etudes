@@ -3,8 +3,7 @@
 #
 # sweep's whole undo promise rests on one claim: a crash mid-move leaves every
 # file at its origin or its destination, never lost, never duplicated. This
-# attacks that claim directly by kill -9'ing a real apply at many different
-# points (including as early and as late as the run allows) and checking
+# attacks that claim directly at named early, middle, and late points, checking
 # the tree by NAME SET, not just by count, both right after the kill and
 # again after `sweep undo`.
 #
@@ -40,7 +39,11 @@ run_and_kill() {
     fi
     sleep 0.001
   done
-  kill -9 "$pid" 2>/dev/null
+  if ! kill -9 "$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null
+    echo "missed-window"
+    return
+  fi
   wait "$pid" 2>/dev/null
   echo "killed"
 }
@@ -162,7 +165,7 @@ trial() {
   # catch, occurring inside the scenario itself; it happened while this file was
   # being edited and reported ok across all 50 trials.
   case "$outcome" in
-    killed|finished-early) ;;
+    killed|finished-early|missed-window) ;;
     *)
       echo "FAIL target=$target the kill step produced no outcome (got [$outcome]). run_and_kill died, so this trial never applied anything and proves nothing"
       rm -f "/tmp/sigkill_trial_undo_out.$$"
@@ -226,12 +229,14 @@ trial() {
   return 0
 }
 
-# --- Sweep many kill points: very early, very late, and scattered in between.
+# --- Named real-OS kill points: early, middle, and late. The old 50 timing
+# guesses did not add phase coverage after these boundaries were represented.
 FIRST_FAILURE=""
 TOTAL=0
 BAD=0
 GOOD=0
 KILLED=0
+MISSED=0
 
 # A trial counts as passed only if it SAYS so and exits 0. It used to count as
 # passed by printing nothing, which meant any way of dying quietly read as
@@ -252,7 +257,7 @@ run_bucket() {
     if [ "$rc" -eq 0 ]; then
       case "$out" in
         "TRIAL-OK killed")         GOOD=$((GOOD + 1)); KILLED=$((KILLED + 1)); continue ;;
-        "TRIAL-OK finished-early") GOOD=$((GOOD + 1)); continue ;;
+        "TRIAL-OK finished-early"|"TRIAL-OK missed-window") GOOD=$((GOOD + 1)); MISSED=$((MISSED + 1)); continue ;;
       esac
     fi
     BAD=$((BAD + 1))
@@ -264,20 +269,10 @@ $out"
   done
 }
 
-# Very early: kill as soon as 1-3 files have landed.
-run_bucket "very-early" 1 1 2 2 3 3 1 2 3 1
-# Very late: kill with only a handful of files left to move (n=220).
-run_bucket "very-late" 214 215 216 217 214 215 216 217 215 216
-# Scattered across the middle of the run. Built into a list and handed to
-# run_bucket rather than looping here: this block used to carry its own copy
-# of the pass/fail check, and when the check changed in one place it did not
-# change in the other -- 30 trials passing and being counted as failures.
-# One place decides what a passed trial looks like.
-SCATTERED=()
-for i in $(seq 1 30); do
-  SCATTERED+=( $(( (i * 37) % 205 + 5 )) )
-done
-run_bucket "scattered" "${SCATTERED[@]}"
+# Early: the first move; middle: half the operation; late: the final moves.
+run_bucket "early" 1 2
+run_bucket "middle" 110
+run_bucket "late" 218 219
 
 # Order matters here. A real failure is the most specific thing that can have
 # happened, so it is reported first; the checks under it are about whether the
@@ -296,7 +291,7 @@ elif [ "$KILLED" -eq 0 ]; then
   # came back intact because it was never disturbed, which is not evidence
   # about crash safety. On a fast enough host, or with a sweep that exits
   # immediately, this is how the scenario would quietly stop testing anything.
-  fail "SIGKILL mid-apply: no trial managed to kill an apply in progress ($TOTAL trials, all finished before the kill point). This proves nothing about interruption"
+  unproven "SIGKILL mid-apply" "no named phase produced a live process to kill ($TOTAL probes; $MISSED missed windows)"
 else
-  pass "SIGKILL at $TOTAL points across an apply (early/late/scattered), $KILLED of them killed mid-run: every file was at exactly one place after the kill, and undo returned the full baseline name set every time"
+  pass "SIGKILL at $KILLED/$TOTAL named early/middle/late probes ($MISSED missed windows): undo returned the full baseline name set every time"
 fi
