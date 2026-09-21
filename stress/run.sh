@@ -135,18 +135,23 @@ PY
   [ "$u" -gt 0 ] && ALL_UNPROVEN+=("$name: $u assertion(s) not proven")
 done
 
-python3 - "$RUN_DIR" "$RESULT_ROWS" <<'PY'
+python3 - "$RUN_DIR" "$RESULT_ROWS" "$PWD/stress/catalog.json" <<'PY'
 import csv
 import json
 import pathlib
 import sys
 
 run_dir = pathlib.Path(sys.argv[1])
+catalog = {row["id"]: row for row in json.load(open(sys.argv[3]))}
 rows = []
 with open(sys.argv[2], newline="") as source:
     for row in csv.DictReader(source, delimiter="\t"):
+        static = catalog[row["id"]]
         rows.append({
             "id": row["id"],
+            "contract": static["contract"],
+            "capability": static["capability"],
+            "tier": static["tier"],
             "passed": int(row["passed"]),
             "failed": int(row["failed"]),
             "unproven": int(row["unproven"]),
