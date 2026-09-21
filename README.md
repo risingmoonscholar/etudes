@@ -222,7 +222,7 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 I wrote an adversarial harness and pointed it at my own tools: 41 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
-apply, 50,000-file trees, and real disk images for full, read-only and
+apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
