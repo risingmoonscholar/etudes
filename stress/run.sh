@@ -99,11 +99,13 @@ PY
   record=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-run-record-XXXXXX")
   transcript=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-transcript-XXXXXX")
   process_evidence="$RUN_DIR/$name.process.json"
+  case_artifacts="$RUN_DIR/$name.artifacts"
+  mkdir -p "$case_artifacts"
   exec 197>>"$record"
   # Each case executes in the bounded helper's owned session. Disable nested
   # job control so the direct-run wrapper stays in that session and is reaped
   # with every descendant on timeout or interruption.
-  if STRESS_RESULT_FD=197 SCENARIO="$name" STRESS_NO_JOB_CONTROL=1 \
+  if STRESS_RESULT_FD=197 SCENARIO="$name" STRESS_NO_JOB_CONTROL=1 STRESS_FAILURE_ARTIFACTS="$case_artifacts" \
       python3 stress/bounded.py --timeout-ms "$CASE_TIMEOUT_MS" --evidence "$process_evidence" --pass-fd 197 -- bash "$s"; then
     bounded_status=0
   else
@@ -145,8 +147,9 @@ PY
     mv "$record" "$RUN_DIR/$evidence/assertions.tsv"
     mv "$transcript" "$RUN_DIR/$evidence/transcript.txt"
     mv "$process_evidence" "$RUN_DIR/$evidence/process.json"
+    mv "$case_artifacts" "$RUN_DIR/$evidence/manifests"
   else
-    rm -f "$record" "$transcript" "$process_evidence"
+    rm -rf "$record" "$transcript" "$process_evidence" "$case_artifacts"
   fi
   printf '%s\t%d\t%d\t%d\t%d\t%d\t%s\n' \
     "$name" "$p" "$f" "$u" "$duration_ms" "$child_status" "$evidence" >> "$RESULT_ROWS"

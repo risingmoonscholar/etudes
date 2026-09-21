@@ -101,6 +101,14 @@ PY
 # a file count alone cannot distinguish a missing file from a duplicate.
 snapshot_tree() {
   python3 "$(dirname "${BASH_SOURCE[0]}")/snapshot.py" "$1" > "$2"
+  # A scenario normally removes its scratch tree on exit. Preserve the actual
+  # manifests that informed a failed verdict before that cleanup can erase the
+  # only useful explanation. The runner removes this directory for passes.
+  if [ -n "${STRESS_FAILURE_ARTIFACTS:-}" ]; then
+    SNAPSHOT_SEQUENCE=$(( ${SNAPSHOT_SEQUENCE:-0} + 1 ))
+    mkdir -p "$STRESS_FAILURE_ARTIFACTS"
+    cp "$2" "$STRESS_FAILURE_ARTIFACTS/snapshot-${SNAPSHOT_SEQUENCE}-$(basename "$2")"
+  fi
 }
 
 # run_bounded MILLISECONDS EVIDENCE -- COMMAND ...: execute one command in an

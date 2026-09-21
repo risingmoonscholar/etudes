@@ -12,7 +12,7 @@ from this branch, not a release certification or independent-review result.
 | Races | Source deletion, destination collision, symlink replacement, growing writers, directory blockers, and permission changes record an independent intervention witness before judging the result. |
 | Cost | The fixed 1.5 GiB cross-volume payload, 50k duplicate cap fixture, 1,450-file group fixture, and repeated signal timing guesses were replaced by contract-sized or bounded probes. |
 | Scheduling | The catalog assigns all 43 scenarios to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline, and every scenario runs in an owned process group with a configurable five-minute default deadline; timeout evidence records the reaped group. A tiered result names every catalogued contract it did not run. |
-| Evidence | Failure-only transcripts and assertion records are retained; CI uploads them with the generated result bundle. |
+| Evidence | Failure-only transcripts, assertion records, process records, and generated filesystem manifests are retained; CI uploads them with the generated result bundle. |
 
 ## Local evidence
 
