@@ -16,11 +16,13 @@ from this branch, not a release certification or independent-review result.
 
 ## Local evidence
 
-The fast tier previously completed on this host with **582 passed, 0 failed,
-1 unproven**. The unproven assertion was the NFC/NFD collision fixture, which
-this filesystem could not represent. Targeted checks after later changes cover
-the updated harness, sync-stub contract, interruption cases, grace-window
-case, group/cap consolidations, and the 1,100-file timing smoke run.
+The final fast-tier run at `d404fbf` completed on this host with **611 passed,
+0 failed, 1 unproven**. The unproven assertion was the NFC/NFD cross-device
+copy fallback, which this host could not exercise. The run explicitly reported
+the 7 load and 8 platform contracts as not run, rather than treating them as
+passes. Targeted checks also cover the updated harness, sync-stub contract,
+interruption cases, grace-window case, group/cap consolidations, and the
+1,100-file timing smoke run.
 
 The timing smoke run on Darwin/arm64 measured 1,100 files: build 0.05 s, plan
 0.12 s, apply 5.17 s, undo 5.06 s, verification 0.06 s, cleanup 0.03 s. The
