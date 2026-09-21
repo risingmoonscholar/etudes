@@ -91,6 +91,9 @@ jobs:
       - name: Do the committed transcripts still come out of these binaries
         run: bash scripts/check-transcripts-reproduce.sh
 
+      - name: A missing ZIP extractor makes the stress witness fail
+        run: bash scripts/check-zip-stress-mutation.sh
+
       # The refusal demo's evidence chain. Clones a pinned public fixture,
       # builds v0.4.0 and v0.5.0 from their tags, and asserts every number the
       # demo states -- 356 files proposed, 105 of them res://-referenced, the
