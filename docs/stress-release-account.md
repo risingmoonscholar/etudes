@@ -34,15 +34,17 @@ The 1,100-file smoke run measured a 5.17 s apply and 5.06 s undo. The full
 undo. It also had a higher per-file apply cost (7.67 ms versus 4.70 ms), so the
 smoke result is retained only to prove the measurement path.
 
-The seven unproven platform contracts cover case-sensitive and cross-device
-behavior, exFAT fallback, full/read-only volumes, and undo on a volume hazard.
-They must run on a macOS host with working DiskManagement and disk-image
-creation before this account can represent a release certification.
+Seven disk-image contracts cover case-sensitive and cross-device behavior,
+exFAT fallback, full/read-only volumes, and undo on a volume hazard. A separate
+fast-tier assertion for the NFC/NFD cross-device copy fallback is also
+unproven. All eight host-dependent exercises must run on a macOS host with
+working DiskManagement and disk-image creation before this account can
+represent a release certification.
 
 ## Release gates
 
-1. Run the seven disk-image platform contracts on a host where image creation
-   works and retain the result bundle.
+1. Run the seven disk-image platform contracts and the NFC/NFD cross-device
+   fallback on a host where image creation works; retain the result bundle.
 2. Run CI and obtain a completed independent factory observer review after the
    factory-core authentication/review-integrity repair is released.
 3. Publish this account only when both gates are successful.
