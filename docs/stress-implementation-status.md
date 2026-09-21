@@ -25,6 +25,9 @@ passed, 0 failed, 1 unproven**; its retained result bundle is
 copy fallback, which this host could not exercise. The result explicitly named
 the 9 load and 8 platform contracts as not run.
 
+[Issue #103](https://github.com/risingmoonscholar/etudes/issues/103) tracks the
+remaining cross-device Unicode witness with a falsifiable closure condition.
+
 The load tier completed with **103 passed, 0 failed, 0 unproven**. Its
 9,999-file timing case measured: build 4.44 s, plan 2.00 s, apply 76.69 s,
 undo 58.73 s, verification 0.30 s, cleanup 0.28 s. That is the load evidence;

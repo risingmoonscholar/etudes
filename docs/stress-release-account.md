@@ -37,7 +37,8 @@ smoke result is retained only to prove the measurement path.
 The disk-image contracts now cover case-sensitive and cross-device behavior,
 exFAT fallback, full/read-only volumes, and undo on a volume hazard. The
 separate fast-tier NFC/NFD cross-device copy fallback remains unproven because
-this host cannot force that collision ordering.
+this host cannot force that collision ordering. [Issue #103](https://github.com/risingmoonscholar/etudes/issues/103)
+tracks the required real-filesystem witness or a deterministic replacement.
 
 ## Release gates
 
