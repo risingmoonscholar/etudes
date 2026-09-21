@@ -41,6 +41,14 @@ FAIL_LINES=(); UNPROVEN_LINES=()
 BIN="${BIN:?BIN must point at target/release}"
 SWEEP="$BIN/sweep"; STASH="$BIN/stash"; UNPACK="$BIN/unpack"; MKFX="$BIN/mkfx"
 
+# Most scenarios are about filesystem behaviour, not whether this machine's
+# login keychain is unlocked. Exercise real sealed journals with one ephemeral
+# supplied key by default. The dedicated journal/keychain scenario explicitly
+# unsets or replaces this value for its own controls.
+if [ -z "${ETUDE_JOURNAL_KEY:-}" ]; then
+  export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+fi
+
 _stress_record() {
   # FD 199 is opened and immediately unlinked by the direct-run wrapper.
   # A scenario sees only the descriptor, never a replaceable record pathname.

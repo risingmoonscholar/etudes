@@ -195,9 +195,26 @@ grep -q -- "--list" <<<"$SYM_OUT" \
   || fail "the refusal offered no next move: $SYM_OUT"
 [ ! -d "$UNP/out-sym" ] && pass "and nothing was written" || fail "a refused archive created its target"
 
-# setuid, from a real archive
-: > "$UNP/stage/suid.bin"; chmod 4755 "$UNP/stage/suid.bin"
-tar -cf "$UNP/suid.tar" -C "$UNP/stage" suid.bin 2>/dev/null
+# setuid, from a real archive.  Do not depend on the host filesystem allowing
+# us to create a setuid inode: APFS and mount policy can clear the bit without
+# reporting an error.  Write the tar header directly, then prove the listing
+# actually contains the authority bit before treating a refusal as evidence.
+python3 - "$UNP/suid.tar" <<'PY'
+import io
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], "w") as archive:
+    member = tarfile.TarInfo("suid.bin")
+    member.mode = 0o4755
+    member.size = 0
+    archive.addfile(member, io.BytesIO())
+PY
+if tar -tvf "$UNP/suid.tar" 2>/dev/null | grep -q -- '-rws'; then
+  :
+else
+  fail "setuid fixture was not encoded in the tar listing; the host tar cannot express this case"
+fi
 CODE=0; SUID_OUT=$("$UNPACK" "$UNP/suid.tar" --into "$UNP/out-suid" 2>&1) || CODE=$?
 assert_eq 2 "$CODE" "an archive carrying a setuid bit is refused"
 grep -q "setuid" <<<"$SUID_OUT" && pass "and says so" || fail "no setuid reason: $SUID_OUT"
