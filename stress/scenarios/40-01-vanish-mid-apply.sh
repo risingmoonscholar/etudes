@@ -70,7 +70,7 @@ if [ "$T0" -lt 20 ]; then
   exit 0
 fi
 
-HIT=0
+INJECTED=0
 CODE=0
 TARGET=""
 IDX=0
@@ -91,27 +91,29 @@ for frac in "${FRACTIONS[@]}"; do
   PID=$!
   DELAY_MS=$((T0 * frac / 100))
   python3 -c "import time; time.sleep($DELAY_MS/1000)"
-  rm -f "$TARGET"
+  # Deletion is a witness only when the planned source still exists at the
+  # instant we remove it. `rm -f` after sweep already moved it would otherwise
+  # look like a successful intervention although nothing was tested.
+  if [ -f "$TARGET" ] && rm -f "$TARGET" && [ ! -e "$TARGET" ]; then
+    INJECTED=1
+  else
+    wait "$PID" 2>/dev/null || true
+    continue
+  fi
   wait "$PID"
   CODE=$?
-
-  if [ "$CODE" != "0" ] && [ ! -e "$TARGET" ]; then
-    # Confirm it's actually gone, not just relocated under a name we didn't
-    # expect (e.g. classify put it somewhere odd). Search the whole tree.
-    if ! find "$D" -name "$(basename "$TARGET")" 2>/dev/null | grep -q .; then
-      HIT=1
-      break
-    fi
-  fi
+  break
 done
 
-if [ "$HIT" != "1" ]; then
-  unproven "file vanishes mid-apply" "deletion never landed inside the apply window across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms). Could not exercise the race on this host"
+if [ "$INJECTED" != "1" ]; then
+  unproven "file vanishes mid-apply" "could not delete the still-present planned source across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms)"
   exit 0
 fi
 
-echo "    (race landed: deleted at ~${DELAY_MS}ms into a ~${T0}ms baseline run, group position $IDX of $((N - 2)))"
+pass "file vanishes mid-apply: deleted the still-present planned source at ~${DELAY_MS}ms (group position $IDX)"
 
+# The witnessed deletion decides that the test ran. A silent success is a
+# failure, never a reason to relabel the attempt as unproven.
 assert_eq 1 "$([ "$CODE" != "0" ] && echo 1 || echo 0)" "apply reported the deletion as a failure, not a silent success (exit $CODE)"
 
 if [ -s "$W/apply.err" ] && grep -qi "sweep:" "$W/apply.err"; then
@@ -133,9 +135,14 @@ echo "    ($MOVED files had already landed in the destination group before the a
 # find nothing at the recorded destination, a story that would look
 # identical to "already gone", masking the lie) or the restored count would
 # not match what we can independently verify was actually moved.
-UNDO_OUT=$("$SWEEP" undo 2>&1)
+UNDO_OUT=$("$SWEEP" undo 2>&1); UNDO_CODE=$?
 RESTORED=$(echo "$UNDO_OUT" | grep -o 'Restored [0-9]*' | grep -o '[0-9]*')
-assert_eq "$MOVED" "${RESTORED:-BAD}" "undo restored exactly the files that were actually moved before the crash"
+if [ "$MOVED" -eq 0 ]; then
+  assert_eq 2 "$UNDO_CODE" "undo reports that no journal exists when the deletion stopped apply before any move"
+else
+  assert_eq 0 "$UNDO_CODE" "undo succeeds after a partial apply"
+  assert_eq "$MOVED" "${RESTORED:-BAD}" "undo restored exactly the files that were actually moved before the crash"
+fi
 
 if echo "$UNDO_OUT" | grep -qi "already gone"; then
   fail "undo reported files as 'already gone'. The journal claimed a move that never happened: $UNDO_OUT"
