@@ -29,12 +29,19 @@ run_and_kill() {
   local d="$1" target="$2"
   "$SWEEP" apply "$d" --yes >/dev/null 2>&1 &
   local pid=$!
+  local deadline=$((SECONDS + 10))
   while true; do
     local moved
     moved=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
     [ "$moved" -ge "$target" ] && break
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "finished-early"
+      return
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null
+      echo "timed-out"
       return
     fi
     sleep 0.001
@@ -165,7 +172,7 @@ trial() {
   # catch, occurring inside the scenario itself; it happened while this file was
   # being edited and reported ok across all 50 trials.
   case "$outcome" in
-    killed|finished-early|missed-window) ;;
+    killed|finished-early|missed-window|timed-out) ;;
     *)
       echo "FAIL target=$target the kill step produced no outcome (got [$outcome]). run_and_kill died, so this trial never applied anything and proves nothing"
       rm -f "/tmp/sigkill_trial_undo_out.$$"
@@ -258,6 +265,7 @@ run_bucket() {
       case "$out" in
         "TRIAL-OK killed")         GOOD=$((GOOD + 1)); KILLED=$((KILLED + 1)); continue ;;
         "TRIAL-OK finished-early"|"TRIAL-OK missed-window") GOOD=$((GOOD + 1)); MISSED=$((MISSED + 1)); continue ;;
+        "TRIAL-OK timed-out") BAD=$((BAD + 1)); [ -z "$FIRST_FAILURE" ] && FIRST_FAILURE="[$label target=$t] apply did not reach the kill witness within 10 seconds"; continue ;;
       esac
     fi
     BAD=$((BAD + 1))

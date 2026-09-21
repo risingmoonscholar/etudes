@@ -22,11 +22,18 @@ run_and_signal() {
   local d="$1" target="$2" sig="$3"
   "$SWEEP" apply "$d" --yes >/dev/null 2>&1 &
   local pid=$!
+  local deadline=$((SECONDS + 10))
   while true; do
     local moved
     moved=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
     [ "$moved" -ge "$target" ] && break
     kill -0 "$pid" 2>/dev/null || { echo "finished-early"; return; }
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null
+      echo "timed-out"
+      return
+    fi
     sleep 0.001
   done
   if ! kill -"$sig" "$pid" 2>/dev/null; then
@@ -80,6 +87,9 @@ run_signal_suite() {
       hits=$((hits + 1))
     elif [ "$out" = "TRIAL-OK finished-early" ] || [ "$out" = "TRIAL-OK missed-window" ]; then
       misses=$((misses + 1))
+    elif [ "$out" = "TRIAL-OK timed-out" ]; then
+      bad=$((bad + 1))
+      [ -z "$first" ] && first="apply did not reach the signal witness within 10 seconds"
     else
       bad=$((bad + 1))
       [ -z "$first" ] && first="unexpected trial result [$out]"
