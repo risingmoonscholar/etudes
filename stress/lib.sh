@@ -87,6 +87,16 @@ snapshot_tree() {
   python3 "$(dirname "${BASH_SOURCE[0]}")/snapshot.py" "$1" > "$2"
 }
 
+# run_bounded MILLISECONDS EVIDENCE -- COMMAND ...: execute one command in an
+# owned process group. The JSON evidence always records elapsed time, output,
+# exit/signal and whether the deadline killed the group. Exit 124 means the
+# deadline fired; callers must record that as failure or unproven explicitly.
+run_bounded() {
+  local timeout_ms="$1" evidence="$2"
+  shift 2
+  python3 "$(dirname "${BASH_SOURCE[0]}")/bounded.py" --timeout-ms "$timeout_ms" --evidence "$evidence" "$@"
+}
+
 # assert_snapshot_eq BEFORE AFTER LABEL
 assert_snapshot_eq() {
   if cmp -s "$1" "$2"; then

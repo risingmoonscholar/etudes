@@ -24,6 +24,12 @@ if [ -n "${EXIT_STATUS_ARM:-}" ]; then
     resource) test -d "$ETUDE_STATE_DIR" && test -n "$(env | grep '^ETUDE_STATE_DIR=')" && pass 'state exported before any helper';;
     reload) fail 'failure before reload'; source "$ROOT/stress/lib.sh"; pass 'continued after reload';;
     arguments) assert_eq preserved "${1:-missing}" 'wrapper preserves script arguments';;
+    bounded_timeout) run_bounded 50 "$ETUDE_STATE_DIR/bounded.json" -- sh -c 'sleep 2'; assert_eq 124 "$?" 'bounded helper reports a deadline'; python3 - "$ETUDE_STATE_DIR/bounded.json" <<'PY'
+import json, sys
+result = json.load(open(sys.argv[1]))
+assert result['timed_out'] is True and result['signal'] == 9 and result['duration_ms'] < 1000, result
+PY
+      pass 'bounded helper records timeout, signal, duration, and output evidence';;
     unwrapped) pass 'missing wrapper fd runs the scenario body unwrapped'; exit 0;;
   esac
   exit 0
@@ -55,3 +61,4 @@ run_arm cleanup_exit 1
 run_arm resource 0
 run_arm reload 1
 run_arm arguments 0
+run_arm bounded_timeout 0
