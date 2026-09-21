@@ -48,6 +48,35 @@ EOF
         BIN="$fake" SCENARIO="85-$EXIT_STATUS_ARM" bash "$target" >/dev/null 2>&1
       got=$?
       assert_eq 1 "$got" "$EXIT_STATUS_ARM: the historical no-op executable is rejected";;
+    drop_and_false_recovery)
+      fake=$(mktemp -d "${TMPDIR:-/tmp}/etudes-mutant-XXXXXX")
+      trap 'rm -rf "$fake"' EXIT
+      cat > "$fake/sweep" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = apply ]; then
+  root="$2"
+  candidate=$(find "$root" -maxdepth 1 -type f -name 'Screenshot*' -print -quit)
+  mkdir -p "$root/Screenshots"
+  mv "$candidate" "$root/Screenshots/$(basename "$candidate")"
+fi
+# `undo` reports success but does not restore the moved file.
+exit 0
+EOF
+      chmod +x "$fake/sweep"
+      env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+        BIN="$fake" SCENARIO="85-$EXIT_STATUS_ARM" bash "$ROOT/stress/scenarios/10-desktop-mid-project.sh" >/dev/null 2>&1
+      got=$?
+      assert_eq 1 "$got" 'dropped movement and false recovery are rejected by the Desktop contract';;
+    snapshot_mutations)
+      d="$ETUDE_STATE_DIR/snapshot-mutations"; mkdir -p "$d"
+      printf 'aa' > "$d/original"; ln -s original "$d/link"
+      snapshot_tree "$d" "$d/before.json"
+      printf 'bb' > "$d/original"
+      snapshot_tree "$d" "$d/same-size.json"
+      assert_snapshot_ne "$d/before.json" "$d/same-size.json" 'snapshot detects same-size content corruption'
+      printf 'cc' > "$d/replacement"; rm "$d/original"; ln -sf replacement "$d/link"
+      snapshot_tree "$d" "$d/paths-and-link.json"
+      assert_snapshot_ne "$d/before.json" "$d/paths-and-link.json" 'snapshot detects a missing path, duplicate replacement, and changed symlink target';;
     catalog_rejects) python3 - "$ROOT/stress/catalog.json" "$ETUDE_STATE_DIR/missing.json" "$ETUDE_STATE_DIR/duplicate.json" "$ETUDE_STATE_DIR/invalid-disposition.json" <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1]))
@@ -97,4 +126,6 @@ run_arm arguments 0
 run_arm bounded_timeout 0
 run_arm no_op_desktop 0
 run_arm no_op_undo 0
+run_arm drop_and_false_recovery 0
+run_arm snapshot_mutations 0
 run_arm catalog_rejects 0
