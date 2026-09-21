@@ -7,7 +7,7 @@ from this branch, not a release certification or independent-review result.
 
 | Area | Contract now enforced |
 | --- | --- |
-| Result reporting | Every case has an explicit completion record and a pass, fail, or unproven verdict. Result bundles include the case contract, capability, tier, duration, child exit, and failure-evidence path. |
+| Result reporting | Every case has an explicit completion record and a pass, fail, or unproven verdict. Result bundles include the revision, runner identity, case contract, capability, tier, duration, child exit, failure-evidence path, and five slowest cases. |
 | Movement and recovery | Desktop, allowed-sync, package, state-directory, hostile-name, and interrupted-undo cases compare filesystem manifests rather than only counts or output. |
 | Races | Source deletion, destination collision, symlink replacement, growing writers, directory blockers, and permission changes record an independent intervention witness before judging the result. |
 | Cost | The fixed 1.5 GiB cross-volume payload, 50k duplicate cap fixture, 1,450-file group fixture, and repeated signal timing guesses were replaced by contract-sized or bounded probes. |

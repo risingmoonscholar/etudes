@@ -135,7 +135,10 @@ PY
   [ "$u" -gt 0 ] && ALL_UNPROVEN+=("$name: $u assertion(s) not proven")
 done
 
-python3 - "$RUN_DIR" "$RESULT_ROWS" "$PWD/stress/catalog.json" "$tier" <<'PY'
+REVISION=$(git rev-parse HEAD)
+RUNNER_OS=$(uname -s)
+RUNNER_ARCH=$(uname -m)
+python3 - "$RUN_DIR" "$RESULT_ROWS" "$PWD/stress/catalog.json" "$tier" "$REVISION" "$RUNNER_OS" "$RUNNER_ARCH" <<'PY'
 import csv
 import json
 import pathlib
@@ -145,6 +148,7 @@ run_dir = pathlib.Path(sys.argv[1])
 catalog_rows = json.load(open(sys.argv[3]))
 catalog = {row["id"]: row for row in catalog_rows}
 tier = sys.argv[4]
+revision, runner_os, runner_arch = sys.argv[5:8]
 rows = []
 with open(sys.argv[2], newline="") as source:
     for row in csv.DictReader(source, delimiter="\t"):
@@ -163,7 +167,13 @@ with open(sys.argv[2], newline="") as source:
         })
 with open(run_dir / "summary.json", "w") as output:
     json.dump({
+        "revision": revision,
+        "runner": {"os": runner_os, "arch": runner_arch},
         "cases": rows,
+        "slowest_cases": sorted(
+            ({"id": row["id"], "duration_ms": row["duration_ms"]} for row in rows),
+            key=lambda row: row["duration_ms"], reverse=True,
+        )[:5],
         "not_run": [] if tier == "all" else [
             {key: row[key] for key in ("id", "tier", "capability", "contract")}
             for row in catalog_rows if row["tier"] != tier
@@ -176,6 +186,14 @@ echo ""
 echo "═══════════════════════════════════════════"
 printf "  passed   %d\n  failed   %d\n  unproven %d\n" "$TOTAL_P" "$TOTAL_F" "$TOTAL_U"
 printf "  results  %s\n" "$RUN_DIR/summary.json"
+echo "  slowest:"
+python3 - "$RUN_DIR/summary.json" <<'PY'
+import json
+import sys
+
+for row in json.load(open(sys.argv[1]))["slowest_cases"]:
+    print(f"    {row['id']}: {row['duration_ms']}ms")
+PY
 
 if [ ${#ALL_FAIL[@]} -gt 0 ]; then
   echo ""; echo "  FAILURES:"; printf '    %s\n' "${ALL_FAIL[@]}"
