@@ -19,12 +19,12 @@ stash/pop, and same-root contention do not silently look successful.
 | --- | --- | --- |
 | Fast | 621 passed, 0 failed, 1 unproven | NFC/NFD cross-device fallback unavailable on this host |
 | Load | 103 passed, 0 failed, 0 unproven | 9,999-file apply: 76.69 s; undo: 58.73 s |
-| Platform | 10 passed, 7 unproven | `hdiutil create` failed, so disk-image contracts did not run |
+| Platform | 10 passed, 7 unproven | DiskManagement is unavailable here; `hdiutil create` reports “Device not configured” |
 
 The seven unproven platform contracts cover case-sensitive and cross-device
 behavior, exFAT fallback, full/read-only volumes, and undo on a volume hazard.
-They must run on a capable host before this account can represent a release
-certification.
+They must run on a macOS host with working DiskManagement and disk-image
+creation before this account can represent a release certification.
 
 ## Release gates
 

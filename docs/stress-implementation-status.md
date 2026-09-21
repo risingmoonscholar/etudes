@@ -52,9 +52,10 @@ not create an `hdiutil` image. They were reported as unproven, not as passes.
 Seven platform scenarios still need a host that can create real disk images:
 case-sensitive collision, cross-device copy and rename fallback, exFAT
 fallback, full-volume behavior, read-only media, and undo recovery on a volume
-hazard. `hdiutil create` failed on this host, so each was recorded as
-`unproven`. The descriptor-limit contract did run and passed. Missing
-capability is never counted as a pass.
+hazard. `hdiutil create` failed with “Device not configured,” and `diskutil`
+reported that its DiskManagement framework is unavailable on this host, so each
+was recorded as `unproven`. The descriptor-limit contract did run and passed.
+Missing capability is never counted as a pass.
 
 Independent review is also not claimed here. Factory-core recovery is outside
 this change; release certification or publication still requires a successful
