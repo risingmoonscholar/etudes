@@ -19,9 +19,9 @@ from this branch, not a release certification or independent-review result.
 
 ## Local evidence
 
-The current fast-tier run at `9f438f5` completed on this host with **621
+The current fast-tier run at `22c2741` completed on this host with **627
 passed, 0 failed, 1 unproven**; its retained result bundle is
-`20260921T212302Z-72046`. The unproven assertion was the NFC/NFD cross-device
+`20260921T224325Z-5184`. The unproven assertion was the NFC/NFD cross-device
 copy fallback, which this host could not exercise. The result explicitly named
 the 9 load and 8 platform contracts as not run.
 
