@@ -103,6 +103,14 @@ for frac in "${FRACTIONS[@]}"; do
   PID=$!
   DELAY_MS=$((T0 * frac / 100))
   python3 -c "import time; time.sleep($DELAY_MS/1000)"
+  # A completed move leaves the old source path free again.  Replacing it at
+  # that point would prove nothing about the mover, and a normal destination
+  # file would be a safe (but misleading) result.  Only inject while this
+  # member is still waiting to be moved.
+  if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    wait "$PID" 2>/dev/null || true
+    continue
+  fi
   rm -f "$TARGET"
   if ln -s "$OUTSIDE/secret.txt" "$TARGET" && [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$OUTSIDE/secret.txt" ]; then
     INJECTED=1

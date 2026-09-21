@@ -1028,7 +1028,10 @@ fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
             .map_err(|error| format!("could not generate staging name: {error}"))?;
         let candidate = parent.join(format!(
             ".{name}.unpack-{}.partial",
-            nonce.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+            nonce
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         ));
         match std::fs::create_dir(&candidate) {
             Ok(()) => return Ok(candidate),
