@@ -70,6 +70,7 @@ OUTSIDE="$W/outside"
 mkdir -p "$OUTSIDE"
 SENTINEL="SAME-DEVICE-OUTSIDE-SECRET-$$-$(python3 -c 'import random;print(random.randint(100000,999999))')"
 printf '%s' "$SENTINEL" > "$OUTSIDE/secret.txt"
+SOURCE_SENTINEL="SAME-DEVICE-INSIDE-SOURCE-$$-$(python3 -c 'import random;print(random.randint(100000,999999))')"
 
 CTRL="$W/control/Desktop"; build_tree "$CTRL"
 T0_START=$(now_ms)
@@ -98,6 +99,9 @@ for frac in "${FRACTIONS[@]}"; do
   GROUP="$(printf '%s\n' "$PICK" | sed -n '3p')"
   NAME="$(basename "$TARGET")"
   DEST="$D/$GROUP/$NAME"
+  # A regular destination with these bytes proves this member moved before
+  # the replacement; outside bytes prove that the replacement was followed.
+  printf '%s' "$SOURCE_SENTINEL" > "$TARGET"
 
   "$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err" &
   PID=$!
@@ -113,13 +117,15 @@ for frac in "${FRACTIONS[@]}"; do
   fi
   rm -f "$TARGET"
   if ln -s "$OUTSIDE/secret.txt" "$TARGET" && [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$OUTSIDE/secret.txt" ]; then
-    # Re-check after the replacement.  The mover can finish between the
-    # pre-injection check and `ln`; that leaves a regular destination and a
-    # new but irrelevant source link.  It is not a witnessed race, so discard
-    # this attempt rather than judging its regular destination as unsafe.
+    # Re-check after the replacement.  A regular destination containing the
+    # known original bytes proves the mover won before `ln`, leaving a new but
+    # irrelevant source link.  A destination containing outside bytes is an
+    # unsafe post-injection follow and must remain a witnessed failure.
     if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
-      wait "$PID" 2>/dev/null || true
-      continue
+      if [ "$(cat "$DEST")" = "$SOURCE_SENTINEL" ]; then
+        wait "$PID" 2>/dev/null || true
+        continue
+      fi
     fi
     INJECTED=1
   else
