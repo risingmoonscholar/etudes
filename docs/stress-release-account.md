@@ -13,6 +13,14 @@ reaped process group. The suite also proves that no-op movement, dropped work,
 false recovery, snapshot corruption, interrupted extraction, interrupted
 stash/pop, and same-root contention do not silently look successful.
 
+## Coverage shape
+
+The suite replaced oversized, duplicate, or weakly observed probes with
+contract-sized fixtures: a 1.5 GiB copy payload, a 50k duplicate-cap fixture,
+and a 1,450-file group fixture were consolidated into bounded cases. The
+remaining 46 scenarios each cover a distinct behavior, while the catalog makes
+their tier and required capability explicit.
+
 ## Current local evidence
 
 | Tier | Result | Material limit |
@@ -20,6 +28,11 @@ stash/pop, and same-root contention do not silently look successful.
 | Fast | 621 passed, 0 failed, 1 unproven | NFC/NFD cross-device fallback unavailable on this host |
 | Load | 103 passed, 0 failed, 0 unproven | 9,999-file apply: 76.69 s; undo: 58.73 s |
 | Platform | 10 passed, 7 unproven | DiskManagement is unavailable here; `hdiutil create` reports “Device not configured” |
+
+The 1,100-file smoke run measured a 5.17 s apply and 5.06 s undo. The full
+9,999-file run is the cost evidence: it took 76.69 s to apply and 58.73 s to
+undo. It also had a higher per-file apply cost (7.67 ms versus 4.70 ms), so the
+smoke result is retained only to prove the measurement path.
 
 The seven unproven platform contracts cover case-sensitive and cross-device
 behavior, exFAT fallback, full/read-only volumes, and undo on a volume hazard.
