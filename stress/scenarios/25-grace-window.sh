@@ -154,7 +154,7 @@ grep -q "redacted" <<<"$ALL_OUT" && pass "and says paths are redacted" \
 # gate exists for. Keep the real held stash in place until after this check:
 # otherwise status exits with "nothing stashed" before it reaches the terminal
 # gate, and this would merely test an empty-state branch.
-CODE=0; PATHS_OUT=$("$STASH" status --all --paths 2>&1) || CODE=$?
+CODE=0; PATHS_OUT=$("$STASH" status --all --paths </dev/null 2>&1) || CODE=$?
 assert_eq 2 "$CODE" "--paths without a terminal is refused"
 grep -q "person at a terminal" <<<"$PATHS_OUT" \
   && pass "and the refusal states its reasoning" \
