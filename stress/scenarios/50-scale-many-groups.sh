@@ -14,14 +14,16 @@
 #   - the group namespace is genuinely bounded and every name is distinct
 #   - a folder holding every kind of file at once produces every group, with
 #     no file counted twice and none lost between them
-#   - apply and undo hold at thousands of files spread across those groups
+#   - apply and undo preserve exact membership across every group family
 #   - the listing stays one line per group and does not blow up
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/many"; mkdir -p "$D"
 
-PER_FAMILY=200
+# Flat 10k already measures throughput. This case measures membership and
+# namespace shape, so a compact fixture makes each asserted family visible.
+PER_FAMILY=8
 
 # One extension per family, so every family is populated and the totals are
 # arithmetic rather than guesswork. dmg is the Installers detector's, not a
@@ -29,7 +31,7 @@ PER_FAMILY=200
 make_family() {  # make_family EXT COUNT PREFIX
   local ext="$1" n="$2" pre="$3" i=0
   while [ "$i" -lt "$n" ]; do
-    : > "$D/${pre}_$(printf '%04d' "$i").$ext"
+    printf '%s/%s/%s\n' "$ext" "$pre" "$i" > "$D/${pre}_$(printf '%04d' "$i").$ext"
     i=$((i+1))
   done
 }
@@ -44,12 +46,14 @@ make_family dmg "$PER_FAMILY" installer_for
 
 # Deliberately unmapped: .dat is a generic container many apps use privately,
 # and sweep leaves what it cannot identify alone. These must land in no group.
-UNMAPPED=50
+UNMAPPED=4
 make_family dat "$UNMAPPED" opaque
 
 TOTAL=$((PER_FAMILY * 7 + UNMAPPED))
 BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
 assert_eq "$TOTAL" "$BEFORE" "fixture has $TOTAL files: 7 families x $PER_FAMILY, plus $UNMAPPED unidentifiable"
+BEFORE_MANIFEST="$W/before.json"
+snapshot_tree "$D" "$BEFORE_MANIFEST"
 
 t0=$(date +%s.%N)
 PLAN_JSON=$("$SWEEP" "$D" --json 2>&1)
@@ -116,3 +120,6 @@ assert_eq 0 "$UNDO_EC" "undo succeeds across every group"
 
 RESTORED=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
 assert_eq "$TOTAL" "$RESTORED" "undo returned every file to the flat directory"
+AFTER_MANIFEST="$W/after.json"
+snapshot_tree "$D" "$AFTER_MANIFEST"
+assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_MANIFEST" "undo restored every filename, byte, directory, and layout exactly"
