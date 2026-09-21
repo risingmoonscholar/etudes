@@ -32,6 +32,22 @@ result = json.load(open(sys.argv[1]))
 assert result['timed_out'] is True and result['signal'] == 9 and result['reaped'] is True and result['duration_ms'] < 1000, result
 PY
       pass 'bounded helper records timeout, signal, duration, output evidence, and reaping';;
+    no_op_desktop|no_op_undo)
+      fake=$(mktemp -d "${TMPDIR:-/tmp}/etudes-noop-XXXXXX")
+      trap 'rm -rf "$fake"' EXIT
+      cat > "$fake/sweep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+      chmod +x "$fake/sweep"
+      case "$EXIT_STATUS_ARM" in
+        no_op_desktop) target="$ROOT/stress/scenarios/10-desktop-mid-project.sh";;
+        no_op_undo) target="$ROOT/stress/scenarios/30-kill-mid-undo.sh";;
+      esac
+      env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+        BIN="$fake" SCENARIO="85-$EXIT_STATUS_ARM" bash "$target" >/dev/null 2>&1
+      got=$?
+      assert_eq 1 "$got" "$EXIT_STATUS_ARM: the historical no-op executable is rejected";;
     catalog_rejects) python3 - "$ROOT/stress/catalog.json" "$ETUDE_STATE_DIR/missing.json" "$ETUDE_STATE_DIR/duplicate.json" "$ETUDE_STATE_DIR/invalid-disposition.json" <<'PY'
 import json, sys
 rows = json.load(open(sys.argv[1]))
@@ -79,4 +95,6 @@ run_arm newline_name 0
 run_arm reload 1
 run_arm arguments 0
 run_arm bounded_timeout 0
+run_arm no_op_desktop 0
+run_arm no_op_undo 0
 run_arm catalog_rejects 0
