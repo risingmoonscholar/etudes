@@ -37,7 +37,7 @@ IMG="$W/inner.dmg"
 INNER="$OUTER/aaa_innervol"
 mkdir -p "$OUTER" "$INNER"
 
-if ! hdiutil create -size 768m -fs "APFS" -volname ExdevStress "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 768m APFS ExdevStress; then
   unproven "cross-volume: EXDEV move is correct and interruption-safe" "hdiutil create failed on this host"
   exit 0
 fi
@@ -103,14 +103,19 @@ for f in bravo charlie delta echo; do : > "$OUTER/interrupt_$f.txt"; done
 # 'z' sorts after the group's other members, and files inside aaa_innervol/
 # sort before plain top-level filenames -- so this file is scanned FIRST.
 # Prove that selection on a tiny payload before allocating anything expensive.
-INTERRUPT="$INNER/interrupt_zzzbig.bin"
-DEST_PARTIAL="$OUTER/interrupt/interrupt_zzzbig.bin"
+INTERRUPT="$INNER/interrupt_zzzbig.txt"
+DEST_PARTIAL="$OUTER/Documents/interrupt_zzzbig.txt"
 printf 'selected-before-bulk-allocation\n' > "$INTERRUPT"
-INTERRUPT_PLAN=$("$SWEEP" "$OUTER" --depth 2 2>&1)
-if grep -Fq "interrupt_zzzbig.bin" <<<"$INTERRUPT_PLAN" && grep -Fq "interrupt" <<<"$INTERRUPT_PLAN"; then
+INTERRUPT_PLAN=$("$SWEEP" "$OUTER" --depth 2 --json 2>&1)
+if python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+members = [m for g in d.get("groups", []) for m in g.get("members", [])]
+sys.exit(0 if any(m.endswith("interrupt_zzzbig.txt") for m in members) else 1)
+' <<<"$INTERRUPT_PLAN"; then
   pass "cross-volume: tiny interruption fixture is selected for the expected interrupt group before bulk allocation"
 else
-  fail "cross-volume: tiny interruption fixture was not selected for its expected group; refusing to allocate a bulk copy fixture: $INTERRUPT_PLAN"
+  fail "cross-volume: tiny interruption fixture was not selected; refusing to allocate a bulk copy fixture: $INTERRUPT_PLAN"
   exit 0
 fi
 

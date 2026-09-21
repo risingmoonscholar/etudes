@@ -229,6 +229,25 @@ detach_registered_mounts() {
   done
 }
 
+# Create a blank filesystem image using the current macOS API when it is
+# available. `hdiutil create -fs` still works for APFS on older systems, but
+# recent macOS releases direct callers to `diskutil image create blank`; the
+# latter is also the path that can create exFAT images on this host.
+#
+# Callers continue to use hdiutil for attach/detach, so this is deliberately a
+# narrow creation helper rather than another mount lifecycle abstraction.
+create_disk_image() {
+  local image=$1 size=$2 filesystem=$3 volume_name=$4
+  if command -v diskutil >/dev/null 2>&1; then
+    if diskutil image create blank -size "$size" -fs "$filesystem" \
+      --volumeName "$volume_name" "$image" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  hdiutil create -size "$size" -fs "$filesystem" -volname "$volume_name" \
+    "$image" >/dev/null 2>&1
+}
+
 # Best-effort cleanup of volumes orphaned by a killed run, run once before a
 # batch starts (see run.sh), not per scenario. Issue #13: a scenario killed
 # with SIGKILL leaves its mount attached forever as far as this harness is

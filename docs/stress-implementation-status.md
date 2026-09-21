@@ -34,9 +34,11 @@ the full fixture took about 7.67 ms per file to apply versus 4.70 ms per file
 in the smoke run. The release record therefore uses the full run for cost
 claims and retains the smoke run only as a measurement-path check.
 
-The platform tier completed its descriptor-limit contract with **10 passed**.
-The seven disk-image contracts were all **unproven** because this host could
-not create an `hdiutil` image. They were reported as unproven, not as passes.
+The platform tier completed with **58 passed, 0 failed, 0 unproven**. It ran
+all eight platform scenarios on this host, including real APFS/exFAT images,
+case-sensitive media, full and read-only volumes, descriptor limits, and
+cross-device interruption. Its retained result bundle is
+`20260921T212153Z-66061`.
 
 ## Guide checkpoint audit
 

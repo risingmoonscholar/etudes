@@ -30,6 +30,8 @@ IMG="$W/cs.dmg"
 MNT="$W/mnt"
 mkdir -p "$MNT"
 
+# Disk Utility's image subcommand silently creates ordinary APFS for this
+# personality; hdiutil is the API that preserves the case-sensitive request.
 if ! hdiutil create -size 20m -fs "Case-sensitive APFS" -volname CSVolStress "$IMG" >/dev/null 2>&1; then
   unproven "case-sensitive volume: a legal case-differing pair is not refused" "hdiutil could not create a case-sensitive APFS image on this host"
   exit 0
