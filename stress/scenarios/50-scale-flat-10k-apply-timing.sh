@@ -38,8 +38,13 @@ D="$W/flat"; mkdir -p "$D"
 # fsync-backed journals and makes the load case portable.
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
-N=9999
-echo "    building $N DCF-conforming files (IMG_0001..IMG_9999)..." >&2
+N="${STRESS_SCALE_N:-9999}"
+if [ "$N" -lt 1 ] || [ "$N" -gt 9999 ]; then
+  fail "STRESS_SCALE_N must be between 1 and 9999 (got $N)"
+  exit 0
+fi
+printf -v LAST_DCF '%04d' "$N"
+echo "    building $N DCF-conforming files (IMG_0001..IMG_${LAST_DCF})..." >&2
 t0=$(date +%s.%N)
 for i in $(seq 1 $N); do
   printf -v padded '%04d' "$i"
@@ -64,9 +69,9 @@ t1=$(date +%s.%N)
 PLAN_S=$(echo "$t1 - $t0" | bc)
 rm -f /tmp/plan_err_$$.txt
 
-assert_eq 0 "$PLAN_EC" "plan exits 0 on a ~10k-file flat directory"
+assert_eq 0 "$PLAN_EC" "plan exits 0 on the $N-file flat directory"
 snapshot_tree "$D" "$AFTER_PLAN_MANIFEST"
-assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_PLAN_MANIFEST" "planning changed no path or byte in the 10k fixture"
+assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_PLAN_MANIFEST" "planning changed no path or byte in the $N-file fixture"
 
 SCANNED=$(grep -o '"scanned":[0-9]*' <<<"$PLAN_JSON" | head -1 | cut -d: -f2)
 assert_eq "$N" "$SCANNED" "plan scanned all $N files (none silently dropped)"
@@ -85,10 +90,16 @@ printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
 # record: tax documents" because its index happened to be 1099 is a real,
 # user-visible false positive. It is specific to scale: the reference
 # desktop fixture (a few hundred files, hand-picked names) cannot produce it.
-if [ "${PERSONAL:-0}" -gt 0 ]; then
+if [ "$N" -ge 1099 ] && [ "${PERSONAL:-0}" -gt 0 ]; then
   fail "a DCF-conforming camera file was misclassified as a personal record: $PERSONAL of $N were. IMG_1099.jpg or IMG_1040.jpg would collide with the tax-form markers \"1099\"/\"1040\" by coincidence of their index, and the camera-name guard in classify.rs (is_dcf_camera_stem, see issue #11) is meant to exclude exactly that. grep etude-core/src/classify.rs for is_dcf_camera_stem."
+elif [ "$N" -ge 1099 ]; then
+  if [ "$N" -eq 9999 ]; then
+    pass "every DCF-conforming filename in this run (IMG_0001..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled"
+  else
+    pass "the reduced fixture includes IMG_1040 and IMG_1099, and neither was misclassified as a personal record"
+  fi
 else
-  pass "every DCF-conforming filename in this run (IMG_0001..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled"
+  unproven "DCF numeric-marker collision coverage" "STRESS_SCALE_N=$N does not include IMG_1099; the default 9999-file run covers it"
 fi
 
 # --- apply (real journal, real fsync-per-move) --------------------------
@@ -97,7 +108,7 @@ APPLY_OUT=$("$SWEEP" apply "$D" --yes 2>&1)
 APPLY_EC=$?
 t1=$(date +%s.%N)
 APPLY_S=$(echo "$t1 - $t0" | bc)
-assert_eq 0 "$APPLY_EC" "apply exits 0 on the ~10k-file plan"
+assert_eq 0 "$APPLY_EC" "apply exits 0 on the $N-file plan"
 
 [ ! -e "$D/IMG_0001.jpg" ] && find "$D" -mindepth 2 -type f -name IMG_0001.jpg | grep -q . \
   && pass "apply moved a representative camera file out of its origin" \
@@ -121,7 +132,7 @@ UNDO_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$UNDO_EC" "undo exits 0"
 
 snapshot_tree "$D" "$AFTER_UNDO_MANIFEST"
-assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_UNDO_MANIFEST" "undo restored every original 10k path and byte"
+assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_UNDO_MANIFEST" "undo restored every original $N-file path and byte"
 v0=$(date +%s.%N)
 snapshot_tree "$D" "$W/verification.json"
 cmp -s "$AFTER_UNDO_MANIFEST" "$W/verification.json" \
