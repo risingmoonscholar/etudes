@@ -206,13 +206,18 @@ jobs:
         if: steps.scope.outputs.run == 'yes'
       - uses: Swatinem/rust-cache@v2
         if: steps.scope.outputs.run == 'yes'
-      - name: Run the stress suite against the recorded baseline
+      - name: Run the applicable stress tier
         if: steps.scope.outputs.run == 'yes'
         env:
           # Somewhere the upload step can reach. The default is the runner's
           # temp dir, which is destroyed with the runner.
           ETUDES_EVIDENCE_DIR: ${{ github.workspace }}/stress-evidence
-        run: bash scripts/stress-ratchet.sh
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            STRESS_TIER=fast bash scripts/stress-ratchet.sh
+          else
+            STRESS_TIER=all bash scripts/stress-ratchet.sh
+          fi
 
       # if: always() because the evidence only exists when the suite FAILED.
       # Running this only on success would upload nothing, every time.

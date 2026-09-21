@@ -3,6 +3,7 @@
 #
 #   stress/run.sh            all scenarios
 #   stress/run.sh scale      only scenarios whose name contains "scale"
+#   STRESS_TIER=fast stress/run.sh  catalogued fast-contract tier only
 #
 # Exit: 0 all passed · 1 something failed · 2 nothing could be proven here ·
 # 3 refused to start, another run is already in progress.
@@ -12,6 +13,7 @@
 # is generated.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+python3 scripts/check-stress-catalog.py || exit 1
 
 # `mkdir` is atomic. The old check-then-write PID file allowed two runners to
 # both observe an absent lock and start destructive volume scenarios together.
@@ -57,12 +59,25 @@ trap 'cleanup_run_lock; eval "$_stress_state_cleanup"' EXIT
 SCENARIO=run BIN="$BIN" bash -c 'source stress/lib.sh; sweep_orphaned_volumes'
 
 filter="${1:-}"
+tier="${STRESS_TIER:-all}"
+case "$tier" in all|fast|load|platform) ;; *) echo "unknown STRESS_TIER: $tier"; exit 2;; esac
 TOTAL_P=0; TOTAL_F=0; TOTAL_U=0
 ALL_FAIL=(); ALL_UNPROVEN=()
 
 for s in stress/scenarios/*.sh; do
   name=$(basename "$s" .sh)
   [ -n "$filter" ] && [[ "$name" != *"$filter"* ]] && continue
+  if [ "$tier" != all ]; then
+    scenario_tier=$(python3 - "$name" <<'PY'
+import json, sys
+for row in json.load(open("stress/catalog.json")):
+    if row["id"] == sys.argv[1]:
+        print(row["tier"])
+        break
+PY
+)
+    [ "$scenario_tier" = "$tier" ] || continue
+  fi
   echo ""
   echo "── $name"
   record=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-run-record-XXXXXX")
