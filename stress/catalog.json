@@ -1,5 +1,6 @@
 [
   {"id":"10-desktop-mid-project","tier":"fast","capability":"filesystem","contract":"A mixed Desktop moves ordinary groups, preserves private records, and undoes exactly.","disposition":"keep"},
+  {"id":"15-agent-mappings","tier":"fast","capability":"filesystem","contract":"Agent mappings move only eligible files, require journaling, and undo exactly.","disposition":"split"},
   {"id":"15-real-project-layouts","tier":"fast","capability":"filesystem","contract":"Project roots and referenced assets remain protected while nearby loose files can be organized.","disposition":"keep"},
   {"id":"20-allow-sync-apply-illusion","tier":"fast","capability":"filesystem","contract":"Explicitly allowed synthetic sync locations have an honest apply result.","disposition":"keep"},
   {"id":"20-apple-metadata","tier":"fast","capability":"macos","contract":"Apple metadata sidecars remain hidden while ordinary files retain their bytes.","disposition":"keep"},
