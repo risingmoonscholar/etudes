@@ -64,6 +64,18 @@ case "$tier" in all|fast|load|platform) ;; *) echo "unknown STRESS_TIER: $tier";
 TOTAL_P=0; TOTAL_F=0; TOTAL_U=0
 ALL_FAIL=(); ALL_UNPROVEN=()
 
+# Runtime facts belong to a generated bundle, not the checked-in catalog.
+# Keeping one line per completed case lets CI retain a small, useful artifact
+# while failure-only copies preserve the assertion record and transcript that
+# explain a red result.  Callers can set STRESS_RESULTS_DIR to their CI
+# artifact directory; local runs default to an ignored directory in stress/.
+RESULTS_DIR="${STRESS_RESULTS_DIR:-$PWD/stress/results}"
+RUN_ID="${STRESS_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+RUN_DIR="$RESULTS_DIR/$RUN_ID"
+mkdir -p "$RUN_DIR/failures" || { echo "could not create stress result directory: $RUN_DIR"; exit 1; }
+RESULT_ROWS="$RUN_DIR/cases.tsv"
+printf 'id\tpassed\tfailed\tunproven\tduration_ms\tchild_exit\tevidence\n' > "$RESULT_ROWS"
+
 for s in stress/scenarios/*.sh; do
   name=$(basename "$s" .sh)
   [ -n "$filter" ] && [[ "$name" != *"$filter"* ]] && continue
@@ -80,6 +92,7 @@ PY
   fi
   echo ""
   echo "── $name"
+  started_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
   record=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-run-record-XXXXXX")
   transcript=$(mktemp "${TMPDIR:-/tmp}/etudes-stress-transcript-XXXXXX")
   exec 197>>"$record"
@@ -98,22 +111,58 @@ PY
   exec 197>&-
   unset STRESS_RESULT_FD
   stress_outcome "$record" "$child_status"; scenario_status=$?
-  rm -f "$record"
   p=$STRESS_PASSED; f=$STRESS_FAILED; u=$STRESS_UNPROVEN
   # Diagnostics retain the assertion text; counts and verdict use the record.
   visible_f=$(grep -c '^    FAIL ' "$transcript" || true)
   if [ "$f" -gt "$visible_f" ]; then
     echo "    FAIL     $((f - visible_f)) failure(s) recorded outside visible assertion output"
   fi
-  rm -f "$transcript"
+  finished_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+  duration_ms=$(( (finished_ns - started_ns) / 1000000 ))
+  evidence=""
+  if [ "$f" -gt 0 ]; then
+    evidence="failures/$name"
+    mkdir -p "$RUN_DIR/$evidence"
+    mv "$record" "$RUN_DIR/$evidence/assertions.tsv"
+    mv "$transcript" "$RUN_DIR/$evidence/transcript.txt"
+  else
+    rm -f "$record" "$transcript"
+  fi
+  printf '%s\t%d\t%d\t%d\t%d\t%d\t%s\n' \
+    "$name" "$p" "$f" "$u" "$duration_ms" "$child_status" "$evidence" >> "$RESULT_ROWS"
   TOTAL_P=$((TOTAL_P+p)); TOTAL_F=$((TOTAL_F+f)); TOTAL_U=$((TOTAL_U+u))
   [ "$f" -gt 0 ] && ALL_FAIL+=("$name: $f recorded failure(s)")
   [ "$u" -gt 0 ] && ALL_UNPROVEN+=("$name: $u assertion(s) not proven")
 done
 
+python3 - "$RUN_DIR" "$RESULT_ROWS" <<'PY'
+import csv
+import json
+import pathlib
+import sys
+
+run_dir = pathlib.Path(sys.argv[1])
+rows = []
+with open(sys.argv[2], newline="") as source:
+    for row in csv.DictReader(source, delimiter="\t"):
+        rows.append({
+            "id": row["id"],
+            "passed": int(row["passed"]),
+            "failed": int(row["failed"]),
+            "unproven": int(row["unproven"]),
+            "duration_ms": int(row["duration_ms"]),
+            "child_exit": int(row["child_exit"]),
+            "failure_evidence": row["evidence"] or None,
+        })
+with open(run_dir / "summary.json", "w") as output:
+    json.dump({"cases": rows}, output, indent=2, sort_keys=True)
+    output.write("\n")
+PY
+
 echo ""
 echo "═══════════════════════════════════════════"
 printf "  passed   %d\n  failed   %d\n  unproven %d\n" "$TOTAL_P" "$TOTAL_F" "$TOTAL_U"
+printf "  results  %s\n" "$RUN_DIR/summary.json"
 
 if [ ${#ALL_FAIL[@]} -gt 0 ]; then
   echo ""; echo "  FAILURES:"; printf '    %s\n' "${ALL_FAIL[@]}"
