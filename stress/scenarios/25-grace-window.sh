@@ -150,13 +150,14 @@ grep -q "stashheld" <<<"$ALL_OUT" && fail "status --all showed a full path with 
   || pass "status --all redacts a real held stash's path"
 grep -q "redacted" <<<"$ALL_OUT" && pass "and says paths are redacted" \
   || fail "status --all did not disclose that it redacts: $ALL_OUT"
-"$STASH" pop "$HELD" >/dev/null 2>&1 || true
 # The harness is not a terminal, which makes it the exact caller the --paths
-# gate exists for: the refusal must fire here, state its reasoning, and leak
-# nothing. journal-dump answers to the same rule.
+# gate exists for. Keep the real held stash in place until after this check:
+# otherwise status exits with "nothing stashed" before it reaches the terminal
+# gate, and this would merely test an empty-state branch.
 CODE=0; PATHS_OUT=$("$STASH" status --all --paths 2>&1) || CODE=$?
 assert_eq 2 "$CODE" "--paths without a terminal is refused"
 grep -q "person at a terminal" <<<"$PATHS_OUT" \
   && pass "and the refusal states its reasoning" \
   || fail "the --paths refusal gave no reason: $PATHS_OUT"
 grep -q "$W" <<<"$PATHS_OUT" && fail "the refusal itself leaked a path" || pass "and leaked nothing"
+"$STASH" pop "$HELD" >/dev/null 2>&1 || true
