@@ -135,14 +135,16 @@ PY
   [ "$u" -gt 0 ] && ALL_UNPROVEN+=("$name: $u assertion(s) not proven")
 done
 
-python3 - "$RUN_DIR" "$RESULT_ROWS" "$PWD/stress/catalog.json" <<'PY'
+python3 - "$RUN_DIR" "$RESULT_ROWS" "$PWD/stress/catalog.json" "$tier" <<'PY'
 import csv
 import json
 import pathlib
 import sys
 
 run_dir = pathlib.Path(sys.argv[1])
-catalog = {row["id"]: row for row in json.load(open(sys.argv[3]))}
+catalog_rows = json.load(open(sys.argv[3]))
+catalog = {row["id"]: row for row in catalog_rows}
+tier = sys.argv[4]
 rows = []
 with open(sys.argv[2], newline="") as source:
     for row in csv.DictReader(source, delimiter="\t"):
@@ -160,7 +162,13 @@ with open(sys.argv[2], newline="") as source:
             "failure_evidence": row["evidence"] or None,
         })
 with open(run_dir / "summary.json", "w") as output:
-    json.dump({"cases": rows}, output, indent=2, sort_keys=True)
+    json.dump({
+        "cases": rows,
+        "not_run": [] if tier == "all" else [
+            {key: row[key] for key in ("id", "tier", "capability", "contract")}
+            for row in catalog_rows if row["tier"] != tier
+        ],
+    }, output, indent=2, sort_keys=True)
     output.write("\n")
 PY
 
@@ -176,6 +184,19 @@ if [ ${#ALL_UNPROVEN[@]} -gt 0 ]; then
   echo ""
   echo "  NOT PROVEN ON THIS HOST (not passes):"
   printf '    %s\n' "${ALL_UNPROVEN[@]}"
+fi
+if [ "$tier" != all ]; then
+  echo ""
+  echo "  NOT RUN (not passes):"
+  for skipped_tier in fast load platform; do
+    [ "$skipped_tier" = "$tier" ] && continue
+    skipped_count=$(python3 - "$skipped_tier" <<'PY'
+import json, sys
+print(sum(row["tier"] == sys.argv[1] for row in json.load(open("stress/catalog.json"))))
+PY
+)
+    printf '    %s tier: %s catalogued scenario(s)\n' "$skipped_tier" "$skipped_count"
+  done
 fi
 echo "═══════════════════════════════════════════"
 
