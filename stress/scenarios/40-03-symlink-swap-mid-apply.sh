@@ -113,6 +113,14 @@ for frac in "${FRACTIONS[@]}"; do
   fi
   rm -f "$TARGET"
   if ln -s "$OUTSIDE/secret.txt" "$TARGET" && [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$OUTSIDE/secret.txt" ]; then
+    # Re-check after the replacement.  The mover can finish between the
+    # pre-injection check and `ln`; that leaves a regular destination and a
+    # new but irrelevant source link.  It is not a witnessed race, so discard
+    # this attempt rather than judging its regular destination as unsafe.
+    if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
+      wait "$PID" 2>/dev/null || true
+      continue
+    fi
     INJECTED=1
   else
     wait "$PID" 2>/dev/null || true
