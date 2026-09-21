@@ -15,6 +15,7 @@
   {"id":"30-graceful-signal-mid-apply","tier":"load","capability":"signals","contract":"Graceful interruption leaves a recoverable operation at witnessed progress points.","disposition":"keep"},
   {"id":"30-journal-supplied-key","tier":"fast","capability":"filesystem","contract":"Supplied keys seal journals and unreadable newer history blocks unsafe selection.","disposition":"keep"},
   {"id":"30-journal-truncation","tier":"fast","capability":"filesystem","contract":"Truncated journals refuse or recover without changing unrecorded files.","disposition":"keep"},
+  {"id":"30-interrupted-stash-pop","tier":"load","capability":"signals","contract":"Killed stash and pop operations resume to the exact original tree without loss or duplicates.","disposition":"keep"},
   {"id":"30-kill-mid-undo","tier":"load","capability":"signals","contract":"A killed undo resumes to the exact original tree.","disposition":"keep"},
   {"id":"30-same-root-contention","tier":"fast","capability":"filesystem","contract":"Concurrent applies on one root leave an honest, loss-free, exactly recoverable state.","disposition":"keep"},
   {"id":"30-sigkill-mid-apply","tier":"load","capability":"signals","contract":"A killed apply leaves every file recoverable without duplication or loss.","disposition":"keep"},
