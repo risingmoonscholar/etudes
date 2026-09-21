@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Verify that every tracked stress scenario has one actionable catalog row."""
 import json
+import argparse
 import subprocess
 import sys
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-catalog = json.loads((root / "stress/catalog.json").read_text())
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--catalog", type=Path, default=root / "stress/catalog.json")
+args = parser.parse_args()
+catalog = json.loads(args.catalog.read_text())
 tracked = {
     Path(path).stem
     for path in subprocess.check_output(
