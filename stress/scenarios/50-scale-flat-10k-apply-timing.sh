@@ -23,7 +23,15 @@
 #      not a live reproduction.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir)
+cleanup() {
+  [ -n "${W:-}" ] && [ -e "$W" ] || return 0
+  t0=$(date +%s.%N)
+  rm -rf "$W"
+  t1=$(date +%s.%N)
+  printf '    cleanup: %ss\n' "$(echo "$t1 - $t0" | bc)" >&2
+}
+trap cleanup EXIT
 D="$W/flat"; mkdir -p "$D"
 # Measure organization and journaling throughput, not this runner's login
 # keychain availability. The supplied ephemeral key still exercises sealed,
@@ -114,13 +122,22 @@ assert_eq 0 "$UNDO_EC" "undo exits 0"
 
 snapshot_tree "$D" "$AFTER_UNDO_MANIFEST"
 assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_UNDO_MANIFEST" "undo restored every original 10k path and byte"
+v0=$(date +%s.%N)
+snapshot_tree "$D" "$W/verification.json"
+cmp -s "$AFTER_UNDO_MANIFEST" "$W/verification.json" \
+  && pass "verification snapshot is stable when repeated" \
+  || fail "verification snapshot changed without a filesystem operation"
+v1=$(date +%s.%N)
+VERIFY_S=$(echo "$v1 - $v0" | bc)
 
 printf '    undo:  %ss\n' "$UNDO_S" >&2
+printf '    verify: %ss\n' "$VERIFY_S" >&2
 
 # --- the usability verdict, stated plainly ------------------------------
 echo "" >&2
 echo "    ── scale verdict ──" >&2
-printf '    measured:      N=%-6s plan=%ss  apply=%ss  undo=%ss\n' "$N" "$PLAN_S" "$APPLY_S" "$UNDO_S" >&2
+printf '    runner:        %s/%s\n' "$(uname -s)" "$(uname -m)" >&2
+printf '    measured:      N=%-6s build=%ss  plan=%ss  apply=%ss  undo=%ss  verify=%ss\n' "$N" "$BUILD_S" "$PLAN_S" "$APPLY_S" "$UNDO_S" "$VERIFY_S" >&2
 # This is one measured runner result, not a universal throughput claim.
 # The 20k cap and 50k refusal have their own boundary scenario.
 # Throughput is recorded above, but it is not a correctness exemption. A
