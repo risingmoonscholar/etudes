@@ -25,6 +25,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/flat"; mkdir -p "$D"
+# Measure organization and journaling throughput, not this runner's login
+# keychain availability. The supplied ephemeral key still exercises sealed,
+# fsync-backed journals and makes the load case portable.
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
 N=9999
 echo "    building $N DCF-conforming files (IMG_0001..IMG_9999)..." >&2
@@ -37,8 +41,12 @@ t1=$(date +%s.%N)
 BUILD_S=$(echo "$t1 - $t0" | bc)
 printf '    (fixture build: %ss for %d files)\n' "$BUILD_S" "$N" >&2
 
-BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
-assert_eq "$N" "$BEFORE" "fixture tree has exactly $N files before anything runs"
+BEFORE_COUNT=$(find "$D" -type f | wc -l | tr -d ' ')
+BEFORE_MANIFEST="$W/before.json"
+AFTER_PLAN_MANIFEST="$W/after-plan.json"
+AFTER_UNDO_MANIFEST="$W/after-undo.json"
+snapshot_tree "$D" "$BEFORE_MANIFEST"
+assert_eq "$N" "$BEFORE_COUNT" "fixture tree has exactly $N files before anything runs"
 
 # --- plan --------------------------------------------------------------
 t0=$(date +%s.%N)
@@ -49,7 +57,8 @@ PLAN_S=$(echo "$t1 - $t0" | bc)
 rm -f /tmp/plan_err_$$.txt
 
 assert_eq 0 "$PLAN_EC" "plan exits 0 on a ~10k-file flat directory"
-assert_intact "$D" "$BEFORE" "planning moved nothing"
+snapshot_tree "$D" "$AFTER_PLAN_MANIFEST"
+assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_PLAN_MANIFEST" "planning changed no path or byte in the 10k fixture"
 
 SCANNED=$(grep -o '"scanned":[0-9]*' <<<"$PLAN_JSON" | head -1 | cut -d: -f2)
 assert_eq "$N" "$SCANNED" "plan scanned all $N files (none silently dropped)"
@@ -82,8 +91,9 @@ t1=$(date +%s.%N)
 APPLY_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$APPLY_EC" "apply exits 0 on the ~10k-file plan"
 
-AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
-assert_eq "$BEFORE" "$AFTER" "apply lost no files (count identical, wherever they now live)"
+[ ! -e "$D/IMG_0001.jpg" ] && find "$D" -mindepth 2 -type f -name IMG_0001.jpg | grep -q . \
+  && pass "apply moved a representative camera file out of its origin" \
+  || fail "apply did not move the representative camera file into a destination directory"
 
 : "${GROUP_COUNT:=0}"
 if [ "$GROUP_COUNT" -gt 0 ]; then
@@ -102,21 +112,17 @@ t1=$(date +%s.%N)
 UNDO_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$UNDO_EC" "undo exits 0"
 
-RESTORED=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
-assert_eq "$BEFORE" "$RESTORED" "undo returned every file to the flat directory (exact baseline count)"
+snapshot_tree "$D" "$AFTER_UNDO_MANIFEST"
+assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_UNDO_MANIFEST" "undo restored every original 10k path and byte"
 
 printf '    undo:  %ss\n' "$UNDO_S" >&2
 
 # --- the usability verdict, stated plainly ------------------------------
-# Linear extrapolation from THIS measured apply time (not a guess): the
-# journal's per-move fsync makes apply cost ~proportional to file count.
-EXTRAP_20K=$(echo "$APPLY_S * 2" | bc)
-EXTRAP_50K=$(echo "$APPLY_S * 5" | bc)
 echo "" >&2
 echo "    ── scale verdict ──" >&2
 printf '    measured:      N=%-6s plan=%ss  apply=%ss  undo=%ss\n' "$N" "$PLAN_S" "$APPLY_S" "$UNDO_S" >&2
-printf '    extrapolated:  N=20000 (the scan cap) apply ≈ %ss\n' "$EXTRAP_20K" >&2
-printf '    extrapolated:  N=50000 apply ≈ %ss. N=50000 can never reach apply: see 50-scale-cap-boundary-50k.sh. sweep refuses at scan time (20,000-item cap) before a journal is ever opened.\n' "$EXTRAP_50K" >&2
+# This is one measured runner result, not a universal throughput claim.
+# The 20k cap and 50k refusal have their own boundary scenario.
 # Throughput is recorded above, but it is not a correctness exemption. A
 # hardware-specific threshold belongs in the historical result table, where it
 # cannot allowlist unrelated assertions in this file.
