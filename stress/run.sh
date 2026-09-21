@@ -13,22 +13,32 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# Refuse to start a second batch while one is already running. Issue #13's
-# own root cause: four concurrent interrupted runs each mounting volumes
-# nobody could then cleanly tell apart, which is what made the leak hard to
-# clean up rather than just present. A stale lock (holder no longer alive)
-# is reclaimed rather than trusted forever.
-LOCK="${TMPDIR:-/tmp}/etudes-stress.lock"
-if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
-  echo "another stress run is already in progress (pid $(cat "$LOCK")): $LOCK"
-  # 3, not 2. A review pointed out that sharing 2 with "nothing could be
-  # proven here" is ambiguous to a caller: a script that retries
-  # automatically on "nothing proven" would not know a competing run was
-  # the actual reason.
-  exit 3
+# `mkdir` is atomic. The old check-then-write PID file allowed two runners to
+# both observe an absent lock and start destructive volume scenarios together.
+# Cleanup only removes the PID file and directory this process created.
+LOCK_DIR="${TMPDIR:-/tmp}/etudes-stress.lock.d"
+cleanup_run_lock() {
+  [ "${STRESS_LOCK_OWNED:-0}" = 1 ] || return 0
+  rm -f "$LOCK_DIR/pid"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  lock_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+    echo "another stress run is already in progress (pid $lock_pid): $LOCK_DIR"
+    exit 3
+  fi
+  # Recover only an empty/stale lock we can identify. A foreign file in this
+  # directory is evidence we do not own; leave it for a person to inspect.
+  if [ -f "$LOCK_DIR/pid" ]; then rm -f "$LOCK_DIR/pid"; fi
+  if ! rmdir "$LOCK_DIR" 2>/dev/null || ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "could not acquire stress-run lock safely: $LOCK_DIR"
+    exit 3
+  fi
 fi
-echo $$ > "$LOCK"
-trap 'rm -f "$LOCK"' EXIT
+STRESS_LOCK_OWNED=1
+printf '%s\n' "$$" > "$LOCK_DIR/pid"
+trap cleanup_run_lock EXIT
 
 echo "building release binaries"
 cargo build --release --quiet || { echo "build failed"; exit 1; }
@@ -38,7 +48,7 @@ export BIN="$PWD/target/release"
 # function.  Sourcing with SCENARIO=run defines helpers without wrapping this
 # coordinator itself.
 SCENARIO=run BIN="$BIN" source stress/lib.sh
-trap 'rm -f "$LOCK"; eval "$_stress_state_cleanup"' EXIT
+trap 'cleanup_run_lock; eval "$_stress_state_cleanup"' EXIT
 
 # Sweeps up whatever a previous SIGKILLed run left mounted. Nothing inside a
 # killed process can do this for itself -- see sweep_orphaned_volumes in
