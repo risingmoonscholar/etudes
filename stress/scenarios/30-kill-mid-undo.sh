@@ -33,7 +33,7 @@ wait_for_partial() {
 
 TOTAL=500
 TRIALS=0
-for percent in 5 50 95; do
+for percent in 5 50 85; do
   TRIALS=$((TRIALS + 1))
   D="$W/trial-$percent"
   make_tree "$D" "$TOTAL"
