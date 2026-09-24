@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 etude-core = { path = "../etude-core", version = "0.5.2" }
+etude-cli-support = { path = "../etude-cli-support", version = "0.5.1" }
 etude-keep = { path = "../etude-keep", version = "0.5.1" }
 
 [dev-dependencies]

@@ -79,9 +79,7 @@ everywhere else. The tree is left in a partially-applied state and the \
 user must know to run 'sweep undo'."
 fi
 
-# Nuance: on this filesystem the failure mode is loud (hard_link's EEXIST
-# check fires before anything is overwritten), so no byte content was
-# actually destroyed. Confirm that explicitly rather than assume it.
+# Confirm the source and destination originals remain byte-for-byte intact.
 survivor_content=""
 for f in "$D"/ClientA/*.pdf "$D"/ClientB/*.pdf "$D"/invoice/*.pdf; do
   [ -f "$f" ] || continue
@@ -92,10 +90,26 @@ if [[ "$survivor_content" == *"CLIENT-A"* ]] && [[ "$survivor_content" == *"CLIE
 else
   fail "DATA LOSS: only one of the two original file contents can be found after apply. A=$a_survived B=$b_survived, surviving text: $survivor_content"
 fi
-unproven "silent overwrite via the cross-device fs::copy fallback" \
-  "reproducing this needs a source entry mounted on a second device colliding with a same-device entry; tried with a real hdiutil-attached APFS volume and could not force it. link()'s EEXIST check appears to win over EXDEV on this host before fs::copy is ever reached. that ordering is not something this test can prove holds on every device/filesystem combination"
 
-# Clean up: prove the "resumable" claim in the error text actually is.
-"$SWEEP" undo >/dev/null 2>&1
+# The CLI collision above is rejected during preflight, before a move syscall.
+# Exercise the lower-level production EXDEV branch separately: the unit test
+# injects EXDEV at the rename boundary, then copyfile runs against a real APFS
+# NFC/NFD destination alias with distinct source bytes. It must return EEXIST
+# and retain both originals. This avoids claiming that a mount setup can force
+# one particular OS errno ordering when the destination already exists.
+fallback_test=$(cargo test -p etude-core --lib exdev_copy_fallback_refuses_nfd_collision_without_clobbering -- --nocapture 2>&1)
+fallback_status=$?
+if [ "$fallback_status" = 0 ] && \
+   [[ "$fallback_test" == *"test apply::tests::exdev_copy_fallback_refuses_nfd_collision_without_clobbering ... ok"* ]] && \
+   [[ "$fallback_test" == *"1 passed"* ]]; then
+  pass "forced EXDEV copy fallback refuses the NFC/NFD alias and preserves both originals"
+else
+  fail "the forced EXDEV/NFC/NFD fallback witness did not pass or did not run: ${fallback_test%%$'\n'*}"
+fi
+
+# A clean preflight refusal creates no journal, so undo must remain a no-op.
+UNDO_OUT=$("$SWEEP" undo 2>&1)
+UNDO_EC=$?
+assert_eq 1 "$UNDO_EC" "undo has no journal to reverse after the preflight refusal"
 AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
-assert_eq "$BEFORE" "$AFTER" "undo restores the pre-apply file count despite the partial apply"
+assert_eq "$BEFORE" "$AFTER" "the refusal left the entire original file count in place"

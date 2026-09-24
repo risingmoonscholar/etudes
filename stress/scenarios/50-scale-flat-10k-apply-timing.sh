@@ -109,6 +109,11 @@ APPLY_EC=$?
 t1=$(date +%s.%N)
 APPLY_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$APPLY_EC" "apply exits 0 on the $N-file plan"
+if grep -Eq "sweep apply: ${GROUP_COUNT}/${GROUP_COUNT} items" <<<"$APPLY_OUT"; then
+  pass "large apply reports bounded progress through the final item on stderr"
+else
+  fail "large apply did not report its final item-count progress on stderr"
+fi
 
 [ ! -e "$D/IMG_0001.jpg" ] && find "$D" -mindepth 2 -type f -name IMG_0001.jpg | grep -q . \
   && pass "apply moved a representative camera file out of its origin" \
@@ -130,6 +135,11 @@ UNDO_EC=$?
 t1=$(date +%s.%N)
 UNDO_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$UNDO_EC" "undo exits 0"
+if grep -Eq "sweep undo: ${N}/${N} items" <<<"$UNDO_OUT"; then
+  pass "large undo reports bounded progress through the final journal entry on stderr"
+else
+  fail "large undo did not report its final journal-entry progress on stderr"
+fi
 
 snapshot_tree "$D" "$AFTER_UNDO_MANIFEST"
 assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_UNDO_MANIFEST" "undo restored every original $N-file path and byte"

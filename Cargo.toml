@@ -6,7 +6,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/etude-core", "crates/sweep-cli", "crates/etude-keep", "crates/etude-read", "crates/stash-cli", "crates/unpack-cli", "crates/fixtures", "crates/journal-dump"]
+members = ["crates/etude-core", "crates/etude-cli-support", "crates/sweep-cli", "crates/etude-keep", "crates/etude-read", "crates/stash-cli", "crates/unpack-cli", "crates/fixtures", "crates/journal-dump"]
 
 [workspace.package]
 version = "0.5.1"

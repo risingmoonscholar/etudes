@@ -74,6 +74,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "etude-cli-support"
+version = "0.5.1"
+
+[[package]]
 name = "etude-core"
 version = "0.5.2"
 dependencies = [
@@ -169,6 +173,7 @@ dependencies = [
 name = "stash-cli"
 version = "0.5.3"
 dependencies = [
+ "etude-cli-support",
  "etude-core",
  "etude-keep",
  "fixtures",
@@ -184,6 +189,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "sweep-cli"
 version = "0.5.3"
 dependencies = [
+ "etude-cli-support",
  "etude-core",
  "etude-keep",
  "etude-read",

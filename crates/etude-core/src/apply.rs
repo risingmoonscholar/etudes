@@ -103,6 +103,14 @@ pub struct ApplyReport {
     pub journal_path: Option<PathBuf>,
 }
 
+/// A monotonic update from an apply or undo walk. `completed` counts entries
+/// whose filesystem step and required journal update have completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    pub completed: usize,
+    pub total: usize,
+}
+
 /// Test hook. Production callers pass `None`.
 pub type FailAt = Option<usize>;
 
@@ -117,6 +125,18 @@ pub fn apply(
     tool: &str,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
+) -> Result<ApplyReport, ApplyError> {
+    apply_with_progress(plan, tool, sealer, fail_at, |_| {})
+}
+
+/// Execute the accepted groups and report each completed move to the caller.
+/// The callback is deliberately output-agnostic; the CLI owns presentation.
+pub fn apply_with_progress(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    mut progress: impl FnMut(Progress),
 ) -> Result<ApplyReport, ApplyError> {
     let id = journal_id(plan);
     let mut j = Journal {
@@ -176,6 +196,7 @@ pub fn apply(
         j.save_sealed(sl).map_err(ApplyError::Journal)?;
     }
 
+    let total = j.entries.len();
     let mut moved = 0usize;
     for i in 0..j.entries.len() {
         if fail_at == Some(i) {
@@ -194,6 +215,10 @@ pub fn apply(
         if let Some(sl) = sealer {
             j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
         }
+        progress(Progress {
+            completed: moved,
+            total,
+        });
     }
 
     Ok(ApplyReport {
@@ -347,7 +372,7 @@ pub fn move_one_for_tests(from: &Path, to: &Path) -> io::Result<Method> {
 }
 
 /// A minimal, explicit cross-device copy on macOS: data and POSIX stat
-/// (mode, mtime) only. Deliberately not `fs::copy`.
+/// (mode, mtime), with an exclusive destination. Deliberately not `fs::copy`.
 ///
 /// `fs::copy`'s own documentation states its macOS mapping to
 /// `fcopyfile`/`fclonefileat` is an implementation detail that "may change
@@ -371,7 +396,10 @@ pub fn move_one_for_tests(from: &Path, to: &Path) -> io::Result<Method> {
 /// Source for the flags: `man copyfile`, and the exact bit values, taken
 /// from the real SDK header rather than assumed --
 /// `.../MacOSX.sdk/usr/include/copyfile.h`:
-/// `COPYFILE_STAT (1<<1)`, `COPYFILE_DATA (1<<3)`.
+/// `COPYFILE_STAT (1<<1)`, `COPYFILE_DATA (1<<3)`, and `COPYFILE_EXCL
+/// (1<<17)`, which fails if the destination already exists. That last flag is
+/// essential on APFS when two different Unicode spellings resolve to one
+/// directory entry.
 // Module-level, not local to copy_data_and_stat, so a unit test can bind to
 // the actual production value instead of redeclaring its own copy that
 // could silently drift from what the real call site requests. A review
@@ -391,10 +419,12 @@ const COPYFILE_STAT: u32 = 1 << 1;
 const COPYFILE_XATTR: u32 = 1 << 2;
 #[cfg(target_os = "macos")]
 const COPYFILE_DATA: u32 = 1 << 3;
+#[cfg(target_os = "macos")]
+const COPYFILE_EXCL: u32 = 1 << 17;
 /// What copy_data_and_stat actually requests. Read by the function AND by
 /// the test that checks it excludes XATTR/ACL, so the two cannot drift.
 #[cfg(target_os = "macos")]
-const COPY_DATA_AND_STAT_FLAGS: u32 = COPYFILE_STAT | COPYFILE_DATA;
+const COPY_DATA_AND_STAT_FLAGS: u32 = COPYFILE_STAT | COPYFILE_DATA | COPYFILE_EXCL;
 
 #[cfg(target_os = "macos")]
 fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
@@ -430,23 +460,35 @@ fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
-    // One syscall, no crash window, refuses to clobber. See rename_excl.
-    #[cfg(target_os = "macos")]
-    {
-        match rename_excl(from, to) {
-            Ok(()) => return Ok(Method::Rename),
-            // EXDEV: cross-device, fall through to the copy path below.
-            Err(e) if e.raw_os_error() == Some(18) => {}
-            // ENOTSUP: a filesystem without renamex_np. Fall back to
-            // link+unlink, which keeps the old crash window on that volume
-            // only; undo's successor-entry recovery covers it.
-            Err(e) if e.raw_os_error() == Some(45) => {
-                return move_one_link_unlink(from, to);
-            }
-            Err(e) => return Err(e),
-        }
+    move_one_macos_with(from, to, rename_excl)
+}
+
+/// The rename operation is injected only in unit tests, allowing the EXDEV
+/// branch to be exercised against a real normalization-aware destination
+/// without depending on a mount race to produce a particular errno ordering.
+#[cfg(target_os = "macos")]
+fn move_one_macos_with(
+    from: &Path,
+    to: &Path,
+    rename: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> io::Result<Method> {
+    match rename(from, to) {
+        // One syscall, no crash window, refuses to clobber. See rename_excl.
+        Ok(()) => Ok(Method::Rename),
+        // EXDEV: cross-device, copy exclusively, verify, then unlink source.
+        Err(e) if e.raw_os_error() == Some(18) => copy_unlink(from, to),
+        // ENOTSUP: a filesystem without renamex_np. Fall back to link+unlink,
+        // which keeps the old crash window on that volume only; undo's
+        // successor-entry recovery covers it.
+        Err(e) if e.raw_os_error() == Some(45) => move_one_link_unlink(from, to),
+        Err(e) => Err(e),
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
     #[cfg(not(target_os = "macos"))]
     if fs::symlink_metadata(from)?.file_type().is_file() {
         return move_one_link_unlink(from, to);
@@ -457,13 +499,6 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
         Err(e) if e.raw_os_error() == Some(18) => {
             // EXDEV: cross-device. rename(2) cannot do this, so copy, verify
             // the copy landed intact, and only then unlink the source.
-            //
-            // Explicit data+stat copy on macOS, not fs::copy: see
-            // copy_data_and_stat's doc comment (issue #20) for the sourced
-            // reason and what it does and does not guarantee.
-            #[cfg(target_os = "macos")]
-            copy_data_and_stat(from, to)?;
-            #[cfg(not(target_os = "macos"))]
             fs::copy(from, to)?;
             let src_md = fs::metadata(from)?;
             let dst_md = fs::metadata(to)?;
@@ -476,6 +511,21 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Copy after an EXDEV result, refusing an already occupied destination, then
+/// remove the source only after the copied size has been checked.
+#[cfg(target_os = "macos")]
+fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
+    copy_data_and_stat(from, to)?;
+    let src_md = fs::metadata(from)?;
+    let dst_md = fs::metadata(to)?;
+    if src_md.len() != dst_md.len() {
+        let _ = fs::remove_file(to);
+        return Err(io::Error::other("cross-device copy size mismatch"));
+    }
+    fs::remove_file(from)?;
+    Ok(Method::CopyUnlink)
 }
 
 /// The pre-#5 strategy, kept only as the fallback for filesystems without
@@ -626,6 +676,16 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
 }
 
 pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
+    undo_with_progress(j, sealer, |_| {})
+}
+
+/// Reverse a journal and report each fully examined entry. Existing callers
+/// that need no progress signal continue to use [`undo`].
+pub fn undo_with_progress(
+    j: &mut Journal,
+    sealer: &dyn Sealer,
+    mut progress: impl FnMut(Progress),
+) -> UndoReport {
     let mut r = UndoReport::default();
 
     // Apply moves entries in order and seals a done record after each, so
@@ -658,6 +718,14 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
     }
 
     // Reverse order, so nested destinations empty before their parents.
+    let total = j.entries.len();
+    let mut completed = 0usize;
+    macro_rules! advance {
+        () => {{
+            completed += 1;
+            progress(Progress { completed, total });
+        }};
+    }
     for i in (0..j.entries.len()).rev() {
         let e = j.entries[i].clone();
         if !e.is_moved() {
@@ -670,9 +738,11 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
                 // recovery inference either: the file is home and the journal
                 // says so.
                 r.already_reversed += 1;
+                advance!();
                 continue;
             }
             if Some(i) != first_planned {
+                advance!();
                 continue;
             }
             if e.to.exists() && e.from.exists() && same_file(&e.to, &e.from) {
@@ -712,6 +782,7 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
                 }
             }
             // Only `from` exists: the move never started. Nothing to do.
+            advance!();
             continue;
         }
         if !e.to.exists() {
@@ -744,15 +815,18 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
                     break;
                 }
                 r.reconciled.push(e.from.clone());
+                advance!();
                 continue;
             }
             r.skipped_missing.push(e.to.clone());
+            advance!();
             continue;
         }
         let (size, mtime, inode, hash) = match fingerprint(&e.to) {
             Ok(f) => f,
             Err(_) => {
                 r.skipped_missing.push(e.to.clone());
+                advance!();
                 continue;
             }
         };
@@ -761,6 +835,7 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
         let inode_ok = e.method != Method::Rename || inode == e.inode;
         if size != e.size || mtime != e.mtime_secs || hash != e.edge_hash || !inode_ok {
             r.skipped_changed.push(e.to.clone());
+            advance!();
             continue;
         }
         if e.from.exists() {
@@ -773,6 +848,7 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
             // The crash case leaves `done` false and is handled above. This
             // stays a refusal.
             r.skipped_changed.push(e.to.clone());
+            advance!();
             continue;
         }
         if let Some(parent) = e.from.parent()
@@ -799,6 +875,7 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
                 break;
             }
         }
+        advance!();
     }
 
     // Remove destination directories that we created and that are now empty.
@@ -1075,6 +1152,75 @@ mod tests {
             0,
             "must request COPYFILE_DATA"
         );
+        assert_ne!(
+            COPY_DATA_AND_STAT_FLAGS & COPYFILE_EXCL,
+            0,
+            "must refuse an existing or normalization-equivalent destination"
+        );
+    }
+
+    /// Force the production EXDEV branch while keeping the filesystem real.
+    /// On APFS, NFC and NFD spellings resolve to the same destination entry;
+    /// the exclusive copy must preserve both that entry and the source.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn exdev_copy_fallback_refuses_nfd_collision_without_clobbering() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = std::env::temp_dir().join(format!("etudes_nfc_nfd_exdev_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let source_dir = dir.join("source-volume-entry");
+        let destination_dir = dir.join("destination-directory");
+        fs::create_dir_all(&source_dir).expect("source directory");
+        fs::create_dir_all(&destination_dir).expect("destination directory");
+
+        let nfc = "invoice_caf\u{00e9}.pdf";
+        let nfd = "invoice_cafe\u{0301}.pdf";
+        assert_ne!(nfc.as_bytes(), nfd.as_bytes());
+        let source = source_dir.join(nfd);
+        let destination = destination_dir.join(nfc);
+        let equivalent_destination = destination_dir.join(nfd);
+        fs::write(&source, b"source original\n").expect("write source");
+        fs::write(&destination, b"destination original\n").expect("write destination");
+
+        assert_ne!(
+            destination.as_os_str().as_bytes(),
+            equivalent_destination.as_os_str().as_bytes()
+        );
+        assert!(
+            equivalent_destination.exists(),
+            "test filesystem must resolve NFC/NFD names to one entry"
+        );
+        assert_eq!(
+            fs::read(&equivalent_destination).expect("read equivalent destination"),
+            b"destination original\n",
+            "the alternate spelling must identify the pre-existing file"
+        );
+
+        // The device error is injected at the rename boundary. Everything
+        // after it, including copyfile's exclusive create, is production code.
+        let error = move_one_macos_with(&source, &destination, |_, _| {
+            Err(io::Error::from_raw_os_error(18))
+        })
+        .expect_err("EXDEV fallback must refuse the existing destination");
+        assert_eq!(error.raw_os_error(), Some(17), "expected EEXIST");
+        assert_eq!(
+            fs::read(&source).expect("source survives"),
+            b"source original\n"
+        );
+        assert_eq!(
+            fs::read(&destination).expect("destination survives"),
+            b"destination original\n"
+        );
+        assert_eq!(
+            fs::read_dir(&destination_dir)
+                .expect("list destination directory")
+                .count(),
+            1,
+            "the failed copy must not create a second entry"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Issue #20's contract: data and mtime survive, and nothing else is

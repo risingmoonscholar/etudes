@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/capture-demos.sh",
-  "commit": "1a6438e",
+  "commit": "484feef",
   "version": "0.5.3",
   "versions": {
     "sweep": "0.5.3",
@@ -50,7 +50,7 @@
       "label": "stash-put",
       "command": "stash ~/Desktop --for 3d",
       "exit": 0,
-      "stdout": "\nStashed 112 items.\n~/Desktop is clear.\n\n  Due back: in 3 days\n  stash does not run in the background. Run `stash pop`,\n  or `stash status` to see what is overdue.\n\n  1 hidden item was left in place.\n"
+      "stdout": "stash: 12/112 items\nstash: 24/112 items\nstash: 36/112 items\nstash: 48/112 items\nstash: 60/112 items\nstash: 72/112 items\nstash: 84/112 items\nstash: 96/112 items\nstash: 108/112 items\nstash: 112/112 items\n\nStashed 112 items.\n~/Desktop is clear.\n\n  Due back: in 3 days\n  stash does not run in the background. Run `stash pop`,\n  or `stash status` to see what is overdue.\n\n  1 hidden item was left in place.\n"
     }
   ]
 }

@@ -18,6 +18,7 @@ path = "src/main.rs"
 # is four verbs.
 [dependencies]
 etude-core = { path = "../etude-core", version = "0.5.2" }
+etude-cli-support = { path = "../etude-cli-support", version = "0.5.1" }
 etude-keep = { path = "../etude-keep", version = "0.5.1" }
 etude-read = { path = "../etude-read", version = "0.5.1" }
 

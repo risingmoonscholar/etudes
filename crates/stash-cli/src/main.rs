@@ -317,12 +317,16 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         };
         Some(sl)
     };
-    match etude_core::apply::apply(
+    let mut progress = etude_cli_support::ProgressReporter::stderr("stash", count);
+    let result = etude_core::apply::apply_with_progress(
         &plan,
         "stash",
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
-    ) {
+        |p| progress.update(p.completed, p.total),
+    );
+    drop(progress);
+    match result {
         Ok(r) => {
             if json {
                 use etude_core::json as j;
@@ -575,7 +579,11 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         );
     }
 
-    let r = etude_core::apply::undo(&mut j, &sl);
+    let mut progress = etude_cli_support::ProgressReporter::stderr("stash pop", j.entries.len());
+    let r = etude_core::apply::undo_with_progress(&mut j, &sl, |p| {
+        progress.update(p.completed, p.total)
+    });
+    drop(progress);
     if r.unrecorded_moves > 1 {
         eprintln!(
             "stash: refused. This journal is missing more than one record: {n} items are\n\
