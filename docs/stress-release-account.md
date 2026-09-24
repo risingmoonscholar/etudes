@@ -1,8 +1,7 @@
 # Stress-suite release account
 
-**Release status: validation pending.** This account is ready to accompany the
-stress-suite changes once the remaining platform and independent-review gates
-have completed.
+**Release status: validation pending.** The local fast, load, and platform
+tiers have completed; CI and review are still pending for the candidate.
 
 ## Delivered behavior
 
@@ -25,7 +24,7 @@ their tier and required capability explicit.
 
 | Tier | Result | Material limit |
 | --- | --- | --- |
-| Fast | 621 passed, 0 failed, 1 unproven | NFC/NFD cross-device fallback unavailable on this host |
+| Fast | 627 passed, 0 failed, 1 unproven | NFC/NFD cross-device fallback unavailable on this host |
 | Load | 103 passed, 0 failed, 0 unproven | 9,999-file apply: 76.69 s; undo: 58.73 s |
 | Platform | 58 passed, 0 failed, 0 unproven | All eight platform scenarios ran on this macOS host |
 
@@ -42,8 +41,9 @@ tracks the required real-filesystem witness or a deterministic replacement.
 
 ## Release gates
 
-1. Exercise the NFC/NFD cross-device fallback on a host where its collision
-   ordering can be forced; retain the result bundle.
-2. Run CI and obtain a completed independent factory observer review after the
-   factory-core authentication/review-integrity repair is released.
-3. Publish this account only when both gates are successful.
+1. Keep the NFC/NFD fallback limitation explicit and tracked in issue #103;
+   this run records it as unproven, not as a pass.
+2. Complete the candidate's CI and review. No independent factory observer
+   result is claimed by this account.
+3. Publish this account with the final candidate evidence after those gates
+   succeed.
