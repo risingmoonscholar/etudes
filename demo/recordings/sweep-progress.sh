@@ -24,8 +24,8 @@ PY
 
 cd "$root"
 export ETUDE_STATE_DIR=../s
-printf '\033[2m0.5.3 candidate · a synthetic camera roll\033[0m\n'
-printf '\033[33m$ sweep apply ~/Desktop --yes\033[0m\n\n'
+printf '\033[2m0.5.3 candidate · a synthetic ~/Desktop camera roll\033[0m\n'
+printf '\033[33m$ sweep apply . --yes\033[0m\n\n'
 "$bin/sweep" apply . --yes
 
 printf '\n\033[33m$ sweep undo\033[0m\n\n'

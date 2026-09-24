@@ -2,7 +2,7 @@
 # Capture real terminal output from the real binaries, for the web demos.
 #
 # Nothing here is authored by hand. Every transcript in demo/transcripts.json is
-# stdout from a binary built out of this tree, run against the synthetic fixture
+# terminal output from binaries built out of this tree, run against the synthetic fixture
 # that `mkfx` generates. A transcript that no longer matches the tool is a build
 # failure, not a stale doc -- and scripts/check-transcripts-reproduce.sh is what
 # makes that true. It said so here for weeks while nothing enforced it, which is
@@ -49,7 +49,7 @@ capture() {
   mkdir -p "$d"
   printf '%s' "$display" > "$d/command"
   set +e
-  "$@" > "$d/stdout" 2>&1
+  "$@" > "$d/output" 2>&1
   printf '%s' "$?" > "$d/exit"
   set -e
 }
@@ -106,14 +106,14 @@ subs = [
 transcripts = []
 for name in sorted(os.listdir(caps)):
     d = os.path.join(caps, name)
-    text = open(os.path.join(d, "stdout")).read()
+    text = open(os.path.join(d, "output")).read()
     for frm, to in subs:
         text = text.replace(frm, to)
     transcripts.append({
         "label": name.split("-", 1)[1],
         "command": open(os.path.join(d, "command")).read(),
         "exit": int(open(os.path.join(d, "exit")).read()),
-        "stdout": text,
+        "output": text,
     })
 
 payload = {
@@ -121,7 +121,8 @@ payload = {
     "commit": rev,
     "version": version,
     "versions": versions,
-    "note": ("Real stdout from binaries built out of this tree, run against the "
+    "note": ("Real terminal output (stdout and stderr combined) from binaries "
+             "built out of this tree, run against the "
              "synthetic mkfx fixture with temporary journal state and a disposable "
              "supplied key. Not hand-written; does not test login-keychain access."),
     "substitution_rule": ("The temporary directory the fixture was built in is "
@@ -136,7 +137,7 @@ print(f"wrote {out}: {len(transcripts)} transcripts at {rev}")
 # between two HTML comment markers, so a double-clicked file:// copy of the
 # page works without a server. fetch() stays the primary path in the page's
 # own JS; this is only the fallback it reaches for when fetch() is blocked.
-# "</" is escaped inside the JSON so no captured stdout can accidentally close
+# "</" is escaped inside the JSON so no captured output can accidentally close
 # the surrounding <script> tag early.
 index_path = os.path.join(os.path.dirname(out), "index.html")
 start, end = "<!-- TRANSCRIPTS_INLINE_START -->", "<!-- TRANSCRIPTS_INLINE_END -->"

@@ -69,8 +69,8 @@ for label in sorted(set(o) | set(n)):
         problems.append(f"{label}: command changed\n    was: {o[label]['command']}\n    now: {n[label]['command']}")
     if o[label]["exit"] != n[label]["exit"]:
         problems.append(f"{label}: exit code {o[label]['exit']} -> {n[label]['exit']}")
-    if o[label]["stdout"] != n[label]["stdout"]:
-        ol, nl = o[label]["stdout"].splitlines(), n[label]["stdout"].splitlines()
+    if o[label]["output"] != n[label]["output"]:
+        ol, nl = o[label]["output"].splitlines(), n[label]["output"].splitlines()
         diff = []
         for i in range(max(len(ol), len(nl))):
             a = ol[i] if i < len(ol) else "<absent>"
@@ -79,7 +79,7 @@ for label in sorted(set(o) | set(n)):
                 diff.append(f"    line {i+1}\n      committed: {a}\n      now:       {b}")
                 if len(diff) == 3:
                     break
-        problems.append(f"{label}: stdout differs\n" + "\n".join(diff))
+        problems.append(f"{label}: terminal output differs\n" + "\n".join(diff))
 
 if old.get("version") != new.get("version"):
     problems.append(f"version {old.get('version')} -> {new.get('version')}")
