@@ -1,0 +1,48 @@
+{
+  "checked_date": "2026-09-24",
+  "revision": "ba7055206ca2f56bcbce628d753dba65427e327b",
+  "environment": {
+    "cargo_net_offline": true,
+    "reason": "The sandbox could not resolve index.crates.io; all locked dependencies were available in the local Cargo cache."
+  },
+  "commands": {
+    "candidate_install": {
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "stdout": [
+        "mode=candidate checkout=ba7055206ca2f56bcbce628d753dba65427e327b",
+        "installing sweep 0.5.3",
+        "PASS sweep: install, version, synthetic operation and recovery/refusal",
+        "installing stash 0.5.3",
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.3",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ]
+    },
+    "release_gate_unit_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 5,
+      "result": "PASS"
+    }
+  },
+  "scope": "Candidate binaries built and installed from the current main checkout, then exercised using synthetic files. Published tags were not installed or tested.",
+  "independent_review": "not assessed",
+  "publication": "not performed"
+}

@@ -84,6 +84,9 @@ hr{border:0; border-top:1px solid var(--line); margin:3.4rem 0}
 
 .term .cmd{color:var(--accent)}
 .term .cmd::before{content:"$ "; color:var(--term-dim)}
+.recording{margin:1.2rem 0 1.8rem}
+.recording img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:var(--term-bg)}
+.recording figcaption{font-family:var(--sans);font-size:.78rem;color:var(--dim-solid);margin-top:.5rem;line-height:1.5}
 .runline{display:flex; gap:.8rem; align-items:center; flex-wrap:wrap; margin:.4rem 0 0}
 .runline button{
   font:inherit; font-size:.78rem; font-family:var(--mono); cursor:pointer;
@@ -142,6 +145,12 @@ binaries out of the tree, generates a synthetic fixture with <code>mkfx</code>, 
 command, and writes the raw stdout to <code>demo/transcripts.json</code> together with the
 commit it was built from. Regenerate it and diff: a transcript that no longer matches the
 tool is a build failure, not a stale document.</p>
+
+<p>The short GIFs above are terminal recordings of bespoke candidate scenarios. Run
+<code>scripts/capture-release-gifs.sh</code> to rebuild them from the release binaries;
+the source sessions are preserved in <code>demo/recordings/</code>. They use disposable,
+synthetic files and local journal state. The clips illustrate behavior; tests and stress
+scenarios remain the evidence for safety claims.</p>
 
 <p>The fixture is generated, not collected. Files with alarming names like
 <code>SSN_card_scan.jpg</code> are decoys whose contents read
@@ -204,14 +213,17 @@ Apache-2.0 · <a href="https://github.com/risingmoonscholar/etudes">source</a>
 const API = {
   sweep: {
     title: "organise the obvious, leave the private alone",
+    recording: { src: "gifs/sweep-progress.gif", alt: "sweep applies an organization plan to a large synthetic folder, shows progress, then undoes the move while leaving a decoy personal-record file untouched", caption: "A large synthetic folder: apply, visible progress, then undo. The decoy personal record stays put." },
     demos: ["sweep-plan", "sweep-explain", "sweep-json"]
   },
   stash: {
     title: "clean now, decide later",
+    recording: { src: "gifs/stash-custody.gif", alt: "stash clears a synthetic folder, reports a hidden item left behind, then restores the visible items", caption: "A synthetic screen-share folder: stash, then pop it back. The hidden marker stays in place." },
     demos: ["stash-put"]
   },
   unpack: {
     title: "stop thinking about archive formats",
+    recording: { src: "gifs/unpack-safety.gif", alt: "unpack extracts a normal synthetic archive and refuses a symlink archive before creating an output folder", caption: "A normal archive extracts; a symlink archive is refused before an output folder is created." },
     demos: ["unpack-help"]
   },
 };
@@ -282,7 +294,10 @@ ${esc(help.stdout.replace(/\s+$/, ""))}</div>`
       <button class="tab" role="tab" aria-selected="true"  aria-controls="${id("demo")}">Demo</button>
       <button class="tab" role="tab" aria-selected="false" aria-controls="${id("api")}">API</button>
     </div>
-    <div class="panel" id="${id("demo")}" role="tabpanel">${demoHTML}</div>
+    <div class="panel" id="${id("demo")}" role="tabpanel">
+      ${spec.recording ? `<figure class="recording"><img src="${esc(spec.recording.src)}" alt="${esc(spec.recording.alt)}"><figcaption>${esc(spec.recording.caption)}</figcaption></figure>` : ""}
+      ${demoHTML}
+    </div>
     <div class="panel" id="${id("api")}" role="tabpanel" hidden>
       ${helpHTML}
       <h3>Exit codes</h3><table><tbody>${rows(EXITS)}</tbody></table>

@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":100,"rows":14},"timestamp":1790278723,"command":"bash demo/recordings/unpack-safety.sh","title":"unpack 0.5.3 — accept and refuse","env":{"SHELL":"/bin/zsh"}}
+[0.018, "o", "\u001b[2m0.5.3 candidate · a normal archive and a dangerous one\u001b[0m\r\n\u001b[33m$ unpack welcome.zip --into welcome\u001b[0m\r\n\r\n"]
+[0.242, "o", "\r\n  Extracted to welcome/\r\n  2 entries\r\n  Checked 2 paths before writing anything\r\n"]
+[1.416, "o", "\r\n\u001b[33m$ unpack unsafe.zip --into unsafe\u001b[0m\r\n\r\n"]
+[0.020, "o", "\r\nunpack: REFUSED. This archive contains members this tool will not\r\ncreate.\r\n\r\n  symlink: shortcut\r\n       a dispatched extractor cannot be stopped from writing through a link, and the link itself points wherever the archive says. This build unpacks regular files and directories.\r\n       `unpack ARCHIVE --list` shows every member without writing\r\n\r\nNothing was extracted. Inspect it with: unpack unsafe.zip --list\r\n"]
+[1.210, "o", "\r\n\u001b[2mVerified: safe files extracted; unsafe archive refused before writing.\u001b[0m\r\n"]
+[0.002, "x", "0"]

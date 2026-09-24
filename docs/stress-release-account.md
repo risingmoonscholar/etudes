@@ -42,10 +42,14 @@ current latency; journal optimization remains a separate, profile-led question
 tracked by [issue #12](https://github.com/risingmoonscholar/etudes/issues/12).
 
 Local candidate installation checks passed for sweep, stash, and unpack at
-PR head `1ef5f5e2a41ef2eabd6a271f3607ebaf639ea3d3`; the release-gate unit tests
-also passed 5/5 at that revision. The exact check record is retained in
+current `main` commit `ba7055206ca2f56bcbce628d753dba65427e327b`; the
+release-gate unit tests also passed 5/5 there. Cargo used its local cache in
+offline mode because this shell could not resolve crates.io. The exact current
+check record is retained in
+[`release-evidence/0.5.3-candidate-checks-ba705520-20260924.json`](release-evidence/0.5.3-candidate-checks-ba705520-20260924.json).
+Earlier PR-head evidence remains in
 [`release-evidence/0.5.3-candidate-checks-20260924.json`](release-evidence/0.5.3-candidate-checks-20260924.json).
-These checks build and exercise the candidate locally; they do not verify
+These checks build and exercise candidate binaries locally; they do not verify
 published tags. The latest product-code commit is
 `484feef76cd7b6eea450e65386d352b51af5769f`; later commits update demos,
 release evidence, and documentation only.
