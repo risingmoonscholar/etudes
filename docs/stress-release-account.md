@@ -53,9 +53,11 @@ release evidence, and documentation only.
 ## Repository and release gates
 
 PR #104 has merged to `main` as `12b47967bb08539058ecb22393ffab255b6c0876`.
-The 0.5.3 candidate work is on a separate branch and still requires PR review
-and merge. No independent factory observer result is claimed. If required
-review or certification is unavailable, hold certification and publication.
+The candidate work merged through PR #105 as
+`ac1c106962e008f289c02093570cf61efde76b73`; this closes issue #103 with the
+deterministic NFC/NFD fallback evidence above. No independent factory observer
+result is claimed. Required review or certification is still outstanding, so
+hold certification and publication.
 
 The seven unproven platform cases are case-sensitive collision, cross-device
 copy and mtime, cross-volume EXDEV, exFAT fallback, full volume, read-only
