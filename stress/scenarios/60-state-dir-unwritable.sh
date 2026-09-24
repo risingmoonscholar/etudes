@@ -25,7 +25,9 @@ fi
 
 D=$(workdir)
 for f in alpha beta gamma delta epsilon; do : > "$D/widget_$f.txt"; done
-BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
+BEFORE="${D}.before.json"
+AFTER="${D}.after.json"
+snapshot_tree "$D" "$BEFORE"
 
 # plan touches no state at all -- must be entirely unaffected.
 assert_exit 0 "unwritable state dir: plan is unaffected (it never touches state)" -- "$SWEEP" "$D"
@@ -45,7 +47,7 @@ else
   pass "unwritable state dir: apply moved nothing when it could not record a journal"
 fi
 
-AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
-assert_eq "$BEFORE" "$AFTER" "unwritable state dir: no file vanished"
+snapshot_tree "$D" "$AFTER"
+assert_snapshot_eq "$BEFORE" "$AFTER" "unwritable state dir: apply changed no path or byte"
 
 exit 0

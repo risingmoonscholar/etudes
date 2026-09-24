@@ -61,6 +61,11 @@ jobs:
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
 
+      - name: Release checks reject missing tags and false success
+        run: python3 -m unittest discover -s scripts -p 'test_check_release.py' -v
+      - name: Install and exercise the local release candidate
+        run: python3 scripts/check-release.py --candidate
+
       # The public tracker is a product surface. This reads every issue, every
       # comment, and every prior version GitHub still serves, and fails when
       # one reads as a working session rather than a defect report. It runs
@@ -85,6 +90,9 @@ jobs:
       # committed, which is the claim the site actually makes.
       - name: Do the committed transcripts still come out of these binaries
         run: bash scripts/check-transcripts-reproduce.sh
+
+      - name: A missing ZIP extractor makes the stress witness fail
+        run: bash scripts/check-zip-stress-mutation.sh
 
       # The refusal demo's evidence chain. Clones a pinned public fixture,
       # builds v0.4.0 and v0.5.0 from their tags, and asserts every number the
@@ -126,6 +134,10 @@ jobs:
   stress:
     name: adversarial stress suite (ratchet)
     runs-on: macos-latest
+    # A wedged platform tool must not consume an unbounded macOS runner. The
+    # suite has per-case deadlines where it owns a child; this is the outer
+    # bound for setup, mounts, and anything a case cannot clean up itself.
+    timeout-minutes: 45
     # ALWAYS runs, and decides inside whether there is anything to attack.
     #
     # It used to be gated with `if:` to schedule and manual dispatch, because
@@ -170,21 +182,7 @@ jobs:
           echo "files changed:"
           printf '%s\n' "$changed" | sed 's/^/  /'
 
-          # Conservative on purpose. Anything that could reach the binaries or
-          # the harness runs the suite; only files that provably cannot are
-          # skipped. A wrong answer here is a green check that checked
-          # nothing, so the list of things it skips is short and explicit
-          # rather than a list of things it catches.
-          # `command grep`, not `grep`: a shell that wraps grep with something
-          # else can change what -qv means. Verified under bash, which is what
-          # `run:` uses.
-          if printf '%s\n' "$changed" | command grep -qvE '^(README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|\.gitignore)'; then
-            echo "run=yes" >> "$GITHUB_OUTPUT"
-            echo "reason=the diff touches something outside documentation" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=no" >> "$GITHUB_OUTPUT"
-            echo "reason=every changed path is documentation" >> "$GITHUB_OUTPUT"
-          fi
+          printf '%s\n' "$changed" | bash scripts/stress-ci-scope.sh "${{ github.event_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Say what was decided
         run: |
@@ -197,28 +195,36 @@ jobs:
             echo "tools or the harness, not because the suite passed."
           fi
 
+      - name: Stress CI scope still distinguishes code from documentation
+        run: bash scripts/stress-ci-scope.sh --self-test
+
       - uses: dtolnay/rust-toolchain@stable
         if: steps.scope.outputs.run == 'yes'
       - uses: Swatinem/rust-cache@v2
         if: steps.scope.outputs.run == 'yes'
-      - name: Run the stress suite against the recorded baseline
+      - name: Run the applicable stress tier
         if: steps.scope.outputs.run == 'yes'
         env:
           # Somewhere the upload step can reach. The default is the runner's
           # temp dir, which is destroyed with the runner.
           ETUDES_EVIDENCE_DIR: ${{ github.workspace }}/stress-evidence
-        run: bash scripts/stress-ratchet.sh
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            STRESS_TIER=fast bash scripts/stress-ratchet.sh
+          else
+            STRESS_TIER=all bash scripts/stress-ratchet.sh
+          fi
 
-      # if: always() because the evidence only exists when the suite FAILED.
-      # Running this only on success would upload nothing, every time.
-      # Only 30-sigkill-mid-apply writes evidence today, so this uploads
-      # nothing for any other scenario's failure. Named for what it does
-      # rather than for what it looks like it does.
-      - name: Keep the evidence from a failing sigkill trial
+      # Results are written for every case. Failure-only evidence carries the
+      # first failing assertion record and transcript, while a SIGKILL case
+      # can additionally preserve its journal and tree evidence.
+      - name: Keep stress results and failure evidence
         if: always() && steps.scope.outputs.run == 'yes' 
         uses: actions/upload-artifact@v4
         with:
           name: stress-evidence
-          path: stress-evidence/
+          path: |
+            stress-evidence/
+            stress/results/
           if-no-files-found: ignore
           retention-days: 30

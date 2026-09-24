@@ -20,7 +20,7 @@ IMG="$W/ro.dmg"
 MNT="$W/mnt"
 mkdir -p "$MNT"
 
-if ! hdiutil create -size 20m -fs "APFS" -volname ROVolStress "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 20m APFS ROVolStress; then
   unproven "read-only volume: apply refuses cleanly" "hdiutil create failed on this host"
   exit 0
 fi

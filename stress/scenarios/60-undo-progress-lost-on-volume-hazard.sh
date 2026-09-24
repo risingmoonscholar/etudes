@@ -42,7 +42,7 @@ IMG="$W/inner.dmg"
 INNER="$OUTER/aaa_ro_source"
 mkdir -p "$OUTER" "$INNER"
 
-if ! hdiutil create -size 20m -fs "APFS" -volname UndoProgressStress "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 20m APFS UndoProgressStress; then
   unproven "undo does not silently drop partial-restore progress on error" "hdiutil create failed on this host"
   exit 0
 fi

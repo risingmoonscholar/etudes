@@ -37,7 +37,7 @@ IMG="$W/inner.dmg"
 INNER="$OUTER/aaa_innervol"
 mkdir -p "$OUTER" "$INNER"
 
-if ! hdiutil create -size 3g -fs "APFS" -volname ExdevStress "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 768m APFS ExdevStress; then
   unproven "cross-volume: EXDEV move is correct and interruption-safe" "hdiutil create failed on this host"
   exit 0
 fi
@@ -101,40 +101,74 @@ fi
 rm -rf "$OUTER/cargo" 2>/dev/null
 for f in bravo charlie delta echo; do : > "$OUTER/interrupt_$f.txt"; done
 # 'z' sorts after the group's other members, and files inside aaa_innervol/
-# sort before plain top-level filenames -- so this big file is scanned (and
-# therefore applied) FIRST, giving a large, killable copy window right at
-# the start of the run rather than buried after several instant same-device
-# moves.
-dd if=/dev/urandom of="$INNER/interrupt_zzzbig.bin" bs=1m count=1500 >/dev/null 2>&1
-SRC_SIZE_BEFORE=$(stat -f "%z" "$INNER/interrupt_zzzbig.bin")
-DEST_PARTIAL="$OUTER/interrupt/interrupt_zzzbig.bin"
+# sort before plain top-level filenames -- so this file is scanned FIRST.
+# Prove that selection on a tiny payload before allocating anything expensive.
+INTERRUPT="$INNER/interrupt_zzzbig.txt"
+DEST_PARTIAL="$OUTER/Documents/interrupt_zzzbig.txt"
+printf 'selected-before-bulk-allocation\n' > "$INTERRUPT"
+INTERRUPT_PLAN=$("$SWEEP" "$OUTER" --depth 2 --json 2>&1)
+if python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+members = [m for g in d.get("groups", []) for m in g.get("members", [])]
+sys.exit(0 if any(m.endswith("interrupt_zzzbig.txt") for m in members) else 1)
+' <<<"$INTERRUPT_PLAN"; then
+  pass "cross-volume: tiny interruption fixture is selected for the expected interrupt group before bulk allocation"
+else
+  fail "cross-volume: tiny interruption fixture was not selected; refusing to allocate a bulk copy fixture: $INTERRUPT_PLAN"
+  exit 0
+fi
 
-"$SWEEP" apply "$OUTER" --yes --depth 2 >/tmp/etudes-exdev-kill.log 2>&1 &
-PID=$!
-# Poll for the destination copy to actually start growing, then kill
-# immediately -- adaptive to whatever this disk's throughput is, rather than
-# guessing a fixed delay tuned to one machine's speed.
+# Escalate only until this host actually exposes an incomplete destination.
+# A completed attempt is undone before the next size, so every repetition
+# starts from the same source path. This replaces a fixed 1.5 GiB allocation
+# that was often far larger than the copy window needed for the observation.
 KILLED=0
-for _ in $(seq 1 400); do
-  if ! kill -0 "$PID" 2>/dev/null; then
-    break
+PAYLOAD_MIB=0
+for mib in 32 96 256; do
+  rm -f "$INTERRUPT" "$DEST_PARTIAL"
+  dd if=/dev/urandom of="$INTERRUPT" bs=1m count="$mib" >/dev/null 2>&1
+  SRC_SIZE_BEFORE=$(stat -f "%z" "$INTERRUPT")
+  SRC_HASH_BEFORE=$(shasum -a 256 "$INTERRUPT" | awk '{print $1}')
+
+  "$SWEEP" apply "$OUTER" --yes --depth 2 >/tmp/etudes-exdev-kill.log 2>&1 &
+  PID=$!
+  # Poll only for the independent witness: a destination that is nonempty but
+  # still shorter than its known source. Never infer that from the exit code.
+  for _ in $(seq 1 300); do
+    kill -0 "$PID" 2>/dev/null || break
+    if [ -f "$DEST_PARTIAL" ]; then
+      partial_size=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
+      if [ "$partial_size" -gt 0 ] && [ "$partial_size" -lt "$SRC_SIZE_BEFORE" ]; then
+        kill -9 "$PID" 2>/dev/null
+        KILLED=1
+        PAYLOAD_MIB=$mib
+        break
+      fi
+    fi
+    sleep 0.01
+  done
+  wait "$PID" 2>/dev/null
+  [ "$KILLED" = 1 ] && break
+
+  # The copy finished before the bounded observation window. Restore it and
+  # try the next measured size; failure to restore is a scenario failure.
+  if [ ! -f "$INTERRUPT" ] && [ -f "$DEST_PARTIAL" ]; then
+    assert_exit 0 "cross-volume: completed ${mib}MiB probe undoes before escalation" -- "$SWEEP" undo
+  else
+    fail "cross-volume: ${mib}MiB probe ended without either a source or a completed destination"
+    exit 0
   fi
-  if [ -s "$DEST_PARTIAL" ]; then
-    kill -9 "$PID" 2>/dev/null
-    KILLED=1
-    break
-  fi
-  sleep 0.01
 done
-wait "$PID" 2>/dev/null
 
 if [ "$KILLED" = 0 ]; then
   unproven "cross-volume: a real SIGKILL mid-copy leaves the source intact" \
-    "the 600MB copy completed before the process could be killed on this (fast) host"
+    "copies through 32MiB, 96MiB, and 256MiB completed before an incomplete destination could be witnessed on this host"
 else
-  SRC_SIZE_AFTER=$(stat -f "%z" "$INNER/interrupt_zzzbig.bin" 2>/dev/null || echo "MISSING")
-  if [ "$SRC_SIZE_AFTER" = "$SRC_SIZE_BEFORE" ]; then
-    pass "cross-volume: source file is byte-for-byte intact after a kill mid-copy ($SRC_SIZE_AFTER bytes)"
+  SRC_SIZE_AFTER=$(stat -f "%z" "$INTERRUPT" 2>/dev/null || echo "MISSING")
+  SRC_HASH_AFTER=$(shasum -a 256 "$INTERRUPT" 2>/dev/null | awk '{print $1}')
+  if [ "$SRC_SIZE_AFTER" = "$SRC_SIZE_BEFORE" ] && [ "$SRC_HASH_AFTER" = "$SRC_HASH_BEFORE" ]; then
+    pass "cross-volume: source is byte-identical after a witnessed SIGKILL during a ${PAYLOAD_MIB}MiB copy"
   else
     fail "REAL DEFECT: a SIGKILL mid cross-device-copy left the source file altered or gone \
 (was $SRC_SIZE_BEFORE bytes, now $SRC_SIZE_AFTER) -- move_one's copy-verify-unlink ordering \
@@ -150,8 +184,8 @@ did not protect the source"
   else
     pass "cross-volume: retrying apply after an interrupted copy refused rather than silently overwriting/succeeding (exit $RETRY_CODE)"
   fi
-  SRC_SIZE_FINAL=$(stat -f "%z" "$INNER/interrupt_zzzbig.bin" 2>/dev/null || echo "MISSING")
-  assert_eq "$SRC_SIZE_BEFORE" "$SRC_SIZE_FINAL" "cross-volume: source is still intact after the refused retry"
+  SRC_HASH_FINAL=$(shasum -a 256 "$INTERRUPT" 2>/dev/null | awk '{print $1}')
+  assert_eq "$SRC_HASH_BEFORE" "$SRC_HASH_FINAL" "cross-volume: source is still byte-identical after the refused retry"
 fi
 rm -f /tmp/etudes-exdev-kill.log
 

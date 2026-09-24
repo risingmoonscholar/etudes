@@ -14,6 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 APP="$D/Northwind Deck.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 mkdir -p "$APP/Contents/Frameworks/Sparkle.framework/Versions/A"
@@ -28,7 +29,13 @@ echo "SYNTHETIC-SENSITIVE" > "$LIB/originals/2024/03/passport_scan.png"
 
 for i in 0 1 2 3 4; do : > "$D/deck_notes_$i.pdf"; done
 
-BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
+BEFORE="$W/before.json"
+AFTER_PLAN="$W/after-plan.json"
+APP_BEFORE="$W/app-before.json"
+APP_AFTER="$W/app-after.json"
+LIB_BEFORE="$W/library-before.json"
+LIB_AFTER="$W/library-after.json"
+snapshot_tree "$D" "$BEFORE"
 
 # --- Opacity holds at every depth sweep supports ---
 for depth in 1 2 3 4 8; do
@@ -48,30 +55,20 @@ print(len(leaks))
   assert_eq 0 "$leaked" "depth $depth: nothing from inside either package appears in the plan"
 done
 
-assert_intact "$D" "$BEFORE" "planning at any depth moved nothing"
+snapshot_tree "$D" "$AFTER_PLAN"
+assert_snapshot_eq "$BEFORE" "$AFTER_PLAN" "planning at every depth changed no path or byte"
 
-# --- The package survives an apply byte-for-byte, moved as one atomic unit ---
-before_app_count=$(find "$APP" -type f | wc -l | tr -d ' ')
-before_lib_count=$(find "$LIB" -type f | wc -l | tr -d ' ')
+# --- Apply leaves packages in place and byte-identical ----------------------
+snapshot_tree "$APP" "$APP_BEFORE"
+snapshot_tree "$LIB" "$LIB_BEFORE"
 
 assert_exit 0 "apply succeeds with a package in the accepted group" \
   -- "$SWEEP" apply "$D" --depth 4 --yes
 
-moved_app=$(find "$D" -maxdepth 2 -iname "Northwind Deck.app" -type d)
-moved_lib=$(find "$D" -maxdepth 2 -iname "Northwind Deck Photos.photoslibrary" -type d)
-if [ -n "$moved_app" ] && [ -n "$moved_lib" ]; then
-  pass "both packages relocated as whole units, not scattered"
-  assert_eq "$before_app_count" \
-            "$(find "$moved_app" -type f | wc -l | tr -d ' ')" \
-            ".app internal file count unchanged by the move"
-  assert_eq "$before_lib_count" \
-            "$(find "$moved_lib" -type f | wc -l | tr -d ' ')" \
-            ".photoslibrary internal file count unchanged by the move"
-  content=$(cat "$moved_app/Contents/MacOS/SSN_card_scan.jpg" 2>/dev/null)
-  assert_eq "SYNTHETIC-SENSITIVE" "$content" "file inside the package is byte-identical after the move (and was never independently classified as sensitive. the package itself was the unit)"
-else
-  fail "a package did not survive the apply intact: app=[$moved_app] lib=[$moved_lib]"
-fi
-
-AFTER=$(find "$D" -type f | wc -l | tr -d ' ')
-assert_eq "$BEFORE" "$AFTER" "no file was lost across the whole run"
+snapshot_tree "$APP" "$APP_AFTER"
+snapshot_tree "$LIB" "$LIB_AFTER"
+assert_snapshot_eq "$APP_BEFORE" "$APP_AFTER" ".app package stayed at its original path with every byte intact"
+assert_snapshot_eq "$LIB_BEFORE" "$LIB_AFTER" ".photoslibrary stayed at its original path with every byte intact"
+[ ! -e "$D/deck_notes_0.pdf" ] && find "$D" -mindepth 2 -type f -name deck_notes_0.pdf | grep -q . \
+  && pass "a representative loose document moved while both packages stayed opaque" \
+  || fail "the loose document did not move independently of the packages"

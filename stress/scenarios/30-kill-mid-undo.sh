@@ -1,135 +1,95 @@
 #!/usr/bin/env bash
-# Interruption family: kill during undo.
-#
-# Undo is itself a mutation. sweep moves files back one at a time. This
-# checks two separate things:
-#
-#   1. Resumption: kill -9 partway through `sweep undo`, then run `sweep undo`
-#      again. Does the second run correctly pick up only the files still at
-#      their destination, or does it double-restore / strand something?
-#
-#   2. Convergence: after a killed-then-resumed undo finishes, does the tool
-#      ever say "Nothing to undo. This journal was already restored." again?
-#      Or does every future `sweep undo` call keep re-reporting the same
-#      stale progress forever, because the killed run never got to persist
-#      what it actually did?
+# A hard kill during undo must leave a journal that resumes to the exact
+# original tree. This proves real setup, partial progress, termination, and
+# recovery; a no-op binary cannot satisfy that chain.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
+W=$(workdir); trap 'rm -rf "$W"' EXIT
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+
 make_tree() {
-  local d="$1" n="$2"
+  local d="$1" n="$2" i
   mkdir -p "$d"
   for i in $(seq 1 "$n"); do
-    : > "$d/Screenshot 2026-0$((i % 9 + 1))-$(printf %02d $((i % 28 + 1))) at $(printf %02d $((i % 12 + 1))).$(printf %02d $((i % 60))).$(printf %02d $((i % 60))) AM ($i).png"
+    printf 'original screenshot payload %s\n' "$i" > "$d/Screenshot 2026-0$((i % 9 + 1))-$(printf %02d $((i % 28 + 1))) at $(printf %02d $((i % 12 + 1))).$(printf %02d $((i % 60))).$(printf %02d $((i % 60))) AM ($i).png"
   done
 }
 
-# --- Resumption: several kill points across the undo pass -------------------
-RESUME_TOTAL=0
-RESUME_BAD=0
-RESUME_FIRST=""
+# Wait at most ten seconds for undo to make a real partial recovery while its
+# process is still alive. It prints the witnessed number of restored files.
+wait_for_partial() {
+  local root="$1" total="$2" target="$3" pid="$4" i restored
+  for i in $(seq 1 1000); do
+    restored=$(find "$root" -maxdepth 1 -type f | wc -l | tr -d ' ')
+    if [ "$restored" -ge "$target" ] && [ "$restored" -lt "$total" ] && kill -0 "$pid" 2>/dev/null; then
+      printf '%s\n' "$restored"
+      return 0
+    fi
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.01
+  done
+  return 1
+}
 
-for target_pct in 5 25 50 75 95; do
-  RESUME_TOTAL=$((RESUME_TOTAL + 1))
-  d=$(workdir)/D
-  N=500
-  make_tree "$d" "$N"
-  before_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
-  before_n=$(echo "$before_set" | grep -c .)
+TOTAL=500
+TRIALS=0
+for percent in 5 50 85; do
+  TRIALS=$((TRIALS + 1))
+  D="$W/trial-$percent"
+  make_tree "$D" "$TOTAL"
+  BEFORE="$W/before-$percent.json"
+  AFTER="$W/after-$percent.json"
+  snapshot_tree "$D" "$BEFORE"
 
-  "$SWEEP" apply "$d" --yes >/dev/null 2>&1
-  applied_n=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_exit 0 "undo interruption $percent%: setup apply succeeds" -- "$SWEEP" apply "$D" --yes
+  moved=$(find "$D/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$TOTAL" "$moved" "undo interruption $percent%: apply moved all files into its holding directory"
 
-  target=$(( applied_n * target_pct / 100 ))
-  [ "$target" -lt 1 ] && target=1
-
+  target=$((TOTAL * percent / 100))
   "$SWEEP" undo >/dev/null 2>&1 &
   pid=$!
-  while true; do
-    restored=$(find "$d" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "$restored" -ge "$target" ] && break
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.001
-  done
-  kill -9 "$pid" 2>/dev/null
+  if ! restored=$(wait_for_partial "$D" "$TOTAL" "$target" "$pid"); then
+    wait "$pid" 2>/dev/null || true
+    fail "undo interruption $percent%: undo did not reach a witnessed partial state before exiting or the 10s deadline"
+    continue
+  fi
+  pass "undo interruption $percent%: undo restored $restored of $TOTAL files while still running"
+
+  if kill -9 "$pid" 2>/dev/null; then
+    pass "undo interruption $percent%: SIGKILL was delivered to the active undo process"
+  else
+    fail "undo interruption $percent%: could not deliver SIGKILL after partial progress"
+  fi
   wait "$pid" 2>/dev/null
+  kill_status=$?
+  [ "$kill_status" -ne 0 ] \
+    && pass "undo interruption $percent%: killed undo exited non-zero ($kill_status)" \
+    || fail "undo interruption $percent%: killed undo exited zero"
 
-  mid_origin=$(find "$d" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
-  mid_total=$(find "$d" -type f | wc -l | tr -d ' ')
-
-  # Resume: run undo again. It must finish the job without erroring.
-  resume_out=$("$SWEEP" undo 2>&1)
-  resume_code=$?
-
-  after_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
-  after_n=$(find "$d" -type f | wc -l | tr -d ' ')
-
-  bad=""
-  if [ "$after_set" != "$before_set" ] || [ "$after_n" != "$before_n" ]; then
-    bad="tree wrong after resume: baseline=$before_n post-resume-total=$after_n"
-    dupes=$(comm -12 <(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort) <(find "$d" -mindepth 2 -type f -exec basename {} \; | sort))
-    [ -n "$dupes" ] && bad="$bad
-  duplicated at both origin and destination: $dupes"
-    missing=$(comm -23 <(echo "$before_set") <(echo "$after_set"))
-    [ -n "$missing" ] && bad="$bad
-  missing from origin: $missing"
+  restored_after_kill=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
+  still_held=$(find "$D/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
+  total_after_kill=$(find "$D" -type f | wc -l | tr -d ' ')
+  if [ "$restored_after_kill" -gt 0 ] && [ "$still_held" -gt 0 ] && [ "$total_after_kill" -eq "$TOTAL" ]; then
+    pass "undo interruption $percent%: interrupted tree has a real restored/held split with no missing files"
+  else
+    fail "undo interruption $percent%: interrupted tree is not a valid partial split (restored=$restored_after_kill held=$still_held total=$total_after_kill expected=$TOTAL)"
   fi
 
-  if [ -n "$bad" ]; then
-    RESUME_BAD=$((RESUME_BAD + 1))
-    [ -z "$RESUME_FIRST" ] && RESUME_FIRST="[kill at ${target_pct}% of undo, mid-state origin=$mid_origin/$before_n total=$mid_total] $bad
-  resume said (exit $resume_code): $resume_out"
+  assert_exit 0 "undo interruption $percent%: a second undo resumes successfully" -- "$SWEEP" undo
+  snapshot_tree "$D" "$AFTER"
+  assert_snapshot_eq "$BEFORE" "$AFTER" "undo interruption $percent%: resume restored every original path and byte"
+
+  COMPLETE="$W/complete-$percent.json"
+  TERMINAL="$W/terminal-$percent.json"
+  snapshot_tree "$D" "$COMPLETE"
+  final_out=$("$SWEEP" undo 2>&1); final_status=$?
+  snapshot_tree "$D" "$TERMINAL"
+  if [ "$final_status" -eq 1 ]; then
+    pass "undo interruption $percent%: a completed journal returns the documented no-work exit"
+  else
+    fail "undo interruption $percent%: completed journal returned unexpected exit=$final_status output=${final_out%%$'\n'*}"
   fi
-
-  rm -rf "$(dirname "$d")"
+  assert_snapshot_eq "$COMPLETE" "$TERMINAL" "undo interruption $percent%: terminal no-work call changed no path or byte"
 done
 
-if [ "$RESUME_BAD" -eq 0 ]; then
-  pass "kill -9 during undo at 5/25/50/75/95% progress, then re-run undo: every trial converged back to the exact baseline name set, no double-restore, no stranding"
-else
-  fail "kill -9 during undo: $RESUME_BAD/$RESUME_TOTAL resume attempts left the tree wrong. First reproduction:
-$RESUME_FIRST"
-fi
-
-# --- Convergence: does a killed-then-resumed journal ever go quiet again? --
-d=$(workdir)/D
-N=700
-make_tree "$d" "$N"
-"$SWEEP" apply "$d" --yes >/dev/null 2>&1
-applied_n=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
-target=$(( applied_n / 3 ))
-
-"$SWEEP" undo >/dev/null 2>&1 &
-pid=$!
-while true; do
-  restored=$(find "$d" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
-  [ "$restored" -ge "$target" ] && break
-  kill -0 "$pid" 2>/dev/null || break
-  sleep 0.001
-done
-kill -9 "$pid" 2>/dev/null
-wait "$pid" 2>/dev/null
-
-# Resume to completion (drive it until the tool itself says there's no more
-# progress to make, capped so a real bug can't hang the suite).
-attempt=0
-last_out=""
-while [ "$attempt" -lt 5 ]; do
-  last_out=$("$SWEEP" undo 2>&1)
-  attempt=$((attempt + 1))
-  echo "$last_out" | grep -q "Restored 0 files" && break
-done
-
-# Now that resuming is done (or gave up trying to make further progress),
-# does the journal report a clean "already restored" on the next call (the
-# state a fully-reversed journal is supposed to reach)?
-final_out=$("$SWEEP" undo 2>&1)
-final_code=$?
-
-if echo "$final_out" | grep -q "already restored"; then
-  pass "after a killed-then-resumed undo finishes, the journal converges: a further \`sweep undo\` correctly reports nothing left to do"
-else
-  fail "after a killed-then-resumed undo finishes, the journal never converges to 'already restored'. Every future \`sweep undo\` call (exit $final_code) keeps re-walking and re-reporting stale progress on this journal, because the killed run never persisted what it actually did before dying. Output on this call:
-$final_out"
-fi
-
-rm -rf "$(dirname "$d")"
+pass "SIGKILL undo recovery covered $TRIALS witnessed progress points (early, middle, and late)"

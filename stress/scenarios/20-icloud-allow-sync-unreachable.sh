@@ -11,7 +11,8 @@
 # provider it will actually meet most often on this OS.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir)
+trap 'rm -rf "$W" "${W}.before-plans.json" "${W}.after-plans.json"' EXIT
 
 # Build the exact real macOS path shape for each provider, all under our own
 # scratch tree so nothing touches a real home directory.
@@ -23,6 +24,8 @@ mkdir -p "$ICLOUD" "$DROPBOX" "$GDRIVE"
 for d in "$ICLOUD" "$DROPBOX" "$GDRIVE"; do
   for i in 0 1 2 3 4; do : > "$d/deck_notes_$i.pdf"; done
 done
+BEFORE_PLANS="${W}.before-plans.json"
+snapshot_tree "$W" "$BEFORE_PLANS"
 
 # --- Baseline: all three are correctly detected and refused by default ---
 assert_exit 2 "iCloud Desktop is refused by default (no --allow-sync)"    -- "$SWEEP" "$ICLOUD"
@@ -61,11 +64,11 @@ if [ "$icloud_code" != "0" ]; then
   esac
 fi
 
-# Whatever happened above, nothing should have actually moved anything.
-# These were all plan-only invocations.
-assert_intact "$ICLOUD" 5 "iCloud Desktop untouched by plan-only runs"
-assert_intact "$DROPBOX" 5 "Dropbox untouched by plan-only runs"
-assert_intact "$GDRIVE" 5 "Google Drive untouched by plan-only runs"
+# These were all plan-only invocations. A count would miss a rename, duplicate,
+# or overwritten payload, so compare the complete scratch-tree manifest.
+AFTER_PLANS="${W}.after-plans.json"
+snapshot_tree "$W" "$AFTER_PLANS"
+assert_snapshot_eq "$BEFORE_PLANS" "$AFTER_PLANS" "provider plan-only runs changed no path, byte, link, or directory"
 
 # --- the fail-open a review caught, pinned so it cannot come back -------------
 #

@@ -10,7 +10,37 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
-## [unpack 0.5.2] - 2026-08-23
+### 0.5.3 candidates — sweep, stash and unpack
+
+These versions are prepared but not published. No release date or completed
+independent review is claimed here.
+
+- **sweep:** project documents found in child directories now hold related
+  sibling assets, while unrelated documents and screenshots remain eligible.
+  Content-inspection buffers erase the full allocation on drop, with a test
+  that observes the destructor path.
+- **sweep and stash:** `ETUDE_JOURNAL_KEY` allows encrypted undo when the login
+  keychain is unavailable. Invalid supplied keys refuse without fallback.
+  Retain the same key for subsequent undo; an external key cannot be destroyed
+  by `sweep forget`. Journal loading also checks the opened file's identity.
+- **unpack:** refuses dangerous ZIP/TAR member types, checks ZIP central and
+  local records, and runs listing and extraction against a private archive
+  copy. System extractor paths are fixed. Cleanup reports what remains when
+  removal fails instead of claiming nothing was left behind.
+- **Verification:** additional undo assertions and standalone stress scenario
+  exit codes expose failures to callers. Release installation checks distinguish
+  local candidates from public tags and exercise the installed binaries.
+
+The extraction budget remains a polled soft limit. Extraction now uses private
+staging and atomic publication, so an interrupted extraction never publishes a
+partial requested destination. Complete structured mutation receipts are not
+part of these candidates. Existing journal encryption and the 0/1/2/3
+exit-code convention remain unchanged.
+
+### unpack 0.5.2 source changes — not published
+
+The earlier entry was dated 2026-08-23, but no `unpack-v0.5.2` tag or release
+was published. Its changes are included in the 0.5.3 candidate above.
 
 ### Fixed
 

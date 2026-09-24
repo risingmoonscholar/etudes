@@ -78,3 +78,17 @@ Two things worth having next to the rule:
 - **A rebased branch is re-tested on the resolved tree.** Running the suite
   during a rebase with unresolved conflicts still prints a passing count. That is
   a number shaped like a result.
+
+### When changing a stress case
+
+Put the answer to these questions in the scenario header or the pull request,
+where the next reviewer can find it:
+
+1. Which user operation and failure does this represent?
+2. What proves the fixture and any intervention actually occurred?
+3. Which exact result or filesystem state passes the case?
+4. Which deliberately broken counterpart would it reject?
+5. What bounds its time and resources?
+6. Which existing contract does it replace, or which distinct gap does it fill?
+
+A case that cannot answer these is not ready to become permanent stress cost.

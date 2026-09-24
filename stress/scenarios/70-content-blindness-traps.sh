@@ -158,21 +158,71 @@ fi
 #     content reading on: it must NOT finish.
 F="$W/Fifo"; mkdir -p "$F"
 for i in 1 2 3 4 5; do : > "$F/quarter_report_$i.txt"; done
-if mkfifo "$F/quarter_report_9.txt" 2>/dev/null && command -v script >/dev/null 2>&1; then
-  { sleep 1; echo y; sleep 30; } \
-    | script -q /dev/null "$SWEEP" "$F" --inspect-content --json >/dev/null 2>&1 &
-  ipid=$!
-  w=0
-  while kill -0 "$ipid" 2>/dev/null && [ "$w" -lt 12 ]; do sleep 1; w=$((w+1)); done
-  if kill -0 "$ipid" 2>/dev/null; then
-    pkill -P "$ipid" 2>/dev/null; kill -9 "$ipid" 2>/dev/null; wait "$ipid" 2>/dev/null
-    pass "INSTRUMENT 2: with --inspect-content the same FIFO BLOCKS the scan. Trap 5's completion is therefore evidence, not decoration"
-  else
-    wait "$ipid" 2>/dev/null
-    fail "INSTRUMENT 2: a content-reading scan finished over a FIFO. The FIFO trap cannot detect a content read, so trap 5 proves nothing"
-  fi
+if mkfifo "$F/quarter_report_9.txt" 2>/dev/null; then
+  # Give the real product process a PTY, wait until it has asked for consent,
+  # answer yes, and then inspect *that PID*. A terminal-wrapper PID remaining
+  # alive is not evidence that sweep reached a FIFO read.
+  FIFO_STATUS="$W/fifo-positive-control.json"
+  python3 - "$SWEEP" "$F" "$FIFO_STATUS" <<'PY'
+import json
+import os
+import select
+import signal
+import sys
+import time
+
+sweep, root, status_path = sys.argv[1:]
+pid, fd = os.forkpty()
+if pid == 0:
+    os.execv(sweep, [sweep, root, "--inspect-content", "--json"])
+
+def finish(result, detail):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
+    with open(status_path, "w") as output:
+        json.dump({"result": result, "detail": detail}, output)
+
+deadline = time.monotonic() + 5
+seen = b""
+while time.monotonic() < deadline:
+    readable, _, _ = select.select([fd], [], [], 0.1)
+    if readable:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            finish("exited-before-consent", seen.decode("utf-8", "replace"))
+            raise SystemExit
+        seen += chunk
+        if b"read file contents?" in seen:
+            os.write(fd, b"y\n")
+            break
+    waited, _ = os.waitpid(pid, os.WNOHANG)
+    if waited:
+        finish("exited-before-consent", seen.decode("utf-8", "replace"))
+        raise SystemExit
+else:
+    finish("no-consent-prompt", seen.decode("utf-8", "replace"))
+    raise SystemExit
+
+time.sleep(3)
+waited, wait_status = os.waitpid(pid, os.WNOHANG)
+if waited:
+    finish("completed", f"wait status {wait_status}")
+else:
+    finish("blocked", "real sweep PID remained alive three seconds after consent")
+PY
+  case "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"])' "$FIFO_STATUS" 2>/dev/null)" in
+    blocked) pass "INSTRUMENT 2: the real --inspect-content sweep process remained blocked after consent on the FIFO" ;;
+    completed) fail "INSTRUMENT 2: a content-reading sweep completed over a FIFO. The FIFO trap cannot detect a content read" ;;
+    *) unproven "INSTRUMENT 2: FIFO positive control" "could not reach and observe the real sweep process at its consent/read boundary" ;;
+  esac
 else
-  unproven "INSTRUMENT 2: FIFO positive control" "mkfifo or script(1) unavailable"
+  unproven "INSTRUMENT 2: FIFO positive control" "mkfifo unavailable"
 fi
 
 # --- unpack refuses members it cannot safely create --------------------------
@@ -195,9 +245,58 @@ grep -q -- "--list" <<<"$SYM_OUT" \
   || fail "the refusal offered no next move: $SYM_OUT"
 [ ! -d "$UNP/out-sym" ] && pass "and nothing was written" || fail "a refused archive created its target"
 
-# setuid, from a real archive
-: > "$UNP/stage/suid.bin"; chmod 4755 "$UNP/stage/suid.bin"
-tar -cf "$UNP/suid.tar" -C "$UNP/stage" suid.bin 2>/dev/null
+# Exercise the ZIP path separately. `zip -y` records the link itself rather
+# than its target, so this is the same forbidden member type through unzip's
+# listing/extraction path. The archive digest and absent output prove refusal
+# did not mutate either side of the operation.
+if command -v zip >/dev/null 2>&1; then
+  (cd "$UNP/stage" && zip -qy "$UNP/sym.zip" shortcut ordinary.txt) || fail "could not build ZIP symlink fixture"
+  ZIP_BEFORE=$(shasum -a 256 "$UNP/sym.zip" | awk '{print $1}')
+  CODE=0; ZIP_OUT=$("$UNPACK" "$UNP/sym.zip" --into "$UNP/out-sym-zip" 2>&1) || CODE=$?
+  assert_eq 2 "$CODE" "a ZIP carrying a symlink is refused"
+  grep -q "symlink: shortcut" <<<"$ZIP_OUT" \
+    && pass "the ZIP refusal names the member and its kind" \
+    || fail "the ZIP symlink refusal did not name the member: $ZIP_OUT"
+  [ ! -d "$UNP/out-sym-zip" ] && pass "the refused ZIP wrote no target" || fail "a refused ZIP created its target"
+  ZIP_AFTER=$(shasum -a 256 "$UNP/sym.zip" | awk '{print $1}')
+  assert_eq "$ZIP_BEFORE" "$ZIP_AFTER" "the refused ZIP source archive stayed byte-identical"
+else
+  unproven "ZIP symlink refusal" "zip is unavailable on this host"
+fi
+
+# A normal ZIP reaches the extractor itself. Together with the refused ZIP
+# above, this makes a missing or broken `unzip` command a visible stress
+# failure instead of a metadata-only green result.
+if command -v zip >/dev/null 2>&1; then
+  mkdir -p "$UNP/zip-ok"; printf 'ordinary ZIP payload\n' > "$UNP/zip-ok/ordinary.txt"
+  (cd "$UNP/zip-ok" && zip -q "$UNP/ok.zip" ordinary.txt) || fail "could not build ordinary ZIP fixture"
+  CODE=0; "$UNPACK" "$UNP/ok.zip" --into "$UNP/out-ok-zip" >/dev/null 2>&1 || CODE=$?
+  assert_eq 0 "$CODE" "an ordinary ZIP still extracts"
+  cmp -s "$UNP/zip-ok/ordinary.txt" "$UNP/out-ok-zip/ordinary.txt" \
+    && pass "and its ZIP payload landed byte-identical" \
+    || fail "the ordinary ZIP payload did not land intact"
+fi
+
+# setuid, from a real archive.  Do not depend on the host filesystem allowing
+# us to create a setuid inode: APFS and mount policy can clear the bit without
+# reporting an error.  Write the tar header directly, then prove the listing
+# actually contains the authority bit before treating a refusal as evidence.
+python3 - "$UNP/suid.tar" <<'PY'
+import io
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], "w") as archive:
+    member = tarfile.TarInfo("suid.bin")
+    member.mode = 0o4755
+    member.size = 0
+    archive.addfile(member, io.BytesIO())
+PY
+if tar -tvf "$UNP/suid.tar" 2>/dev/null | grep -q -- '-rws'; then
+  :
+else
+  fail "setuid fixture was not encoded in the tar listing; the host tar cannot express this case"
+fi
 CODE=0; SUID_OUT=$("$UNPACK" "$UNP/suid.tar" --into "$UNP/out-suid" 2>&1) || CODE=$?
 assert_eq 2 "$CODE" "an archive carrying a setuid bit is refused"
 grep -q "setuid" <<<"$SUID_OUT" && pass "and says so" || fail "no setuid reason: $SUID_OUT"

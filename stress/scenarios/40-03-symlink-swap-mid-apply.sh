@@ -70,6 +70,7 @@ OUTSIDE="$W/outside"
 mkdir -p "$OUTSIDE"
 SENTINEL="SAME-DEVICE-OUTSIDE-SECRET-$$-$(python3 -c 'import random;print(random.randint(100000,999999))')"
 printf '%s' "$SENTINEL" > "$OUTSIDE/secret.txt"
+SOURCE_SENTINEL="SAME-DEVICE-INSIDE-SOURCE-$$-$(python3 -c 'import random;print(random.randint(100000,999999))')"
 
 CTRL="$W/control/Desktop"; build_tree "$CTRL"
 T0_START=$(now_ms)
@@ -81,7 +82,7 @@ if [ "$T0" -lt 20 ]; then
   exit 0
 fi
 
-HIT=0
+INJECTED=0
 CODE=0
 TARGET=""
 GROUP=""
@@ -98,44 +99,68 @@ for frac in "${FRACTIONS[@]}"; do
   GROUP="$(printf '%s\n' "$PICK" | sed -n '3p')"
   NAME="$(basename "$TARGET")"
   DEST="$D/$GROUP/$NAME"
+  # A regular destination with these bytes proves this member moved before
+  # the replacement; outside bytes prove that the replacement was followed.
+  printf '%s' "$SOURCE_SENTINEL" > "$TARGET"
 
   "$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err" &
   PID=$!
   DELAY_MS=$((T0 * frac / 100))
   python3 -c "import time; time.sleep($DELAY_MS/1000)"
+  # A completed move leaves the old source path free again.  Replacing it at
+  # that point would prove nothing about the mover, and a normal destination
+  # file would be a safe (but misleading) result.  Only inject while this
+  # member is still waiting to be moved.
+  if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    wait "$PID" 2>/dev/null || true
+    continue
+  fi
   rm -f "$TARGET"
-  ln -s "$OUTSIDE/secret.txt" "$TARGET"
+  if ln -s "$OUTSIDE/secret.txt" "$TARGET" && [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$OUTSIDE/secret.txt" ]; then
+    # Re-check after the replacement.  A regular destination containing the
+    # known original bytes proves the mover won before `ln`, leaving a new but
+    # irrelevant source link.  A destination containing outside bytes is an
+    # unsafe post-injection follow and must remain a witnessed failure.
+    if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
+      if [ "$(cat "$DEST")" = "$SOURCE_SENTINEL" ]; then
+        wait "$PID" 2>/dev/null || true
+        continue
+      fi
+    fi
+    INJECTED=1
+  else
+    wait "$PID" 2>/dev/null || true
+    continue
+  fi
   wait "$PID"
   CODE=$?
-
-  if [ -L "$DEST" ]; then
-    HIT=1
-    break
-  fi
-  if [ -L "$TARGET" ]; then
-    # Never got processed this run (apply may have exited before reaching
-    # it, or finished before our swap even fired). Still informative if
-    # apply otherwise completed, but keep looking for the in-flight case.
-    :
-  fi
+  break
 done
 
-if [ "$HIT" != "1" ]; then
-  unproven "symlink swap mid-apply (same device)" "the swap never landed as the in-flight source across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms) on this host"
+if [ "$INJECTED" != "1" ]; then
+  unproven "symlink swap mid-apply (same device)" "could not replace the planned source with the external symlink across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms)"
   exit 0
 fi
 
-echo "    (race landed: swapped at ~${DELAY_MS}ms into a ~${T0}ms baseline run, group position $IDX)"
+pass "symlink swap mid-apply: replaced the planned source with a verified external link at ~${DELAY_MS}ms (group position $IDX)"
 
-assert_eq 1 "$([ -L "$DEST" ] && echo 1 || echo 0)" "the destination holds a symlink, not a copy of its target's content"
-
-LINK_TARGET="$(readlink "$DEST" 2>/dev/null)"
-assert_eq "$OUTSIDE/secret.txt" "$LINK_TARGET" "the relocated link still points at the same outside path, unchanged"
+# The witnessed swap decides whether this test ran. A regular destination with
+# the outside bytes is unsafe; a relocated link or a refusal that leaves the
+# link at source are both defined safe outcomes for same-device movement.
+if [ -L "$DEST" ]; then
+  LINK_TARGET="$(readlink "$DEST" 2>/dev/null)"
+  assert_eq "$OUTSIDE/secret.txt" "$LINK_TARGET" "the relocated link still points at the same outside path, unchanged"
+elif [ -L "$TARGET" ] && [ "$CODE" -ne 0 ]; then
+  pass "apply refused after the swap and left the external link at its source"
+else
+  fail "after a witnessed symlink swap, apply left neither a safe destination link nor a refused source link (exit=$CODE)"
+fi
 
 OUTSIDE_CONTENT="$(cat "$OUTSIDE/secret.txt" 2>/dev/null)"
 assert_eq "$SENTINEL" "$OUTSIDE_CONTENT" "the outside file's content was never read into a copy or modified"
 
-if grep -rq "$SENTINEL" "$D" 2>/dev/null; then
+COPIES=$(find "$D" -type f -exec grep -lF "$SENTINEL" {} + 2>/dev/null || true)
+if [ -n "$COPIES" ]; then
   fail "the outside file's content leaked into the tree as a real copy somewhere under \$D"
 else
   pass "no copy of the outside content exists anywhere in the tree. Only the link moved"

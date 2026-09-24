@@ -41,6 +41,14 @@ FAIL_LINES=(); UNPROVEN_LINES=()
 BIN="${BIN:?BIN must point at target/release}"
 SWEEP="$BIN/sweep"; STASH="$BIN/stash"; UNPACK="$BIN/unpack"; MKFX="$BIN/mkfx"
 
+# Most scenarios are about filesystem behaviour, not whether this machine's
+# login keychain is unlocked. Exercise real sealed journals with one ephemeral
+# supplied key by default. The dedicated journal/keychain scenario explicitly
+# unsets or replaces this value for its own controls.
+if [ -z "${ETUDE_JOURNAL_KEY:-}" ]; then
+  export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+fi
+
 _stress_record() {
   # FD 199 is opened and immediately unlinked by the direct-run wrapper.
   # A scenario sees only the descriptor, never a replaceable record pathname.
@@ -65,11 +73,87 @@ assert_exit() {
   else fail "$label: wanted exit $want, got $got (${out%%$'\n'*})"; fi
 }
 
-# assert_intact DIR N LABEL: nothing was destroyed
+# assert_intact DIR N LABEL: nothing was destroyed. Count directory entries,
+# never printed paths: a filename containing a newline is one file, not two.
 assert_intact() {
-  local n; n=$(find "$1" -type f 2>/dev/null | wc -l | tr -d ' ')
+  local n; n=$(python3 - "$1" <<'PY'
+import os
+import stat
+import sys
+
+count = 0
+for root, dirs, files in os.walk(sys.argv[1], followlinks=False):
+    for name in files:
+        try:
+            if stat.S_ISREG(os.lstat(os.path.join(root, name)).st_mode):
+                count += 1
+        except FileNotFoundError:
+            pass
+print(count)
+PY
+)
   if [ "$n" = "$2" ]; then pass "$3 ($n files intact)"
   else fail "$3: expected $2 files, found $n. FILES WERE LOST"; fi
+}
+
+# snapshot_tree DIR OUT: capture names, kinds, bytes and link targets without
+# following links.  This is the default oracle for movement and refusal cases;
+# a file count alone cannot distinguish a missing file from a duplicate.
+snapshot_tree() {
+  python3 "$(dirname "${BASH_SOURCE[0]}")/snapshot.py" "$1" > "$2"
+  # A scenario normally removes its scratch tree on exit. Preserve the actual
+  # manifests that informed a failed verdict before that cleanup can erase the
+  # only useful explanation. The runner removes this directory for passes.
+  if [ -n "${STRESS_FAILURE_ARTIFACTS:-}" ]; then
+    SNAPSHOT_SEQUENCE=$(( ${SNAPSHOT_SEQUENCE:-0} + 1 ))
+    mkdir -p "$STRESS_FAILURE_ARTIFACTS"
+    cp "$2" "$STRESS_FAILURE_ARTIFACTS/snapshot-${SNAPSHOT_SEQUENCE}-$(basename "$2")"
+  fi
+}
+
+# run_bounded MILLISECONDS EVIDENCE -- COMMAND ...: execute one command in an
+# owned process group. The JSON evidence always records elapsed time, output,
+# exit/signal and whether the deadline killed the group. Exit 124 means the
+# deadline fired; callers must record that as failure or unproven explicitly.
+run_bounded() {
+  local timeout_ms="$1" evidence="$2"
+  shift 2
+  python3 "$(dirname "${BASH_SOURCE[0]}")/bounded.py" --timeout-ms "$timeout_ms" --evidence "$evidence" "$@"
+}
+
+# set_mtime_relative SECONDS PATH...: use the current clock rather than a
+# calendar date in a fixture. Positive seconds mean the past; negative values
+# mean the future. Python avoids platform-specific touch date syntax.
+set_mtime_relative() {
+  local seconds="$1"
+  shift
+  python3 - "$seconds" "$@" <<'PY'
+import os
+import sys
+import time
+
+when = time.time() - int(sys.argv[1])
+for path in sys.argv[2:]:
+    os.utime(path, (when, when))
+PY
+}
+
+# assert_snapshot_eq BEFORE AFTER LABEL
+assert_snapshot_eq() {
+  if cmp -s "$1" "$2"; then
+    pass "$3"
+  else
+    fail "$3: filesystem manifest changed (before=$1 after=$2)"
+  fi
+}
+
+# assert_snapshot_ne BEFORE AFTER LABEL
+assert_snapshot_ne() {
+  if cmp -s "$1" "$2"; then
+    fail "$3: filesystem manifest did not change"
+  else
+    pass "$3"
+  fi
 }
 
 # Journals go to a scratch state directory, never the real one.
@@ -143,6 +227,25 @@ detach_registered_mounts() {
   for m in "${REGISTERED_MOUNTS[@]:-}"; do
     [ -n "$m" ] && [ -d "$m" ] && hdiutil detach "$m" -force >/dev/null 2>&1
   done
+}
+
+# Create a blank filesystem image using the current macOS API when it is
+# available. `hdiutil create -fs` still works for APFS on older systems, but
+# recent macOS releases direct callers to `diskutil image create blank`; the
+# latter is also the path that can create exFAT images on this host.
+#
+# Callers continue to use hdiutil for attach/detach, so this is deliberately a
+# narrow creation helper rather than another mount lifecycle abstraction.
+create_disk_image() {
+  local image=$1 size=$2 filesystem=$3 volume_name=$4
+  if command -v diskutil >/dev/null 2>&1; then
+    if diskutil image create blank -size "$size" -fs "$filesystem" \
+      --volumeName "$volume_name" "$image" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  hdiutil create -size "$size" -fs "$filesystem" -volname "$volume_name" \
+    "$image" >/dev/null 2>&1
 }
 
 # Best-effort cleanup of volumes orphaned by a killed run, run once before a
@@ -238,18 +341,22 @@ require() {  # require CMD REASON: mark unproven and return 1 if missing
 # and the status from it.  run.sh calls this same function after each child.
 stress_outcome() {
   local record="$1" child_status="$2" line
-  STRESS_PASSED=0; STRESS_FAILED=0; STRESS_UNPROVEN=0
+  STRESS_PASSED=0; STRESS_FAILED=0; STRESS_UNPROVEN=0; STRESS_COMPLETED=0
   while IFS= read -r line; do
     case "$line" in
       ok) STRESS_PASSED=$((STRESS_PASSED + 1));;
       FAIL) STRESS_FAILED=$((STRESS_FAILED + 1));;
       unproven) STRESS_UNPROVEN=$((STRESS_UNPROVEN + 1));;
+      complete) STRESS_COMPLETED=1;;
     esac
     if [ -n "${STRESS_RESULT_FD:-}" ]; then printf '%s\n' "$line" >&"$STRESS_RESULT_FD"; fi
   done < "$record"
   # A failed conditional at the end of a scenario is not a failed assertion.
   # Preserve signal deaths, and use USR1 only as a fallback for a lost record.
-  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || [ "$child_status" -ge 128 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
+  # Exit 2 is the wrapper's explicit all-unproven verdict.  It is incomplete
+  # coverage, not an assertion failure; preserve it so the runner can report
+  # that distinction. Any other nonzero child status is an unexpected abort.
+  if [ "$STRESS_FAILED" -eq 0 ] && { [ "${STRESS_WRAPPER_FAILED:-0}" -ne 0 ] || { [ "$child_status" -ne 0 ] && [ "$child_status" -ne 2 ]; } || [ "$STRESS_COMPLETED" -ne 1 ] || [ $((STRESS_PASSED + STRESS_UNPROVEN)) -eq 0 ]; }; then
     STRESS_FAILED=1
     [ -z "${STRESS_RESULT_FD:-}" ] || printf 'FAIL\n' >&"$STRESS_RESULT_FD"
   fi
@@ -286,7 +393,9 @@ elif [ "${SCENARIO:-}" != run ]; then
   trap '_stress_forward TERM' TERM
   trap '_stress_forward HUP' HUP
   trap '_stress_forward QUIT' QUIT
-  set -m
+  # The batch runner already owns a process group for its case. Job control
+  # would put this child in a different group and let it escape that reaper.
+  [ "${STRESS_NO_JOB_CONTROL:-0}" = 1 ] || set -m
   /bin/bash "$0" "$@" <&0 &
   _stress_child=$!
   # USR1 interrupts wait (158 on macOS); wait again until the job is reaped.
@@ -295,6 +404,9 @@ elif [ "${SCENARIO:-}" != run ]; then
     wait "$_stress_child"; _stress_child_status=$?
     [ "$_stress_wait_interrupted" -eq 0 ] && break
   done
+  if [ "$_stress_child_status" -eq 0 ]; then
+    printf 'complete\n' >&199
+  fi
   kill -TERM -- "-$_stress_child" 2>/dev/null || true
   kill -KILL -- "-$_stress_child" 2>/dev/null || true
   stress_outcome /dev/fd/198 "$_stress_child_status"

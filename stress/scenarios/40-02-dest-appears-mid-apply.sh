@@ -61,7 +61,7 @@ if [ "$T0" -lt 20 ]; then
 fi
 
 SENTINEL="INTRUDER-CONTENT-DO-NOT-TOUCH-$$"
-HIT=0
+INJECTED=0
 CODE=0
 TARGET=""
 BLOCKER=""
@@ -87,32 +87,30 @@ for frac in "${FRACTIONS[@]}"; do
   DELAY_MS=$((T0 * frac / 100))
   python3 -c "import time; time.sleep($DELAY_MS/1000)"
   mkdir -p "$D/$GROUPNAME"
-  printf '%s' "$SENTINEL" > "$BLOCKER"
+  # noclobber makes injection itself safe. Plain `>` could overwrite sweep's
+  # output after it won the race, then manufacture the very corruption this
+  # scenario is supposed to detect.
+  if (set -C; printf '%s' "$SENTINEL" > "$BLOCKER") 2>/dev/null; then
+    INJECTED=1
+  else
+    wait "$PID" 2>/dev/null || true
+    continue
+  fi
   wait "$PID"
   CODE=$?
-
-  # A hit is: the source file for this entry never made it into the
-  # destination (still sitting at the original path OR gone-because-refused
-  # before any move started), and the blocker at the destination still holds
-  # exactly our sentinel: i.e. sweep's move for this entry did not run, or
-  # ran and lost the race honestly (EEXIST), either way never overwriting us.
-  if [ "$CODE" != "0" ] && [ -f "$BLOCKER" ]; then
-    CONTENT="$(cat "$BLOCKER" 2>/dev/null)"
-    if [ "$CONTENT" = "$SENTINEL" ]; then
-      HIT=1
-      break
-    fi
-  fi
+  break
 done
 
-if [ "$HIT" != "1" ]; then
-  unproven "destination appears mid-apply" "the intruder file never landed inside the apply window across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms). Could not exercise the race on this host"
+if [ "$INJECTED" != "1" ]; then
+  unproven "destination appears mid-apply" "could not exclusively create the intruder before sweep had already created that destination across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms)"
   exit 0
 fi
 
-echo "    (race landed: blocker planted at ~${DELAY_MS}ms into a ~${T0}ms baseline run, group position $IDX of $((N - 2)))"
+pass "destination appears mid-apply: exclusively created the intruder at ~${DELAY_MS}ms, before the target destination existed (group position $IDX)"
 
-assert_eq 1 "$([ "$CODE" != "0" ] && echo 1 || echo 0)" "apply refused rather than succeeding over the intruder (exit $CODE)"
+# From this point onward, the injection is the witness. Product outcomes are
+# assertions, never a condition for deciding whether the race happened.
+assert_eq 1 "$([ "$CODE" != "0" ] && echo 1 || echo 0)" "apply refused rather than silently succeeding after the intruder appeared (exit $CODE)"
 
 CONTENT="$(cat "$BLOCKER" 2>/dev/null)"
 assert_eq "$SENTINEL" "$CONTENT" "the intruder's content at the destination was never overwritten"
@@ -120,9 +118,7 @@ assert_eq "$SENTINEL" "$CONTENT" "the intruder's content at the destination was 
 # The tool's own source copy for this entry must not have been silently
 # deleted while failing to land at the (blocked) destination. That would be
 # data loss dressed up as a refusal.
-SRC_STILL_HERE=0
-[ -f "$TARGET" ] && SRC_STILL_HERE=1
-if [ "$SRC_STILL_HERE" = "1" ]; then
+if [ -f "$TARGET" ]; then
   pass "the source file for the blocked entry was left in place, not deleted"
 else
   fail "the source file is gone and the destination still holds only the intruder's content. The original file was lost: $TARGET"

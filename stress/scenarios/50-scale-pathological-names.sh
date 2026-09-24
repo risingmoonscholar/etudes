@@ -15,13 +15,8 @@
 #     No file or directory named after the real output of whoami ever appears
 #   - nothing crashes, nothing silently drops a file
 #
-# A note on the harness: lib.sh's assert_intact counts files with
-# `find DIR -type f | wc -l`. A filename containing an embedded newline adds
-# an extra apparent line to find's default output, so assert_intact
-# OVERCOUNTS by one for every such name in the tree. This scenario does NOT
-# use assert_intact once the newline-name is on disk. It counts with
-# `find -print0` instead. It flags the harness gap explicitly below rather
-# than silently working around it.
+# The shared integrity helper counts filesystem entries rather than printed
+# lines, so this fixture also guards newline-containing names.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
@@ -114,14 +109,4 @@ else
   fail "undo restored a different set of names than the original: diff $(diff <(sort "$BEFORE_LIST") <(sort "$RESTORED_LIST") | head -5 | tr '\n' ' ')"
 fi
 
-# --- harness note, not a tool defect: assert_intact would have lied here -
-NAIVE=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
-if [ "$NAIVE" != "$BEFORE" ]; then
-  echo "    NOTE (test-infrastructure, not a tool defect): lib.sh's assert_intact" >&2
-  echo "    uses \`find DIR -type f | wc -l\`, which overcounts by one for every" >&2
-  echo "    filename containing an embedded newline. Here: naive count=$NAIVE," >&2
-  echo "    real count=$BEFORE. Any scenario that uses assert_intact on a tree" >&2
-  echo "    containing a newline-named file will report a false file count." >&2
-else
-  pass "(sanity) naive find|wc -l happened to agree with the NUL-safe count this run"
-fi
+assert_intact "$D" "$BEFORE" "the shared integrity helper counts newline-containing names exactly"

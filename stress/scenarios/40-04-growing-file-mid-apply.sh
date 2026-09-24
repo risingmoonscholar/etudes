@@ -35,26 +35,29 @@ PY
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 build_filler "$D"
 
 TARGET="$D/batch_growing.csv"
 : > "$TARGET"
 RESULT="$W/writer-result.txt"
+READY="$W/writer-ready"
+RELEASE="$W/release-writer"
 
 # Appends a deterministic, verifiable byte stream to $TARGET for a fixed wall
 #-clock duration, independent of how long sweep takes. It is writing before
 # sweep starts, during the scan, during fingerprinting, and during (or
 # around) the move, whichever the OS scheduler lands it on.
-python3 - "$TARGET" "$RESULT" <<'PY' &
+python3 - "$TARGET" "$RESULT" "$READY" "$RELEASE" <<'PY' &
 import sys, time, hashlib
-path, result_path = sys.argv[1], sys.argv[2]
-duration = 6.0
+path, result_path, ready_path, release_path = sys.argv[1:]
+deadline = time.monotonic() + 30.0
 f = open(path, "ab", buffering=0)
 h = hashlib.sha256()
 total = 0
 i = 0
-start = time.time()
-while time.time() - start < duration:
+open(ready_path, "w").write("open\n")
+while not __import__("os").path.exists(release_path) and time.monotonic() < deadline:
     chunk = (f"CHUNK-{i:08d}-".encode() * 64)[:1024]
     f.write(chunk)
     h.update(chunk)
@@ -67,12 +70,20 @@ with open(result_path, "w") as r:
 PY
 WRITER_PID=$!
 
-# Give the writer a head start so there's real content and an open fd before
-# sweep ever looks at the path, then run sweep while it's still appending.
-python3 -c "import time; time.sleep(0.3)"
+# Wait for the writer to acknowledge its open descriptor. A fixed sleep can
+# pass before the child even opens the file on a loaded runner.
+for _ in $(seq 1 200); do [ -f "$READY" ] && break; sleep 0.01; done
+[ -f "$READY" ] || { fail "growing file writer never acknowledged its open descriptor"; exit 0; }
 "$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err"
 APPLY_CODE=$?
 
+FOUND="$(find "$D" -name "batch_growing.csv" 2>/dev/null | head -1)"
+if [ "$APPLY_CODE" = 0 ] && [ "$FOUND" != "$TARGET" ] && kill -0 "$WRITER_PID" 2>/dev/null; then
+  pass "the growing file moved while its acknowledged writer was still running"
+else
+  fail "apply did not move the growing file while its writer was alive (exit=$APPLY_CODE path=${FOUND:-missing})"
+fi
+touch "$RELEASE"
 wait "$WRITER_PID"
 
 if [ ! -f "$RESULT" ]; then
@@ -82,11 +93,8 @@ fi
 EXPECT_SIZE="$(cut -f1 "$RESULT")"
 EXPECT_HASH="$(cut -f2 "$RESULT")"
 
-if [ "$APPLY_CODE" != "0" ]; then
-  echo "    (apply exited $APPLY_CODE: $(cat "$W/apply.err")). Checking the file survived regardless"
-fi
+assert_eq 0 "$APPLY_CODE" "apply succeeds while the writer holds the file open"
 
-FOUND="$(find "$D" -name "batch_growing.csv" 2>/dev/null | head -1)"
 if [ -z "$FOUND" ]; then
   fail "the growing file cannot be found anywhere in the tree after apply. It was lost"
   exit 0

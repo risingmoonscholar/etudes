@@ -30,7 +30,7 @@ MNT="$W/exfat"
 IMG="$W/exfat.dmg"
 mkdir -p "$MNT"
 
-if ! hdiutil create -size 64m -fs ExFAT -volname RenameFallback "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 64m ExFAT RenameFall; then
   unproven "exFAT disk image" "hdiutil create failed on this machine"
   exit 0
 fi

@@ -36,16 +36,23 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
-| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.2, maturing |
-| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.2 |
-| **`unpack`** | One command for every archive format, safely | v0.5.2 |
+| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.3 candidate |
+| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.3 candidate |
+| **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.3 candidate |
 
 ## Install
 
+**0.5.3 is a release candidate, not a published release.** The commands below
+are the proposed release pins and will work only after those tags are published.
+For currently published versions, see [Releases](https://github.com/risingmoonscholar/etudes/releases).
+To try this candidate from a checkout, use
+`cargo install --path crates/sweep-cli --locked`
+(or `crates/stash-cli`, `crates/unpack-cli`).
+
 ```sh
-cargo install --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.2 sweep-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.2 stash-cli
-cargo install --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.2 unpack-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.3 sweep-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.3 stash-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.3 unpack-cli
 ```
 
 The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
@@ -137,15 +144,12 @@ $ sweep ~/Downloads
 `sweep` never reads your files, and that has a cost worth stating plainly.
 
 A project *document* -- a `.blend`, an `.flp`, an `.als` -- references its
-assets relative to itself and freely upward, out of its own folder. Sweep
-steps over the folder holding one, which is right for a `project.godot` that
-marks a project root by definition, and **not enough** for a `.blend` in
-`scenes/` that points at `../textures/`. Those textures can still be sorted.
-[Issue #49](../../issues/49) carries four reproductions.
-
-The complete rule -- refuse any scan with a project document anywhere below it
--- was built, reviewed and rejected: one `.flp` made an entire Downloads folder
-unsweepable, which removes the tool from the folder it exists for.
+assets relative to itself and freely upward, out of its own folder. In this
+candidate, a document found during the scan also holds related asset families
+beside it: a `.blend` in `scenes/` keeps sibling textures in place. Unrelated
+documents and screenshots can still be organized. This protection follows
+filesystem names and layout; it does not parse the project's references or
+promise to discover documents outside the scan's scope.
 
 Similarly, a Final Cut library told to keep its media *outside* the bundle has
 no filesystem-level mark saying which library owns that media. That
@@ -216,22 +220,17 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 41 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 46 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
-apply, 50,000-file trees, and real disk images for full, read-only and
+apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 41 scenarios, 1 of them failing
+bash stress/run.sh        # 46 scenarios
 ```
 
-The one failing scenario is real and it is [filed](../../issues), with a
-reproduction. It fails on purpose so the reproduction does not rot, and CI
-fails only when the number gets worse:
-
-| | |
-|---|---|
-| [#12](../../issues/12) | 10,000 files takes about a minute with the journal on. A measurement rather than a defect, kept failing so the number stays visible. |
+Every failed assertion is actionable. Timing is recorded as a measurement, but
+it cannot exempt an integrity assertion in the same scenario.
 
 The best story in the tracker is closed: an earlier fix swapped `rename` for
 `link` plus `unlink` to stop silent overwrites, and that opened a crash window
@@ -241,6 +240,11 @@ by its position in the journal rather than by guessing from inodes.
 
 There is also an `unproven` count, kept separate from the passes on purpose. A
 hazard that could not be exercised on this machine is not a hazard that passed.
+
+Each run writes a compact JSON bundle under `stress/results/` (or
+`STRESS_RESULTS_DIR`): one row per case with its contract, capability, tier,
+duration, verdict, child exit, and any retained failure evidence. CI uploads
+that bundle with failure-only transcripts and assertion records.
 
 A scenario can also run directly against built release binaries:
 

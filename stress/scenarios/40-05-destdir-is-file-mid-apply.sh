@@ -40,6 +40,7 @@ print(s)"
 }
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 DA="$W/a/Desktop"; mkdir -p "$DA"
 for i in $(seq 1 8); do : > "$DA/widget_$(letters "$i").txt"; done
 BLOCKER_CONTENT="I-AM-A-FILE-NOT-A-DIRECTORY-$$"
@@ -104,21 +105,23 @@ else
   DELAY_MS=$((T0 * 50 / 100))
   python3 -c "import time; time.sleep($DELAY_MS/1000)"
   BLOCKER_B="RACE-BLOCKER-$$"
-  printf '%s' "$BLOCKER_B" > "$DB/Documents"
+  # Exclusive creation proves the intruder won the destination name without
+  # overwriting a directory or product result after it had already won.
+  if ! (set -C; printf '%s' "$BLOCKER_B" > "$DB/Documents") 2>/dev/null; then
+    wait "$PID" 2>/dev/null || true
+    unproven "[B] destination blocked mid-run by a same-named file" "could not exclusively create the blocker before sweep created Documents (baseline ${T0}ms)"
+    exit 0
+  fi
   wait "$PID"
   CODE_B=$?
 
-  if [ -f "$DB/Documents" ] && [ "$(cat "$DB/Documents" 2>/dev/null)" = "$BLOCKER_B" ] && [ ! -d "$DB/Documents" ]; then
-    echo "    (blocker planted at ~${DELAY_MS}ms into a ~${T0}ms baseline run)"
-    assert_eq 1 "$([ "$CODE_B" != "0" ] && echo 1 || echo 0)" "[B] apply refused rather than succeeding over the blocked destination (exit $CODE_B)"
-    assert_eq "$BLOCKER_B" "$(cat "$DB/Documents" 2>/dev/null)" "[B] the mid-run blocking file's content is untouched"
+  pass "[B] exclusively created the blocker at ~${DELAY_MS}ms before Documents existed"
+  assert_eq 1 "$([ "$CODE_B" != "0" ] && echo 1 || echo 0)" "[B] apply refused rather than succeeding over the blocked destination (exit $CODE_B)"
+  assert_eq "$BLOCKER_B" "$(cat "$DB/Documents" 2>/dev/null)" "[B] the mid-run blocking file's content is untouched"
 
-    MOVED_PHOTOS=$(find "$DB" -mindepth 2 -name 'IMG_*.jpg' 2>/dev/null | wc -l | tr -d ' ')
-    echo "    ($MOVED_PHOTOS of the first group's files had already landed before the collision)"
-    # +1 for the blocker file itself, which we planted and which is expected
-    # to still be there. It is not something the tool lost.
-    assert_eq "$((BEFORE_B + 1))" "$(find "$DB" -type f | wc -l | tr -d ' ')" "[B] no file was lost anywhere in the tree. The earlier group's real moves stand, nothing else vanished"
-  else
-    unproven "[B] destination blocked mid-run by a same-named file" "the blocker either never survived to be checked or apply had already finished before it landed (baseline ${T0}ms, fired at ${DELAY_MS}ms)"
-  fi
+  MOVED_PHOTOS=$(find "$DB" -mindepth 2 -name 'IMG_*.jpg' 2>/dev/null | wc -l | tr -d ' ')
+  echo "    ($MOVED_PHOTOS of the first group's files had already landed before the collision)"
+  # +1 for the blocker file itself, which we planted and which is expected
+  # to still be there. It is not something the tool lost.
+  assert_eq "$((BEFORE_B + 1))" "$(find "$DB" -type f | wc -l | tr -d ' ')" "[B] no file was lost anywhere in the tree. The earlier group's real moves stand, nothing else vanished"
 fi

@@ -37,7 +37,7 @@ IMG="$W/full.dmg"
 MNT="$W/mnt"
 mkdir -p "$MNT"
 
-if ! hdiutil create -size 10m -fs "APFS" -volname FullVolStress "$IMG" >/dev/null 2>&1; then
+if ! create_disk_image "$IMG" 10m APFS FullVolStress; then
   unproven "full volume: apply refuses without partial state" "hdiutil create failed on this host"
   exit 0
 fi

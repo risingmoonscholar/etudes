@@ -42,9 +42,13 @@ what = "PR bodies, comments, reviews, and prior versions"
 watched_by = ["check-issues.py"]
 
 [surface.releases]
-what = "release notes and tags"
+what = "release tags and installation"
+watched_by = ["check-release.py"]
+
+[surface.release-notes]
+what = "release prose and its correspondence with shipped behavior"
 watched_by = []
-unwatched = "audited by hand 2026-08-23, found clean; no check yet"
+unwatched = "requires human review; installation smoke checks do not judge release prose"
 
 [surface.commit-messages]
 what = "the permanent git history"
@@ -95,3 +99,7 @@ failable = "self-tests every rule against known-bad text before judging, and ref
 [check."demo/refusal/run.sh"]
 guards = "the nine numbers the refusal demo states"
 failable = "verified by tampering with each asserted count and the exit code"
+
+[check."check-release.py"]
+guards = "candidate installation in CI; public tag existence and tagged installation when --published is run; release prose still requires review"
+failable = "test_check_release.py rejects a missing tag, similarly named tags, an incorrect installed version and success without filesystem effects"
