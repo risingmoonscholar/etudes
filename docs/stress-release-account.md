@@ -1,7 +1,7 @@
 # Stress-suite release account
 
 **Release status: validation pending.** The local fast, load, and platform
-tiers have completed; CI and review are still pending for the candidate.
+tiers have completed, and CI has passed. Review and merge remain pending.
 
 ## Delivered behavior
 
@@ -42,7 +42,7 @@ tracks the required real-filesystem witness or a deterministic replacement.
 
 1. Keep the NFC/NFD fallback limitation explicit and tracked in issue #103;
    this run records it as unproven, not as a pass.
-2. Complete the candidate's CI and review. No independent factory observer
-   result is claimed by this account.
+2. Keep CI green and complete review and merge. No independent factory
+   observer result is claimed by this account.
 3. Publish this account with the final candidate evidence after those gates
    succeed.
