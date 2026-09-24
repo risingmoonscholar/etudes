@@ -17,6 +17,10 @@ on:
     paths:
       - 'demo/**'
       - '.github/workflows/pages.yml'
+  # A published release is also a publication event: redeploy the page from
+  # main only after all per-tool tags are visible to the release gate.
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -40,7 +44,29 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - name: Refuse to deploy from a non-main ref
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Pages may only deploy from main; selected ref was $GITHUB_REF"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Pages push deployment must come from main; selected ref was $GITHUB_REF"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "push" ] && [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] && [ "$GITHUB_EVENT_NAME" != "release" ]; then
+            echo "Unsupported Pages deployment event: $GITHUB_EVENT_NAME"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
+        with:
+          # A release event's default ref is its tag. Pages always publishes
+          # the current main-tree demos, then verifies them against remote tags.
+          ref: main
+
+      - name: Refuse unpublished or stale page versions
+        run: python3 scripts/check-pages-release.py
 
       # The page reads transcripts.json at runtime. If it is missing, the page
       # renders a "not loaded" message. That is a broken demo published

@@ -63,6 +63,8 @@ jobs:
 
       - name: Release checks reject missing tags and false success
         run: python3 -m unittest discover -s scripts -p 'test_check_release.py' -v
+      - name: Pages release gate rejects unpublished and stale demos
+        run: python3 -m unittest discover -s scripts -p 'test_check_pages_release.py' -v
       - name: Install and exercise the local release candidate
         run: python3 scripts/check-release.py --candidate
 

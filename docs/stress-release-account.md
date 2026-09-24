@@ -54,6 +54,16 @@ published tags. The latest product-code commit is
 `484feef76cd7b6eea450e65386d352b51af5769f`; later commits update demos,
 release evidence, and documentation only.
 
+After the demo and evidence corrections, the same candidate install check passed
+again at local review commit `cc29019e2c44d0f6afb3737df404de9ee4251fd1`;
+all three tools installed and passed their synthetic operation and recovery or
+refusal checks. The new Pages release-gate tests passed 12/12. The live public
+tag lookup could not resolve `github.com` in this shell and failed closed, so
+published-tag status remains unverified here. The claims check and all seven
+transcript reproductions passed, and the focused NFC/NFD `EXDEV` fallback test
+passed again on the current APFS host. The result is retained in
+[`release-evidence/0.5.3-candidate-checks-cc29019-20260924.json`](release-evidence/0.5.3-candidate-checks-cc29019-20260924.json).
+
 ## Repository and release gates
 
 PR #104 has merged to `main` as `12b47967bb08539058ecb22393ffab255b6c0876`.

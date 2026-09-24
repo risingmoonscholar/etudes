@@ -1,0 +1,89 @@
+{
+  "checked_date": "2026-09-24",
+  "revision": "cc29019e2c44d0f6afb3737df404de9ee4251fd1",
+  "working_tree_changes": "Pages gate, tests, and evidence edits are uncommitted; no Rust product source changed after this revision.",
+  "environment": {
+    "cargo_net_offline": true,
+    "reason": "The shell could not resolve github.com; candidate dependencies were available in the local Cargo cache."
+  },
+  "commands": {
+    "candidate_install": {
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "stdout": [
+        "mode=candidate checkout=cc29019e2c44d0f6afb3737df404de9ee4251fd1",
+        "installing sweep 0.5.3",
+        "PASS sweep: install, version, synthetic operation and recovery/refusal",
+        "installing stash 0.5.3",
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.3",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ]
+    },
+    "pages_release_gate_unit_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_pages_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 12,
+      "result": "PASS"
+    },
+    "claims_and_transcript_ratchets": {
+      "commands": [
+        "CARGO_NET_OFFLINE=true bash scripts/check-claims.sh",
+        "CARGO_NET_OFFLINE=true bash scripts/check-transcripts-reproduce.sh"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "details": [
+        "All documented counts, versions, pins, inline transcripts, and captured help checks passed.",
+        "All 7 committed transcripts reproduced from the current binaries."
+      ]
+    },
+    "nfc_nfd_exdev_fallback_witness": {
+      "argv": [
+        "cargo",
+        "test",
+        "-p",
+        "etude-core",
+        "--lib",
+        "exdev_copy_fallback_refuses_nfd_collision_without_clobbering",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "stdout": [
+        "test apply::tests::exdev_copy_fallback_refuses_nfd_collision_without_clobbering ... ok",
+        "1 passed; 0 failed; 0 ignored"
+      ],
+      "scope": "On APFS, inject EXDEV at the rename boundary, exercise the production exclusive-copy fallback against an NFC/NFD alias, then verify both original contents and the single destination entry remain."
+    },
+    "published_tag_lookup": {
+      "argv": [
+        "python3",
+        "scripts/check-pages-release.py"
+      ],
+      "exit_code": 1,
+      "result": "UNVERIFIED",
+      "reason": "git ls-remote could not resolve github.com in this execution environment; the gate failed closed."
+    }
+  },
+  "scope": "Candidate binaries built and installed from the local checkout, then exercised using synthetic files. Claims and all 7 transcripts reproduced. The APFS NFC/NFD EXDEV fallback witness passed. Public tags were not installed or tested. The Pages tag gate's selection logic passed local tests, but remote tag state could not be observed.",
+  "independent_review": "Cursor CLI read-only review of the Pages release gate completed with no remaining actionable findings. Product-code review evidence remains documented separately.",
+  "publication": "not performed"
+}
