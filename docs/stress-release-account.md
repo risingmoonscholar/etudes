@@ -68,6 +68,10 @@ checks are retained in
 [`release-evidence/0.5.3-candidate-checks-cc29019-20260924.json`](release-evidence/0.5.3-candidate-checks-cc29019-20260924.json).
 The live Pages-gate result is retained in
 [`release-evidence/0.5.3-pages-gate-20260924.json`](release-evidence/0.5.3-pages-gate-20260924.json).
+The direct published-tag check failed as expected: all three proposed 0.5.3
+tags are absent, so installing from those tags was not attempted. Its result is
+retained in
+[`release-evidence/0.5.3-published-tags-20260924.json`](release-evidence/0.5.3-published-tags-20260924.json).
 The gate treats shared workspace tags only through `v0.5.1`; newer releases
 must publish per-tool tags so one tool cannot be advanced by another tool's
 release. Cursor's follow-up review found no remaining selector defect.

@@ -1,0 +1,25 @@
+{
+  "checked_date": "2026-09-24",
+  "revision": "bd13dc9",
+  "command": {
+    "argv": [
+      "python3",
+      "scripts/check-release.py",
+      "--published",
+      "--tags-only"
+    ],
+    "exit_code": 1,
+    "result": "FAIL_AS_EXPECTED",
+    "stdout": [
+      "FAIL unpublished tags: sweep-v0.5.3, stash-v0.5.3, unpack-v0.5.3"
+    ],
+    "execution": "Cursor CLI Agent mode with sandbox and auto-review enabled; public GitHub tag lookup succeeded."
+  },
+  "latest_published_versions": {
+    "sweep": "0.5.2",
+    "stash": "0.5.2",
+    "unpack": "0.5.1"
+  },
+  "scope": "The proposed 0.5.3 tags are absent, so installation and behavior from those tags were not attempted. This check made no installs, tags, releases, deployments, or remote writes.",
+  "publication": "not performed"
+}
