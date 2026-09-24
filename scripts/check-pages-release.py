@@ -9,7 +9,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "https://github.com/risingmoonscholar/etudes"
 TOOLS = ("sweep", "stash", "unpack")
-TAG = re.compile(r"^refs/tags/(sweep|stash|unpack)-v(\d+)\.(\d+)\.(\d+)$")
+TAG = re.compile(r"^refs/tags/(?:(sweep|stash|unpack)-v|v)(\d+)\.(\d+)\.(\d+)$")
+# v0.5.1 is the last confirmed shared workspace release. Later releases use
+# per-tool tags; a new generic tag must not silently advance a tool that was
+# omitted from that release.
+LEGACY_SHARED_TAG_CUTOFF = (0, 5, 1)
 
 
 def latest_published_versions(tag_listing):
@@ -21,7 +25,15 @@ def latest_published_versions(tag_listing):
         match = TAG.fullmatch(fields[1])
         if match:
             tool, *parts = match.groups()
-            versions[tool].append((tuple(map(int, parts)), ".".join(parts)))
+            version = ".".join(parts)
+            entry = (tuple(map(int, parts)), version)
+            if tool is None and tuple(map(int, parts)) <= LEGACY_SHARED_TAG_CUTOFF:
+                # Historical monorepo release tags apply to every workspace
+                # tool only through the confirmed transition point.
+                for release_tool in TOOLS:
+                    versions[release_tool].append(entry)
+            elif tool is not None:
+                versions[tool].append(entry)
     missing = [tool for tool in TOOLS if not versions[tool]]
     if missing:
         raise ValueError("no published version tag found for: " + ", ".join(missing))

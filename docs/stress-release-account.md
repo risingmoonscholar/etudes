@@ -57,12 +57,20 @@ release evidence, and documentation only.
 After the demo and evidence corrections, the same candidate install check passed
 again at local review commit `cc29019e2c44d0f6afb3737df404de9ee4251fd1`;
 all three tools installed and passed their synthetic operation and recovery or
-refusal checks. The new Pages release-gate tests passed 12/12. The live public
-tag lookup could not resolve `github.com` in this shell and failed closed, so
-published-tag status remains unverified here. The claims check and all seven
-transcript reproductions passed, and the focused NFC/NFD `EXDEV` fallback test
-passed again on the current APFS host. The result is retained in
+refusal checks. The live public tag lookup initially failed DNS from the
+regular shell, then succeeded through Cursor CLI Agent mode. It found sweep
+and stash at 0.5.2, unpack at 0.5.1 from
+the shared workspace tag, and no 0.5.3 tags. The corrected gate passed 14/14
+unit tests and rejected the current page with exit 1 before upload. The claims
+check and all seven transcript reproductions passed, and the focused NFC/NFD
+`EXDEV` fallback test passed again on the current APFS host. The candidate
+checks are retained in
 [`release-evidence/0.5.3-candidate-checks-cc29019-20260924.json`](release-evidence/0.5.3-candidate-checks-cc29019-20260924.json).
+The live Pages-gate result is retained in
+[`release-evidence/0.5.3-pages-gate-20260924.json`](release-evidence/0.5.3-pages-gate-20260924.json).
+The gate treats shared workspace tags only through `v0.5.1`; newer releases
+must publish per-tool tags so one tool cannot be advanced by another tool's
+release. Cursor's follow-up review found no remaining selector defect.
 
 ## Repository and release gates
 

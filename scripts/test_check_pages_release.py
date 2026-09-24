@@ -14,10 +14,16 @@ SPEC.loader.exec_module(release)
 
 
 def tags(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
-    versions = {"sweep": sweep, "stash": stash, "unpack": unpack}
-    return "\n".join(
-        f"{tool}-sha refs/tags/{tool}-v{version}"
-        for tool, version in versions.items())
+    entries = [
+        f"sweep-sha refs/tags/sweep-v{sweep}",
+        f"stash-sha refs/tags/stash-v{stash}",
+        "v04-sha refs/tags/v0.4.0",
+        "v05-sha refs/tags/v0.5.0",
+        "v051-sha refs/tags/v0.5.1",
+    ]
+    if unpack != "0.5.1":
+        entries.append(f"unpack-sha refs/tags/unpack-v{unpack}")
+    return "\n".join(entries)
 
 
 def page(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
@@ -29,6 +35,24 @@ class PagesReleaseGateTests(unittest.TestCase):
     def test_all_latest_published_versions_are_allowed(self):
         found = release.check_page(page(), tags())
         self.assertEqual(found, {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"})
+
+    def test_shared_monorepo_tag_supplies_unpack_version(self):
+        self.assertEqual(
+            release.latest_published_versions(tags()),
+            {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"},
+        )
+
+    def test_newer_shared_monorepo_tag_does_not_advance_any_tool(self):
+        for newer_shared in ("0.5.2", "0.5.3"):
+            with self.subTest(shared_tag=newer_shared):
+                listing = tags() + f"\nnew-sha refs/tags/v{newer_shared}\n"
+                self.assertEqual(
+                    release.latest_published_versions(listing),
+                    {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"},
+                )
+                with self.assertRaisesRegex(ValueError, "latest published tool versions"):
+                    release.check_page(
+                        page(sweep="0.5.3", stash="0.5.3", unpack="0.5.3"), listing)
 
     def test_unpublished_candidate_is_rejected_even_if_manifest_version_is_valid(self):
         with self.assertRaisesRegex(ValueError, "latest published tag is 0.5.2"):
