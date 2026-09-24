@@ -25,13 +25,12 @@ their tier and required capability explicit.
 | Tier | Result | Material limit |
 | --- | --- | --- |
 | Fast | 627 passed, 0 failed, 1 unproven | NFC/NFD cross-device fallback unavailable on this host |
-| Load | 103 passed, 0 failed, 0 unproven | 9,999-file apply: 76.69 s; undo: 58.73 s |
+| Load | 103 passed, 0 failed, 0 unproven | 9,999-file apply: 44.38 s; undo: 45.50 s |
 | Platform | 58 passed, 0 failed, 0 unproven | All eight platform scenarios ran on this macOS host |
 
-The 1,100-file smoke run measured a 5.17 s apply and 5.06 s undo. The full
-9,999-file run is the cost evidence: it took 76.69 s to apply and 58.73 s to
-undo. It also had a higher per-file apply cost (7.67 ms versus 4.70 ms), so the
-smoke result is retained only to prove the measurement path.
+The full 9,999-file run is the cost evidence: it took 44.38 s to apply and
+45.50 s to undo. The earlier 1,100-file smoke run only exercised the
+measurement path and is not used for cost claims.
 
 The disk-image contracts now cover case-sensitive and cross-device behavior,
 exFAT fallback, full/read-only volumes, and undo on a volume hazard. The

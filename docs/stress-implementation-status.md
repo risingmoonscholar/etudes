@@ -28,14 +28,13 @@ the 9 load and 8 platform contracts as not run.
 [Issue #103](https://github.com/risingmoonscholar/etudes/issues/103) tracks the
 remaining cross-device Unicode witness with a falsifiable closure condition.
 
-The load tier completed with **103 passed, 0 failed, 0 unproven**. Its
-9,999-file timing case measured: build 4.44 s, plan 2.00 s, apply 76.69 s,
-undo 58.73 s, verification 0.30 s, cleanup 0.28 s. That is the load evidence;
-the earlier 1,100-file run only validated the measurement path. Its 5.17 s
-apply and 5.06 s undo figures are not linearly comparable to the full run:
-the full fixture took about 7.67 ms per file to apply versus 4.70 ms per file
-in the smoke run. The release record therefore uses the full run for cost
-claims and retains the smoke run only as a measurement-path check.
+The load tier completed at `d018a7b` with **103 passed, 0 failed, 0 unproven**;
+its retained result bundle is `20260924T082229Z-29801`. The 9,999-file timing
+case measured: build 0.46 s, plan 1.97 s, apply 44.38 s, undo 45.50 s,
+verification 0.32 s, cleanup 0.29 s. The earlier 1,100-file smoke run only
+validated the measurement path and is not used for cost claims. The interrupted
+undo witness now targets 5%, 50%, and 85%: CI showed the final 5% could finish
+before the harness observed a live process to kill.
 
 The platform tier completed with **58 passed, 0 failed, 0 unproven**. It ran
 all eight platform scenarios on this host, including real APFS/exFAT images,
