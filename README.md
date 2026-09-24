@@ -213,6 +213,10 @@ already exist, the output says so plainly: *the folder name "Blender" was
 chosen by your agent, not derived from your files* -- the one sanctioned
 exception to the naming rule, and it announces itself.
 
+Large apply, undo, stash and pop operations report item-count milestones to
+stderr, leaving JSON on stdout untouched. Small operations stay quiet; large
+ones produce at most ten updates.
+
 **`--json` discloses less, not more.** For files that look like personal
 records, the JSON carries counts by category and **never the paths**. An agent
 gets "3 tax documents were left alone", not a list of which files those are.
@@ -265,6 +269,7 @@ crates/
   etude-core/    scan, plan, apply, journal-first undo, zero dependencies
   etude-keep/    journal encryption (XChaCha20-Poly1305, keychain or supplied key)
   etude-read/    content inspection, mlock'd, zeroed, never persisted
+  etude-cli-support/ bounded progress presentation shared by the CLIs
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
   unpack-cli/    bin: unpack, dispatches to system tools, parses nothing

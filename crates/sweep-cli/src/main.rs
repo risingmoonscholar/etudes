@@ -1290,12 +1290,16 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
 
 /// Shared tail of `apply` and `review`.
 fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
-    match etude_core::apply::apply(
+    let mut progress = etude_cli_support::ProgressReporter::stderr("sweep apply", p.moves());
+    let result = etude_core::apply::apply_with_progress(
         p,
         "sweep",
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
-    ) {
+        |p| progress.update(p.completed, p.total),
+    );
+    drop(progress);
+    match result {
         Ok(r) => {
             println!("\nMoved {} files.", r.moved);
             match r.journal_path {
@@ -1565,7 +1569,9 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
         );
     }
 
-    let r = etude_core::apply::undo(j, sl);
+    let mut progress = etude_cli_support::ProgressReporter::stderr("sweep undo", j.entries.len());
+    let r = etude_core::apply::undo_with_progress(j, sl, |p| progress.update(p.completed, p.total));
+    drop(progress);
     if r.unrecorded_moves > 1 {
         eprintln!(
             "sweep: refused. This journal is missing more than one record: {n} files are\n\

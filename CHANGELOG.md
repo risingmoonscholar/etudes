@@ -30,6 +30,12 @@ independent review is claimed here.
 - **Verification:** additional undo assertions and standalone stress scenario
   exit codes expose failures to callers. Release installation checks distinguish
   local candidates from public tags and exercise the installed binaries.
+- **sweep, stash:** long apply/undo/stash/pop operations report bounded item
+  progress on stderr. JSON stays on stdout and small operations stay quiet; the
+  existing per-entry journal writes remain unchanged when journaling is enabled.
+- **sweep:** the macOS cross-device copy refuses an occupied destination,
+  including NFC/NFD-equivalent names. A forced-EXDEV test on the real APFS
+  normalization behavior proves both original files survive the refusal.
 
 The extraction budget remains a polled soft limit. Extraction now uses private
 staging and atomic publication, so an interrupted extraction never publishes a
