@@ -1,0 +1,44 @@
+{
+  "checked_at": "2026-09-24T10:08:19Z",
+  "revision": "1ef5f5e2a41ef2eabd6a271f3607ebaf639ea3d3",
+  "commands": {
+    "candidate_install": {
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "stdout": [
+        "mode=candidate checkout=1ef5f5e2a41ef2eabd6a271f3607ebaf639ea3d3",
+        "installing sweep 0.5.3",
+        "PASS sweep: install, version, synthetic operation and recovery/refusal",
+        "installing stash 0.5.3",
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.3",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ]
+    },
+    "release_gate_unit_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 5,
+      "result": "PASS"
+    }
+  },
+  "scope": "Local candidate build and behavior checks only. No published tags were installed or tested.",
+  "independent_review": "not assessed",
+  "publication": "not performed"
+}

@@ -42,10 +42,13 @@ current latency; journal optimization remains a separate, profile-led question
 tracked by [issue #12](https://github.com/risingmoonscholar/etudes/issues/12).
 
 Local candidate installation checks passed for sweep, stash, and unpack at
-code commit `484feef76cd7b6eea450e65386d352b51af5769f`. These checks build and
-exercise the candidate locally; they do not verify published tags. The latest
-candidate changes after that code commit are documentation and retained test
-evidence only.
+PR head `1ef5f5e2a41ef2eabd6a271f3607ebaf639ea3d3`; the release-gate unit tests
+also passed 5/5 at that revision. The exact check record is retained in
+[`release-evidence/0.5.3-candidate-checks-20260924.json`](release-evidence/0.5.3-candidate-checks-20260924.json).
+These checks build and exercise the candidate locally; they do not verify
+published tags. The latest product-code commit is
+`484feef76cd7b6eea450e65386d352b51af5769f`; later commits update demos,
+release evidence, and documentation only.
 
 ## Repository and release gates
 
