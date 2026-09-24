@@ -59,9 +59,23 @@ release evidence, and documentation only.
 PR #104 has merged to `main` as `12b47967bb08539058ecb22393ffab255b6c0876`.
 The candidate work merged through PR #105 as
 `ac1c106962e008f289c02093570cf61efde76b73`; this closes issue #103 with the
-deterministic NFC/NFD fallback evidence above. No independent factory observer
-result is claimed. Required review or certification is still outstanding, so
-hold certification and publication.
+deterministic NFC/NFD fallback evidence above.
+
+A read-only independent Cursor CLI review (Composer 2.5, Auto review, sandbox
+enabled) examined product commit `484feef` and the local demo/evidence branch
+against `main` at `ba70552`. It found no definite product defect in the macOS
+fallback or progress code, and identified two definite demo-evidence wording
+defects: a stale stress summary and a transcript field that called combined
+stdout/stderr `stdout`. Those were corrected in local commits `cc5678a` and
+`2795820`; a follow-up confirmed the stress totals and exit-code legend are
+distinct. The review ran `cargo test --all` (278 passed, 1 ignored), but did not
+rerun the stress suite or candidate-install checks. It is not Factory
+certification, and it does not verify published tags. No Factory observer
+result is claimed.
+
+The 0.5.3 tags remain unpublished. Their installation and behavior cannot be
+verified until you publish those tags; no tag-verification result is claimed
+here, and no release was made in this work.
 
 The seven unproven platform cases are case-sensitive collision, cross-device
 copy and mtime, cross-volume EXDEV, exFAT fallback, full volume, read-only
