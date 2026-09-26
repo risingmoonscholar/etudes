@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>sweep v0.5.3 — safer holds and bounded progress · études</title>
+  <meta name="description" content="Sweep 0.5.3 adds safer project holds, external journal-key support, cross-device collision protection, and bounded progress reporting.">
+  <meta property="og:title" content="sweep v0.5.3 — safer holds and bounded progress">
+  <meta property="og:description" content="Project documents hold related assets; private records remain untouched. See the 9,999-file progress demo.">
+  <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/sweep-progress.gif">
+  <link rel="stylesheet" href="release.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="chrome">
+      <a href="../index.html">études / demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes/releases/tag/sweep-v0.5.3">GitHub release</a>
+    </header>
+
+    <article>
+      <p class="release-id">sweep · v0.5.3</p>
+      <h1>sweep v0.5.3 — safer holds and bounded progress</h1>
+      <div class="release-copy">
+        <p>Project documents inside child folders now hold related sibling assets without blocking unrelated files. This release also adds:</p>
+        <ul>
+          <li>Content-inspection buffers erase their full allocation when dropped.</li>
+          <li><code>ETUDE_JOURNAL_KEY</code> supports encrypted undo when the login keychain is unavailable. Invalid supplied keys refuse without fallback; retain the key for undo.</li>
+          <li>The cross-device copy fallback refuses NFC/NFD-equivalent destination collisions without changing either original.</li>
+          <li>Long apply and undo operations report bounded progress on stderr, keeping JSON output on stdout. The 9,999-file scenario checks that progress reaches the final item and stays within ten milestones.</li>
+        </ul>
+      </div>
+    </article>
+
+    <section class="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">The demo</h2>
+      <figure>
+        <img src="../gifs/sweep-progress.gif" alt="A light terminal demo applies sweep to a synthetic 9,999-item folder, shows progress, then undoes the changes while leaving personal records untouched." width="860" height="294">
+        <figcaption>A synthetic large folder: apply, bounded progress, then undo. The terminal recording is shown in its original light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install sweep 0.5.3</h2>
+      <p>Run this command to install the pinned release:</p>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.3 sweep-cli</code></pre>
+    </section>
+
+    <footer class="footer">
+      <a href="../index.html">All tool demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes/tree/sweep-v0.5.3">Source at sweep-v0.5.3</a>
+    </footer>
+  </main>
+</body>
+</html>

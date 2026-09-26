@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stash v0.5.3 — external journal key and bounded progress · études</title>
+  <meta name="description" content="Stash 0.5.3 adds external journal-key support and bounded progress reporting while keeping restore under your control.">
+  <meta property="og:title" content="stash v0.5.3 — external journal key and bounded progress">
+  <meta property="og:description" content="Stash moves files only when asked, reports progress, and brings them back on request.">
+  <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/stash-custody.gif">
+  <link rel="stylesheet" href="release.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="chrome">
+      <a href="../index.html">études / demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes/releases/tag/stash-v0.5.3">GitHub release</a>
+    </header>
+
+    <article>
+      <p class="release-id">stash · v0.5.3</p>
+      <h1>stash v0.5.3 — external journal key and bounded progress</h1>
+      <div class="release-copy">
+        <ul>
+          <li><code>ETUDE_JOURNAL_KEY</code> supports encrypted stash recovery when the login keychain is unavailable. Invalid supplied keys refuse without fallback; retain the same key for recovery.</li>
+          <li>Long stash and pop operations report bounded progress on stderr, keeping machine-readable stdout separate.</li>
+        </ul>
+      </div>
+    </article>
+
+    <section class="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">The demo</h2>
+      <figure>
+        <img src="../gifs/stash-custody.gif" alt="A light terminal demo stashes a synthetic folder, reports progress, then restores the visible items while leaving one hidden item in place." width="860" height="294">
+        <figcaption>A synthetic folder: stash, then pop it back. The hidden item stays in place. The terminal recording is shown in its original light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install stash 0.5.3</h2>
+      <p>Run this command to install the pinned release:</p>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.3 stash-cli</code></pre>
+    </section>
+
+    <footer class="footer">
+      <a href="../index.html">All tool demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes/tree/stash-v0.5.3">Source at stash-v0.5.3</a>
+    </footer>
+  </main>
+</body>
+</html>
