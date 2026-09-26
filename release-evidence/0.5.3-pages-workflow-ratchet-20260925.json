@@ -1,13 +1,7 @@
 {
   "checked_date": "2026-09-25",
-  "revision": "02378728c998438662d37672a84182ac981a316a",
-  "working_tree_changes": [
-    ".github/workflows/pages.yml",
-    "scripts/check-pages-release.py",
-    "scripts/test_check_pages_release.py",
-    "docs/stress-release-account.md",
-    "release-evidence/0.5.3-pages-workflow-ratchet-20260925.json"
-  ],
+  "revision": "85d1946f3d566f3e89985e4be99c6065a958b023",
+  "working_tree_state": "clean at the reviewed revision",
   "change": "Pages deploys only on a per-tool stable GitHub Release or stable-promotion event. The job validates the exact per-tool tag, checks out the immutable commit associated with that release event, and compares the page manifest to GitHub Release records with explicit draft=false and prerelease=false before artifact upload. Demo-only pushes, manual dispatches, and prereleases cannot deploy.",
   "checks": {
     "pages_gate_and_workflow_tests": {
@@ -30,6 +24,7 @@
         "live tag/version gate runs before Pages artifact upload",
         "runtime guard refuses non-release events",
         "release checkout is pinned to GitHub's release-event commit",
+        "draft releases do not deploy",
         "prereleases do not deploy",
         "missing explicit stable status is rejected"
       ]
@@ -56,13 +51,15 @@
       "command": "python3 scripts/check-pages-release.py",
       "exit_code": 1,
       "result": "PASS_EXPECTED_REJECTION",
-      "reason": "Live GitHub Release API lookup succeeded. The gate rejected the currently hosted 0.5.3 manifest because the latest stable releases are sweep 0.5.2, stash 0.5.2, and unpack 0.5.1. No files were published."
+      "reason": "The live GitHub Release API lookup succeeded. The gate rejected the checked-out demo manifest (0.5.3 for all tools) against latest stable releases sweep 0.5.2, stash 0.5.2, and unpack 0.5.1. The gate reads local checkout files; it does not fetch hosted Pages content."
     },
     "independent_cursor_review": {
-      "result": "NOT_COMPLETED",
-      "reason": "The read-only Cursor CLI review did not return output and was interrupted. No independent review pass is claimed."
+      "result": "COMPLETED",
+      "reviewed_revision": "85d1946f3d566f3e89985e4be99c6065a958b023",
+      "evidence_file": "0.5.3-independent-review-85d1946-20260925.json",
+      "reason": "No product defect was found for #103 or #12. The first review identified stale checkout metadata, a broken evidence path, an overstated hosted-manifest gate claim, and a CLI-level progress stream/bound test gap. Those corrections passed a follow-up review; no remaining defect was reported."
     }
   },
-  "external_state": "The prior read-only Cursor CLI lookup at 2026-09-26T01:20:21Z confirmed all three v0.5.3 tags absent and live Pages manifest at 0.5.3. See 0.5.3-independent-release-review-20260925.json.",
-  "publication": "not performed; changes remain in local worktree"
+  "external_state": "A separate read-only Cursor review fetched the public tag state and hosted transcript manifest: all v0.5.3 tags are absent, stable versions are sweep/stash 0.5.2 and unpack 0.5.1, while hosted Pages still advertises 0.5.3. See 0.5.3-independent-review-85d1946-20260925.json.",
+  "publication": "No push, tag, release, or deployment was performed; the branch remains local."
 }

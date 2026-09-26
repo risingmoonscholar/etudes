@@ -1,8 +1,8 @@
 # Stress-suite release account
 
-**Release status: candidate validation complete; certification and publication
-are pending.** This account records the unpublished 0.5.3 candidate. No 0.5.3
-tag or release has been created.
+**Release status: the local candidate checks pass; tag-based verification and
+publication are pending.** This account records the unpublished 0.5.3 candidate.
+No 0.5.3 tag or release has been created.
 
 ## Candidate changes
 
@@ -94,9 +94,16 @@ rerun the stress suite or candidate-install checks. It is not Factory
 certification, and it does not verify published tags. No Factory observer
 result is claimed.
 
+A second read-only Cursor review at `85d1946` again found no defect in the #103
+fallback or #12 progress implementation. It did find that the 9,999-file
+scenario had merged output streams, so it could not prove progress-channel
+separation or the output bound. The scenario now checks each stream and the
+ten-line limit; the follow-up review found these corrections sound. The review record is
+[`../release-evidence/0.5.3-independent-review-85d1946-20260925.json`](../release-evidence/0.5.3-independent-review-85d1946-20260925.json).
+
 The 0.5.3 tags remain unpublished. Their installation and behavior cannot be
-verified until those tags exist. The Sep. 24 tag check and the Sep. 25
-independent recheck both found them absent; no release was made in this work.
+verified until those tags exist. The Sep. 24 tag check and subsequent
+independent rechecks both found them absent; no release was made in this work.
 
 The seven unproven platform cases are case-sensitive collision, cross-device
 copy and mtime, cross-volume EXDEV, exFAT fallback, full volume, read-only
@@ -113,40 +120,49 @@ for all three tools at capture commit `484feef`. The public demo therefore
 advertises an unpublished candidate. This is not merely a pending release gate:
 the Pages site already carries candidate version claims.
 
-The local Pages gate rejects that manifest against the live tags, but the gate
-and its workflow integration are only on the unpushed branch
-`codex/0-5-3-release-demos`. `origin/main`'s Pages workflow does not run
-`scripts/check-pages-release.py`. Consequently, the gate did not protect the
-deployment already on the public site. The current independent findings and
-tag evidence are retained in
+The local Pages gate rejects the **checkout's** manifest against live stable
+GitHub Releases; it does not fetch the hosted page. A separate read-only
+independent review fetched the hosted manifest and confirmed the same 0.5.3
+claim. The release-only workflow does not remove or correct already-hosted
+files. It only gates future deployments after the branch reaches the default
+branch. Until then, `origin/main`'s workflow can still deploy on demo-path
+pushes or manual dispatch. The earlier live-state review is retained in
 [`../release-evidence/0.5.3-independent-release-review-20260925.json`](../release-evidence/0.5.3-independent-release-review-20260925.json).
+The current code and evidence review is retained in
+[`../release-evidence/0.5.3-independent-review-85d1946-20260925.json`](../release-evidence/0.5.3-independent-review-85d1946-20260925.json).
 
 ## Current local rerun
 
-On 2026-09-25, the candidate install and smoke checks passed again at checkout
-`02378728c998438662d37672a84182ac981a316a`. The current changes are limited to
-the demo page, GIF recordings, recording scripts, and capture theme; no Rust
-product source changed. All three locally installed tools passed version,
-synthetic operation, and recovery/refusal checks. The claims check, all seven
-transcript reproductions, the 14 Pages-gate unit tests then present, and `cargo test --all`
-also passed. The exact run is retained in
-[`../release-evidence/0.5.3-candidate-checks-0237872-20260925.json`](../release-evidence/0.5.3-candidate-checks-0237872-20260925.json).
+At product checkout `85d1946f3d566f3e89985e4be99c6065a958b023`, all three tools
+were installed locally and passed version, synthetic operation, and
+recovery/refusal checks. The claims check and all seven transcript
+reproductions passed. The exact results are retained in
+[`../release-evidence/0.5.3-candidate-checks-85d1946-20260925.json`](../release-evidence/0.5.3-candidate-checks-85d1946-20260925.json).
+These are local candidate builds, not installs from release tags. Public
+0.5.3 tags are absent, so tag-based installs remain impossible until the user
+publishes them. No publication was performed.
 
-The ordinary candidate-check shell could not resolve GitHub, so its run does
-not establish live tag state or verify installs from proposed public tags. The
-separate Cursor CLI check did reach GitHub and confirmed the candidate tags are
-absent and the public Pages manifest advertises 0.5.3. Tag-based installs
-remain impossible until the user publishes tags. No publication was performed.
+After review found that the 9,999-file scenario combined stdout and stderr, I
+changed it to assert that apply and undo progress stays on stderr, is bounded
+to ten lines, and reaches the final item. The updated 9,999-file run passed all
+15 assertions with no unproven cases: apply took 42.266 seconds and undo
+42.187 seconds on this Apple Silicon Mac. Its passing assertion output is
+retained in
+[`../release-evidence/0.5.3-progress-scale-9999-transcript-20260925.txt`](../release-evidence/0.5.3-progress-scale-9999-transcript-20260925.txt),
+with timings and run identifiers in
+[`../release-evidence/0.5.3-progress-scale-20260925.json`](../release-evidence/0.5.3-progress-scale-20260925.json).
 
 
 ## Release-version Pages ratchet
 
 After the live deployment mismatch was confirmed, the Pages workflow was tightened
-in the current local worktree: only a per-tool stable GitHub Release or stable
+in the candidate branch: only a per-tool stable GitHub Release or stable
 promotion can trigger deployment. The job checks the release event and exact
 per-tool version tag, checks out the release event's immutable commit, and
 compares the page manifest with GitHub's explicitly stable Release records
 before artifact upload. Demo-only
-pushes, manual dispatches, and prereleases cannot deploy. Workflow tests cover
-trigger, tag pinning, gate ordering, and prerelease exclusion. This wiring is
-still only on the unpushed branch, so `origin/main` is not protected yet.
+pushes and manual dispatches cannot deploy through this workflow; drafts and
+prereleases are excluded. Workflow tests cover trigger, tag pinning, gate
+ordering, and release-status exclusions. This wiring is still only on the
+unpublished branch, so `origin/main` is not protected yet, and the existing
+hosted 0.5.3 manifest is unaffected until a deployment changes it.

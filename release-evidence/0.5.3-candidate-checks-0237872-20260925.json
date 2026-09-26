@@ -69,15 +69,15 @@
       ],
       "exit_code": 128,
       "result": "UNVERIFIED",
-      "reason": "The execution environment could not resolve github.com. Previous verified result (2026-09-24) found the three 0.5.3 per-tool tags absent; Cursor CLI independent recheck is pending.",
+      "reason": "The execution environment could not resolve github.com, so this exact shell invocation did not verify public refs. A separate read-only Cursor CLI recheck reached GitHub and verified all three proposed tags were absent.",
       "note": "This exact shell invocation was unverified due to DNS, not evidence that the tags are absent. A separate live Cursor CLI query in release-evidence/0.5.3-independent-release-review-20260925.json reached GitHub and verified the current tag state."
     }
   },
   "scope": "Candidate binaries were installed from this local checkout and exercised with synthetic fixtures. Claims and all 7 transcripts reproduced. Pages release-gate logic passed 14 tests. Public tag state was separately verified through Cursor CLI; the candidate tags are absent, so installs from those tags cannot be attempted.",
-  "independent_review": "Current Cursor CLI independent recheck verified live tag state, Pages manifest, and that origin/main Pages workflow does not run the branch-local fail-closed gate. Details are retained in docs/0.5.3-independent-release-review-20260925.json.",
+  "independent_review": "A read-only Cursor CLI recheck recorded live tag state, Pages manifest, and that origin/main Pages workflow does not run the branch-local fail-closed gate. Details are retained at release-evidence/0.5.3-independent-release-review-20260925.json.",
   "publication": "not performed",
   "independent_live_verification": {
-    "evidence_file": "0.5.3-independent-release-review-20260925.json",
+    "evidence_file": "release-evidence/0.5.3-independent-release-review-20260925.json",
     "method": "Cursor CLI Agent mode, sandbox enabled, auto-review enabled; GitHub git refs/API/releases and hosted Pages manifest read-only",
     "candidate_tags": "sweep-v0.5.3, stash-v0.5.3, unpack-v0.5.3 all absent",
     "published_versions": {

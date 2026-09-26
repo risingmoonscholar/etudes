@@ -1,0 +1,60 @@
+{
+  "checked_date": "2026-09-25",
+  "reviewed_revision": "85d1946f3d566f3e89985e4be99c6065a958b023",
+  "method": "Cursor CLI, auto-review, sandbox enabled; read-only prompt",
+  "review_result": "No product defect found for the scoped #103 and #12 changes. The follow-up review found the evidence, documentation, scale scenario, and workflow corrections sound.",
+  "product_review": {
+    "issue_103": {
+      "result": "PASS",
+      "evidence": "The macOS test injects EXDEV at the rename boundary, uses real APFS NFC/NFD aliasing for the destination, requires EEXIST from exclusive production copy, and reads back both original payloads. The test passed in this session.",
+      "limitation": "A real cross-volume EXDEV combined with NFC/NFD aliasing remains unproven; the isolated deterministic test exercises the production fallback branch."
+    },
+    "issue_12": {
+      "result": "PASS_WITH_TEST_GAP",
+      "evidence": "Progress is bounded to at most ten redirected milestones, a single updating TTY line, and quiet below 100 items. Progress uses stderr; journal writes remain unchanged.",
+      "test_gap": "The original scale scenario merged stdout and stderr. It now captures channels separately and asserts progress stays on stderr, reaches the final count, and is bounded to ten lines for both apply and undo."
+    },
+    "rust_diff": "No Rust product changes occur between this branch and origin/main."
+  },
+  "release_state": {
+    "candidate_tags": {
+      "sweep-v0.5.3": "absent",
+      "stash-v0.5.3": "absent",
+      "unpack-v0.5.3": "absent"
+    },
+    "latest_stable_versions": {
+      "sweep": "0.5.2",
+      "stash": "0.5.2",
+      "unpack": "0.5.1"
+    },
+    "hosted_manifest": {
+      "url": "https://risingmoonscholar.github.io/etudes/transcripts.json",
+      "versions": {
+        "sweep": "0.5.3",
+        "stash": "0.5.3",
+        "unpack": "0.5.3"
+      },
+      "capture_commit": "484feef",
+      "field_name": "stdout"
+    },
+    "pages_gate_scope": "scripts/check-pages-release.py validates the checked-out demo/transcripts.json and demo/index.html against live stable GitHub Release records. It does not fetch the hosted manifest. The hosted manifest was fetched separately by this review.",
+    "publication": "No push, tag, release, or deployment was performed."
+  },
+  "evidence_findings": [
+    "The Pages-workflow evidence described revision 0237872 and an uncommitted worktree although the reviewed state was clean at 85d1946.",
+    "The candidate-check evidence pointed to docs/0.5.3-independent-release-review-20260925.json; the actual file is under release-evidence/.",
+    "The local Pages gate result was described as a rejection of the hosted manifest, which it does not fetch.",
+    "The release account described the 0237872 state as current and did not distinguish a future-deployment gate from correction of already-hosted content."
+  ],
+  "follow_up_review": {
+    "result": "PASS",
+    "finding": "The reviewed fixes are sound. No remaining defect in the scoped evidence, docs, scale scenario, or Pages workflow.",
+    "scale_evidence": "The 9999-item run passed 15, failed 0, unproven 0; the 100-item run passed 14, failed 0, unproven 1 because the reduced case does not reach IMG_1099.",
+    "pages_workflow": "The deploy job and tests explicitly exclude both draft and prerelease releases."
+  },
+  "remaining_external_limits": [
+    "Candidate installs from proposed tags cannot run until the user publishes those tags.",
+    "The live Pages manifest remains at 0.5.3; the local release-only workflow has not been merged or deployed.",
+    "No Factory certification is claimed."
+  ]
+}

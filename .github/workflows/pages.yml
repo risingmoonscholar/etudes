@@ -36,6 +36,7 @@ jobs:
     # not published yet, not broken.
     if: >-
       github.event.repository.visibility == 'public' &&
+      github.event.release.draft == false &&
       github.event.release.prerelease == false
     runs-on: ubuntu-latest
     environment:

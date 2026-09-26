@@ -1,0 +1,39 @@
+ok stress catalog: 46 scenarios; fast=29 load=9 platform=8
+building release binaries
+
+── 50-scale-flat-10k-apply-timing
+    ok       fixture tree has exactly 9999 files before anything runs
+    ok       plan exits 0 on the 9999-file flat directory
+    ok       planning changed no path or byte in the 9999-file fixture
+    ok       plan scanned all 9999 files (none silently dropped)
+    ok       every DCF-conforming filename in this run (IMG_0001..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled
+    ok       apply exits 0 on the 9999-file plan
+    ok       apply progress stays off stdout
+    ok       large apply reports final-item progress on stderr in at most ten milestones (10)
+    ok       apply moved a representative camera file out of its origin
+    ok       undo exits 0
+    ok       undo progress stays off stdout
+    ok       large undo reports final-entry progress on stderr in at most ten milestones (10)
+    ok       undo restored every original 9999-file path and byte
+    ok       verification snapshot is stable when repeated
+    ok       apply timing recorded for this runner (42.265722000s for 9999 files); integrity assertions remain independently gating
+    building 9999 DCF-conforming files (IMG_0001..IMG_9999)...
+    (fixture build: .474041000s for 9999 files)
+    plan: 2.309544000s  (scanned=9999  grouped=9999  looks_personal=0)
+    apply: 42.265722000s for ~9999 moves (4.22699489948994899489ms/file)  journal: yes
+    undo:  42.187004000s
+    verify: .393835000s
+
+    ── scale verdict ──
+    runner:        Darwin/arm64
+    measured:      N=9999   build=.474041000s  plan=2.309544000s  apply=42.265722000s  undo=42.187004000s  verify=.393835000s
+    cleanup: .250415000s
+
+═══════════════════════════════════════════
+  passed   15
+  failed   0
+  unproven 0
+  results  /private/tmp/etudes-053-stress-results/20260926T022134Z-32412/summary.json
+  slowest:
+    50-scale-flat-10k-apply-timing: 89323ms
+═══════════════════════════════════════════

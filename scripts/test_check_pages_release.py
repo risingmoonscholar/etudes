@@ -229,7 +229,9 @@ class PagesReleaseWorkflowTests(unittest.TestCase):
                    if lines[i].startswith("    runs-on:"))
         job = lines[start:end]
         significant = [line.strip() for line in job if line.strip() and not line.lstrip().startswith("#")]
-        self.assertIn("github.event.release.prerelease == false", " ".join(significant))
+        joined = " ".join(significant)
+        self.assertIn("github.event.release.draft == false", joined)
+        self.assertIn("github.event.release.prerelease == false", joined)
 
 
 if __name__ == "__main__":
