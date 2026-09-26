@@ -104,15 +104,24 @@ fi
 
 # --- apply (real journal, real fsync-per-move) --------------------------
 t0=$(date +%s.%N)
-APPLY_OUT=$("$SWEEP" apply "$D" --yes 2>&1)
+APPLY_STDOUT="$W/apply.stdout"
+APPLY_STDERR="$W/apply.stderr"
+"$SWEEP" apply "$D" --yes >"$APPLY_STDOUT" 2>"$APPLY_STDERR"
 APPLY_EC=$?
 t1=$(date +%s.%N)
 APPLY_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$APPLY_EC" "apply exits 0 on the $N-file plan"
-if grep -Eq "sweep apply: ${GROUP_COUNT}/${GROUP_COUNT} items" <<<"$APPLY_OUT"; then
-  pass "large apply reports bounded progress through the final item on stderr"
+if ! grep -q '^sweep apply:' "$APPLY_STDOUT"; then
+  pass "apply progress stays off stdout"
 else
-  fail "large apply did not report its final item-count progress on stderr"
+  fail "apply progress leaked onto stdout"
+fi
+APPLY_PROGRESS_LINES=$(grep -cE '^sweep apply: [0-9]+/[0-9]+ items$' "$APPLY_STDERR" || true)
+if [ "$APPLY_PROGRESS_LINES" -gt 0 ] && [ "$APPLY_PROGRESS_LINES" -le 10 ] && \
+   grep -Eq "^sweep apply: ${GROUP_COUNT}/${GROUP_COUNT} items$" "$APPLY_STDERR"; then
+  pass "large apply reports final-item progress on stderr in at most ten milestones ($APPLY_PROGRESS_LINES)"
+else
+  fail "apply progress was missing, unbounded, or did not reach the final item on stderr ($APPLY_PROGRESS_LINES lines)"
 fi
 
 [ ! -e "$D/IMG_0001.jpg" ] && find "$D" -mindepth 2 -type f -name IMG_0001.jpg | grep -q . \
@@ -130,15 +139,24 @@ printf '    apply: %ss for ~%s moves (%sms/file)  journal: yes\n' \
 
 # --- undo -----------------------------------------------------------
 t0=$(date +%s.%N)
-UNDO_OUT=$("$SWEEP" undo 2>&1)
+UNDO_STDOUT="$W/undo.stdout"
+UNDO_STDERR="$W/undo.stderr"
+"$SWEEP" undo >"$UNDO_STDOUT" 2>"$UNDO_STDERR"
 UNDO_EC=$?
 t1=$(date +%s.%N)
 UNDO_S=$(echo "$t1 - $t0" | bc)
 assert_eq 0 "$UNDO_EC" "undo exits 0"
-if grep -Eq "sweep undo: ${N}/${N} items" <<<"$UNDO_OUT"; then
-  pass "large undo reports bounded progress through the final journal entry on stderr"
+if ! grep -q '^sweep undo:' "$UNDO_STDOUT"; then
+  pass "undo progress stays off stdout"
 else
-  fail "large undo did not report its final journal-entry progress on stderr"
+  fail "undo progress leaked onto stdout"
+fi
+UNDO_PROGRESS_LINES=$(grep -cE '^sweep undo: [0-9]+/[0-9]+ items$' "$UNDO_STDERR" || true)
+if [ "$UNDO_PROGRESS_LINES" -gt 0 ] && [ "$UNDO_PROGRESS_LINES" -le 10 ] && \
+   grep -Eq "^sweep undo: ${N}/${N} items$" "$UNDO_STDERR"; then
+  pass "large undo reports final-entry progress on stderr in at most ten milestones ($UNDO_PROGRESS_LINES)"
+else
+  fail "undo progress was missing, unbounded, or did not reach the final journal entry on stderr ($UNDO_PROGRESS_LINES lines)"
 fi
 
 snapshot_tree "$D" "$AFTER_UNDO_MANIFEST"

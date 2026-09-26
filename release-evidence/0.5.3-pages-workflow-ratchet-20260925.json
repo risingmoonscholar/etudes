@@ -1,0 +1,65 @@
+{
+  "checked_date": "2026-09-25",
+  "revision": "85d1946f3d566f3e89985e4be99c6065a958b023",
+  "working_tree_state": "clean at the reviewed revision",
+  "change": "Pages deploys only on a per-tool stable GitHub Release or stable-promotion event. The job validates the exact per-tool tag, checks out the immutable commit associated with that release event, and compares the page manifest to GitHub Release records with explicit draft=false and prerelease=false before artifact upload. Demo-only pushes, manual dispatches, and prereleases cannot deploy.",
+  "checks": {
+    "pages_gate_and_workflow_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_pages_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 22,
+      "result": "PASS",
+      "new_workflow_contract_tests": [
+        "only published/released event triggers deployment",
+        "live tag/version gate runs before Pages artifact upload",
+        "runtime guard refuses non-release events",
+        "release checkout is pinned to GitHub's release-event commit",
+        "draft releases do not deploy",
+        "prereleases do not deploy",
+        "missing explicit stable status is rejected"
+      ]
+    },
+    "workflow_yaml_parse": {
+      "argv": [
+        "ruby",
+        "-e",
+        "require \"yaml\"; YAML.load_file(\".github/workflows/pages.yml\")"
+      ],
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    "actionlint": {
+      "result": "NOT_RUN",
+      "reason": "actionlint is not installed in this environment"
+    },
+    "live_gate": {
+      "command": "python3 scripts/check-pages-release.py",
+      "exit_code": 1,
+      "result": "PASS_EXPECTED_REJECTION",
+      "reason": "The live GitHub Release API lookup succeeded. The gate rejected the checked-out demo manifest (0.5.3 for all tools) against latest stable releases sweep 0.5.2, stash 0.5.2, and unpack 0.5.1. The gate reads local checkout files; it does not fetch hosted Pages content."
+    },
+    "independent_cursor_review": {
+      "result": "COMPLETED",
+      "reviewed_revision": "85d1946f3d566f3e89985e4be99c6065a958b023",
+      "evidence_file": "0.5.3-independent-review-85d1946-20260925.json",
+      "reason": "No product defect was found for #103 or #12. The first review identified stale checkout metadata, a broken evidence path, an overstated hosted-manifest gate claim, and a CLI-level progress stream/bound test gap. Those corrections passed a follow-up review; no remaining defect was reported."
+    }
+  },
+  "external_state": "A separate read-only Cursor review fetched the public tag state and hosted transcript manifest: all v0.5.3 tags are absent, stable versions are sweep/stash 0.5.2 and unpack 0.5.1, while hosted Pages still advertises 0.5.3. See 0.5.3-independent-review-85d1946-20260925.json.",
+  "publication": "The branch was subsequently pushed and PR #107 is ready for review. No tag, release, merge, or deployment was performed."
+}

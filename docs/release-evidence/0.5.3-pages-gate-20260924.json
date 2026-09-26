@@ -1,0 +1,54 @@
+{
+  "checked_date": "2026-09-24",
+  "revision": "af6c966",
+  "working_tree_changes": "Local Pages gate/test updates add support for historical shared workspace tags, capped at v0.5.1.",
+  "legacy_shared_tag_cutoff": "v0.5.1; later releases require per-tool tags.",
+  "commands": {
+    "pages_gate_unit_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_pages_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 14,
+      "result": "PASS"
+    },
+    "pages_gate_against_public_tags": {
+      "argv": [
+        "python3",
+        "scripts/check-pages-release.py"
+      ],
+      "exit_code": 1,
+      "result": "REJECTED_AS_EXPECTED",
+      "tag_lookup": "Cursor CLI Agent mode, sandbox enabled, auto-review enabled",
+      "latest_published_versions": {
+        "sweep": "0.5.2",
+        "stash": "0.5.2",
+        "unpack": "0.5.1"
+      },
+      "tag_sources": {
+        "sweep": "sweep-v0.5.2",
+        "stash": "stash-v0.5.2",
+        "unpack": "shared workspace tag v0.5.1; no unpack-v* tags exist"
+      },
+      "candidate_tags": "No tool-specific v0.5.3 tags exist.",
+      "shared_tag_policy": "Tags after v0.5.1 do not advance any tool; later releases require per-tool tags.",
+      "diagnostic": [
+        "sweep: page has 0.5.3, latest published tag is 0.5.2",
+        "stash: page has 0.5.3, latest published tag is 0.5.2",
+        "unpack: page has 0.5.3, latest published tag is 0.5.1",
+        "legacy page version is 0.5.3, latest published sweep version is 0.5.2"
+      ]
+    }
+  },
+  "scope": "The gate selected current public release tags and rejected the 0.5.3 candidate page before artifact upload. After applying the v0.5.1 cutoff and boundary test, the 14-test suite passed and the real gate again rejected the page. This did not deploy, install candidate tags, or publish anything.",
+  "independent_review": "Cursor CLI read-only review found and prompted correction of newer generic-tag advancement; follow-up confirmed the cutoff and current release mapping with no remaining actionable selector defects.",
+  "publication": "not performed"
+}

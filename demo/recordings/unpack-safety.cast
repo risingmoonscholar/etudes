@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":100,"rows":14},"timestamp":1790363554,"command":"bash demo/recordings/unpack-safety.sh","title":"unpack 0.5.3 — accept and refuse","env":{"SHELL":"/bin/zsh"}}
+[0.023, "o", "\u001b[2m~/Desktop · synthetic fixture · unpack 0.5.3 candidate\u001b[0m\r\n\u001b[33m$ unpack site_export.zip --into site_export\u001b[0m\r\n\r\n"]
+[0.157, "o", "\r\n  Extracted to site_export/\r\n  2 entries\r\n  Checked 2 paths before writing anything\r\n"]
+[1.405, "o", "\r\n\u001b[33m$ unpack photos_2025.zip --into photos_2025\u001b[0m\r\n\r\n"]
+[0.012, "o", "\r\nunpack: REFUSED. This archive contains members this tool will not\r\ncreate.\r\n\r\n  symlink: escape_link\r\n       a dispatched extractor cannot be stopped from writing through a link, and the link itself points wherever the archive says. This build unpacks regular files and directories.\r\n       `unpack ARCHIVE --list` shows every member without writing\r\n\r\nNothing was extracted. Inspect it with: unpack photos_2025.zip --list\r\n"]
+[1.214, "x", "0"]

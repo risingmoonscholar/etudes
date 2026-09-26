@@ -1,0 +1,41 @@
+{
+  "checked_date": "2026-09-25",
+  "revision": "02378728c998438662d37672a84182ac981a316a",
+  "reviewer": "Cursor CLI Agent mode, sandbox enabled, auto-review enabled; read-only prompt; no files edited",
+  "public_tag_state": {
+    "sweep-v0.5.3": "absent (GitHub API 404; git ls-remote and matching-refs checked)",
+    "stash-v0.5.3": "absent (GitHub API 404; git ls-remote and matching-refs checked)",
+    "unpack-v0.5.3": "absent (GitHub API 404; git ls-remote and matching-refs checked)",
+    "latest_published_versions": {
+      "sweep": "0.5.2",
+      "stash": "0.5.2",
+      "unpack": "0.5.1"
+    },
+    "latest_public_release": "sweep v0.5.2 / stash v0.5.2; no 0.5.3 release"
+  },
+  "live_pages": {
+    "url": "https://risingmoonscholar.github.io/etudes/transcripts.json",
+    "reported_version": "0.5.3",
+    "per_tool_versions": {
+      "sweep": "0.5.3",
+      "stash": "0.5.3",
+      "unpack": "0.5.3"
+    },
+    "capture_commit": "484feef",
+    "finding": "The hosted page advertises 0.5.3 while all matching public tool tags are absent; this is a real publication mismatch."
+  },
+  "gate": {
+    "scripts/check-release.py --published": "Fails closed on missing advertised candidate tags; rejected all three 0.5.3 tags absent.",
+    "scripts/check-pages-release.py": "Against live public tags, rejects the 0.5.3 page because latest tagged versions are sweep/stash 0.5.2 and unpack 0.5.1.",
+    "origin/main_pages_workflow": "Does not invoke scripts/check-pages-release.py; gate is absent from origin/main and current gate exists only on unpushed branch codex/0-5-3-release-demos.",
+    "consequence": "The local fail-closed gate did not protect the already-deployed Pages workflow; workflow wiring must reach main before future Pages runs can be gated."
+  },
+  "stress_account_audit": [
+    "Stress counts and seven named unproven platform cases agree with retained stress JSON.",
+    "The 2026-09-24 cc29019 paragraph conflated an older 12-test/unverified-remote record with the later 14-test/live-rejection result at af6c966; documentation correction required.",
+    "The phrase claiming later commits were docs/demo/evidence only omitted release-gate scripts, tests, and workflow changes on this branch.",
+    "The account did not disclose the live Pages 0.5.3 state."
+  ],
+  "candidate_tags_installed": "No; tags do not exist. Candidate local-install checks are separate evidence.",
+  "publication": "No tag, release, push, or deployment performed."
+}

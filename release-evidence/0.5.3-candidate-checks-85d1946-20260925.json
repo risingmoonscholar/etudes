@@ -1,0 +1,53 @@
+{
+  "checked_date_local": "2026-09-25",
+  "product_revision": "85d1946f3d566f3e89985e4be99c6065a958b023",
+  "scope": "Rust product source at this revision; later uncommitted edits in this run change only workflow, tests, stress assertions, and documentation.",
+  "checks": {
+    "candidate_install": {
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
+      "environment": {
+        "CARGO_NET_OFFLINE": "true"
+      },
+      "exit_code": 0,
+      "result": "PASS",
+      "details": [
+        "sweep 0.5.3 installed, version checked, synthetic operation and recovery/refusal passed",
+        "stash 0.5.3 installed, version checked, synthetic operation and recovery/refusal passed",
+        "unpack 0.5.3 installed, version checked, synthetic operation and recovery/refusal passed"
+      ],
+      "limitation": "These are locally built candidate binaries, not installs from published tags."
+    },
+    "claims": {
+      "command": "bash scripts/check-claims.sh",
+      "exit_code": 0,
+      "result": "PASS",
+      "scope_note": "Checks local manifests, help transcripts, and page claims; does not verify public tag existence."
+    },
+    "transcript_reproduction": {
+      "command": "bash scripts/check-transcripts-reproduce.sh",
+      "exit_code": 0,
+      "result": "PASS",
+      "reproduced": 7
+    },
+    "workspace_tests": {
+      "command": "cargo test --all",
+      "exit_code": 0,
+      "result": "PASS",
+      "passed": 278,
+      "failed": 0,
+      "ignored": 1,
+      "details": "All workspace test binaries and doctests passed; one performance benchmark is intentionally ignored."
+    },
+    "pages_gate": {
+      "command": "python3 scripts/check-pages-release.py",
+      "exit_code": 1,
+      "result": "PASS_EXPECTED_REJECTION",
+      "details": "The local checkout manifest reports 0.5.3 for each tool. The live stable Releases API reported sweep/stash 0.5.2 and unpack 0.5.1, so the gate rejected the checkout. This check did not fetch or inspect the hosted page."
+    }
+  },
+  "publication": "No push, tag, release, or deployment was performed. Candidate installation from proposed tags remains impossible until the user creates those tags."
+}
