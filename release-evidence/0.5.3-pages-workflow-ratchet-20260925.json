@@ -1,0 +1,68 @@
+{
+  "checked_date": "2026-09-25",
+  "revision": "02378728c998438662d37672a84182ac981a316a",
+  "working_tree_changes": [
+    ".github/workflows/pages.yml",
+    "scripts/check-pages-release.py",
+    "scripts/test_check_pages_release.py",
+    "docs/stress-release-account.md",
+    "release-evidence/0.5.3-pages-workflow-ratchet-20260925.json"
+  ],
+  "change": "Pages deploys only on a per-tool stable GitHub Release or stable-promotion event. The job validates the exact per-tool tag, checks out the immutable commit associated with that release event, and compares the page manifest to GitHub Release records with explicit draft=false and prerelease=false before artifact upload. Demo-only pushes, manual dispatches, and prereleases cannot deploy.",
+  "checks": {
+    "pages_gate_and_workflow_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_pages_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 22,
+      "result": "PASS",
+      "new_workflow_contract_tests": [
+        "only published/released event triggers deployment",
+        "live tag/version gate runs before Pages artifact upload",
+        "runtime guard refuses non-release events",
+        "release checkout is pinned to GitHub's release-event commit",
+        "prereleases do not deploy",
+        "missing explicit stable status is rejected"
+      ]
+    },
+    "workflow_yaml_parse": {
+      "argv": [
+        "ruby",
+        "-e",
+        "require \"yaml\"; YAML.load_file(\".github/workflows/pages.yml\")"
+      ],
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    "diff_check": {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS"
+    },
+    "actionlint": {
+      "result": "NOT_RUN",
+      "reason": "actionlint is not installed in this environment"
+    },
+    "live_gate": {
+      "command": "python3 scripts/check-pages-release.py",
+      "exit_code": 1,
+      "result": "PASS_EXPECTED_REJECTION",
+      "reason": "Live GitHub Release API lookup succeeded. The gate rejected the currently hosted 0.5.3 manifest because the latest stable releases are sweep 0.5.2, stash 0.5.2, and unpack 0.5.1. No files were published."
+    },
+    "independent_cursor_review": {
+      "result": "NOT_COMPLETED",
+      "reason": "The read-only Cursor CLI review did not return output and was interrupted. No independent review pass is claimed."
+    }
+  },
+  "external_state": "The prior read-only Cursor CLI lookup at 2026-09-26T01:20:21Z confirmed all three v0.5.3 tags absent and live Pages manifest at 0.5.3. See 0.5.3-independent-release-review-20260925.json.",
+  "publication": "not performed; changes remain in local worktree"
+}

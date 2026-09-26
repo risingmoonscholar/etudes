@@ -12,26 +12,25 @@ import os, sys
 root, count = sys.argv[1], int(sys.argv[2])
 old = 1767225600
 for n in range(1, count + 1):
-    path = os.path.join(root, f"screen-share-item-{n:04d}.txt")
+    path = os.path.join(root, f"Screenshot 2026-07-{(n % 28) + 1:02d} at 9.{n % 60:02d}.11 AM.png")
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"SYNTHETIC DEMO ITEM {n}\n")
     os.utime(path, (old, old))
-with open(os.path.join(root, "tax_return_2025.pdf"), "w", encoding="utf-8") as f:
-    f.write("SYNTHETIC DEMO FILE — NOT REAL DATA\n")
-with open(os.path.join(root, ".hidden-note"), "w", encoding="utf-8") as f:
-    f.write("Hidden demo marker stays in place.\n")
+with open(os.path.join(root, "tax_return_2023_filed.pdf"), "w", encoding="utf-8") as f:
+    f.write("SYNTHETIC TEST FIXTURE - NOT REAL DATA\n")
+with open(os.path.join(root, ".ssh"), "w", encoding="utf-8") as f:
+    f.write("SYNTHETIC\n")
 PY
 
 cd "$root"
 export ETUDE_STATE_DIR=../s
-printf '\033[2m0.5.3 candidate · clearing a synthetic screen-share folder\033[0m\n'
-printf '\033[33m$ stash . --for 3d\033[0m\n\n'
+printf '\033[2m~/Desktop · synthetic fixture · stash 0.5.3 candidate\033[0m\n'
+printf '\033[33m$ stash ~/Desktop --for 3d\033[0m\n\n'
 "$bin/stash" . --for 3d
 
-printf '\n\033[33m$ stash pop\033[0m\n\n'
+printf '\n\033[33m$ stash pop ~/Desktop\033[0m\n\n'
 "$bin/stash" pop
 
-restored="$(find . -maxdepth 1 -type f ! -name '.hidden-note' | wc -l | tr -d ' ')"
+restored="$(find . -maxdepth 1 -type f ! -name '.ssh' | wc -l | tr -d ' ')"
 test "$restored" = "$((count + 1))"
-test -f "$root/.hidden-note"
-printf '\n\033[2mVerified: %s visible items restored; hidden marker never moved.\033[0m\n' "$restored"
+test -f "$root/.ssh"

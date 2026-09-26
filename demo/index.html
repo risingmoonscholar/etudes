@@ -125,9 +125,10 @@ also worth performing. These are built the same way: each removes one recurring
 friction, each is small enough to read in an afternoon, and each can prove its own
 claims rather than asking you to trust them.</p>
 
-<p>Every terminal block below is <strong>recorded output from the real binaries</strong>,
-run against a synthetic fixture. Nothing is executing in your browser, and nothing is
-hand-written. <a href="#provenance">How that is guaranteed.</a></p>
+<p>Every terminal block below shows a real binary running against a generated synthetic
+fixture. The text panels are captured command output; the short GIFs are terminal
+recordings with small script-written labels around the real output. Nothing runs in your
+browser. <a href="#provenance">How the recordings are made.</a></p>
 
 <hr>
 
@@ -140,26 +141,29 @@ hand-written. <a href="#provenance">How that is guaranteed.</a></p>
 <hr>
 
 <h2 id="provenance">Provenance</h2>
-<p>The demos are captured, never authored. <code>scripts/capture-demos.sh</code> builds the
+<p>The transcript panels are captured, not authored. <code>scripts/capture-demos.sh</code> builds the
 binaries out of the tree, generates a synthetic fixture with <code>mkfx</code>, runs each
 command, and writes the captured terminal output (stdout and stderr combined) to
 <code>demo/transcripts.json</code> together with the commit it was built from. Regenerate
 it and diff: a transcript that no longer matches the tool is a build failure, not a stale
 document.</p>
 
-<p>The short GIFs above are terminal recordings of bespoke candidate scenarios. Run
+<p>The short GIFs above are terminal recordings of feature-specific candidate scenarios.
+Their synthetic names and markers follow the same fixture vocabulary as the transcript
+panels; the visible command and verification labels are written by the recording scripts,
+while the tool output comes from the real binaries. Run
 <code>scripts/capture-release-gifs.sh</code> to rebuild them from the release binaries;
 the source sessions are preserved in <code>demo/recordings/</code>. They use disposable,
 synthetic files and local journal state. The clips illustrate behavior; tests and stress
 scenarios remain the evidence for safety claims.</p>
 
-<p>The transcript fixture is generated, not collected. Files with alarming names like
+<p>The shared fixture is generated, not collected. Files with alarming names like
 <code>SSN_card_scan.jpg</code> are decoys whose contents read
-<code>SYNTHETIC TEST FIXTURE - NOT REAL DATA</code>. The GIF scenarios build their own
-synthetic files from the scripts in <code>demo/recordings/</code>. Both capture paths use
+<code>SYNTHETIC TEST FIXTURE - NOT REAL DATA</code>. The GIF scenarios scale or select
+feature-specific cases from that same naming and marker vocabulary. Both capture paths use
 temporary directories and disposable journal state; no real file is read.</p>
 
-<p>One edit is made to the captured text: the temporary directory is rendered as
+<p>For transcript panels, one edit is made to the captured text: the temporary directory is rendered as
 <code>~/Desktop</code>, because its real name is machine-specific noise. That rule is
 declared in the artifact, and nothing else is touched.</p>
 
@@ -215,12 +219,12 @@ Apache-2.0 · <a href="https://github.com/risingmoonscholar/etudes">source</a>
 const API = {
   sweep: {
     title: "organise the obvious, leave the private alone",
-    recording: { src: "gifs/sweep-progress.gif", alt: "sweep applies an organization plan to a large synthetic folder, shows progress, then undoes the move while leaving a decoy personal-record file untouched", caption: "A large synthetic folder: apply, visible progress, then undo. The decoy personal record stays put." },
+    recording: { src: "gifs/sweep-progress.gif", alt: "sweep applies an organization plan to a large synthetic camera folder, shows progress, then undoes the move while leaving synthetic tax records untouched", caption: "A large synthetic camera folder: apply, visible progress, then undo." },
     demos: ["sweep-plan", "sweep-explain", "sweep-json"]
   },
   stash: {
     title: "clean now, decide later",
-    recording: { src: "gifs/stash-custody.gif", alt: "stash clears a synthetic folder, reports a hidden item left behind, then restores the visible items", caption: "A synthetic screen-share folder: stash, then pop it back. The hidden marker stays in place." },
+    recording: { src: "gifs/stash-custody.gif", alt: "stash clears a synthetic screenshot folder, reports a hidden item left behind, then restores the visible items", caption: "A synthetic screenshot folder: stash, then pop it back. The hidden item stays in place." },
     demos: ["stash-put"]
   },
   unpack: {

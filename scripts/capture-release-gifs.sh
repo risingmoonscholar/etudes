@@ -25,7 +25,7 @@ record() {
   ETUDES_DEMO_WORK="$work/$name" asciinema rec --quiet --overwrite --title "$title" --window-size 100x14 \
     --command "bash demo/recordings/$name.sh" \
     "$root/demo/recordings/$name.cast"
-  agg --quiet --theme github-dark --font-size 14 --cols 100 --rows 14 \
+  agg --quiet --theme github-light --font-size 14 --cols 100 --rows 14 \
     --speed "$speed" --idle-time-limit 1.3 --last-frame-duration 4 \
     "$root/demo/recordings/$name.cast" "$root/demo/gifs/$name.gif"
   echo "wrote demo/gifs/$name.gif"

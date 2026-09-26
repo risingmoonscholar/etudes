@@ -1,0 +1,91 @@
+{
+  "checked_date": "2026-09-25",
+  "revision": "02378728c998438662d37672a84182ac981a316a",
+  "working_tree_changes": "Only demo GIFs, demo capture sources, demo page copy, and capture theme are modified; no Rust product source changed.",
+  "environment": {
+    "cargo_net_offline": true,
+    "reason": "Cargo dependencies were locally cached; direct shell remote lookup could not resolve github.com."
+  },
+  "commands": {
+    "candidate_install": {
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "details": [
+        "sweep 0.5.3 installed, version checked, synthetic operation and recovery/refusal passed",
+        "stash 0.5.3 installed, version checked, synthetic operation and recovery/refusal passed",
+        "unpack 0.5.3 installed, version checked, synthetic operation and recovery/refusal passed"
+      ]
+    },
+    "claims_and_transcript_ratchets": {
+      "commands": [
+        "bash scripts/check-claims.sh",
+        "bash scripts/check-transcripts-reproduce.sh"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "details": [
+        "Documented counts, versions, pins, inline transcripts, and captured help checks passed.",
+        "All 7 committed transcripts reproduced from the current binaries."
+      ]
+    },
+    "pages_release_gate_unit_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_pages_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 14,
+      "result": "PASS"
+    },
+    "full_workspace_tests": {
+      "argv": [
+        "cargo",
+        "test",
+        "--all"
+      ],
+      "exit_code": 0,
+      "result": "PASS",
+      "details": "All workspace unit, integration, and doc-test binaries completed; one profiling benchmark remains intentionally ignored."
+    },
+    "public_tag_lookup": {
+      "argv": [
+        "git",
+        "ls-remote",
+        "--tags",
+        "origin",
+        "*0.5.3*"
+      ],
+      "exit_code": 128,
+      "result": "UNVERIFIED",
+      "reason": "The execution environment could not resolve github.com. Previous verified result (2026-09-24) found the three 0.5.3 per-tool tags absent; Cursor CLI independent recheck is pending.",
+      "note": "This exact shell invocation was unverified due to DNS, not evidence that the tags are absent. A separate live Cursor CLI query in release-evidence/0.5.3-independent-release-review-20260925.json reached GitHub and verified the current tag state."
+    }
+  },
+  "scope": "Candidate binaries were installed from this local checkout and exercised with synthetic fixtures. Claims and all 7 transcripts reproduced. Pages release-gate logic passed 14 tests. Public tag state was separately verified through Cursor CLI; the candidate tags are absent, so installs from those tags cannot be attempted.",
+  "independent_review": "Current Cursor CLI independent recheck verified live tag state, Pages manifest, and that origin/main Pages workflow does not run the branch-local fail-closed gate. Details are retained in docs/0.5.3-independent-release-review-20260925.json.",
+  "publication": "not performed",
+  "independent_live_verification": {
+    "evidence_file": "0.5.3-independent-release-review-20260925.json",
+    "method": "Cursor CLI Agent mode, sandbox enabled, auto-review enabled; GitHub git refs/API/releases and hosted Pages manifest read-only",
+    "candidate_tags": "sweep-v0.5.3, stash-v0.5.3, unpack-v0.5.3 all absent",
+    "published_versions": {
+      "sweep": "0.5.2",
+      "stash": "0.5.2",
+      "unpack": "0.5.1"
+    },
+    "live_pages": "all three tools advertised as 0.5.3 at capture commit 484feef",
+    "pages_gate_on_origin_main": false
+  }
+}

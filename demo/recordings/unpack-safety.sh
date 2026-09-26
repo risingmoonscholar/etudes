@@ -4,28 +4,29 @@ set -euo pipefail
 bin="${ETUDES_DEMO_BIN:?}"
 work="${ETUDES_DEMO_WORK:?temporary recording directory required}"
 mkdir -p "$work/good" "$work/bad"
-printf 'SYNTHETIC DEMO NOTES\n' > "$work/good/notes.txt"
-printf 'SYNTHETIC DEMO PHOTO PLACEHOLDER\n' > "$work/good/photo.jpg"
-printf 'SYNTHETIC DEMO FILE — NOT REAL DATA\n' > "$work/bad/notes.txt"
-printf 'SYNTHETIC OUTSIDE SENTINEL\n' > "$work/outside-sentinel.txt"
-ln -s "$work/outside-sentinel.txt" "$work/bad/shortcut"
-(cd "$work/good" && zip -q "$work/welcome.zip" notes.txt photo.jpg)
-(cd "$work/bad" && zip -q -y "$work/unsafe.zip" notes.txt shortcut)
+printf 'synthetic\n' > "$work/good/Report.pdf"
+printf 'synthetic\n' > "$work/good/café_menu.pdf"
+printf 'SYNTHETIC TEST FIXTURE - NOT REAL DATA\n' > "$work/bad/tax_return_2023_filed.pdf"
+mkdir -p "$work/outside"
+printf 'SYNTHETIC\n' > "$work/outside/secret_outside.txt"
+ln -s "$work/outside/secret_outside.txt" "$work/bad/escape_link"
+(cd "$work/good" && zip -q "$work/site_export.zip" Report.pdf café_menu.pdf)
+(cd "$work/bad" && zip -q -y "$work/photos_2025.zip" tax_return_2023_filed.pdf escape_link)
 
 cd "$work"
-printf '\033[2m0.5.3 candidate · a normal archive and a dangerous one\033[0m\n'
-printf '\033[33m$ unpack welcome.zip --into welcome\033[0m\n\n'
-"$bin/unpack" welcome.zip --into welcome
+export ETUDE_STATE_DIR="$work/state"
+printf '\033[2m~/Desktop · synthetic fixture · unpack 0.5.3 candidate\033[0m\n'
+printf '\033[33m$ unpack site_export.zip --into site_export\033[0m\n\n'
+"$bin/unpack" site_export.zip --into site_export
 sleep 1.4
 
-printf '\n\033[33m$ unpack unsafe.zip --into unsafe\033[0m\n\n'
+printf '\n\033[33m$ unpack photos_2025.zip --into photos_2025\033[0m\n\n'
 set +e
-"$bin/unpack" unsafe.zip --into unsafe
+"$bin/unpack" photos_2025.zip --into photos_2025
 status="$?"
 set -e
 test "$status" -eq 2
-test ! -e "$work/unsafe"
-test "$(cat "$work/outside-sentinel.txt")" = "SYNTHETIC OUTSIDE SENTINEL"
-test -f "$work/welcome/notes.txt"
+test ! -e "$work/photos_2025"
+test "$(cat "$work/outside/secret_outside.txt")" = "SYNTHETIC"
+test -f "$work/site_export/Report.pdf"
 sleep 1.2
-printf '\n\033[2mVerified: safe files extracted; unsafe archive refused before writing.\033[0m\n'

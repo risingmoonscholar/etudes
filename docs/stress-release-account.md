@@ -50,21 +50,20 @@ check record is retained in
 Earlier PR-head evidence remains in
 [`release-evidence/0.5.3-candidate-checks-20260924.json`](release-evidence/0.5.3-candidate-checks-20260924.json).
 These checks build and exercise candidate binaries locally; they do not verify
-published tags. The latest product-code commit is
-`484feef76cd7b6eea450e65386d352b51af5769f`; later commits update demos,
-release evidence, and documentation only.
+published tags. The latest Rust product-code commit is
+`484feef76cd7b6eea450e65386d352b51af5769f`; later branch commits also add
+release-gate scripts, tests, and Pages workflow wiring, alongside demo/evidence
+and documentation updates.
 
-After the demo and evidence corrections, the same candidate install check passed
-again at local review commit `cc29019e2c44d0f6afb3737df404de9ee4251fd1`;
-all three tools installed and passed their synthetic operation and recovery or
-refusal checks. The live public tag lookup initially failed DNS from the
-regular shell, then succeeded through Cursor CLI Agent mode. It found sweep
-and stash at 0.5.2, unpack at 0.5.1 from
-the shared workspace tag, and no 0.5.3 tags. The corrected gate passed 14/14
-unit tests and rejected the current page with exit 1 before upload. The claims
-check and all seven transcript reproductions passed, and the focused NFC/NFD
-`EXDEV` fallback test passed again on the current APFS host. The candidate
-checks are retained in
+After the demo and evidence corrections, the candidate install check passed at
+local review commit `cc29019e2c44d0f6afb3737df404de9ee4251fd1`; all three tools
+installed and passed their synthetic operation and recovery or refusal checks.
+That check record contains 12 Pages-gate unit tests and an unverified remote tag
+lookup because the shell could not resolve GitHub. The later Pages-gate result
+is separate: at `af6c966`, its 14 unit tests passed and it rejected the current
+page against live tags before upload. The claims check, all seven transcript
+reproductions, and the focused NFC/NFD `EXDEV` fallback test also passed. The
+candidate checks are retained in
 [`release-evidence/0.5.3-candidate-checks-cc29019-20260924.json`](release-evidence/0.5.3-candidate-checks-cc29019-20260924.json).
 The live Pages-gate result is retained in
 [`release-evidence/0.5.3-pages-gate-20260924.json`](release-evidence/0.5.3-pages-gate-20260924.json).
@@ -96,10 +95,58 @@ certification, and it does not verify published tags. No Factory observer
 result is claimed.
 
 The 0.5.3 tags remain unpublished. Their installation and behavior cannot be
-verified until you publish those tags; no tag-verification result is claimed
-here, and no release was made in this work.
+verified until those tags exist. The Sep. 24 tag check and the Sep. 25
+independent recheck both found them absent; no release was made in this work.
 
 The seven unproven platform cases are case-sensitive collision, cross-device
 copy and mtime, cross-volume EXDEV, exFAT fallback, full volume, read-only
 volume, and undo recovery after a volume hazard. They require a host capable of
 creating and mounting the test disk images; they are not recorded as passes.
+
+## Live Pages mismatch
+
+On 2026-09-25, an independent read-only Cursor CLI check fetched the public
+tags and hosted transcript manifest successfully. All three proposed 0.5.3
+tags remain absent; the latest public versions are sweep 0.5.2, stash 0.5.2,
+and unpack 0.5.1. However, the hosted Pages transcript manifest reports 0.5.3
+for all three tools at capture commit `484feef`. The public demo therefore
+advertises an unpublished candidate. This is not merely a pending release gate:
+the Pages site already carries candidate version claims.
+
+The local Pages gate rejects that manifest against the live tags, but the gate
+and its workflow integration are only on the unpushed branch
+`codex/0-5-3-release-demos`. `origin/main`'s Pages workflow does not run
+`scripts/check-pages-release.py`. Consequently, the gate did not protect the
+deployment already on the public site. The current independent findings and
+tag evidence are retained in
+[`../release-evidence/0.5.3-independent-release-review-20260925.json`](../release-evidence/0.5.3-independent-release-review-20260925.json).
+
+## Current local rerun
+
+On 2026-09-25, the candidate install and smoke checks passed again at checkout
+`02378728c998438662d37672a84182ac981a316a`. The current changes are limited to
+the demo page, GIF recordings, recording scripts, and capture theme; no Rust
+product source changed. All three locally installed tools passed version,
+synthetic operation, and recovery/refusal checks. The claims check, all seven
+transcript reproductions, the 14 Pages-gate unit tests then present, and `cargo test --all`
+also passed. The exact run is retained in
+[`../release-evidence/0.5.3-candidate-checks-0237872-20260925.json`](../release-evidence/0.5.3-candidate-checks-0237872-20260925.json).
+
+The ordinary candidate-check shell could not resolve GitHub, so its run does
+not establish live tag state or verify installs from proposed public tags. The
+separate Cursor CLI check did reach GitHub and confirmed the candidate tags are
+absent and the public Pages manifest advertises 0.5.3. Tag-based installs
+remain impossible until the user publishes tags. No publication was performed.
+
+
+## Release-version Pages ratchet
+
+After the live deployment mismatch was confirmed, the Pages workflow was tightened
+in the current local worktree: only a per-tool stable GitHub Release or stable
+promotion can trigger deployment. The job checks the release event and exact
+per-tool version tag, checks out the release event's immutable commit, and
+compares the page manifest with GitHub's explicitly stable Release records
+before artifact upload. Demo-only
+pushes, manual dispatches, and prereleases cannot deploy. Workflow tests cover
+trigger, tag pinning, gate ordering, and prerelease exclusion. This wiring is
+still only on the unpushed branch, so `origin/main` is not protected yet.
