@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>unpack v0.5.3 — staged extraction with archive checks · études</title>
+  <meta name="description" content="Unpack 0.5.3 checks archive members, stages extraction privately, and publishes the destination only after audit.">
+  <meta property="og:title" content="unpack v0.5.3 — staged extraction with archive checks">
+  <meta property="og:description" content="A normal archive extracts; an unsafe archive is refused before a destination is published.">
+  <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/unpack-safety.gif">
+  <link rel="stylesheet" href="release.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="chrome">
+      <a href="../index.html">études / demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes/releases/tag/unpack-v0.5.3">GitHub release</a>
+    </header>
+
+    <article>
+      <p class="release-id">unpack · v0.5.3</p>
+      <h1>unpack v0.5.3 — staged extraction with archive checks</h1>
+      <div class="release-copy">
+        <p>Unpack 0.5.3 hardens archive inspection and publishes extracted trees only after staging and audit.</p>
+        <ul>
+          <li>Refuses dangerous ZIP and TAR member types and validates ZIP central and local records.</li>
+          <li>Runs listing and extraction against a private archive copy.</li>
+          <li>Extracts into private staging and publishes the destination atomically after the tree audit passes. Refusals report cleanup state.</li>
+          <li>The extraction budget remains a monitored soft limit, not a hard write-time cap.</li>
+        </ul>
+      </div>
+    </article>
+
+    <section class="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">The demo</h2>
+      <figure>
+        <img src="../gifs/unpack-safety.gif" alt="A light terminal demo extracts a synthetic ZIP archive and refuses a second extraction when the destination already exists." width="860" height="294">
+        <figcaption>A normal synthetic archive extracts; an existing destination is refused. The terminal recording is shown in its original light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install unpack 0.5.3</h2>
+      <p>Run this command to install the pinned release:</p>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.3 unpack-cli</code></pre>
+    </section>
+
+    <footer class="footer">
+      <a href="../index.html">All tool demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes/tree/unpack-v0.5.3">Source at unpack-v0.5.3</a>
+    </footer>
+  </main>
+</body>
+</html>
