@@ -61,5 +61,5 @@
     }
   },
   "external_state": "A separate read-only Cursor review fetched the public tag state and hosted transcript manifest: all v0.5.3 tags are absent, stable versions are sweep/stash 0.5.2 and unpack 0.5.1, while hosted Pages still advertises 0.5.3. See 0.5.3-independent-review-85d1946-20260925.json.",
-  "publication": "No push, tag, release, or deployment was performed; the branch remains local."
+  "publication": "The branch was subsequently pushed and PR #107 is ready for review. No tag, release, merge, or deployment was performed."
 }

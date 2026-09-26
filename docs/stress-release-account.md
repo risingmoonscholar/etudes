@@ -125,8 +125,9 @@ GitHub Releases; it does not fetch the hosted page. A separate read-only
 independent review fetched the hosted manifest and confirmed the same 0.5.3
 claim. The release-only workflow does not remove or correct already-hosted
 files. It only gates future deployments after the branch reaches the default
-branch. Until then, `origin/main`'s workflow can still deploy on demo-path
-pushes or manual dispatch. The earlier live-state review is retained in
+branch. PR #107 is pushed and ready for review, but not merged; until it is,
+`origin/main`'s workflow can still deploy on demo-path pushes or manual
+dispatch. The earlier live-state review is retained in
 [`../release-evidence/0.5.3-independent-release-review-20260925.json`](../release-evidence/0.5.3-independent-release-review-20260925.json).
 The current code and evidence review is retained in
 [`../release-evidence/0.5.3-independent-review-85d1946-20260925.json`](../release-evidence/0.5.3-independent-review-85d1946-20260925.json).
@@ -163,6 +164,6 @@ compares the page manifest with GitHub's explicitly stable Release records
 before artifact upload. Demo-only
 pushes and manual dispatches cannot deploy through this workflow; drafts and
 prereleases are excluded. Workflow tests cover trigger, tag pinning, gate
-ordering, and release-status exclusions. This wiring is still only on the
-unpublished branch, so `origin/main` is not protected yet, and the existing
-hosted 0.5.3 manifest is unaffected until a deployment changes it.
+ordering, and release-status exclusions. This wiring is in PR #107, which is
+ready for review but not merged, so `origin/main` is not protected yet. The
+existing hosted 0.5.3 manifest remains unchanged until a deployment changes it.

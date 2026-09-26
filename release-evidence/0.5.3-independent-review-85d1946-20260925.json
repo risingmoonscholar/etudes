@@ -54,7 +54,7 @@
   },
   "remaining_external_limits": [
     "Candidate installs from proposed tags cannot run until the user publishes those tags.",
-    "The live Pages manifest remains at 0.5.3; the local release-only workflow has not been merged or deployed.",
+    "The live Pages manifest remains at 0.5.3; the release-only workflow is in PR #107, ready for review but not merged or deployed.",
     "No Factory certification is claimed."
   ]
 }
