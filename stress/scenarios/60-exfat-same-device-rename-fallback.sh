@@ -13,10 +13,6 @@
 # separately in 60-cross-device-copy-and-mtime.sh, which puts the source
 # and destination on genuinely different volumes the way
 # 60-cross-volume-exdev.sh already does for APFS.
-#
-# Count the fixture JPGs on both sides, excluding macOS AppleDouble sidecars.
-# Mount-free control and dropped-JPG check:
-#   bash scripts/check-exfat-scenario-counts.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 require hdiutil "same-device exFAT scenario needs a real disk image" || exit 0
@@ -48,14 +44,14 @@ mkdir -p "$MNT/inbox"
 for n in 1 2 3; do
   printf 'photo %s' "$n" > "$MNT/inbox/IMG_104$n.jpg"
 done
-BEFORE=$(find "$MNT/inbox" -type f -name 'IMG_104*.jpg' ! -name '._*' | wc -l | tr -d ' ')
+BEFORE=$(find "$MNT/inbox" -type f | wc -l | tr -d ' ')
 assert_eq 3 "$BEFORE" "fixture has 3 files before anything runs"
 
 APPLY_OUT=$("$SWEEP" apply "$MNT" --depth 2 --yes 2>&1)
 APPLY_EC=$?
 assert_eq 0 "$APPLY_EC" "same-device apply on exFAT exits 0 (was a hard error before #21's fix)"
 
-AFTER=$(find "$MNT" -type f -name 'IMG_104*.jpg' ! -name '._*' | wc -l | tr -d ' ')
+AFTER=$(find "$MNT" -name 'IMG_104*.jpg' | wc -l | tr -d ' ')
 assert_eq "$BEFORE" "$AFTER" "apply lost none of the 3 real files"
 
 CONTENT_OK=1
