@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 278 tests
+cargo test --all                # 282 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -187,6 +187,32 @@ stash status --json             # what is held, and whether it is overdue
 unpack a.zip --list --json      # inspect an archive without extracting
 unpack a.zip --json             # what happened, or why it was refused
 ```
+
+**Unpack publishes an audited transaction.** Extraction happens in a private
+0700 staging directory beside the destination. Before tidying and again before
+the final rename, a tree audit checks every actual member, including implicit
+directories, for containment and type. Only directories and ordinary files
+are accepted; links, special files, setuid/setgid modes and unreadable members
+refuse publication. The requested destination appears with one rename after
+the final audit. Failed runs remove staging; if removal fails, the diagnostic
+names the remaining staging path or explicitly says its state is unverified.
+
+**Unpack's size budget is a monitored soft limit.** `--max-size N[G|M]` replaces
+the default of half the target volume's free space. System extractors write
+directly, so unpack measures logical file bytes every 100 ms and after exit,
+then kills and reaps an over-budget extractor and measures again. Refusals
+report the final exact byte total, limit and overshoot. Read errors stop the
+transaction instead of silently undercounting. This is not a hard write cap,
+and filesystem allocation, metadata and the private archive copy are outside
+that logical-byte measurement.
+
+On 2026-10-06, macOS 27.0.1 arm64, the maximum measured overshoot in
+`80-finder-unpack` was **16,777,215 bytes**: a 16,777,216-byte payload against a
+one-byte limit. The scenario runs ZIP, tar and gzip with one-byte and 1 MiB
+limits, three repetitions each (18 trials), and prints
+`MEASURED_MAX_OVERSHOOT_BYTES`. Reproduce with `bash stress/run.sh 80-finder-unpack`.
+This maximum describes that fixture on that host; larger or faster extractions
+can overshoot further. There is no guaranteed maximum overshoot.
 
 **Meaningful exit codes**, uniform across the tools: `0` done · `1` nothing to
 do · `2` refused · `3` error. "Refused" is distinct from "error" on purpose.
