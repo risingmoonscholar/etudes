@@ -1543,30 +1543,65 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn audit_refuses_hard_links_privileged_modes_and_fifos() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
         let fixture = AuditFixture::new();
         let staging = staging_destination(&fixture.0.join("out")).unwrap();
         let file = staging.join("file");
         std::fs::write(&file, b"data").unwrap();
         let link = staging.join("link");
         std::fs::hard_link(&file, &link).unwrap();
+        assert_eq!(file.symlink_metadata().unwrap().nlink(), 2);
         assert!(audit_staging(&staging).unwrap_err().contains("hard-linked"));
         std::fs::remove_file(link).unwrap();
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o2644)).unwrap();
-        assert!(
-            audit_staging(&staging)
-                .unwrap_err()
-                .contains("setuid/setgid")
-        );
+        assert_eq!(file.symlink_metadata().unwrap().nlink(), 1);
+
+        // chmod can succeed while the filesystem clears the requested bit
+        // (e.g. setgid for a group the caller does not belong to). Verify the
+        // fixture before asking the audit to refuse it; try setuid as well.
+        let mut privileged_fixture_created = false;
+        for requested in [0o2644, 0o4644] {
+            if let Err(error) =
+                std::fs::set_permissions(&file, std::fs::Permissions::from_mode(requested))
+            {
+                eprintln!("privileged-mode fixture: chmod {requested:#06o} failed: {error}");
+            }
+            let observed = file.symlink_metadata().unwrap().mode() & 0o7777;
+            if observed & 0o6000 != 0 {
+                assert!(
+                    audit_staging(&staging)
+                        .expect_err("audit must refuse the privileged bits verified by readback")
+                        .contains("setuid/setgid")
+                );
+                privileged_fixture_created = true;
+            } else {
+                eprintln!(
+                    "privileged-mode fixture unavailable: requested {requested:#06o}, \
+                     read back {observed:#06o}; platform did not retain privileged bits"
+                );
+                assert_eq!(
+                    audit_staging(&staging).unwrap(),
+                    1,
+                    "without privileged bits, this singly-linked file is ordinary"
+                );
+            }
+        }
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(file.symlink_metadata().unwrap().mode() & 0o6000, 0);
+        if !privileged_fixture_created {
+            eprintln!(
+                "privileged-mode audit case was not exercised on this platform; \
+                 requiring the verified FIFO audit refusal below instead"
+            );
+        }
         let fifo = staging.join("fifo");
         assert!(
             Command::new("/usr/bin/mkfifo")
-                .arg(fifo)
+                .arg(&fifo)
                 .status()
                 .unwrap()
                 .success()
         );
+        assert!(fifo.symlink_metadata().unwrap().file_type().is_fifo());
         assert!(
             audit_staging(&staging)
                 .unwrap_err()

@@ -215,6 +215,9 @@ def transaction(tag, injected=None):
                 "successful extraction reports its final tree audit")
         require(complete_at_visibility and (dest / "transaction").read_bytes() == b"x" * large_size,
                 "first visible destination contains the complete byte-identical payload")
+        published = (dest / "transaction").stat()
+        require(published.st_mode & 0o6000 == 0 and published.st_nlink == 1,
+                "audited published file has no privileged mode bits and is singly linked")
         require(not leftovers(dest), "atomic publication consumes staging")
 
 
