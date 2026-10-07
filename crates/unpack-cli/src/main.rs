@@ -26,6 +26,7 @@ use std::process::{Command, ExitCode, Stdio};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use etude_cli_support::contract::{ARCHIVE_SUFFIXES, ArchiveFormat as Format};
 use safety::Unsafe;
 
 // `unpack` deliberately targets the macOS system extractors.  Do not replace
@@ -40,12 +41,13 @@ unpack: stop thinking about archive formats
 USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
     unpack ARCHIVE --list          show what is inside, extract nothing
+    unpack contract --json         print the versioned capability contract
     --max-size N[G|M]              set the monitored soft limit in bytes
     --json                         machine-readable output (for agents)
     --version                      print the version and exit
     unpack help
 
-Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz using the tools already
+Handles .zip .jar .tar .tar.gz .tgz .tar.bz2 .tbz .tar.xz .txz .gz using the tools already
 on this machine. Nothing is parsed here.
 
 .dmg is recognised and refused, by design rather than pending. Opening one
@@ -65,17 +67,6 @@ Bytes on disk are checked every 100 ms and after exit, independently of archive
 headers. This is not a hard write cap: extraction can overshoot between checks
 and while stopping. Refusals report the final measured bytes and overshoot.
 --max-size changes this soft limit; README.md records measured overshoot.";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Format {
-    Zip,
-    Tar,
-    TarGz,
-    TarBz2,
-    TarXz,
-    Gz,
-    Dmg,
-}
 
 /// A private byte-for-byte copy of the archive we judged.
 ///
@@ -182,19 +173,7 @@ fn after_preflight_for_test() {}
 fn detect(path: &Path) -> Option<Format> {
     let n = path.file_name()?.to_string_lossy().to_ascii_lowercase();
     // Longest suffix first: .tar.gz must win over .gz.
-    for (suffix, f) in [
-        (".tar.gz", Format::TarGz),
-        (".tgz", Format::TarGz),
-        (".tar.bz2", Format::TarBz2),
-        (".tbz", Format::TarBz2),
-        (".tar.xz", Format::TarXz),
-        (".txz", Format::TarXz),
-        (".tar", Format::Tar),
-        (".zip", Format::Zip),
-        (".jar", Format::Zip),
-        (".dmg", Format::Dmg),
-        (".gz", Format::Gz),
-    ] {
+    for &(suffix, f) in ARCHIVE_SUFFIXES {
         if n.ends_with(suffix) {
             return Some(f);
         }
@@ -222,6 +201,15 @@ fn stem(path: &Path) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "contract") {
+        return etude_cli_support::contract::command(
+            etude_cli_support::contract::Tool::Unpack,
+            env!("CARGO_PKG_VERSION"),
+            &args,
+            &[],
+            None,
+        );
+    }
     match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
@@ -284,8 +272,12 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
     let Some(fmt) = detect(archive) else {
         eprintln!(
-            "unpack: unrecognised archive type.\n\
-             Handles .zip .tar .tar.gz .tgz .tar.bz2 .tar.xz .gz"
+            "unpack: unsupported archive format: {}.\n\
+             Run `unpack contract --json` for the exact supported suffixes.",
+            archive
+                .extension()
+                .map(|ext| format!(".{}", ext.to_string_lossy()))
+                .unwrap_or_else(|| "(no suffix)".into())
         );
         return ExitCode::from(3);
     };

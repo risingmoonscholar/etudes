@@ -17,3 +17,4 @@ path = "src/main.rs"
 # this would add, and the value here is the safe uniform wrapper, not a parser.
 [dependencies]
 etude-core = { path = "../etude-core", version = "0.5.2" }
+etude-cli-support = { path = "../etude-cli-support", version = "0.5.1" }

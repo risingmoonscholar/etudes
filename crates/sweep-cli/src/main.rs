@@ -25,6 +25,7 @@ USAGE
     sweep forget                 remove sweep's journals; ask before destroying
                                  a key stash also relies on
     sweep verify                 print sweep's own privacy posture
+    sweep contract --json        print the versioned capability contract
     sweep lesson [N]             seven exercises against a folder you throw away
 
 FLAGS
@@ -50,6 +51,16 @@ never moved, in any mode.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.first().is_some_and(|arg| arg == "contract") {
+        return etude_cli_support::contract::command(
+            etude_cli_support::contract::Tool::Sweep,
+            env!("CARGO_PKG_VERSION"),
+            &args,
+            etude_read::scan::TEXT_EXTS,
+            Some(etude_read::buf::MAX_READ),
+        );
+    }
 
     // Core dumps can carry filenames from the heap into a file the OS may offer
     // to upload. Close that before doing any work. THREAT-MODEL § T5.
@@ -415,6 +426,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
     ("undo", &[]),
     ("verify", &[]),
     ("lesson", &[]),
+    ("contract", &[("--json", false)]),
 ];
 
 /// Flags that exist, but not on the command they were given to. Naming the

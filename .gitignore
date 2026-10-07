@@ -1,5 +1,6 @@
 target/
-docs/
+docs/*
+!docs/contracts/
 graphify-out/
 crates/graphify-out/
 .night-watch/

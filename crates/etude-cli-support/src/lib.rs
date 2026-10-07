@@ -1,5 +1,7 @@
 //! Small presentation helpers shared by the command-line tools.
 
+pub mod contract;
+
 use std::io::{self, IsTerminal, Write};
 
 const MIN_ITEMS_FOR_PROGRESS: usize = 100;
