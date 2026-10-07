@@ -40,6 +40,7 @@ USAGE
     stash status [PATH]             what is stashed, and when it is due back
     stash status --all              every stash this machine's journals know,
                                     paths redacted; --paths shows them
+    stash contract --json           print the versioned capability contract
     --no-journal                    stash without undo; pop cannot restore
     --json                          machine-readable output (for agents)
     --version                       print the version and exit
@@ -59,6 +60,16 @@ With a journal, everything is reversible. stash prints what it took.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    if args.first().is_some_and(|arg| arg == "contract") {
+        return etude_cli_support::contract::command(
+            etude_cli_support::contract::Tool::Stash,
+            env!("CARGO_PKG_VERSION"),
+            &args,
+            &[],
+            None,
+        );
+    }
 
     // One-time move from the old XDG-style state directory to the correct
     // macOS one (issue #23), before anything reads state_dir(). Journals in

@@ -25,7 +25,12 @@ FILES="README.md demo/index.html"
 # Measured exactly as check-claims.sh measures. Test count from the suite's
 # own report; scenario count from what git TRACKS, because a reader gets what
 # a clone contains and an untracked scenario is not one the readme can claim.
-tests=$(cargo test --all 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
+if ! tests_output=$(cargo test --all 2>&1); then
+  echo "FAIL cargo test --all failed; refusing to sync claims from an incomplete suite"
+  printf '%s\n' "$tests_output" | tail -60
+  exit 1
+fi
+tests=$(printf '%s\n' "$tests_output" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 scenarios=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
 

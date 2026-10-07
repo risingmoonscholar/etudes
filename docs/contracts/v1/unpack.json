@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "tool_version": "<manifest-version>",
+  "operation_id": "<per-invocation>",
+  "status": "done",
+  "tool": "unpack",
+  "kind": "capability_contract",
+  "contract_query": {
+    "operation": "contract",
+    "reads": [],
+    "writes": []
+  },
+  "observation_scope": {
+    "default_user_content": "archive_bytes",
+    "content_exceptions": [
+      "system_extractor_reads_private_archive_copy"
+    ],
+    "symlinks": "refuse_or_skip",
+    "environment": [
+      "HOME",
+      "TMPDIR"
+    ],
+    "subprocess_environment": "inherited"
+  },
+  "mutation_scope": {
+    "operations": [
+      {
+        "operation": "list",
+        "reads": [
+          "archive_bytes",
+          "archive_metadata",
+          "private_archive_copy",
+          "os_random_bytes"
+        ],
+        "writes": [
+          "private_archive_copy"
+        ]
+      },
+      {
+        "operation": "extract",
+        "reads": [
+          "archive_bytes",
+          "archive_metadata",
+          "private_archive_copy",
+          "destination_parent_metadata",
+          "volume_free_space",
+          "staging_tree_metadata",
+          "os_random_bytes"
+        ],
+        "writes": [
+          "private_archive_copy",
+          "private_staging_tree",
+          "new_destination_tree"
+        ]
+      }
+    ],
+    "startup": {
+      "operation": "startup_except_contract",
+      "reads": [],
+      "writes": []
+    }
+  },
+  "network": {
+    "policy": "none",
+    "runtime_enforcement": "none",
+    "subprocesses": [
+      "/usr/bin/unzip",
+      "/usr/bin/tar",
+      "/usr/bin/gunzip"
+    ],
+    "subprocess_network_verified": false
+  },
+  "overwrite": {
+    "user_destinations": "refused",
+    "owned_state": "private_staging_only"
+  },
+  "deletion": {
+    "source_entries": "never",
+    "user_payloads": "never",
+    "owned_artifacts": [
+      "private_archive_copy",
+      "failed_staging_tree",
+      "junk_members_in_staging"
+    ]
+  },
+  "reversibility": {
+    "mode": "no_undo",
+    "conditions": [
+      "source_archive_retained"
+    ],
+    "disabled_by": []
+  },
+  "persistent_state": {
+    "journal_store": "none",
+    "journal_namespace": "none",
+    "journal_ttl_days": null,
+    "key": "none",
+    "result_artifacts": [
+      "destination_tree"
+    ]
+  },
+  "formats": {
+    "filesystem_handling": "archive_suffix_allowlist",
+    "content_inspection": {
+      "supported": [],
+      "unsupported": [
+        "all"
+      ],
+      "unlisted": "unsupported",
+      "matching": "case_insensitive_suffix"
+    },
+    "archive_extraction": {
+      "supported": [
+        ".tar.gz",
+        ".tgz",
+        ".tar.bz2",
+        ".tbz",
+        ".tar.xz",
+        ".txz",
+        ".tar",
+        ".zip",
+        ".jar",
+        ".gz"
+      ],
+      "unsupported": [
+        ".dmg",
+        ".rar",
+        ".7z",
+        ".bz2",
+        ".xz",
+        ".tbz2",
+        ".zst",
+        ".tar.zst"
+      ],
+      "unlisted": "unsupported",
+      "matching": "case_insensitive_suffix"
+    }
+  },
+  "limits": {
+    "platform": "macos",
+    "inspection_max_bytes": null,
+    "extraction_budget": "monitored_soft_limit_not_hard_cap"
+  },
+  "evidence": {
+    "kind": "declaration_not_receipt",
+    "access_verified": false,
+    "witness": "scripts/check-tool-contracts.py"
+  }
+}

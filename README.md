@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 282 tests
+cargo test --all                # 288 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -176,6 +176,17 @@ not incidental.
 **Structured output.** `--json` on every tool, emitting the same data the human
 rendering is drawn from. A tool that tells a person one thing and an agent
 another is the worst kind of interface.
+
+**Versioned capability contracts.** `sweep contract --json`, `stash contract
+--json` and `unpack contract --json` declare observation and mutation scope,
+network policy, overwrite, deletion, reversibility, persistent state and exact
+supported formats. Contract queries have no application-state side effects.
+Each carries `schema_version`, `tool_version`, `operation_id` and `status`.
+Binary probes in the test suite compare declarations with exercised filesystem
+behaviour and pin each contract's schema; deliberate schema and behaviour mutants
+must fail those probes. The declaration is not a receipt or proof of no access.
+Ordinary operation JSON is still unversioned; the shared result envelope and read
+receipts are the next stage. See [the contract specification and witness limits](docs/contracts/README.md).
 
 ```sh
 sweep ~/Desktop --json          # the plan, including projects_skipped,

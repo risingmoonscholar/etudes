@@ -76,6 +76,9 @@ dependencies = [
 [[package]]
 name = "etude-cli-support"
 version = "0.5.1"
+dependencies = [
+ "etude-core",
+]
 
 [[package]]
 name = "etude-core"
@@ -216,6 +219,7 @@ dependencies = [
 name = "unpack-cli"
 version = "0.5.3"
 dependencies = [
+ "etude-cli-support",
  "etude-core",
 ]
 

@@ -49,7 +49,12 @@ claim() {
   fi
 }
 
-tests_actual=$(cargo test --all 2>&1 | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
+if ! tests_output=$(cargo test --all 2>&1); then
+  bad "cargo test --all failed (including the binary capability-contract witnesses). Counts cannot certify a failed suite."
+  printf '%s\n' "$tests_output" | tail -60
+  exit 1
+fi
+tests_actual=$(printf '%s\n' "$tests_output" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
 for f in README.md demo/index.html; do

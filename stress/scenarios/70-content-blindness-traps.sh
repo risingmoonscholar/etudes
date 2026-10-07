@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Content-blindness traps: facsimile files whose CONTENT contradicts their NAME.
 #
-# Every scan banner claims "no contents read". This scenario makes that claim
-# falsifiable rather than trusted. Each trap routes one way by name and the
-# opposite way by content, so a sweep that ever reads a file routes it wrongly
-# and the trap fires.
+# Content-dependent decisions without consent contradict the declared scope.
+# These traps detect that contradiction; unchanged decisions alone do not prove
+# absence of reads. The contract probes below report that distinction.
 #
 # Two of the traps are unfakeable:
 #
 #   FIFO       reading a named pipe with no writer blocks forever. A sweep
-#              that opens contents hangs. Completing is the proof.
+#              that performs a blocking content read hangs. Completion tests
+#              that behaviour; it does not witness reads of ordinary files.
 #   INSTRUMENT the same .txt trap MUST fire under --inspect-content. A trap
 #              that can never fire proves nothing, so the positive arm is
 #              part of the scenario rather than an afterthought.
@@ -18,6 +18,21 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
+
+# Query each built binary and drive real verbs, then use independent snapshots
+# and digest checks to falsify its capability declaration. The same witness
+# runs in cargo test, so this scenario also covers CLI changes to the contract.
+for tool in sweep stash unpack; do
+  if python3 "$(dirname "${BASH_SOURCE[0]}")/../../scripts/check-tool-contracts.py" \
+      --tool "$tool" --bin "$BIN/$tool"; then
+    pass "$tool contract agrees with exercised operation effects and recovery"
+    unproven "$tool absence of reads and subprocess networking" \
+      "snapshots and symbol checks cannot observe all access attempts"
+  else
+    fail "$tool capability contract drift witness failed"
+  fi
+done
+
 D="$W/Desktop"
 mkdir -p "$D"
 
@@ -102,7 +117,7 @@ if mkfifo "$D/quarterly_summary.txt" 2>/dev/null; then
     fail "TRAP 5 FIRED: sweep hung ${waited}s on a FIFO. It opened file contents"
   else
     wait "$pid" 2>/dev/null
-    pass "TRAP 5: FIFO present, scan finished in ${waited}s. No content was opened"
+    pass "TRAP 5: FIFO present, scan finished in ${waited}s without blocking"
   fi
 else
   unproven "TRAP 5: FIFO trap" "mkfifo unavailable on this filesystem"
@@ -141,7 +156,7 @@ except Exception:
     print('PARSE-FAIL')
 " <<<"$insp")
     case "$flagged" in
-      1) pass "INSTRUMENT 1: under --inspect-content the .txt trap FIRES (flagged as a personal record). The blind arm's zero is therefore evidence" ;;
+      1) pass "INSTRUMENT 1: consent changes the .txt refusal decision; this witnesses behaviour, not absence of reads" ;;
       0) fail "INSTRUMENT 1: consent given but the .txt trap was not flagged. These traps cannot detect a content read, so their green proves nothing" ;;
       *) unproven "INSTRUMENT 1" "could not parse the --inspect-content plan (looks_personal=$flagged)" ;;
     esac
