@@ -40,7 +40,7 @@ unpack: stop thinking about archive formats
 USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
     unpack ARCHIVE --list          show what is inside, extract nothing
-    --max-size N[G|M]              allow this extraction to write more
+    --max-size N[G|M]              set the monitored soft limit in bytes
     --json                         machine-readable output (for agents)
     --version                      print the version and exit
     unpack help
@@ -56,15 +56,15 @@ covers it. `hdiutil attach` does it if you decide to.
 Every archive is listed and judged BEFORE anything is written. Paths that
 escape the target, absolute paths and drive paths are refused outright.
 
-Extraction stops if it writes more than half the free space on the target
-volume, and the target is removed. The limit is on bytes that land on disk,
-never on the size an archive claims for itself: those numbers are written by
-whoever built it, and forging four bytes makes unzip, tar and gzip all
-understate a member by three orders of magnitude.
+Extraction uses private staging beside the destination. Every extracted path
+and member type is audited before the complete tree is published by rename.
+Failed runs remove staging, or report its location if cleanup fails.
 
-A large legitimate archive and a decompression bomb are the same event to
-that check. It bounds damage, it does not detect intent -- so --max-size
-raises the bound when you know what you are unpacking.";
+The monitored soft limit defaults to half the free space on the target volume.
+Bytes on disk are checked every 100 ms and after exit, independently of archive
+headers. This is not a hard write cap: extraction can overshoot between checks
+and while stopping. Refusals report the final measured bytes and overshoot.
+--max-size changes this soft limit; README.md records measured overshoot.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -537,21 +537,22 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             return ExitCode::from(3);
         }
         Ok(Err(breach)) => {
-            // Remove what landed before the cap was hit. A partial extraction
+            // Remove what landed before the soft limit was observed. A partial extraction
             // left behind is the mess this tool exists to avoid, and it is
             // worse here than usual: the user did not choose to start it.
             let cleanup = cleanup_destination(&staging);
             let Breach::Total(n) = breach;
             eprintln!(
-                "unpack: stopped at {}, which is more than this extraction was given.\n\
+                "unpack: monitored soft limit exceeded: {n} bytes measured after stopping;\n\
+                 limit {budget} bytes; overshoot {} bytes.\n\
                  {}\n\n\
                  The budget is half the free space on the target volume, so a large\n\
                  archive on a roomy disk is fine and the same archive on a full one is\n\
                  not. This says nothing about the archive being hostile: a big project\n\
                  and a decompression bomb look identical from here, which is why the\n\
-                 limit is on damage rather than on intent.\n\n\
+                 soft limit watches bytes written rather than intent; it is not a hard cap.\n\n\
                  To allow more:  unpack ARCHIVE --max-size {}G",
-                human(n),
+                n - budget,
                 cleanup.message(),
                 (n / (1024 * 1024 * 1024)) + 2
             );
@@ -560,11 +561,21 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(Ok(())) => {}
     }
 
+    // Audit before tidying, so discarded metadata cannot hide unsafe members.
+    if let Err(error) = audit_staging(&staging) {
+        return audit_refusal(&staging, &error);
+    }
+
     // --- 5. tidy -----------------------------------------------------------
     let removed = remove_junk(&staging);
     let flattened = match safety::wrapper_dir(&entries) {
         Some(w) => flatten(&staging, &w),
         None => false,
+    };
+    // Audit the final tree as well: this is the tree the rename publishes.
+    let audited = match audit_staging(&staging) {
+        Ok(count) => count,
+        Err(error) => return audit_refusal(&staging, &error),
     };
     if let Err(error) = std::fs::rename(&staging, &dest) {
         eprintln!(
@@ -586,6 +597,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 ("flattened", j::bool(flattened)),
                 ("junk_removed", j::num(removed)),
                 ("paths_checked", j::num(members.len())),
+                ("paths_audited", j::num(audited)),
             ])
         );
         return ExitCode::SUCCESS;
@@ -600,6 +612,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         println!("  Dropped {removed} metadata file(s)");
     }
     println!("  Checked {} paths before writing anything", members.len());
+    println!("  Audited {audited} extracted paths before publication");
     ExitCode::SUCCESS
 }
 
@@ -803,7 +816,7 @@ fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// `--max-size N[G|M]`: the caller's own bound, replacing the free-space one.
+/// `--max-size N[G|M]`: the caller's monitored soft limit, replacing the default.
 ///
 /// Exists because the default WILL refuse legitimate work -- a 6 GB project is
 /// indistinguishable from a 6 GB bomb from here. A refusal with no way past it
@@ -919,83 +932,139 @@ fn cleanup_destination_with(
     }
 }
 
-/// Total bytes written under `dir`.
-///
-/// One number, because there is one bound. An earlier version also tracked
-/// the largest single file for a separate per-member cap; the two answered
-/// the same question and disagreed about which one a user had hit.
-fn written(dir: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    let mut total = 0;
-    for e in rd.flatten() {
-        // symlink_metadata, not metadata: a symlink's target is not what this
-        // extraction wrote, and following one could count something outside
-        // dest entirely.
-        let Ok(md) = e.path().symlink_metadata() else {
-            continue;
-        };
-        if md.is_dir() {
-            total += written(&e.path());
+/// Total logical bytes observed under `dir`, without following links.
+/// An unreadable entry makes the measurement fail, never silently smaller.
+fn written(dir: &Path) -> Result<u64, String> {
+    let rd = std::fs::read_dir(dir).map_err(|e| tree_error(dir, e))?;
+    let mut total = 0_u64;
+    for entry in rd {
+        let path = entry.map_err(|e| tree_error(dir, e))?.path();
+        let md = path.symlink_metadata().map_err(|e| tree_error(&path, e))?;
+        let bytes = if md.is_dir() {
+            written(&path)?
         } else {
-            total += md.len();
-        }
+            md.len()
+        };
+        total = total
+            .checked_add(bytes)
+            .ok_or("measured byte total overflowed")?;
     }
-    total
+    Ok(total)
 }
 
-/// Why an extraction was abandoned partway.
-/// One bound, not two. A per-member cap and a per-archive cap answered the
-/// same question twice and disagreed about which one a user had hit; what
-/// matters is how much this extraction wrote, whether that was one file or a
-/// million.
+fn tree_error(path: &Path, error: std::io::Error) -> String {
+    format!("cannot inspect {}: {error}", etude_core::redact::path(path))
+}
+
+/// Inspect the actual tree, including implicit directories and junk, without
+/// following links. Only directories and ordinary, singly-linked files may
+/// be published. A failed read or containment check refuses the transaction.
+fn audit_staging(staging: &Path) -> Result<usize, String> {
+    let md = staging
+        .symlink_metadata()
+        .map_err(|e| tree_error(staging, e))?;
+    if !md.is_dir() || md.file_type().is_symlink() {
+        return Err("staging root is not an ordinary directory".into());
+    }
+    let root = staging.canonicalize().map_err(|e| tree_error(staging, e))?;
+    fn walk(dir: &Path, root: &Path) -> Result<usize, String> {
+        let mut count = 0;
+        for entry in std::fs::read_dir(dir).map_err(|e| tree_error(dir, e))? {
+            let path = entry.map_err(|e| tree_error(dir, e))?.path();
+            let md = path.symlink_metadata().map_err(|e| tree_error(&path, e))?;
+            let kind = md.file_type();
+            let reason = if kind.is_symlink() {
+                Some("symlink")
+            } else if !kind.is_file() && !kind.is_dir() {
+                Some("special member")
+            } else {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if md.mode() & 0o6000 != 0 {
+                        Some("setuid/setgid member")
+                    } else if kind.is_file() && md.nlink() != 1 {
+                        Some("hard-linked file")
+                    } else {
+                        None
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            };
+            if let Some(reason) = reason {
+                return Err(format!("{reason} at {}", etude_core::redact::path(&path)));
+            }
+            let resolved = path.canonicalize().map_err(|e| tree_error(&path, e))?;
+            if !resolved.starts_with(root) {
+                return Err(format!(
+                    "path escaped staging: {}",
+                    etude_core::redact::path(&path)
+                ));
+            }
+            count += 1;
+            if kind.is_dir() {
+                count += walk(&path, root)?;
+            }
+        }
+        Ok(count)
+    }
+    // Keep the caller's spelling in diagnostics (e.g. /var vs /private/var),
+    // while comparing resolved paths against the canonical containment root.
+    walk(staging, &root)
+}
+
+fn audit_refusal(staging: &Path, error: &str) -> ExitCode {
+    eprintln!(
+        "unpack: staging audit failed ({error}); destination was not published. {}",
+        cleanup_destination(staging).message()
+    );
+    ExitCode::from(2)
+}
+
+/// Final measured total on a monitored soft-limit refusal.
 pub enum Breach {
     Total(u64),
 }
 
-/// Run an extractor, watching what it writes and killing it if it goes past
-/// the caps.
-///
-/// The cap is enforced HERE rather than from the listing, because every
-/// declared size is written by whoever built the archive. Measured, not
-/// assumed: forging four bytes made `unzip -Z`, `tar -tvf` and `gzip -l` each
-/// report 4,096 for members that expand to millions of bytes, and the forged
-/// zip then extracted in full with unzip exiting 0.
-///
-/// Polling rather than a stream wrapper, because three of the four formats
-/// are extracted by a child process that writes files directly. A poll can
-/// overshoot by whatever lands between two checks, so this is a bound on the
-/// order of the cap, not to the byte.
+/// System extractors write directly. Poll every 100 ms and after exit; this
+/// monitors a soft limit, with no fixed maximum overshoot. After killing and
+/// reaping the extractor, recount to include writes made while stopping.
 fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), Breach>, String> {
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => {
-                // Check once more after exit: a fast extraction can finish
-                // between two polls, and an unchecked archive is the thing
-                // this function exists to prevent.
-                let total = written(dest);
-                if total > budget {
-                    return Ok(Err(Breach::Total(total)));
+    let result = (|| {
+        loop {
+            let status = child.try_wait().map_err(|e| e.to_string())?;
+            let total = written(dest)?;
+            if total > budget {
+                if status.is_none() {
+                    child
+                        .kill()
+                        .map_err(|e| format!("could not stop extractor: {e}"))?;
+                    child
+                        .wait()
+                        .map_err(|e| format!("could not reap extractor: {e}"))?;
                 }
+                return Ok(Err(Breach::Total(written(dest)?)));
+            }
+            if let Some(status) = status {
                 return if status.success() {
                     Ok(Ok(()))
                 } else {
                     Err("extractor reported failure".into())
                 };
             }
-            None => {
-                let total = written(dest);
-                if total > budget {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Ok(Err(Breach::Total(total)));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
+    })();
+    if result.is_err() {
+        // A failed measurement must not orphan a writer while cleanup runs.
+        let _ = child.kill();
+        let _ = child.wait();
     }
+    result
 }
 
 fn extract(
@@ -1033,7 +1102,13 @@ fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()
         ));
-        match std::fs::create_dir(&candidate) {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.to_string()),
@@ -1404,6 +1479,116 @@ mod tests {
             b"select 1;\n"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    struct AuditFixture(PathBuf);
+
+    impl AuditFixture {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::temp_dir().join(format!(
+                "unpack-audit-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&root).expect("create audit fixture");
+            Self(root)
+        }
+    }
+
+    impl Drop for AuditFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn audit_counts_implicit_directories_and_files_before_and_after_tidying() {
+        let fixture = AuditFixture::new();
+        let staging = staging_destination(&fixture.0.join("out")).unwrap();
+        std::fs::create_dir_all(staging.join("wrapper/nested")).unwrap();
+        std::fs::write(staging.join("wrapper/nested/file"), b"data").unwrap();
+        std::fs::write(staging.join("wrapper/.DS_Store"), b"junk").unwrap();
+        assert_eq!(audit_staging(&staging).unwrap(), 4);
+        assert_eq!(remove_junk(&staging), 1);
+        assert!(flatten(&staging, "wrapper"));
+        assert_eq!(audit_staging(&staging).unwrap(), 2);
+        assert_eq!(written(&staging).unwrap(), 4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_refuses_external_dangling_and_internal_symlinks_without_following_them() {
+        use std::os::unix::fs::symlink;
+        let fixture = AuditFixture::new();
+        let staging = staging_destination(&fixture.0.join("out")).unwrap();
+        let outside = fixture.0.join("outside");
+        std::fs::write(&outside, b"untouched").unwrap();
+        std::fs::write(staging.join("file"), b"data").unwrap();
+        for target in [outside, fixture.0.join("missing"), staging.join("file")] {
+            let link = staging.join(".DS_Store");
+            symlink(target, &link).unwrap();
+            assert!(audit_staging(&staging).unwrap_err().contains("symlink"));
+            std::fs::remove_file(link).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(fixture.0.join("outside")).unwrap(),
+            b"untouched"
+        );
+        let alias = fixture.0.join("alias");
+        symlink(&staging, &alias).unwrap();
+        assert!(audit_staging(&alias).unwrap_err().contains("staging root"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_refuses_hard_links_privileged_modes_and_fifos() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = AuditFixture::new();
+        let staging = staging_destination(&fixture.0.join("out")).unwrap();
+        let file = staging.join("file");
+        std::fs::write(&file, b"data").unwrap();
+        let link = staging.join("link");
+        std::fs::hard_link(&file, &link).unwrap();
+        assert!(audit_staging(&staging).unwrap_err().contains("hard-linked"));
+        std::fs::remove_file(link).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o2644)).unwrap();
+        assert!(
+            audit_staging(&staging)
+                .unwrap_err()
+                .contains("setuid/setgid")
+        );
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let fifo = staging.join("fifo");
+        assert!(
+            Command::new("/usr/bin/mkfifo")
+                .arg(fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            audit_staging(&staging)
+                .unwrap_err()
+                .contains("special member")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_subtrees_fail_both_audit_and_byte_measurement() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = AuditFixture::new();
+        let nested = fixture.0.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("file"), b"data").unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let audit = audit_staging(&fixture.0);
+        let measurement = written(&fixture.0);
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(audit.unwrap_err().contains("cannot inspect"));
+        assert!(measurement.unwrap_err().contains("cannot inspect"));
+        assert!(written(&fixture.0.join("missing")).is_err());
     }
 
     #[test]
