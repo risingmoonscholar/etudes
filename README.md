@@ -410,3 +410,37 @@ propagation and exFAT storage are measured behavior, rather than promises inferr
 from these manuals. The unpack capability declaration is version 3; the result
 envelope remains version 2. `docs/contracts/v3/unpack.json` is the canonical pin,
 `v1/unpack.json` mirrors it, and `v2/unpack.json` remains the prior immutable pin.
+
+### Stash exactly the selected objects
+
+`stash select PATH...` takes the chosen files and directories from any number of
+parents. A selected directory moves as one opaque object; its children are not
+scanned. The existing `stash DIR` command still stashes that directory's visible
+contents. Explicit selections can include hidden files, but retain the existing
+system and credential-directory location refusals. Explicit symlinks and special
+files are refused before holding storage is created. Directory selections require
+holding storage on their own volume; regular files retain the existing copy
+fallback when crossing volumes.
+
+`stash select --from0 FILE` reads UTF-8 paths terminated by NUL; use `--from0 -`
+for stdin. Newlines inside a path are preserved. The list must terminate every
+path, contains no empty records, and is limited to 32 MiB and 100,000 objects.
+Positional sources can accompany a list. Use `--` before option-shaped positional
+filenames. Duplicate canonical paths, repeated object identities such as hard-link
+aliases, and any ancestor/descendant overlap are refused before any move. Overlap
+checks sort canonical path components; they do not scan a common ancestor.
+
+Selections require an encrypted journal. `--no-journal` remains available for
+legacy whole-folder stashing and is refused for explicit selections. Each selection
+uses one private operation root and numbered holding slots, so equal basenames
+from different parents cannot collide. `--into PARENT` chooses the holding parent;
+otherwise the first canonical selected object's parent is used. A holding parent
+inside a selected directory is refused.
+
+The result prints counts and the minimum operation-root locator needed for
+`stash pop LOCATOR`; it does not list source paths or basenames. Pop uses the
+original absolute parents stored in the encrypted journal, and removes only
+empty holding directories authenticated by that journal. Selected directories
+retain the existing opaque directory fingerprint behavior; this is not a recursive
+content-integrity claim. Receipts continue to name uninstrumented access as
+unproven, and no zero counter proves absence of reads.
