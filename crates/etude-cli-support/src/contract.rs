@@ -133,8 +133,15 @@ pub fn declaration(
             .unwrap_or_default()
             .as_nanos()
     );
-    j::obj(&[
-        ("schema_version", j::num(SCHEMA_VERSION)),
+    let mut fields = vec![
+        (
+            "schema_version",
+            j::num(if matches!(tool, Tool::Unpack) {
+                3
+            } else {
+                SCHEMA_VERSION
+            }),
+        ),
         ("tool_version", j::str(version)),
         ("operation_id", j::str(&operation_id)),
         ("status", j::str("done")),
@@ -375,7 +382,19 @@ pub fn declaration(
                 ("witness", j::str("scripts/check-tool-contracts.py")),
             ]),
         ),
-    ])
+    ];
+    if matches!(tool, Tool::Unpack) {
+        fields.push(("quarantine", j::obj(&[
+            ("source", j::str("captured_from_same_nofollow_descriptor_as_archive_bytes")),
+            ("changed_during_copy", j::str("refused_before_extraction")),
+            ("output", j::str("captured_attribute_applied_to_every_final_file_and_directory_and_readback_verified_before_publication")),
+            ("unsupported_storage", j::str("refuse_publication_and_remove_staging_if_attribute_cannot_be_stored_or_exactly_read_back")),
+            ("appledouble", j::str("filesystem_generated_companions_retained_when_they_store_quarantine;_not_a_promise_of_native_xattr_storage")),
+            ("absent_source", j::str("no_quarantine_attribute_added_by_unpack")),
+            ("disclosure", j::str("attribute_value_never_reported")),
+        ])));
+    }
+    j::obj(&fields)
 }
 
 fn operation_scopes(tool: Tool) -> Vec<String> {
@@ -519,6 +538,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &[
                     "archive_bytes",
                     "archive_metadata",
+                    "archive_quarantine_metadata",
                     "private_archive_copy",
                     "os_random_bytes",
                 ],
@@ -529,15 +549,18 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &[
                     "archive_bytes",
                     "archive_metadata",
+                    "archive_quarantine_metadata",
                     "private_archive_copy",
                     "destination_parent_metadata",
                     "volume_free_space",
                     "staging_tree_metadata",
+                    "staging_quarantine_metadata",
                     "os_random_bytes",
                 ],
                 &[
                     "private_archive_copy",
                     "private_staging_tree",
+                    "staging_quarantine_attributes",
                     "new_destination_tree",
                 ],
             ),

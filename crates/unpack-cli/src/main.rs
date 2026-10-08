@@ -17,6 +17,7 @@
 //! means a hostile archive has already written outside the target, and a bomb
 //! has already filled the disk.
 
+mod quarantine;
 mod safety;
 
 use std::collections::HashMap;
@@ -77,10 +78,47 @@ and while stopping. Refusals report the final measured bytes and overshoot.
 struct ArchiveAnchor {
     dir: PathBuf,
     path: PathBuf,
+    quarantine: Option<Vec<u8>>,
+}
+
+#[derive(Debug)]
+enum ArchiveAnchorError {
+    Io(String),
+    QuarantineChanged,
+}
+impl std::fmt::Display for ArchiveAnchorError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(message) => formatter.write_str(message),
+            Self::QuarantineChanged => {
+                formatter.write_str("archive quarantine changed while copying")
+            }
+        }
+    }
+}
+impl From<std::io::Error> for ArchiveAnchorError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error.to_string())
+    }
+}
+impl From<String> for ArchiveAnchorError {
+    fn from(message: String) -> Self {
+        Self::Io(message)
+    }
+}
+impl From<&str> for ArchiveAnchorError {
+    fn from(message: &str) -> Self {
+        Self::Io(message.into())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_ANCHOR_COPY: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 impl ArchiveAnchor {
-    fn create(archive: &Path) -> Result<Self, String> {
+    fn create(archive: &Path) -> Result<Self, ArchiveAnchorError> {
         for _ in 0..128 {
             // A counter plus PID is visible to any process and makes this
             // supposedly private filename predictable.  Read enough bytes
@@ -132,20 +170,47 @@ impl ArchiveAnchor {
                         Ok(_) => {}
                         Err(error) => {
                             let _ = std::fs::remove_dir_all(&dir);
-                            return Err(error.to_string());
+                            return Err(error.into());
                         }
                     }
-                    if let Err(error) = etude_core::scan::observe_read(
-                        "archive_bytes",
-                        std::fs::copy(archive, &path),
-                    ) {
-                        let _ = std::fs::remove_dir_all(&dir);
-                        return Err(error.to_string());
+                    let secured = (|| -> Result<Option<Vec<u8>>, ArchiveAnchorError> {
+                        let mut source = quarantine::open_archive(archive)?;
+                        let mark = quarantine::capture(&source)?;
+                        let mut output = std::fs::File::options()
+                            .write(true)
+                            .create_new(true)
+                            .open(&path)?;
+                        etude_core::scan::observe_read(
+                            "archive_bytes",
+                            std::io::copy(&mut source, &mut output),
+                        )?;
+                        #[cfg(test)]
+                        AFTER_ANCHOR_COPY.with(|hook| {
+                            if let Some(action) = hook.borrow_mut().take() {
+                                action();
+                            }
+                        });
+                        if quarantine::capture(&source)? != mark {
+                            return Err(ArchiveAnchorError::QuarantineChanged);
+                        }
+                        Ok(mark)
+                    })();
+                    match secured {
+                        Ok(quarantine) => {
+                            return Ok(Self {
+                                dir,
+                                path,
+                                quarantine,
+                            });
+                        }
+                        Err(error) => {
+                            let _ = std::fs::remove_dir_all(&dir);
+                            return Err(error);
+                        }
                     }
-                    return Ok(Self { dir, path });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.to_string()),
+                Err(error) => return Err(error.into()),
             }
         }
         Err("could not create a private archive anchor".into())
@@ -341,6 +406,12 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // replaced or rewritten in the meantime.
     let pinned = match ArchiveAnchor::create(archive) {
         Ok(pinned) => pinned,
+        Err(ArchiveAnchorError::QuarantineChanged) => {
+            eprintln!(
+                "unpack: REFUSED. Archive quarantine changed while copying. Nothing was extracted."
+            );
+            return ExitCode::from(2);
+        }
         Err(e) => {
             eprintln!("unpack: could not secure the archive for checking ({e})");
             return ExitCode::from(3);
@@ -588,6 +659,19 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Some(w) => flatten(&staging, &w),
         None => false,
     };
+    // Preserve the captured source state after flattening and junk removal, before publication.
+    let quarantined = match quarantine::preserve(&staging, pinned.quarantine.as_deref()) {
+        Ok(count) => count,
+        Err(error) => {
+            etude_cli_support::envelope::status("refused");
+            eprintln!(
+                "unpack: REFUSED. Could not preserve archive quarantine ({error}). {}",
+                cleanup_destination(&staging).message()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    etude_cli_support::envelope::effect("quarantine_paths_verified", quarantined);
     // Audit the final tree as well: this is the tree the rename publishes.
     let audited = match audit_staging(&staging) {
         Ok(count) => count,
@@ -617,6 +701,14 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 ("junk_removed", j::num(removed)),
                 ("paths_checked", j::num(members.len())),
                 ("paths_audited", j::num(audited)),
+                (
+                    "quarantine",
+                    j::str(if pinned.quarantine.is_some() {
+                        "preserved_and_readback_verified"
+                    } else {
+                        "absent_on_captured_archive"
+                    })
+                ),
             ])
         );
         return ExitCode::SUCCESS;
@@ -1450,6 +1542,12 @@ mod tests {
             assert!(status.success(), "zip fixture creation failed");
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            quarantine::platform_set_for_test(&archive, b"0083;00000000;etudes-original").unwrap();
+            quarantine::platform_set_for_test(&replacement, b"0083;00000000;etudes-replacement")
+                .unwrap();
+        }
         *AFTER_PREFLIGHT.lock().expect("preflight hook lock") = Some(Box::new({
             let archive = archive.clone();
             let replacement = replacement.clone();
@@ -1471,7 +1569,41 @@ mod tests {
             b"checked archive"
         );
         assert!(!dest.join("replacement.txt").exists());
+        #[cfg(target_os = "macos")]
+        {
+            let output = quarantine::open_archive(&dest.join("checked.txt")).unwrap();
+            assert_eq!(
+                quarantine::capture(&output).unwrap().as_deref(),
+                Some(b"0083;00000000;etudes-original".as_slice())
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn changing_quarantine_during_anchor_copy_is_refused() {
+        let root =
+            std::env::temp_dir().join(format!("unpack-quarantine-change-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let archive = root.join("source.gz");
+        std::fs::write(&archive, b"synthetic opaque bytes").unwrap();
+        quarantine::platform_set_for_test(&archive, b"0083;00000000;etudes-before").unwrap();
+        AFTER_ANCHOR_COPY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new({
+                let archive = archive.clone();
+                move || {
+                    quarantine::platform_set_for_test(&archive, b"0083;00000000;etudes-after")
+                        .unwrap()
+                }
+            }))
+        });
+        assert!(matches!(
+            ArchiveAnchor::create(&archive),
+            Err(ArchiveAnchorError::QuarantineChanged)
+        ));
+        assert!(archive.is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
