@@ -42,7 +42,9 @@ FLAGS
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
     --map EXT=Folder  route an unknown extension into a folder, this run only
                       (repeatable; refusals still win; journal required)
-    --json          machine-readable plan on stdout (for agents)
+    --json          machine-readable results on stdout (for agents)
+    --export-plan F save a private bound plan outside the selected tree
+    apply --plan F --plan-digest SHA --yes applies that exact observed plan
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
@@ -411,6 +413,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         &[
             ("--depth", true),
             ("--json", false),
+            ("--export-plan", true),
             ("--quiet", false),
             ("--explain", false),
             ("--allow-sync", false),
@@ -424,6 +427,8 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         &[
             ("--yes", false),
             ("--json", false),
+            ("--plan", true),
+            ("--plan-digest", true),
             ("--only", true),
             ("--no-journal", false),
             ("--depth", true),
@@ -702,6 +707,47 @@ impl plan::Inspector for ReceiptInspector {
     }
 }
 
+fn observation_contract_digest() -> String {
+    let mut declaration = etude_cli_support::contract::declaration(etude_cli_support::contract::Tool::Sweep, env!("CARGO_PKG_VERSION"), etude_read::scan::TEXT_EXTS, Some(etude_read::buf::MAX_READ));
+    let start = declaration.find("\"operation_id\":").expect("contract identifier") + "\"operation_id\":".len();
+    let end = start + 1 + declaration[start+1..].find('"').expect("contract identifier end") + 1;
+    declaration.replace_range(start..end, "\"<per-invocation>\"");
+    plan::binding_digest(declaration.as_bytes())
+}
+
+fn current_binding_context(profile: &str) -> plan::BindingContext {
+    plan::BindingContext::new("sweep", env!("CARGO_PKG_VERSION"), profile, &observation_contract_digest())
+}
+
+fn planning_profile(args: &[String], inspected: bool) -> String {
+    let configuration = format!("depth={:?};sync={};grace={:?};maps={:?};content={inspected}", parse_depth(args), has(args, "--allow-sync"), since_flag(args).map(|value| value.or(ScanConfig::default().grace)), map_flags(args));
+    format!("sweep-metadata-v1;{}", plan::binding_digest(configuration.as_bytes()))
+}
+
+fn bound_or_refuse(p: plan::Plan, context: plan::BindingContext) -> Result<plan::BoundPlan, ExitCode> {
+    plan::BoundPlan::from_plan(p, context).map_err(|error| { eprintln!("sweep: {error}; replan required"); etude_cli_support::envelope::status("refused"); ExitCode::from(2) })
+}
+
+fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
+    if ["--map", "--depth", "--since", "--allow-sync", "--inspect-content", "--export-plan"].iter().any(|flag| has(args, flag)) {
+        eprintln!("sweep: an exported plan fixes its planning configuration; replan instead of overriding it");
+        return ExitCode::from(2);
+    }
+    let Some(digest) = value(args, "--plan-digest") else { eprintln!("sweep: --plan requires the digest printed with the exported plan"); return ExitCode::from(2); };
+    let mut bound = match plan::BoundPlan::load(Path::new(file), &digest) { Ok(plan) => plan, Err(error) => { eprintln!("sweep: {error}; replan required"); return ExitCode::from(2); } };
+    if !bound.context().profile.starts_with("sweep-metadata-v1;") { eprintln!("sweep: plan scheme changed; replan required"); return ExitCode::from(2); }
+    let context = current_binding_context(&bound.context().profile);
+    if let Err(error) = bound.validate(&context) { eprintln!("sweep: {error}"); return ExitCode::from(2); }
+    let only = value(args, "--only");
+    if !has(args, "--yes") && only.is_none() { eprintln!("sweep: applying requires --yes or --only NAME"); return ExitCode::from(2); }
+    for group in &mut bound.plan.groups { group.accepted = only.as_ref().is_none_or(|name| name == &group.name); }
+    if let Err(error) = bound.finalize_choices() { eprintln!("sweep: {error}; replan required"); return ExitCode::from(2); }
+    if bound.moves() == 0 { return ExitCode::from(1); }
+    if has(args, "--no-journal") && bound.groups.iter().any(|group| group.accepted && matches!(group.signal, plan::Signal::Mapped { .. })) { eprintln!("sweep: mapped plans require a journal"); return ExitCode::from(2); }
+    let sl = if has(args, "--no-journal") { None } else { let Some(sl) = sealer() else { return ExitCode::from(2); }; Some(sl) };
+    run_apply(&bound, &context, sl)
+}
+
 fn scan_and_plan(
     path: &Path,
     args: &[String],
@@ -789,11 +835,20 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
+    let mut export_binding = None;
+    if let Some(file) = value(args, "--export-plan") {
+        let context = current_binding_context(&planning_profile(args, stats.is_some()));
+        let bound = match bound_or_refuse(plan.clone(), context) { Ok(bound) => bound, Err(code) => return code };
+        if let Err(error) = bound.export(Path::new(&file)) { eprintln!("sweep: cannot export plan ({error})"); return ExitCode::from(2); }
+        if !has(args, "--json") { println!("Plan exported to {file}; contains selected paths and metadata. Digest: {}", bound.digest()); }
+        export_binding = Some(bound.binding_json());
+    }
+    let plan_json = || { let mut json = plan.to_json(); if let Some(binding) = &export_binding { json.pop(); json.push_str(&format!(",\"binding\":{binding}}}")); } json };
     if plan.skipped_unreadable > 0 {
         etude_cli_support::envelope::status("incomplete");
     }
     if plan.groups.is_empty() && has(args, "--json") {
-        println!("{}", plan.to_json());
+        println!("{}", plan_json());
         return ExitCode::from(1);
     }
     if plan.groups.is_empty() {
@@ -870,7 +925,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     if has(args, "--json") {
         // The agent contract: same data the human rendering draws from, so the
         // tool cannot tell a person one thing and an agent another.
-        println!("{}", plan.to_json());
+        println!("{}", plan_json());
         return ExitCode::SUCCESS;
     }
 
@@ -1216,7 +1271,9 @@ fn cmd_review(args: &[String]) -> ExitCode {
             } else {
                 None
             };
-            run_apply(&p, sl)
+            let context = current_binding_context(&planning_profile(args, false));
+            let bound = match bound_or_refuse(p, context.clone()) { Ok(plan) => plan, Err(code) => return code };
+            run_apply(&bound, &context, sl)
         }
     }
 }
@@ -1341,11 +1398,11 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
 }
 
 /// Shared tail of `apply` and `review`.
-fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
+fn run_apply(p: &plan::BoundPlan, context: &plan::BindingContext, sl: Option<KeychainSeal>) -> ExitCode {
     let mut progress = etude_cli_support::ProgressReporter::stderr("sweep apply", p.moves());
     let result = etude_core::apply::apply_with_progress(
         p,
-        "sweep",
+        context,
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
         |p| progress.update(p.completed, p.total),
@@ -1356,6 +1413,7 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
             etude_cli_support::envelope::effect("items_moved", r.moved);
             etude_cli_support::envelope::detail(etude_core::json::obj(&[
                 ("moved", etude_core::json::num(r.moved)),
+                ("binding", p.binding_json()),
                 (
                     "journal",
                     r.journal_path
@@ -1376,6 +1434,11 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
+            if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) {
+                etude_cli_support::envelope::status("refused");
+                eprintln!("sweep: {e}");
+                return ExitCode::from(2);
+            }
             etude_cli_support::envelope::status("incomplete");
             refuse_apply(&e);
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
@@ -1390,6 +1453,8 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
 /// since the plan was printed, and a stale plan is the write-freshness failure:
 /// the record says one thing and the tree says another.
 fn cmd_apply(args: &[String]) -> ExitCode {
+    if let Some(file) = value(args, "--plan") { return apply_exported_plan(args, &file); }
+    if has(args, "--plan-digest") { eprintln!("sweep: --plan-digest requires --plan FILE"); return ExitCode::from(2); }
     let path = match apply_path(&args[1..]) {
         Ok(path) => path,
         Err(msg) => {
@@ -1484,7 +1549,9 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         None
     };
 
-    run_apply(&p, sl)
+    let context = current_binding_context(&planning_profile(args, false));
+    let bound = match bound_or_refuse(p, context.clone()) { Ok(plan) => plan, Err(code) => return code };
+    run_apply(&bound, &context, sl)
 }
 
 /// The newest sweep journal that still has entries to reverse.

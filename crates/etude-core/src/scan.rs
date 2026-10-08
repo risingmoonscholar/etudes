@@ -89,6 +89,293 @@ pub fn receipt_json() -> String {
     })
 }
 
+/// Metadata binding for a tree selected by a plan; contains no payload bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeSnapshot {
+    pub root: PathBuf,
+    pub depth: usize,
+    pub whole_units: bool,
+    pub root_identity: SnapshotIdentity,
+    pub ancestors: Vec<SnapshotEntry>,
+    pub entries: Vec<SnapshotEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotEntry {
+    pub path: PathBuf,
+    pub identity: SnapshotIdentity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub size: u64,
+    pub mtime_sec: i64,
+    pub mtime_nsec: i64,
+    pub ctime_sec: i64,
+    pub ctime_nsec: i64,
+    pub mode: u32,
+    pub kind: u8,
+}
+
+impl SnapshotIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        let kind = if metadata.file_type().is_symlink() {
+            3
+        } else if metadata.is_dir() {
+            2
+        } else if metadata.is_file() {
+            1
+        } else {
+            4
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                size: metadata.len(),
+                mtime_sec: metadata.mtime(),
+                mtime_nsec: metadata.mtime_nsec(),
+                ctime_sec: metadata.ctime(),
+                ctime_nsec: metadata.ctime_nsec(),
+                mode: metadata.mode(),
+                kind,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .unwrap_or_default();
+            Self {
+                device: 0,
+                inode: 0,
+                size: metadata.len(),
+                mtime_sec: modified.as_secs() as i64,
+                mtime_nsec: modified.subsec_nanos() as i64,
+                ctime_sec: 0,
+                ctime_nsec: 0,
+                mode: u32::from(metadata.permissions().readonly()),
+                kind,
+            }
+        }
+    }
+}
+
+impl TreeSnapshot {
+    /// Commit raw path bytes without retaining names; reserved NUL prefix is idempotent.
+    pub fn path_commitment(path: &Path) -> PathBuf {
+        const PREFIX: &[u8] = b"\0etude-path-sha256:";
+        #[cfg(unix)]
+        let bytes = {
+            use std::os::unix::ffi::OsStrExt;
+            path.as_os_str().as_bytes()
+        };
+        #[cfg(not(unix))]
+        let bytes = path.as_os_str().as_encoded_bytes();
+        if bytes.starts_with(PREFIX)
+            && bytes.len() == PREFIX.len() + 64
+            && bytes[PREFIX.len()..]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+        {
+            return path.to_path_buf();
+        }
+        PathBuf::from(format!(
+            "\0etude-path-sha256:{}",
+            crate::plan::binding_digest(bytes)
+        ))
+    }
+
+    /// Capture before planning, then validate after scanning and before application.
+    pub fn capture(root: &Path, depth: usize) -> io::Result<Self> {
+        if depth > 8 {
+            return Err(io::Error::other("snapshot depth must be at most 8"));
+        }
+        Self::capture_for_config(
+            root,
+            &ScanConfig {
+                depth: depth as u8,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Capture only the entry metadata and marker probes used by this scan profile.
+    pub fn capture_for_config(root: &Path, cfg: &ScanConfig) -> io::Result<Self> {
+        let depth = usize::from(cfg.depth.min(8));
+        if depth > 8 {
+            return Err(io::Error::other("snapshot depth must be at most 8"));
+        }
+        let absolute = if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(root)
+        };
+        let name = absolute
+            .file_name()
+            .ok_or_else(|| io::Error::other("snapshot root must have a final component"))?;
+        let root = absolute
+            .parent()
+            .ok_or_else(|| io::Error::other("snapshot root has no parent"))?
+            .canonicalize()?
+            .join(name);
+        let metadata = observe_read("metadata", fs::symlink_metadata(&root))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() || is_refused_system_location(&root) || root.components().any(|component| matches!(component, Component::Normal(name) if never_enter(&name.to_string_lossy()))) {
+            return Err(io::Error::other("snapshot root is not an allowed directory"));
+        }
+        let mut snapshot = Self {
+            root,
+            depth,
+            whole_units: cfg.whole_units,
+            root_identity: SnapshotIdentity::from_metadata(&metadata),
+            entries: Vec::new(),
+            ancestors: Vec::new(),
+        };
+        snapshot.capture_ancestor_markers()?;
+        snapshot.capture_directory(Path::new(""), 0, false)?;
+        snapshot.entries.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(snapshot)
+    }
+
+    fn capture_ancestor_markers(&mut self) -> io::Result<()> {
+        for directory in self.root.ancestors().skip(1) {
+            for entry in observe_read("directory_enumeration", fs::read_dir(directory))? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !name_matches(&name, ROOT_MARKERS) {
+                    continue;
+                }
+                if self.ancestors.len() >= 100_000 {
+                    return Err(io::Error::other("snapshot exceeds 100000 ancestor markers"));
+                }
+                let path = entry.path();
+                let metadata = observe_read("metadata", fs::symlink_metadata(&path))?;
+                self.ancestors.push(SnapshotEntry {
+                    path: Self::path_commitment(&path),
+                    identity: SnapshotIdentity::from_metadata(&metadata),
+                });
+            }
+        }
+        self.ancestors.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(())
+    }
+
+    fn capture_directory(
+        &mut self,
+        relative: &Path,
+        level: usize,
+        probe_only: bool,
+    ) -> io::Result<bool> {
+        let directory = self.root.join(relative);
+        let before = observe_read("metadata", fs::symlink_metadata(&directory))?;
+        if !before.is_dir() || before.file_type().is_symlink() {
+            return Err(io::Error::other("snapshot directory changed"));
+        }
+        let full = !probe_only && level < self.depth;
+        let mut children = Vec::new();
+        let mut has_project = false;
+        for entry in observe_read("directory_enumeration", fs::read_dir(&directory))? {
+            let entry = observe_read("directory_entry", entry)?;
+            if self.entries.len() >= 100_000 {
+                return Err(io::Error::other("snapshot exceeds 100000 observations"));
+            }
+            let path = relative.join(entry.file_name());
+            let absolute = self.root.join(&path);
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let marker = !name_matches(&name, BUNDLE_MARKERS)
+                && (name_matches(&name, ROOT_MARKERS) || (level > 0 && is_document_marker(&name)));
+            let metadata = if full || marker {
+                Some(observe_read("metadata", fs::symlink_metadata(&absolute))?)
+            } else {
+                None
+            };
+            if marker && metadata.as_ref().is_some_and(|metadata| !metadata.is_dir()) {
+                has_project = true;
+            }
+            self.entries.push(SnapshotEntry {
+                path: Self::path_commitment(&path),
+                identity: metadata
+                    .as_ref()
+                    .map(SnapshotIdentity::from_metadata)
+                    .unwrap_or(SnapshotIdentity {
+                        device: 0,
+                        inode: 0,
+                        size: 0,
+                        mtime_sec: 0,
+                        mtime_nsec: 0,
+                        ctime_sec: 0,
+                        ctime_nsec: 0,
+                        mode: 0,
+                        kind: 0,
+                    }),
+            });
+            if !full {
+                continue;
+            }
+            let metadata = metadata
+                .as_ref()
+                .expect("full snapshot records entry metadata");
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || is_hidden(&name)
+                || never_enter(&name)
+                || is_refused_system_location(&absolute)
+            {
+                continue;
+            }
+            let named_package = is_package(&name);
+            let inflight = IN_FLIGHT_SUFFIXES
+                .iter()
+                .any(|suffix| name.to_ascii_lowercase().ends_with(suffix));
+            let bundle = name_matches(&name, BUNDLE_MARKERS);
+            let document_probe = !named_package && !bundle && !inflight;
+            let project_probe = self.whole_units
+                || (!named_package && !inflight && !bundle && !os_says_package(&absolute));
+            if document_probe || project_probe {
+                children.push((path, project_probe && !self.whole_units));
+            }
+        }
+        let after = observe_read("metadata", fs::symlink_metadata(&directory))?;
+        if SnapshotIdentity::from_metadata(&before) != SnapshotIdentity::from_metadata(&after) {
+            return Err(io::Error::other(
+                "snapshot directory changed during capture",
+            ));
+        }
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        for (child, may_recurse) in children {
+            let start = self.entries.len();
+            let marked = self.capture_directory(&child, level + 1, true)?;
+            if may_recurse && !marked && level + 1 < self.depth {
+                self.entries.truncate(start);
+                self.capture_directory(&child, level + 1, false)?;
+            }
+        }
+        Ok(has_project)
+    }
+
+    /// Refuse changed identities, entries, permissions or timestamps before effects.
+    pub fn validate(&self) -> io::Result<()> {
+        if Self::capture_for_config(
+            &self.root,
+            &ScanConfig {
+                depth: self.depth as u8,
+                whole_units: self.whole_units,
+                ..Default::default()
+            },
+        )? != *self
+        {
+            return Err(io::Error::other("selected tree changed since planning"));
+        }
+        Ok(())
+    }
+}
+
 /// Directory names that are never entered, regardless of depth or location.
 /// A credential/noise directory is dangerous by NAME, wherever it appears.
 /// `.ssh` under a project checkout is still `.ssh`. This list must not carry
@@ -634,6 +921,7 @@ impl std::fmt::Display for ScanError {
 #[derive(Debug)]
 pub struct ScanOutcome {
     pub root: PathBuf,
+    pub snapshot: Option<TreeSnapshot>,
     /// The grace window this scan ran with, carried so the plan applies the
     /// same one. The scan reports what is there; deciding a file is too
     /// recent to move is a planning decision, and it belongs where the other
@@ -893,8 +1181,15 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
         return Err(ScanError::RefusedSyncRoot(root.clone()));
     }
 
+    let snapshot = match TreeSnapshot::capture_for_config(&root, cfg) {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => None,
+        Err(error) => return Err(ScanError::Io(error)),
+    };
+
     let mut out = ScanOutcome {
         root: root.clone(),
+        snapshot,
         grace: cfg.grace,
         entries: Vec::new(),
         project_holds: Vec::new(),
@@ -912,6 +1207,15 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
     // Visited device+inode pairs close the symlink-cycle case.
     let mut visited: HashSet<(u64, u64)> = HashSet::new();
     walk(&root, &root, 0, cfg, &mut out, &mut visited)?;
+    if out.skipped_unreadable > 0 {
+        out.snapshot = None;
+    } else if let Some(snapshot) = &out.snapshot {
+        match snapshot.validate() {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => out.snapshot = None,
+            Err(error) => return Err(ScanError::Io(error)),
+        }
+    }
 
     if out.entries.len() > cfg.max_entries {
         return Err(ScanError::TooManyEntries {
@@ -1154,6 +1458,107 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_profiles_bind_only_metadata_the_scan_observes() {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "etude-profile-snapshot-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("child")).unwrap();
+        fs::write(root.join("child/ordinary.bin"), b"synthetic fixture").unwrap();
+        let key = TreeSnapshot::path_commitment(Path::new("child/ordinary.bin"));
+        for whole_units in [false, true] {
+            let snapshot = TreeSnapshot::capture_for_config(
+                &root,
+                &ScanConfig {
+                    depth: 1,
+                    whole_units,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| entry.path == key)
+                    .unwrap()
+                    .identity
+                    .kind,
+                0
+            );
+            snapshot.validate().unwrap();
+        }
+        let deep = TreeSnapshot::capture_for_config(
+            &root,
+            &ScanConfig {
+                depth: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            deep.entries
+                .iter()
+                .find(|entry| entry.path == key)
+                .unwrap()
+                .identity
+                .kind,
+            1
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_commitments_preserve_raw_bytes_without_retaining_names() {
+        let path = Path::new("held-sensitive-name.pdf");
+        let committed = TreeSnapshot::path_commitment(path);
+        assert_eq!(TreeSnapshot::path_commitment(&committed), committed);
+        assert!(!committed.to_string_lossy().contains("held-sensitive-name"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raw = PathBuf::from(std::ffi::OsString::from_vec(vec![b'x', 0xff]));
+            let replacement = PathBuf::from("x\u{fffd}");
+            assert_ne!(
+                TreeSnapshot::path_commitment(&raw),
+                TreeSnapshot::path_commitment(&replacement)
+            );
+        }
+    }
+
+    #[test]
+    fn protected_directory_contents_stay_outside_snapshot_scope() {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "etude-protected-snapshot-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join(".ssh")).unwrap();
+        let snapshot = TreeSnapshot::capture(&root, 1).unwrap();
+        let entry = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.path == TreeSnapshot::path_commitment(Path::new(".ssh")))
+            .unwrap();
+        assert_eq!(entry.identity.kind, 2);
+        fs::write(root.join(".ssh/inside"), b"synthetic fixture").unwrap();
+        let recaptured = TreeSnapshot::capture(&root, 1).unwrap();
+        assert!(
+            recaptured
+                .entries
+                .iter()
+                .all(|entry| entry.path != TreeSnapshot::path_commitment(Path::new(".ssh/inside")))
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn receipt_counts_outcomes_without_retaining_values_or_errors() {

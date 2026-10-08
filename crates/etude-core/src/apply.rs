@@ -21,7 +21,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::journal::{Entry, EntryState, Journal, Method, Sealer, fingerprint};
-use crate::plan::Plan;
+use crate::plan::{Plan, BoundPlan, BindingContext};
 
 #[derive(Debug)]
 pub enum ApplyError {
@@ -36,6 +36,7 @@ pub enum ApplyError {
     CannotCompareNames(PathBuf),
     /// Injected by tests to prove the journal stays resumable.
     Injected(usize),
+    StalePlan(io::Error),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -70,6 +71,7 @@ impl std::fmt::Display for ApplyError {
             // io::Error::other with a formatted path is the one who breaks
             // it, and an_io_error_names_the_os_reason_without_naming_the_path
             // is what should catch them.
+            ApplyError::StalePlan(e) => write!(f, "refused: {e}; replan required"),
             ApplyError::Io(e) => write!(f, "io error: {e}"),
             ApplyError::Journal(e) => write!(f, "{e}"),
             ApplyError::DestinationExists(p) => {
@@ -121,23 +123,26 @@ pub type FailAt = Option<usize>;
 ///
 /// There is no plaintext journal path. Either it is sealed or it is absent.
 pub fn apply(
-    plan: &Plan,
-    tool: &str,
+    plan: &BoundPlan,
+    context: &BindingContext,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
 ) -> Result<ApplyReport, ApplyError> {
-    apply_with_progress(plan, tool, sealer, fail_at, |_| {})
+    apply_with_progress(plan, context, sealer, fail_at, |_| {})
 }
 
 /// Execute the accepted groups and report each completed move to the caller.
 /// The callback is deliberately output-agnostic; the CLI owns presentation.
 pub fn apply_with_progress(
-    plan: &Plan,
-    tool: &str,
+    bound: &BoundPlan,
+    context: &BindingContext,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
     mut progress: impl FnMut(Progress),
 ) -> Result<ApplyReport, ApplyError> {
+    bound.validate(context).map_err(ApplyError::StalePlan)?;
+    let plan = &bound.plan;
+    let tool = &context.tool;
     let id = journal_id(plan);
     let mut j = Journal {
         id: id.clone(),
@@ -1338,21 +1343,7 @@ mod tests {
     fn journal_id_is_unique_across_tight_loop() {
         // Tight loop finishes well under one second; under seconds+hash-only
         // ids this fails every time, proving the counter (not wall-clock luck).
-        let plan = Plan {
-            root: PathBuf::from("/tmp/journal_id_test_root"),
-            groups: Vec::new(),
-            untouched: Vec::new(),
-            scanned: 0,
-            skipped_hidden: 0,
-            skipped_symlink: 0,
-            skipped_system: 0,
-            skipped_project: 0,
-            skipped_in_flight: 0,
-            skipped_package: 0,
-            skipped_unreadable: 0,
-            root_is_synced: false,
-            allow_sync: false,
-        };
+        let plan = Plan::display_only(PathBuf::from("/tmp/journal_id_test_root"), Vec::new());
         const N: usize = 200;
         let mut ids = HashSet::with_capacity(N);
         for _ in 0..N {

@@ -78,8 +78,9 @@ pub struct Group {
     pub accepted: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Plan {
+    observations: Option<crate::scan::TreeSnapshot>,
     pub root: PathBuf,
     pub groups: Vec<Group>,
     /// Files sweep declined to act on, with the reason.
@@ -109,6 +110,21 @@ pub struct Plan {
     /// instead of re-deciding: the decision was already made when the plan
     /// was built, and apply never received the original flag on its own.
     pub allow_sync: bool,
+}
+
+impl Plan {
+    pub fn display_only(root: PathBuf, groups: Vec<Group>) -> Self {
+        Self { observations: None, root, groups, untouched: Vec::new(), scanned: 0, skipped_hidden: 0, skipped_symlink: 0, skipped_system: 0, skipped_project: 0, skipped_in_flight: 0, skipped_package: 0, skipped_unreadable: 0, root_is_synced: false, allow_sync: false }
+    }
+
+    pub fn with_groups(scan: &ScanOutcome, mut groups: Vec<Group>) -> Self {
+        for group in &mut groups {
+            for member in &mut group.members {
+                if let (Some(parent), Some(name)) = (member.parent(), member.file_name()) && let Ok(parent) = parent.canonicalize() { *member = parent.join(name); }
+            }
+        }
+        Self { observations: scan.snapshot.clone(), root: scan.root.clone(), groups, untouched: scan.project_holds.clone(), scanned: scan.entries.len(), skipped_hidden: scan.skipped_hidden, skipped_symlink: scan.skipped_symlink, skipped_system: scan.skipped_system, skipped_project: scan.skipped_project, skipped_in_flight: scan.skipped_in_flight, skipped_package: scan.skipped_package, skipped_unreadable: scan.skipped_unreadable, root_is_synced: scan.root_is_synced, allow_sync: scan.allow_sync }
+    }
 }
 
 impl Plan {
@@ -723,6 +739,7 @@ pub fn build_with_maps(
     untouched.sort_by(|a, b| a.0.cmp(&b.0));
 
     Plan {
+        observations: scan.snapshot.clone(),
         root: scan.root.clone(),
         groups,
         untouched,
@@ -805,7 +822,7 @@ mod tests {
 
     fn scan_outcome(entries: Vec<Entry>) -> ScanOutcome {
         ScanOutcome {
-            grace: None,
+            snapshot: None,            grace: None,
             root: PathBuf::from("/fixture"),
             entries,
             project_holds: Vec::new(),
@@ -1007,4 +1024,149 @@ mod tests {
         );
         assert_eq!(range, "Jan 1, 2020–Jan 1, 2026");
     }
+}
+
+mod codec;
+
+pub const PLAN_SCHEMA_VERSION: u32 = 1;
+pub const MAX_PLAN_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingContext {
+    pub tool: String,
+    pub tool_version: String,
+    pub profile: String,
+    pub observation_contract: String,
+}
+
+impl BindingContext {
+    pub fn new(tool: &str, version: &str, profile: &str, contract: &str) -> Self {
+        Self { tool: tool.into(), tool_version: version.into(), profile: profile.into(), observation_contract: contract.into() }
+    }
+}
+
+#[derive(Debug)]
+pub struct BoundPlan {
+    pub plan: Plan,
+    context: BindingContext,
+    snapshot: crate::scan::TreeSnapshot,
+    digest: String,
+    allowed_sources: std::collections::HashSet<PathBuf>,
+}
+
+impl BoundPlan {
+    pub fn from_plan(plan: Plan, context: BindingContext) -> std::io::Result<Self> {
+        let snapshot = plan.observations.clone().ok_or_else(|| std::io::Error::other("plan has incomplete observations; replan required"))?;
+        let allowed_sources = plan.groups.iter().flat_map(|group| group.members.iter().cloned()).collect();
+        let mut bound = Self { plan, context, snapshot, digest: String::new(), allowed_sources };
+        bound.finalize_choices()?;
+        Ok(bound)
+    }
+
+    pub fn context(&self) -> &BindingContext { &self.context }
+    pub fn digest(&self) -> &str { &self.digest }
+
+    fn check_members(&self) -> std::io::Result<()> {
+        use std::path::Component;
+        if self.plan.root != self.snapshot.root || self.plan.skipped_unreadable != 0 {
+            return Err(std::io::Error::other("plan root or observation coverage changed; replan required"));
+        }
+        let observed: std::collections::HashSet<_> = self.snapshot.entries.iter().filter(|entry| entry.identity.kind != 0).map(|entry| entry.path.clone()).collect();
+        let mut sources = std::collections::HashSet::new();
+        for group in &self.plan.groups {
+            let mut parts = std::path::Path::new(&group.name).components();
+            if !matches!(parts.next(), Some(Component::Normal(_))) || parts.next().is_some() || group.name.as_bytes().contains(&0) {
+                return Err(std::io::Error::other("plan destination is not a single directory name; replan required"));
+            }
+            for path in &group.members {
+                let relative = path.strip_prefix(&self.snapshot.root).map_err(|_| std::io::Error::other("plan source is outside the observed root; replan required"))?;
+                if !observed.contains(&crate::scan::TreeSnapshot::path_commitment(relative)) || !self.allowed_sources.contains(path) || !sources.insert(path) {
+                    return Err(std::io::Error::other("plan source was not uniquely observed; replan required"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finalize_choices(&mut self) -> std::io::Result<()> {
+        self.check_members()?;
+        self.snapshot.validate()?;
+        self.digest = codec::digest(&codec::encode(&self.plan, &self.snapshot, &self.context)?);
+        Ok(())
+    }
+
+    pub fn validate(&self, expected: &BindingContext) -> std::io::Result<()> {
+        if &self.context != expected {
+            return Err(std::io::Error::other("plan tool version, profile or observation contract changed; replan required"));
+        }
+        self.check_members()?;
+        if self.digest != codec::digest(&codec::encode(&self.plan, &self.snapshot, &self.context)?) {
+            return Err(std::io::Error::other("plan digest changed; replan required"));
+        }
+        self.snapshot.validate().map_err(|_| std::io::Error::other("planned tree changed; replan required"))
+    }
+
+    pub fn binding_json(&self) -> String {
+        use crate::json as j;
+        j::obj(&[("schema_version", j::num(PLAN_SCHEMA_VERSION)), ("plan_digest", j::str(&self.digest)), ("tool", j::str(&self.context.tool)), ("tool_version", j::str(&self.context.tool_version)), ("profile", j::str(&self.context.profile)), ("observation_contract", j::str(&self.context.observation_contract)), ("root_device", j::num(self.snapshot.root_identity.device)), ("root_inode", j::num(self.snapshot.root_identity.inode)), ("observed_entries", j::num(self.snapshot.entries.len()))])
+    }
+
+    pub fn export(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+        self.validate(&self.context)?;
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).canonicalize()?;
+        let target = parent.join(path.file_name().ok_or_else(|| std::io::Error::other("plan export needs a filename"))?);
+        if target.starts_with(&self.snapshot.root) {
+            return Err(std::io::Error::other("plan export must be outside the observed tree"));
+        }
+        let payload = codec::encode(&self.plan, &self.snapshot, &self.context)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+        let mut file = options.open(&target)?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            if file.metadata()?.permissions().mode() & 0o077 != 0 {
+                let _ = std::fs::remove_file(&target);
+                return Err(std::io::Error::other("plan metadata requires an owner-only filesystem"));
+            }
+        }
+        let result = file.write_all(&payload).and_then(|_| file.write_all(self.digest.as_bytes())).and_then(|_| file.sync_all());
+        if result.is_err() { let _ = std::fs::remove_file(&target); }
+        result
+    }
+
+    pub fn load(path: &std::path::Path, expected_digest: &str) -> std::io::Result<Self> {
+        use std::io::Read;
+        if expected_digest.len() != 64 || !expected_digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(std::io::Error::other("a 64-digit SHA256 plan digest is required"));
+        }
+        let mut options = std::fs::OpenOptions::new(); options.read(true);
+        #[cfg(target_os="macos")] { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(0x100 | 0x4); }
+        #[cfg(target_os="linux")] { use std::os::unix::fs::OpenOptionsExt; options.custom_flags(0x20000 | 0x800); }
+        let file = crate::scan::observe_read("plan_file_open", options.open(path))?;
+        if !file.metadata()?.is_file() { return Err(std::io::Error::other("plan input must be a regular file")); }
+        let mut bytes = Vec::new();
+        crate::scan::observe_read("plan_file_bytes", file.take(MAX_PLAN_BYTES + 65).read_to_end(&mut bytes))?;
+        if bytes.len() < 64 || bytes.len() as u64 > MAX_PLAN_BYTES + 64 { return Err(std::io::Error::other("plan input exceeds its bounded format")); }
+        let checksum = bytes.split_off(bytes.len()-64);
+        if checksum != expected_digest.as_bytes() || codec::digest(&bytes) != expected_digest {
+            return Err(std::io::Error::other("exported plan digest differs; replan required"));
+        }
+        let (plan, snapshot, context) = codec::decode(&bytes)?;
+        let allowed_sources = plan.groups.iter().flat_map(|group| group.members.iter().cloned()).collect();
+        let bound = Self { plan, snapshot, context, digest: expected_digest.to_string(), allowed_sources };
+        bound.check_members()?;
+        Ok(bound)
+    }
+}
+
+pub fn binding_digest(bytes: &[u8]) -> String { codec::digest(bytes) }
+
+impl std::ops::Deref for BoundPlan {
+    type Target = Plan;
+    fn deref(&self) -> &Plan { &self.plan }
+}
+impl std::ops::DerefMut for BoundPlan {
+    fn deref_mut(&mut self) -> &mut Plan { &mut self.plan }
 }

@@ -43,6 +43,8 @@ USAGE
     stash contract --json           print the versioned capability contract
     --no-journal                    stash without undo; pop cannot restore
     --json                          machine-readable output (for agents)
+    --export-plan FILE              save a private bound plan, without moving
+    --plan FILE --plan-digest SHA    apply the exact exported observation
     --version                       print the version and exit
     stash help
 
@@ -136,7 +138,7 @@ fn run_main() -> ExitCode {
 
 /// Flags that may lead the argument list. Anything else there is a typo, and a
 /// typo must not stash the current directory.
-const STASH_FLAGS: &[&str] = &["--for", "--json", "--no-journal"];
+const STASH_FLAGS: &[&str] = &["--for", "--json", "--no-journal", "--export-plan", "--plan", "--plan-digest"];
 
 /// Every command, and every flag reachable from it. Same construction as
 /// sweep's COMMAND_FLAGS and for the same reason: the leading-flag guard
@@ -145,7 +147,7 @@ const STASH_FLAGS: &[&str] = &["--for", "--json", "--no-journal"];
 /// early. A tool cannot offer automation a contract while accepting any
 /// misspelling of it.
 const COMMAND_FLAGS: &[(&str, &[&str])] = &[
-    ("", &["--for", "--json", "--no-journal"]),
+    ("", &["--for", "--json", "--no-journal", "--export-plan", "--plan", "--plan-digest"]),
     ("pop", &["--if-due", "--json"]),
     ("status", &["--json", "--all", "--paths"]),
 ];
@@ -164,7 +166,8 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     }
     while i < args.len() {
         let a = &args[i];
-        if a == "--for" && allowed.contains(&"--for") {
+        if matches!(a.as_str(), "--for" | "--export-plan" | "--plan" | "--plan-digest") && allowed.contains(&a.as_str()) {
+            if args.get(i+1).is_none_or(|value| value.starts_with('-')) { return Err(format!("{a} needs a value")); }
             i += 2;
             continue;
         }
@@ -203,7 +206,7 @@ fn positional_path(args: &[String]) -> Option<&str> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--for" => i += 2,
+            "--for" | "--export-plan" | "--plan" | "--plan-digest" => i += 2,
             "--json" => i += 1,
             a if a.starts_with('-') => i += 1,
             a => return Some(a),
@@ -262,7 +265,30 @@ fn find_holding(root: &Path) -> Option<PathBuf> {
         })
 }
 
+fn observation_contract_digest() -> String {
+    let mut declaration = etude_cli_support::contract::declaration(etude_cli_support::contract::Tool::Stash, env!("CARGO_PKG_VERSION"), &[], None);
+    let start = declaration.find("\"operation_id\":").expect("contract identifier") + "\"operation_id\":".len();
+    let end = start + 1 + declaration[start+1..].find('"').expect("contract identifier end") + 1;
+    declaration.replace_range(start..end, "\"<per-invocation>\"");
+    etude_core::plan::binding_digest(declaration.as_bytes())
+}
+
+fn current_binding_context(profile: &str) -> etude_core::plan::BindingContext {
+    etude_core::plan::BindingContext::new("stash", env!("CARGO_PKG_VERSION"), profile, &observation_contract_digest())
+}
+
+fn replay_stash(args: &[String], file: &str) -> ExitCode {
+    if flag(args, "--for") || flag(args, "--export-plan") { eprintln!("stash: exported plan fixes its holding deadline; replan instead of overriding it"); return ExitCode::from(2); }
+    let Some(digest) = value(args, "--plan-digest") else { eprintln!("stash: --plan requires the digest printed with the exported plan"); return ExitCode::from(2); };
+    let bound = match etude_core::plan::BoundPlan::load(Path::new(file), &digest) { Ok(plan) => plan, Err(error) => { eprintln!("stash: {error}; replan required"); return ExitCode::from(2); } };
+    if !bound.context().profile.starts_with("stash-metadata-v1;") || bound.groups.len() != 1 || !bound.groups[0].name.starts_with(".stash-") { eprintln!("stash: plan scheme changed; replan required"); return ExitCode::from(2); }
+    let context = current_binding_context(&bound.context().profile);
+    execute_stash(bound, context, args)
+}
+
 fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
+    if let Some(file) = value(args, "--plan") { return replay_stash(args, &file); }
+    if flag(args, "--plan-digest") { eprintln!("stash: --plan-digest requires --plan FILE"); return ExitCode::from(2); }
     let deadline = match value(args, "--for") {
         Some(d) => match parse_duration(&d) {
             Some(secs) => Some(now_secs() + secs),
@@ -310,26 +336,26 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     // One group, everything in it. No detectors, no decisions.
     let members: Vec<PathBuf> = outcome.entries.iter().map(|e| e.path.clone()).collect();
     let count = members.len();
-    let plan = Plan {
-        root: outcome.root.clone(),
-        groups: vec![Group {
-            name: holding_name(deadline),
-            signal: Signal::Collected { count },
-            members,
-            accepted: true,
-        }],
-        untouched: outcome.project_holds.clone(),
-        scanned: outcome.entries.len(),
-        skipped_hidden: outcome.skipped_hidden,
-        skipped_symlink: outcome.skipped_symlink,
-        skipped_system: outcome.skipped_system,
-        skipped_project: outcome.skipped_project,
-        skipped_in_flight: outcome.skipped_in_flight,
-        skipped_package: outcome.skipped_package,
-        skipped_unreadable: outcome.skipped_unreadable,
-        root_is_synced: outcome.root_is_synced,
-        allow_sync: outcome.allow_sync,
-    };
+    let proposal = Plan::with_groups(&outcome, vec![Group {
+        name: holding_name(deadline), signal: Signal::Collected { count }, members, accepted: true,
+    }]);
+    let profile = format!("stash-metadata-v1;{}", etude_core::plan::binding_digest(format!("whole_units=true;depth=1;deadline={deadline:?};grace={:?}", cfg.grace).as_bytes()));
+    let context = current_binding_context(&profile);
+    let bound = match etude_core::plan::BoundPlan::from_plan(proposal, context.clone()) { Ok(plan) => plan, Err(error) => { eprintln!("stash: {error}; replan required"); return ExitCode::from(2); } };
+    if let Some(file) = value(args, "--export-plan") {
+        if let Err(error) = bound.export(Path::new(&file)) { eprintln!("stash: cannot export plan ({error})"); return ExitCode::from(2); }
+        if flag(args, "--json") { let mut detail = bound.plan.to_json(); detail.pop(); detail.push_str(&format!(",\"binding\":{}}}", bound.binding_json())); println!("{detail}"); }
+        else { println!("Plan exported to {file}; contains selected paths and private metadata. Digest: {}", bound.digest()); }
+        return ExitCode::SUCCESS;
+    }
+    execute_stash(bound, context, args)
+}
+
+fn execute_stash(bound: etude_core::plan::BoundPlan, context: etude_core::plan::BindingContext, args: &[String]) -> ExitCode {
+    if let Err(error) = bound.validate(&context) { eprintln!("stash: {error}; replan required"); return ExitCode::from(2); }
+    let path = &bound.root;
+    let count = bound.moves();
+    let deadline = bound.groups.first().and_then(|group| deadline_of(&group.name));
 
     let json = flag(args, "--json");
     let sl = if flag(args, "--no-journal") {
@@ -343,8 +369,8 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     };
     let mut progress = etude_cli_support::ProgressReporter::stderr("stash", count);
     let result = etude_core::apply::apply_with_progress(
-        &plan,
-        "stash",
+        &bound,
+        &context,
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
         |p| progress.update(p.completed, p.total),
@@ -359,12 +385,13 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                     "{}",
                     j::obj(&[
                         ("action", j::str("stash")),
-                        ("root", j::path(&outcome.root)),
+                        ("root", j::path(&bound.root)),
                         ("moved", j::num(r.moved)),
-                        ("holding", j::str(&holding_name(deadline))),
+                        ("holding", j::str(&bound.groups[0].name)),
+                        ("binding", bound.binding_json()),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into())),
-                        ("skipped_hidden", j::num(outcome.skipped_hidden)),
-                        ("skipped_unreadable", j::num(outcome.skipped_unreadable)),
+                        ("skipped_hidden", j::num(bound.skipped_hidden)),
+                        ("skipped_unreadable", j::num(bound.skipped_unreadable)),
                     ])
                 );
                 return ExitCode::SUCCESS;
@@ -381,11 +408,11 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                     None => println!("  No deadline. Restore with: stash pop"),
                 }
             }
-            if outcome.skipped_hidden > 0 {
+            if bound.skipped_hidden > 0 {
                 println!(
                     "\n  {} hidden {} left in place.",
-                    outcome.skipped_hidden,
-                    if outcome.skipped_hidden == 1 {
+                    bound.skipped_hidden,
+                    if bound.skipped_hidden == 1 {
                         "item was"
                     } else {
                         "items were"
@@ -395,6 +422,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
+            if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) { eprintln!("stash: {e}"); etude_cli_support::envelope::status("refused"); return ExitCode::from(2); }
             etude_cli_support::envelope::status("incomplete");
             eprintln!("stash: {e}");
             if sl.is_some() {
@@ -1086,31 +1114,23 @@ mod tests {
         }
     }
 
-    fn stash_plan(root: &Path) -> Plan {
+    fn stash_plan(root: &Path) -> etude_core::plan::BoundPlan {
         let root = root.canonicalize().expect("root");
         let members = vec![root.join("one.txt"), root.join("two.txt")];
-        Plan {
-            root,
-            groups: vec![Group {
+        let out = scan::scan(root, &ScanConfig { depth: 1, allow_sync: true, whole_units: true, ..Default::default() }).expect("fixture scan");
+        let proposal = Plan::with_groups(&out, vec![Group {
                 name: ".stash-0".into(),
                 signal: Signal::Collected {
                     count: members.len(),
                 },
                 members,
                 accepted: true,
-            }],
-            untouched: Vec::new(),
-            scanned: 2,
-            skipped_hidden: 0,
-            skipped_symlink: 0,
-            skipped_system: 0,
-            skipped_project: 0,
-            skipped_in_flight: 0,
-            skipped_package: 0,
-            skipped_unreadable: 0,
-            root_is_synced: false,
-            allow_sync: false,
-        }
+            }]);
+        etude_core::plan::BoundPlan::from_plan(proposal, test_binding_context()).expect("bound fixture")
+    }
+
+    fn test_binding_context() -> etude_core::plan::BindingContext {
+        etude_core::plan::BindingContext::new("stash", env!("CARGO_PKG_VERSION"), "fixture-v1", "metadata-v1")
     }
 
     #[test]
@@ -1134,7 +1154,7 @@ mod tests {
     fn a_mistyped_leading_flag_is_not_treated_as_consent_to_stash() {
         // `stash --version` used to empty the current directory, because any
         // leading flag meant "stash here". Only these declared flags may lead.
-        assert_eq!(STASH_FLAGS, &["--for", "--json", "--no-journal"]);
+        assert_eq!(STASH_FLAGS, &["--for", "--json", "--no-journal", "--export-plan", "--plan", "--plan-digest"]);
         for typo in ["--dry-run", "--yes", "-n", "--all", "--force"] {
             assert!(
                 !STASH_FLAGS.contains(&typo),
@@ -1186,9 +1206,9 @@ mod tests {
         }
         unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
-        etude_core::apply::apply(&stash_plan(&first), "stash", Some(&TestSeal), None)
+        etude_core::apply::apply(&stash_plan(&first), &test_binding_context(), Some(&TestSeal), None)
             .expect("first stash");
-        etude_core::apply::apply(&stash_plan(&second), "stash", Some(&TestSeal), None)
+        etude_core::apply::apply(&stash_plan(&second), &test_binding_context(), Some(&TestSeal), None)
             .expect("second stash");
 
         let target = first.canonicalize().expect("first canonical path");
@@ -1221,7 +1241,7 @@ mod tests {
         std::fs::write(root.join("two.txt"), b"two").expect("second file");
         unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
-        etude_core::apply::apply(&stash_plan(&root), "stash", Some(&TestSeal), None)
+        etude_core::apply::apply(&stash_plan(&root), &test_binding_context(), Some(&TestSeal), None)
             .expect("stash");
         let target = root.canonicalize().expect("canonical path");
         let mut journal = journal_for_root("stash", &TestSeal, &target)

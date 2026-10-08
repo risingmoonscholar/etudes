@@ -200,9 +200,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn plan_of(names: &[&str]) -> Plan {
-        Plan {
-            root: PathBuf::from("/tmp/root"),
-            groups: names
+        Plan::display_only(PathBuf::from("/tmp/root"), names
                 .iter()
                 .map(|n| Group {
                     name: n.to_string(),
@@ -210,19 +208,7 @@ mod tests {
                     members: vec![PathBuf::from(format!("/tmp/root/{n}-1"))],
                     accepted: false,
                 })
-                .collect(),
-            untouched: Vec::new(),
-            scanned: 1,
-            skipped_hidden: 0,
-            skipped_symlink: 0,
-            skipped_system: 0,
-            skipped_project: 0,
-            skipped_in_flight: 0,
-            skipped_package: 0,
-            skipped_unreadable: 0,
-            root_is_synced: false,
-            allow_sync: false,
-        }
+                .collect())
     }
 
     fn drive(p: &mut Plan, script: &str) -> Outcome {
