@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 315 tests
+cargo test --all                # 330 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -267,13 +267,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 47 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 48 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 47 scenarios
+bash stress/run.sh        # 48 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
@@ -412,3 +412,39 @@ envelope remains version 2. `docs/contracts/v3/unpack.json` is the canonical pin
 `v1/unpack.json` mirrors it, and `v2/unpack.json` remains the prior immutable pin.
 
 Opt in to versioned stderr progress with `sweep apply PATH --yes --progress-json` (also available during review). Records distinguish planned entries, successful moves, and durable journal acknowledgements; `--json` stdout remains one result envelope. See [structured progress](docs/sweep-progress.md) for the schema and failure counts. Journal persistence is unchanged; no speed improvement is claimed.
+
+### Stash exactly the selected objects
+
+`stash select PATH...` takes the chosen files and directories from any number of
+parents. A selected directory moves as one opaque object; its children are not
+scanned. The existing `stash DIR` command still stashes that directory's visible
+contents. Explicit selections can include hidden files, but retain the existing
+system and credential-directory location refusals. Known sync locations matched
+by the existing path-marker rules are refused for selected sources and holding
+parents before any move. This mode has no cloud-support override. Explicit symlinks and special
+files are refused before holding storage is created. Directory selections require
+holding storage on their own volume; regular files retain the existing copy
+fallback when crossing volumes.
+
+`stash select --from0 FILE` reads UTF-8 paths terminated by NUL; use `--from0 -`
+for stdin. Newlines inside a path are preserved. The list must terminate every
+path, contains no empty records, and is limited to 32 MiB and 100,000 objects.
+Positional sources can accompany a list. Use `--` before option-shaped positional
+filenames. Duplicate canonical paths, repeated object identities such as hard-link
+aliases, and any ancestor/descendant overlap are refused before any move. Overlap
+checks sort canonical path components; they do not scan a common ancestor.
+
+Selections require an encrypted journal. `--no-journal` remains available for
+legacy whole-folder stashing and is refused for explicit selections. Each selection
+uses one private operation root and numbered holding slots, so equal basenames
+from different parents cannot collide. `--into PARENT` chooses the holding parent;
+otherwise the first canonical selected object's parent is used. A holding parent
+inside a selected directory is refused.
+
+The result prints counts and the minimum operation-root locator needed for
+`stash pop LOCATOR`; it does not list source paths or basenames. Pop uses the
+original absolute parents stored in the encrypted journal, and removes only
+empty holding directories authenticated by that journal. Selected directories
+retain the existing opaque directory fingerprint behavior; this is not a recursive
+content-integrity claim. Receipts continue to name uninstrumented access as
+unproven, and no zero counter proves absence of reads.

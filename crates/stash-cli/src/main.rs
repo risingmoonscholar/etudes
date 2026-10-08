@@ -22,6 +22,8 @@
 //! file, no second state store, nothing to fall out of sync. The deadline is
 //! derived from the filesystem rather than recorded next to it.
 
+mod selection;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,6 +36,9 @@ stash: clean now, decide later
 
 USAGE
     stash [PATH] [--for DURATION]   move everything into a hidden holding folder
+    stash select PATH...           stash exactly the chosen objects; folders move whole
+    stash select --from0 FILE|-     read NUL-terminated UTF-8 paths; '-' reads stdin
+    --into PARENT                   holding parent for an explicit selection
     stash pop [PATH]                bring back the stash for PATH (or here)
     stash pop [PATH] --if-due       pop only if the deadline has passed;
                                     exit 2 when early, 1 when nothing stashed
@@ -41,7 +46,7 @@ USAGE
     stash status --all              every stash this machine's journals know,
                                     paths redacted; --paths shows them
     stash contract --json           print the versioned capability contract
-    --no-journal                    stash without undo; pop cannot restore
+    --no-journal                    legacy folder mode only; explicit selections require undo
     --json                          machine-readable output (for agents)
     --version                       print the version and exit
     stash help
@@ -65,7 +70,12 @@ macro_rules! println {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    etude_cli_support::envelope::begin("stash", env!("CARGO_PKG_VERSION"), &args);
+    let receipt_args = if args.first().is_some_and(|arg| arg == "select") {
+        selection::receipt_arguments(&args)
+    } else {
+        args.clone()
+    };
+    etude_cli_support::envelope::begin("stash", env!("CARGO_PKG_VERSION"), &receipt_args);
     let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
     etude_cli_support::envelope::finish(code);
     code
@@ -100,6 +110,7 @@ fn run_main() -> ExitCode {
             println!("stash {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Some("select") => cmd_select(&args),
         Some("pop" | "restore") => match check_flags("pop", &args) {
             Ok(()) => cmd_pop(&args),
             Err(m) => {
@@ -259,6 +270,7 @@ fn find_holding(root: &Path) -> Option<PathBuf> {
                 && p.file_name()
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| n.starts_with(".stash-"))
+                && !selection::is_selection_root(p)
         })
 }
 
@@ -405,6 +417,94 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                 );
             }
             apply_exit_code(&e)
+        }
+    }
+}
+
+fn cmd_select(args: &[String]) -> ExitCode {
+    let options = match selection::parse(args) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("stash: {}", error.message());
+            return ExitCode::from(error.code());
+        }
+    };
+    let deadline = match options.duration.as_deref() {
+        Some(value) => {
+            match parse_duration(value).and_then(|seconds| now_secs().checked_add(seconds)) {
+                Some(deadline) => Some(deadline),
+                None => {
+                    eprintln!("stash: invalid selection duration");
+                    return ExitCode::from(2);
+                }
+            }
+        }
+        None => None,
+    };
+    let prepared = match selection::prepare(&options) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("stash: {}", error.message());
+            return ExitCode::from(error.code());
+        }
+    };
+    if prepared.sources.is_empty() {
+        println!("Nothing selected to stash.");
+        return ExitCode::from(1);
+    }
+    let Some(sealer) = sealer() else {
+        return ExitCode::from(2);
+    };
+    let root = match selection::reserve(&prepared.parent) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("stash: {}", error.message());
+            return ExitCode::from(error.code());
+        }
+    };
+    let plan = selection::plan(&prepared, root.clone(), &holding_name(deadline));
+    let mut progress = etude_cli_support::ProgressReporter::stderr("stash", prepared.sources.len());
+    let result =
+        etude_core::apply::apply_with_progress(&plan, "stash", Some(&sealer), None, |event| {
+            progress.update(event.completed, event.total)
+        });
+    drop(progress);
+    match result {
+        Ok(report) => {
+            etude_cli_support::envelope::effect("items_moved", report.moved);
+            if options.json {
+                use etude_core::json as j;
+                println!(
+                    "{}",
+                    j::obj(&[
+                        ("action", j::str("stash_selected")),
+                        ("moved", j::num(report.moved)),
+                        ("selected", j::num(prepared.sources.len())),
+                        ("holding_root", j::path(&root)),
+                        ("due", deadline.map(j::num).unwrap_or_else(|| "null".into()))
+                    ])
+                );
+            } else {
+                println!(
+                    "Stashed {} selected {}. Restore with: stash pop {}",
+                    report.moved,
+                    if report.moved == 1 {
+                        "object"
+                    } else {
+                        "objects"
+                    },
+                    etude_core::redact::path(&root)
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            etude_cli_support::envelope::status("incomplete");
+            eprintln!(
+                "stash: selection could not finish; inspect its holding locator before retrying."
+            );
+            eprintln!("Recovery: stash pop {}", etude_core::redact::path(&root));
+            apply_exit_code(&error)
         }
     }
 }
@@ -649,8 +749,10 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             "  {} changed while stashed and were left alone:",
             r.skipped_changed.len()
         );
-        for p in &r.skipped_changed {
-            println!("    {}", etude_core::redact::path(p));
+        if !selection::is_selection_root(&target) {
+            for p in &r.skipped_changed {
+                println!("    {}", etude_core::redact::path(p));
+            }
         }
     }
     if !r.skipped_missing.is_empty() {
@@ -701,6 +803,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     if let Err(save_err) = saved {
         eprintln!("stash: pop finished, but the journal could not be saved: {save_err}");
         return ExitCode::from(3);
+    }
+    if r.skipped_changed.is_empty() {
+        selection::remove_empty_root(&j);
     }
     ExitCode::SUCCESS
 }
