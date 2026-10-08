@@ -34,8 +34,8 @@
     <section class="demo" aria-labelledby="demo-title">
       <h2 id="demo-title">The demo</h2>
       <figure>
-        <img src="../gifs/unpack-safety.gif" alt="A light terminal demo extracts a synthetic ZIP archive and refuses a second extraction when the destination already exists." width="860" height="294">
-        <figcaption>A normal synthetic archive extracts; an existing destination is refused. The terminal recording is shown in its original light theme.</figcaption>
+        <img src="../gifs/unpack-safety.gif" alt="A light terminal demo extracts a synthetic ZIP archive and refuses a second ZIP archive containing a symlink." width="860" height="294">
+        <figcaption>A normal synthetic archive extracts and its two output paths pass the tree audit; a ZIP archive containing a symlink is refused before extraction. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 
