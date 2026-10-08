@@ -1,0 +1,152 @@
+{
+  "protocol_version": 1,
+  "kind": "normative_fixture_expectations",
+  "measured_results": false,
+  "platform": "macos",
+  "scope": "regular_files_and_complete_directory_trees_local_copy",
+  "required_claims": [
+    "copy_only_no_replacement",
+    "destination_complete_readback",
+    "data_separate_from_metadata",
+    "unsupported_fidelity_disclosed",
+    "source_mutation_detected_before_publication"
+  ],
+  "cases": [
+    {
+      "id": "bytes",
+      "fixture": "empty, binary, multi-buffer files; nested trees and empty directories",
+      "data_fidelity": "pass",
+      "metadata_fidelity": "per_field",
+      "allowed_statuses": [
+        "done"
+      ]
+    },
+    {
+      "id": "identical",
+      "fixture": "identical existing file or complete tree; same-inode alias",
+      "data_fidelity": "pass",
+      "metadata_fidelity": "per_field",
+      "allowed_statuses": [
+        "nothing_to_do"
+      ]
+    },
+    {
+      "id": "collision",
+      "fixture": "differing existing file or tree, including extra or missing members; raced destination",
+      "data_fidelity": "unproven",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "refused"
+      ]
+    },
+    {
+      "id": "name_collision",
+      "fixture": "case-folded or NFC/NFD matching destination with differing data or tree members",
+      "data_fidelity": "unproven",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "refused"
+      ]
+    },
+    {
+      "id": "content_mutation",
+      "fixture": "append, truncate, same-length, restored-size rewrite",
+      "data_fidelity": "fail",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "refused"
+      ]
+    },
+    {
+      "id": "identity_mutation",
+      "fixture": "source pathname replacement, symlink swap, tree member addition or removal",
+      "data_fidelity": "unproven",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "refused"
+      ]
+    },
+    {
+      "id": "security_mutation",
+      "fixture": "quarantine, ACL, permissions, provenance changes",
+      "data_fidelity": "unproven",
+      "metadata_fidelity": "fail",
+      "allowed_statuses": [
+        "refused"
+      ]
+    },
+    {
+      "id": "unsupported_security",
+      "fixture": "required security state cannot be preserved",
+      "data_fidelity": "per_field",
+      "metadata_fidelity": "fail",
+      "allowed_statuses": [
+        "refused"
+      ]
+    },
+    {
+      "id": "ordinary_metadata",
+      "fixture": "rounded time or unsupported ordinary field",
+      "data_fidelity": "pass",
+      "metadata_fidelity": "fail",
+      "allowed_statuses": [
+        "done"
+      ]
+    },
+    {
+      "id": "extra_stream",
+      "fixture": "resource fork, AppleDouble multi-object publication",
+      "data_fidelity": "per_field",
+      "metadata_fidelity": "per_field",
+      "allowed_statuses": [
+        "done",
+        "refused"
+      ]
+    },
+    {
+      "id": "corrupt_staging",
+      "fixture": "deliberately corrupted private copy",
+      "data_fidelity": "fail",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "error"
+      ]
+    },
+    {
+      "id": "corrupt_published",
+      "fixture": "deliberately corrupted published copy",
+      "data_fidelity": "fail",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "incomplete"
+      ]
+    },
+    {
+      "id": "failure",
+      "fixture": "disk full, permission error, interruption",
+      "data_fidelity": "unproven",
+      "metadata_fidelity": "unproven",
+      "allowed_statuses": [
+        "error",
+        "incomplete"
+      ]
+    },
+    {
+      "id": "tree_manifest_mutation",
+      "fixture": "changed file, changed type or renamed member in nested tree",
+      "allowed_statuses": [
+        "refused"
+      ],
+      "data_fidelity": "fail",
+      "metadata_fidelity": "unproven"
+    }
+  ],
+  "acceptance": {
+    "successful_bytes": "all_bytes_equal",
+    "existing_outputs_replaced": 0,
+    "injected_source_mutations_detected": "every_case_before_publication",
+    "required_unproven": "blocks_success",
+    "security_downgrade": "refused",
+    "performance_threshold": null
+  }
+}
