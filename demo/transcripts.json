@@ -1,6 +1,6 @@
 {
   "generated_by": "scripts/capture-demos.sh",
-  "commit": "93d541e",
+  "commit": "3f72a7b",
   "version": "0.5.3",
   "versions": {
     "sweep": "0.5.3",
@@ -8,7 +8,7 @@
     "unpack": "0.5.3"
   },
   "note": "Real terminal output (stdout and stderr combined) from binaries built out of this tree, run against the synthetic mkfx fixture with temporary journal state and a disposable supplied key. Not hand-written; does not test login-keychain access.",
-  "substitution_rule": "The temporary directory the fixture was built in is rendered as ~/Desktop. Only the volatile envelope operation_id is additionally rendered as <per-invocation>; all other output bytes are retained. The real path is a mktemp name and is not recorded.",
+  "substitution_rule": "The temporary directory the fixture was built in is rendered as ~/Desktop. Only the volatile envelope operation_id is additionally rendered as <per-invocation>; the stash-put persistent operation id in its operation/restore line is rendered as <stash-operation>; all other output bytes are retained. The real path is a mktemp name and is not recorded.",
   "transcripts": [
     {
       "label": "sweep-plan",
@@ -38,7 +38,7 @@
       "label": "stash-help",
       "command": "stash help",
       "exit": 0,
-      "output": "stash: clean now, decide later\n\nUSAGE\n    stash [PATH] [--for DURATION]   move everything into a hidden holding folder\n    stash select PATH...           stash exactly the chosen objects; folders move whole\n    stash select --from0 FILE|-     read NUL-terminated UTF-8 paths; '-' reads stdin\n    --into PARENT                   holding parent for an explicit selection\n    stash pop [PATH]                bring back the stash for PATH (or here)\n    stash pop [PATH] --if-due       pop only if the deadline has passed;\n                                    exit 2 when early, 1 when nothing stashed\n    stash status [PATH]             what is stashed, and when it is due back\n    stash status --all              every stash this machine's journals know,\n                                    paths redacted; --paths shows them\n    stash contract --json           print the versioned capability contract\n    --no-journal                    legacy folder mode only; explicit selections require undo\n    --json                          machine-readable output (for agents)\n    --version                       print the version and exit\n    stash help\n\nDURATION\n    30m  2h  3d  1w        default: no deadline, restore whenever\n\nKEY\n    ETUDE_JOURNAL_KEY  64 hex digits (32 random bytes), overrides the keychain.\n                       Retain the same key for undo; see README for setup.\n\nstash moves everything sweep can see, including the files sweep would refuse\nto organise. Hidden items are left in place, and it says how many.\nThat is deliberate: clearing a folder for a screen share means clearing it.\nWith a journal, everything is reversible. stash prints what it took.\n"
+      "output": "stash: clean now, decide later\n\nUSAGE\n    stash [PATH] [--for DURATION]   move everything into a hidden holding folder\n    stash select PATH...           stash exactly the chosen objects; folders move whole\n    stash select --from0 FILE|-     read NUL-terminated UTF-8 paths; '-' reads stdin\n    --into PARENT                   holding parent for an explicit selection\n    stash pop --id ID               restore exactly one operation\n    stash pop ID                    restore an operation id directly\n    stash pop [PATH]                restore the unique batch for PATH (or here)\n    stash pop [PATH] --latest       restore the latest live batch; no PATH means all\n    stash pop [PATH] --if-due       pop only if the deadline has passed;\n                                    exit 2 when early, 1 when nothing stashed\n    stash status [PATH]             what is stashed, and when it is due back\n    stash status --all              every stash this machine's journals know,\n                                    paths redacted; --paths shows them\n    stash contract --json           print the versioned capability contract\n    --no-journal                    legacy folder mode only; explicit selections require undo\n    --json                          machine-readable output (for agents)\n    --version                       print the version and exit\n    stash help\n\nDURATION\n    30m  2h  3d  1w        default: no deadline, restore whenever\n\nKEY\n    ETUDE_JOURNAL_KEY  64 hex digits (32 random bytes), overrides the keychain.\n                       Retain the same key for undo; see README for setup.\n\nstash moves everything sweep can see, including the files sweep would refuse\nto organise. Hidden items are left in place, and it says how many.\nThat is deliberate: clearing a folder for a screen share means clearing it.\nWith a journal, everything is reversible. stash prints what it took.\n"
     },
     {
       "label": "unpack-help",
@@ -50,7 +50,7 @@
       "label": "stash-put",
       "command": "stash ~/Desktop --for 3d",
       "exit": 0,
-      "output": "stash: 12/112 items\nstash: 24/112 items\nstash: 36/112 items\nstash: 48/112 items\nstash: 60/112 items\nstash: 72/112 items\nstash: 84/112 items\nstash: 96/112 items\nstash: 108/112 items\nstash: 112/112 items\n\nStashed 112 items.\n~/Desktop is clear.\n\n  Due back: in 3 days\n  stash does not run in the background. Run `stash pop`,\n  or `stash status` to see what is overdue.\n\n  1 hidden item was left in place.\n"
+      "output": "stash: 12/112 items\nstash: 24/112 items\nstash: 36/112 items\nstash: 48/112 items\nstash: 60/112 items\nstash: 72/112 items\nstash: 84/112 items\nstash: 96/112 items\nstash: 108/112 items\nstash: 112/112 items\n\nStashed 112 items.\nThe selected folder is clear.\n\n  Operation id: <stash-operation>. Restore with: stash pop --id <stash-operation>\n  Due back: in 3 days\n  stash does not run in the background. Run `stash pop`,\n  or `stash status` to see what is overdue.\n\n  1 hidden item was left in place.\n"
     }
   ]
 }

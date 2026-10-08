@@ -241,6 +241,29 @@ fn unesc(s: &str) -> String {
     out
 }
 
+/// Validate an exact batch selector before consulting state or constructing a path.
+pub fn validate_id(id: &str) -> Result<(), JournalError> {
+    if valid_journal_id(id) {
+        Ok(())
+    } else {
+        Err(JournalError::Malformed("invalid journal id"))
+    }
+}
+
+/// Filename-safe legacy and current IDs; no separators, traversal or unbounded names.
+pub fn valid_journal_id(id: &str) -> bool {
+    valid_component(id, 128)
+}
+
+fn valid_component(value: &str, limit: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= limit
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 impl Journal {
     pub fn path(&self) -> PathBuf {
         state_dir().join(format!("{}-{}.journal", self.tool, self.id))
@@ -249,7 +272,12 @@ impl Journal {
     /// Serialise. Line-oriented so a truncated write loses at most one entry.
     pub fn encode(&self) -> String {
         let mut s = String::new();
-        s.push_str("sweep-journal 1\n");
+        if self.tool == "stash" {
+            s.push_str("sweep-journal 2\n");
+            s.push_str(&format!("identity\t{}\t{}\n", self.tool, self.id));
+        } else {
+            s.push_str("sweep-journal 1\n");
+        }
         s.push_str(&format!("root\t{}\n", esc(&self.root)));
         for e in &self.entries {
             s.push_str(&format!(
@@ -283,7 +311,25 @@ impl Journal {
 
     pub fn decode(text: &str) -> Result<Journal, JournalError> {
         let mut j = Journal::default();
-        for line in text.lines() {
+        let mut lines = text.lines();
+        match lines.next() {
+            Some("sweep-journal 1") => {}
+            Some("sweep-journal 2") => {
+                let fields: Vec<_> = lines
+                    .next()
+                    .ok_or(JournalError::Malformed("missing journal identity"))?
+                    .split('\t')
+                    .collect();
+                if fields.len() != 3 || fields[0] != "identity" || !valid_component(fields[1], 64) {
+                    return Err(JournalError::Malformed("invalid journal identity"));
+                }
+                validate_id(fields[2])?;
+                j.tool = fields[1].to_string();
+                j.id = fields[2].to_string();
+            }
+            _ => return Err(JournalError::Malformed("unsupported journal header")),
+        }
+        for line in lines {
             let f: Vec<&str> = line.split('\t').collect();
             match f.first().copied() {
                 Some("root") => {
@@ -420,6 +466,19 @@ impl Journal {
     /// are still accepted. Framed parse is tried first; any failure falls back
     /// to opening the whole file as one sealed blob (the pre-framing format).
     pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
+        Self::load_sealed_exact(tool, id, sealer)
+    }
+
+    /// Load one identity directly without timestamp discovery or unrelated journals.
+    pub fn load_sealed_exact(
+        tool: &str,
+        id: &str,
+        sealer: &dyn Sealer,
+    ) -> Result<Journal, JournalError> {
+        validate_id(id)?;
+        if !valid_component(tool, 64) {
+            return Err(JournalError::Malformed("invalid journal tool"));
+        }
         let path = state_dir().join(format!("{tool}-{id}.journal"));
         let metadata =
             crate::scan::observe_read("metadata", fs::symlink_metadata(&path)).map_err(|e| {
@@ -451,8 +510,7 @@ impl Journal {
                 && let Ok(text) = String::from_utf8(plain)
                 && let Ok(mut j) = Journal::decode(&text)
             {
-                j.id = id.to_string();
-                j.tool = tool.to_string();
+                j.bind_requested_identity(tool, id)?;
                 j.apply_progress(&raw[4 + base_len..], sealer)?;
                 return Ok(j);
             }
@@ -462,9 +520,19 @@ impl Journal {
         let plain = sealer.open(raw).map_err(JournalError::Seal)?;
         let text = String::from_utf8(plain).map_err(|_| JournalError::Malformed("not utf-8"))?;
         let mut j = Journal::decode(&text)?;
-        j.id = id.to_string();
-        j.tool = tool.to_string();
+        j.bind_requested_identity(tool, id)?;
         Ok(j)
+    }
+
+    fn bind_requested_identity(&mut self, tool: &str, id: &str) -> Result<(), JournalError> {
+        if (!self.id.is_empty() || !self.tool.is_empty()) && (self.id != id || self.tool != tool) {
+            return Err(JournalError::Malformed(
+                "journal identity does not match selector",
+            ));
+        }
+        self.id = id.to_string();
+        self.tool = tool.to_string();
+        Ok(())
     }
 
     /// Replay length-framed progress records that follow the base frame.
@@ -785,6 +853,28 @@ pub fn ids_by_recency(tool: &str) -> Result<Vec<String>, JournalError> {
 }
 
 pub fn candidates_by_recency(tool: &str) -> Result<Vec<JournalCandidate>, JournalError> {
+    let mut journals = candidates_with_times(tool)?;
+    journals.sort_by(|(a, _), (b, _)| b.cmp(a));
+    if journals.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(JournalError::Malformed(
+            "journal modification times are ambiguous",
+        ));
+    }
+    Ok(journals
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect())
+}
+
+/// Inventory exact candidates without imposing mutable timestamp order or ties.
+pub fn candidates_unordered(tool: &str) -> Result<Vec<JournalCandidate>, JournalError> {
+    Ok(candidates_with_times(tool)?
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect())
+}
+
+fn candidates_with_times(tool: &str) -> Result<Vec<(SystemTime, JournalCandidate)>, JournalError> {
     let prefix = format!("{tool}-");
     let dir = state_dir();
     let mut journals = Vec::new();
@@ -825,13 +915,7 @@ pub fn candidates_by_recency(tool: &str) -> Result<Vec<JournalCandidate>, Journa
     if journals.is_empty() {
         return Err(JournalError::NotFound);
     }
-    journals.sort_by(|(a, _), (b, _)| b.cmp(a));
-    if journals.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(JournalError::Malformed(
-            "journal modification times are ambiguous",
-        ));
-    }
-    Ok(journals.into_iter().map(|(_, id)| id).collect())
+    Ok(journals)
 }
 
 #[cfg(test)]

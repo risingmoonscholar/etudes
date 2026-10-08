@@ -70,7 +70,7 @@ capture stash-put     'stash ~/Desktop --for 3d'       "$bin/stash" "$home/Stash
 
 mkdir -p demo
 python3 - "$caps" "$home" "$work" demo/transcripts.json "$bin" <<'PY'
-import json, os, subprocess, sys
+import json, os, re, subprocess, sys
 
 caps, home, work, out = sys.argv[1:5]
 # The version the captured binaries actually reported, asked of a binary
@@ -111,6 +111,11 @@ for name in sorted(os.listdir(caps)):
         captured = json.loads(text)
         operation_id = json.dumps(captured["operation_id"])
         text = text.replace(operation_id, json.dumps("<per-invocation>"), 1)
+    if label == "stash-put":
+        match = re.search(r"  Operation id: ([0-9]+-[0-9]+-[0-9]+-[0-9a-f]+)\. Restore with: stash pop --id \1", text)
+        if match is None:
+            raise RuntimeError("stash-put did not emit its declared persistent operation id")
+        text = text.replace(match.group(1), "<stash-operation>")
     transcripts.append({
         "label": label,
         "command": open(os.path.join(d, "command")).read(),
@@ -129,7 +134,8 @@ payload = {
              "supplied key. Not hand-written; does not test login-keychain access."),
     "substitution_rule": ("The temporary directory the fixture was built in is "
                           "rendered as ~/Desktop. Only the volatile envelope operation_id "
-                          "is additionally rendered as <per-invocation>; all other "
+                          "is additionally rendered as <per-invocation>; the stash-put persistent "
+                          "operation id in its operation/restore line is rendered as <stash-operation>; all other "
                           "output bytes are retained. The real path is a mktemp name "
                           "and is not recorded."),
     "transcripts": transcripts,
