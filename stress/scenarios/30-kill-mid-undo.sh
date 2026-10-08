@@ -15,14 +15,18 @@ make_tree() {
   done
 }
 
+# Millisecond wall clock. Diagnostic only: it does not affect the verdict.
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
 # Wait at most ten seconds for undo to make a real partial recovery while its
-# process is still alive. It prints the witnessed number of restored files.
+# process is still alive. It prints the witnessed number of restored files and
+# the millisecond time the state was witnessed.
 wait_for_partial() {
   local root="$1" total="$2" target="$3" pid="$4" i restored
   for i in $(seq 1 1000); do
     restored=$(find "$root" -maxdepth 1 -type f | wc -l | tr -d ' ')
     if [ "$restored" -ge "$target" ] && [ "$restored" -lt "$total" ] && kill -0 "$pid" 2>/dev/null; then
-      printf '%s\n' "$restored"
+      printf '%s %s\n' "$restored" "$(now_ms)"
       return 0
     fi
     kill -0 "$pid" 2>/dev/null || return 1
@@ -48,11 +52,18 @@ for percent in 5 50 85; do
   target=$((TOTAL * percent / 100))
   "$SWEEP" undo >/dev/null 2>&1 &
   pid=$!
-  if ! restored=$(wait_for_partial "$D" "$TOTAL" "$target" "$pid"); then
+  undo_started_ms=$(now_ms)
+  if ! witness=$(wait_for_partial "$D" "$TOTAL" "$target" "$pid"); then
+    undo_exited_ms=$(now_ms)
     wait "$pid" 2>/dev/null || true
+    printf "undo timing %s%%: start_ms=%s exit_observed_ms=%s partial_witness=not_reached\n" \
+      "$percent" "$undo_started_ms" "$undo_exited_ms"
     fail "undo interruption $percent%: undo did not reach a witnessed partial state before exiting or the 10s deadline"
     continue
   fi
+  read -r restored witness_ms <<< "$witness"
+  printf "undo timing %s%%: start_ms=%s partial_witness_ms=%s restored=%s/%s\n" \
+    "$percent" "$undo_started_ms" "$witness_ms" "$restored" "$TOTAL"
   pass "undo interruption $percent%: undo restored $restored of $TOTAL files while still running"
 
   if kill -9 "$pid" 2>/dev/null; then
@@ -62,6 +73,9 @@ for percent in 5 50 85; do
   fi
   wait "$pid" 2>/dev/null
   kill_status=$?
+  undo_exited_ms=$(now_ms)
+  printf "undo timing %s%%: exit_observed_ms=%s exit_status=%s\n" \
+    "$percent" "$undo_exited_ms" "$kill_status"
   [ "$kill_status" -ne 0 ] \
     && pass "undo interruption $percent%: killed undo exited non-zero ($kill_status)" \
     || fail "undo interruption $percent%: killed undo exited zero"
