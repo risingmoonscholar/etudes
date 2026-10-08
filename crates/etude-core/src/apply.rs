@@ -21,7 +21,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::journal::{Entry, EntryState, Journal, Method, Sealer, fingerprint};
-use crate::plan::{Plan, BoundPlan, BindingContext};
+use crate::plan::{BindingContext, BoundPlan, Plan};
 
 #[derive(Debug)]
 pub enum ApplyError {

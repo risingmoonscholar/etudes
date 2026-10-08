@@ -92,7 +92,7 @@ fn raw_names_survive_and_symlink_targets_are_not_read() {
             snapshot
                 .entries
                 .iter()
-                .any(|entry| entry.path == PathBuf::from(&name))
+                .any(|entry| entry.path == TreeSnapshot::path_commitment(&PathBuf::from(&name)))
         );
     }
     snapshot.validate().unwrap();

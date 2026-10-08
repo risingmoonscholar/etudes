@@ -1207,14 +1207,13 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
     // Visited device+inode pairs close the symlink-cycle case.
     let mut visited: HashSet<(u64, u64)> = HashSet::new();
     walk(&root, &root, 0, cfg, &mut out, &mut visited)?;
-    if out.skipped_unreadable > 0 {
+    if out.skipped_unreadable > 0
+        || out
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.validate().is_err())
+    {
         out.snapshot = None;
-    } else if let Some(snapshot) = &out.snapshot {
-        match snapshot.validate() {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => out.snapshot = None,
-            Err(error) => return Err(ScanError::Io(error)),
-        }
     }
 
     if out.entries.len() > cfg.max_entries {
@@ -1458,6 +1457,30 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tree_changed_during_readonly_scan_cannot_supply_a_bound_plan() {
+        let root =
+            std::env::temp_dir().join(format!("etude-snapshot-during-walk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("ordinary.txt"), b"synthetic original").unwrap();
+        AFTER_DOCUMENT_PROBE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(|directory| {
+                fs::write(directory.join("ordinary.txt"), b"synthetic changed length").unwrap();
+            }));
+        });
+        let outcome = scan(&root, &ScanConfig::default()).unwrap();
+        assert!(outcome.snapshot.is_none());
+        let context = crate::plan::BindingContext::new(
+            "sweep",
+            env!("CARGO_PKG_VERSION"),
+            "fixture-v1",
+            "metadata-v1",
+        );
+        assert!(crate::plan::BoundPlan::from_plan(crate::plan::build(&outcome), context).is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn snapshot_profiles_bind_only_metadata_the_scan_observes() {

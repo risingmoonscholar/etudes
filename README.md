@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 302 tests
+cargo test --all                # 330 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -167,6 +167,14 @@ you choose one after telling you what it costs.
 **Reading more must mean acting less.** `sweep --inspect-content` is off by
 default and needs consent separate from `--yes`. What it reads can only ever
 move a file into "left alone". It never influences a destination.
+
+**Apply the plan you exported.** `sweep PATH --export-plan FILE --json` and
+`stash PATH --export-plan FILE --json` save explicit private metadata artifacts
+without moving anything. Replay with `--plan FILE --plan-digest SHA` binds the
+original root, file identities, configuration, tool version and observation
+contract. Changed observations refuse with a replan requirement before probes,
+journals or moves. Direct apply still creates a fresh proposal in that invocation.
+See [plan binding and its metadata limits](docs/plan-binding.md).
 
 ## For agents as well as people
 

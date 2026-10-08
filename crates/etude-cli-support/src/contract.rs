@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use etude_core::json as j;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy)]
 pub enum Tool {
@@ -383,6 +383,66 @@ pub fn declaration(
             ]),
         ),
     ];
+    if custody {
+        fields.push((
+            "plan_binding",
+            j::obj(&[
+                (
+                    "artifact_schema_version",
+                    j::num(etude_core::plan::PLAN_SCHEMA_VERSION),
+                ),
+                (
+                    "digest",
+                    j::str("sha256_metadata_configuration_and_choices"),
+                ),
+                (
+                    "identity",
+                    strings(&[
+                        "root_device_and_inode",
+                        "selected_file_device_inode_size_mode_nanosecond_mtime_ctime",
+                        "observed_directory_names_and_project_markers",
+                    ]),
+                ),
+                (
+                    "profile",
+                    j::str(if matches!(tool, Tool::Sweep) {
+                        "sweep-metadata-v1"
+                    } else {
+                        "stash-metadata-v1"
+                    }),
+                ),
+                (
+                    "observation_contract",
+                    j::str("stable_capability_declaration_digest_excluding_operation_id"),
+                ),
+                (
+                    "stale",
+                    j::str("refused_before_case_probe_journal_and_moves_replan_required"),
+                ),
+                (
+                    "export",
+                    j::str("explicit_mode_0600_file_outside_selected_tree"),
+                ),
+                (
+                    "sensitivity",
+                    j::str(
+                        "selected_paths_and_metadata_held_names_are_commitments_no_payload_bytes",
+                    ),
+                ),
+                ("limit_bytes", j::num(etude_core::plan::MAX_PLAN_BYTES)),
+                (
+                    "opaque_units",
+                    j::str(
+                        "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
+                    ),
+                ),
+                (
+                    "concurrency",
+                    j::str("metadata_preflight_not_an_os_filesystem_lock"),
+                ),
+            ]),
+        ));
+    }
     if matches!(tool, Tool::Unpack) {
         fields.push(("quarantine", j::obj(&[
             ("source", j::str("captured_from_same_nofollow_descriptor_as_archive_bytes")),
@@ -400,6 +460,33 @@ pub fn declaration(
 fn operation_scopes(tool: Tool) -> Vec<String> {
     match tool {
         Tool::Sweep => vec![
+            scope(
+                "export_plan",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "consented_text_prefixes",
+                ],
+                &["explicit_plan_file"],
+            ),
+            scope(
+                "apply_exported_plan",
+                &[
+                    "explicit_plan_file_bytes",
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "journal_key",
+                    "journal_fingerprint_bytes",
+                    "cross_device_source_bytes",
+                ],
+                &[
+                    "selected_tree_entries",
+                    "journal_store",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
             scope(
                 "scan",
                 &[
@@ -481,6 +568,32 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
             scope("lesson", &[], &[]),
         ],
         Tool::Stash => vec![
+            scope(
+                "export_plan",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                ],
+                &["explicit_plan_file"],
+            ),
+            scope(
+                "apply_exported_plan",
+                &[
+                    "explicit_plan_file_bytes",
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "journal_key",
+                    "journal_fingerprint_bytes",
+                    "cross_device_source_bytes",
+                ],
+                &[
+                    "selected_tree_entries",
+                    "journal_store",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
             scope(
                 "stash",
                 &[

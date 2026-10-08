@@ -150,3 +150,13 @@ The declaration names captured archive quarantine metadata, staging attribute
 reads and writes, exact readback before publication, and refusal if preservation
 fails. On exFAT, macOS-generated AppleDouble companions are retained when they
 provide the attribute representation. Raw values are never disclosed.
+
+
+Sweep and stash capability version 3 declare explicit plan exports and replay.
+The result envelope remains version 2; the separate bounded plan artifact is
+version 1. Existing versioned pins remain immutable. A plan holds metadata
+observations and selected paths, with private held-name commitments. Replay uses
+the original digest and current tool/profile/observation contract, refusing stale
+observations before case probes, journals or relocations. Root/filesystem identity
+values and plan digests are meaningful binding evidence, not proof of payload
+integrity or complete access coverage. See [plan binding](../plan-binding.md).

@@ -67,7 +67,7 @@ fn manual_proposal(
         &ScanConfig {
             depth: 8,
             allow_sync,
-            whole_units: true,
+            whole_units: false,
             ..Default::default()
         },
     )
@@ -477,6 +477,8 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
     let src_b = sub_b.join("beta.txt");
     fs::write(&src_a, b"alpha\n").expect("write a");
     fs::write(&src_b, b"beta\n").expect("write b");
+    let src_a = src_a.canonicalize().expect("canonical a");
+    let src_b = src_b.canonicalize().expect("canonical b");
 
     let state =
         std::env::temp_dir().join(format!("sweep_state_jid_collision_{}", std::process::id()));
