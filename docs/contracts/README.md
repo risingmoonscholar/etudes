@@ -69,13 +69,14 @@ enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.
 
 The original immutable declarations remain under `history/v1/`; their byte
-digests are checked by the witness. Current canonical envelopes in `v2/`
-fix all fields, types and declared semantics. The published `v1/*.json` fixture
-locations now mirror the schema-version-2 envelopes for existing documentation
+digests are checked by the witness. Canonical pins in `v2/` retain the version-2 declarations; `v3/unpack.json`
+pins the current version-3 unpack declaration in a version-2 result envelope.
+They fix all fields, types and declared semantics. The published `v1/*.json` fixture
+locations mirror each tool's current canonical envelope for existing documentation
 links; trust `schema_version`, not a fixture directory name. Only the per-run
 operation ID and manifest version are normalized. Changing the contract without
 bumping `SCHEMA_VERSION` fails `cargo test`. To evolve it, retain the old pins,
-increase the version, and add all three pins under the new version directory.
+increase the affected declaration version and add its pin under the new version directory.
 Consumers should reject unknown versions rather than guess at their meaning.
 
 `scripts/check-tool-contracts.py` runs against `CARGO_BIN_EXE` in each CLI's
@@ -101,8 +102,8 @@ operational errors and recovered panics. Plain `contract` also returns this
 envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
-`v1/{sweep,stash,unpack}.json` fixtures mirror the current versioned `v2/`
-contract envelopes; `v2/envelope.json` pins the result structure. Editing fields or types without
+`v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
+contract envelopes (`v2/` for sweep and stash, `v3/` for unpack); `v2/envelope.json` pins the result structure. Editing fields or types without
 adding a new version is rejected by the independent binary witness.
 
 The envelope contains `schema_version`, `tool_version`, `operation_id`, `status`,
@@ -138,3 +139,14 @@ conditional journal restoration; `--no-journal` requires manual restoration.
 Queries and scans need no operation undo; their declared startup effects still
 apply. Restore failures require resolving refusals before retrying remaining
 journal entries. Recovery verification remains unproven by the envelope. Unpack retains its source archive and has no undo command.
+
+## Unpack quarantine declaration version 3
+
+Unpack's capability declaration under `details.schema_version` is version 3;
+its surrounding result envelope remains version 2. `v3/unpack.json` pins the
+new declaration and `v1/unpack.json` mirrors that current fixture. The preceding
+`v2/unpack.json` stays unchanged; sweep and stash declarations remain version 2.
+The declaration names captured archive quarantine metadata, staging attribute
+reads and writes, exact readback before publication, and refusal if preservation
+fails. On exFAT, macOS-generated AppleDouble companions are retained when they
+provide the attribute representation. Raw values are never disclosed.
