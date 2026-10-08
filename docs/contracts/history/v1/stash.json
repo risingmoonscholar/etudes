@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "tool_version": "<manifest-version>",
+  "operation_id": "<per-invocation>",
+  "status": "done",
+  "tool": "stash",
+  "kind": "capability_contract",
+  "contract_query": {
+    "operation": "contract",
+    "reads": [],
+    "writes": []
+  },
+  "observation_scope": {
+    "default_user_content": "metadata_only",
+    "content_exceptions": [
+      "cross_device_copy"
+    ],
+    "symlinks": "move_link_itself",
+    "environment": [
+      "HOME",
+      "TMPDIR",
+      "ETUDE_STATE_DIR",
+      "ETUDE_JOURNAL_KEY"
+    ],
+    "subprocess_environment": "inherited"
+  },
+  "mutation_scope": {
+    "operations": [
+      {
+        "operation": "stash",
+        "reads": [
+          "selected_tree_metadata",
+          "ancestor_metadata",
+          "journal_key",
+          "cross_device_source_bytes"
+        ],
+        "writes": [
+          "selected_tree_entries",
+          "journal_store",
+          "keychain_if_no_supplied_key"
+        ]
+      },
+      {
+        "operation": "pop",
+        "reads": [
+          "journal_store",
+          "journal_key",
+          "journal_recorded_paths_metadata",
+          "cross_device_source_bytes"
+        ],
+        "writes": [
+          "journal_recorded_entries",
+          "journal_store",
+          "empty_holding_directories",
+          "keychain_if_no_supplied_key"
+        ]
+      },
+      {
+        "operation": "status",
+        "reads": [
+          "selected_tree_metadata",
+          "journal_store",
+          "journal_key",
+          "journal_recorded_paths_metadata"
+        ],
+        "writes": [
+          "keychain_if_no_supplied_key"
+        ]
+      },
+      {
+        "operation": "status_all",
+        "reads": [
+          "journal_store",
+          "journal_key",
+          "journal_recorded_paths_metadata"
+        ],
+        "writes": [
+          "keychain_if_no_supplied_key"
+        ]
+      }
+    ],
+    "startup": {
+      "operation": "startup_except_contract",
+      "reads": [
+        "legacy_state_metadata"
+      ],
+      "writes": [
+        "legacy_state_migration"
+      ]
+    }
+  },
+  "network": {
+    "policy": "none",
+    "runtime_enforcement": "none",
+    "subprocesses": [
+      "/usr/bin/security"
+    ],
+    "subprocess_network_verified": false
+  },
+  "overwrite": {
+    "user_destinations": "refused",
+    "owned_state": "journal_updates_replace"
+  },
+  "deletion": {
+    "source_entries": "relocation_and_size_checked_copy_unlink",
+    "user_payloads": "never",
+    "owned_artifacts": [
+      "empty_holding_directories",
+      "case_probe_files"
+    ]
+  },
+  "reversibility": {
+    "mode": "conditional_journal_restore",
+    "conditions": [
+      "readable_journal",
+      "same_key",
+      "unchanged_items",
+      "vacant_original_paths",
+      "journal_not_expired",
+      "journal_progress_writable"
+    ],
+    "disabled_by": [
+      "--no-journal",
+      "journal_or_key_loss"
+    ]
+  },
+  "persistent_state": {
+    "journal_store": "ETUDE_STATE_DIR_or_HOME/Library/Application Support/etudes",
+    "journal_namespace": "stash",
+    "journal_ttl_days": 30,
+    "key": "supplied_environment_or_shared_login_keychain",
+    "result_artifacts": [
+      "holding_directory_deadline_in_name"
+    ]
+  },
+  "formats": {
+    "filesystem_handling": "visible_files_directories_packages_and_links_opaque_any_extension",
+    "content_inspection": {
+      "supported": [],
+      "unsupported": [
+        "all"
+      ],
+      "unlisted": "unsupported",
+      "matching": "case_insensitive_suffix"
+    },
+    "archive_extraction": {
+      "supported": [],
+      "unsupported": [
+        "all"
+      ],
+      "unlisted": "unsupported",
+      "matching": "case_insensitive_suffix"
+    }
+  },
+  "limits": {
+    "platform": "macos",
+    "inspection_max_bytes": null,
+    "extraction_budget": "not_applicable"
+  },
+  "evidence": {
+    "kind": "declaration_not_receipt",
+    "access_verified": false,
+    "witness": "scripts/check-tool-contracts.py"
+  }
+}

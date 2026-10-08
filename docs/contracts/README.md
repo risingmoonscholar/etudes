@@ -29,6 +29,7 @@ Scope domains resolve as follows:
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
 | `project_marker_names` | Names of project markers; no parsing of marker contents |
 | `consented_text_prefixes` | Prefix bytes of allowlisted files, after separate terminal consent; only increases refusal |
+| `journal_fingerprint_bytes` | First and last 4 KiB of regular files used by custody and restoration fingerprints; directories and links stay opaque |
 | `cross_device_source_bytes` | Data read by the copy fallback after EXDEV; applies to moves and restores, independently of inspection consent |
 | `selected_tree_entries` | Relocations and new group/holding directories within the selected tree, including filesystem case-probe files |
 | `journal_store`, `journal_store_metadata` | Encrypted journal bytes, or just journal names and metadata, in the configured state directory |
@@ -67,8 +68,11 @@ The declarations do not enforce an OS sandbox. Network policy is `none`, runtime
 enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.
 
-The immutable canonical pins in `v1/sweep.json`, `v1/stash.json` and
-`v1/unpack.json` fix all fields, types and declared semantics. Only the per-run
+The original immutable declarations remain under `history/v1/`; their byte
+digests are checked by the witness. Current canonical envelopes in `v2/`
+fix all fields, types and declared semantics. The published `v1/*.json` fixture
+locations now mirror the schema-version-2 envelopes for existing documentation
+links; trust `schema_version`, not a fixture directory name. Only the per-run
 operation ID and manifest version are normalized. Changing the contract without
 bumping `SCHEMA_VERSION` fails `cargo test`. To evolve it, retain the old pins,
 increase the version, and add all three pins under the new version directory.
@@ -90,7 +94,47 @@ conditional path (including keychain, EXDEV, review and crash recovery). Those
 claims remain unproven by this witness. Broader existing unit/stress witnesses
 exercise some of those paths separately.
 
-This is the first stage of the tool handoff. Ordinary operation JSON still uses
-the existing per-tool shapes. Read receipts with attempted/observed/verified/
-failed/unproven evidence, the shared result envelope, named verification claims,
-recovery/disclosure fields and result-schema version pins remain to be built.
+## Result envelopes and read receipts
+
+Schema version 2 wraps every `--json` response, including parser refusals,
+operational errors and recovered panics. Plain `contract` also returns this
+envelope. Existing contract and operation fields move under `details`; consumers
+must check `schema_version` before accessing that field. The original schema-version-1
+declarations are retained verbatim under `history/v1/`. The published
+`v1/{sweep,stash,unpack}.json` fixtures mirror the current versioned `v2/`
+contract envelopes; `v2/envelope.json` pins the result structure. Editing fields or types without
+adding a new version is rejected by the independent binary witness.
+
+The envelope contains `schema_version`, `tool_version`, `operation_id`, `status`,
+`scope`, `observations`, `effects`, `verification`, `recovery`, `disclosure` and
+`details`. Status is one of `done`, `nothing_to_do`, `refused`, `incomplete` or
+`error`. Exit codes retain their existing meaning. Incomplete move or restore
+attempts require checking the filesystem and the journal before retrying.
+
+`scope` identifies the tool and operation and includes its conditional declared
+read/write domains and startup domains. Those are capabilities, not observations.
+`observations.categories` records instrumented read operations by category:
+metadata, directory enumeration, access opens, encrypted journal bytes, key
+acquisition, fingerprint bytes, cross-device copying and archive copying.
+`attempted` counts calls, `observed` successful calls, `failed` failed calls,
+and `verified` successful calls with a separate check. An open is not a payload
+read. Directory-enumeration calls and yielded directory entries have separate
+categories. Fingerprint reads and cross-device reads have separate categories. Verification
+is narrow: journal authentication and identity checks, or copied size equality,
+which is not cryptographic equality. Key acquisition is recorded without its
+source value. Receipts contain no paths, contents, keys or environment values.
+`details` retains the operation's existing path disclosures.
+
+`unproven` separately names subprocess reads, environment access, uninstrumented
+operations and absence of access. Receipt instrumentation runs on the command
+thread, not in the OS or system extractors. No zero or missing counter is evidence
+of no access. `verification` names each claim and gives `pass`, `fail` or
+`unproven`; a successful process does not establish complete read coverage or
+subprocess network absence. `effects` identifies the outcome and reports available operation counters
+for moves, restoration, publication, audit and expiry pruning. Unaccounted effects
+remain explicitly unproven; missing or zero accounting proves no absence of effects.
+Recovery names its operation-specific mode and conditions. Moves use
+conditional journal restoration; `--no-journal` requires manual restoration.
+Queries and scans need no operation undo; their declared startup effects still
+apply. Restore failures require resolving refusals before retrying remaining
+journal entries. Recovery verification remains unproven by the envelope. Unpack retains its source archive and has no undo command.

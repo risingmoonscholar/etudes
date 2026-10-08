@@ -1,6 +1,7 @@
 //! Small presentation helpers shared by the command-line tools.
 
 pub mod contract;
+pub mod envelope;
 
 use std::io::{self, IsTerminal, Write};
 

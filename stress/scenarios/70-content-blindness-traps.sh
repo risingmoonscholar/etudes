@@ -87,13 +87,13 @@ json=$("$SWEEP" "$D" --json 2>&1)
 grouped_by_name() {  # grouped_by_name NEEDLE
   python3 -c "
 import json,sys
-d=json.load(sys.stdin)
+d=json.load(sys.stdin)['details']
 m=[f for g in d['groups'] for f in g.get('members',[])]
 print(any('$1' in f for f in m))
 " <<<"$json"
 }
 personal_count=$(python3 -c "
-import json,sys; print(json.load(sys.stdin)['left_alone']['looks_personal'])" <<<"$json")
+import json,sys; print(json.load(sys.stdin)['details']['left_alone']['looks_personal'])" <<<"$json")
 
 assert_eq "True" "$(grouped_by_name IMG_7705)" \
   "TRAP 1: 1099 content inside a .jpg name is grouped BY NAME with the photos"
@@ -150,7 +150,7 @@ if command -v script >/dev/null 2>&1; then
     flagged=$(python3 -c "
 import json,sys
 try:
-    d=json.loads(sys.stdin.read())
+    d=json.loads(sys.stdin.read())['details']
     print(d['left_alone']['looks_personal'])
 except Exception:
     print('PARSE-FAIL')

@@ -38,7 +38,7 @@ now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 pick_target() {
   "$SWEEP" "$1" --json 2>/dev/null | python3 -c '
 import json, sys
-p = json.load(sys.stdin)
+p = json.load(sys.stdin)['details']
 g = next(g for g in p["groups"] if g["name"] == "Data")
 m = g["members"]
 idx = int(len(m) * 0.75)

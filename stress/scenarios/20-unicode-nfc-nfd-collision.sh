@@ -46,7 +46,7 @@ assert_exit 0 "planning a tree with an NFC/NFD name pair succeeds" -- "$SWEEP" "
 # entries, in different subdirectories.
 group_count=$("$SWEEP" "$D" --depth 2 --json | python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['details']
 g = [g for g in d['groups'] if g['name'] == 'Documents']
 print(g[0]['count'] if g else 0)
 ")

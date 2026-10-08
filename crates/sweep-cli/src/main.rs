@@ -4,6 +4,15 @@
 //! The undo journal is sealed with a key held in the login keychain; if sealing
 //! is unavailable sweep refuses rather than writing plaintext.
 
+macro_rules! println {
+    () => { etude_cli_support::envelope::print(String::new()) };
+    ($($arg:tt)*) => { etude_cli_support::envelope::print(format!($($arg)*)) };
+}
+
+macro_rules! print {
+    ($($arg:tt)*) => { etude_cli_support::envelope::prompt(format!($($arg)*)) };
+}
+
 mod inspect;
 mod review;
 
@@ -51,6 +60,14 @@ never moved, in any mode.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    etude_cli_support::envelope::begin("sweep", env!("CARGO_PKG_VERSION"), &args);
+    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    etude_cli_support::envelope::finish(code);
+    code
+}
+
+fn run_main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.first().is_some_and(|arg| arg == "contract") {
         return etude_cli_support::contract::command(
@@ -75,6 +92,7 @@ fn main() -> ExitCode {
     // Journals past their TTL are dropped before anything else. Keeping an
     // index of the user's filenames forever keeps the exposure forever.
     let expired = etude_core::journal::prune_expired();
+    etude_cli_support::envelope::effect("expired_journals_removed", expired);
     if expired > 0 {
         eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
     }
@@ -405,6 +423,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         "apply",
         &[
             ("--yes", false),
+            ("--json", false),
             ("--only", true),
             ("--no-journal", false),
             ("--depth", true),
@@ -423,7 +442,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         ],
     ),
     ("forget", &[("--yes", false)]),
-    ("undo", &[]),
+    ("undo", &[("--json", false)]),
     ("verify", &[]),
     ("lesson", &[]),
     ("contract", &[("--json", false)]),
@@ -754,6 +773,9 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
+    if plan.skipped_unreadable > 0 {
+        etude_cli_support::envelope::status("incomplete");
+    }
     if plan.groups.is_empty() && has(args, "--json") {
         println!("{}", plan.to_json());
         return ExitCode::from(1);
@@ -1091,7 +1113,9 @@ impl etude_core::journal::Sealer for KeychainSeal {
 /// On failure sweep refuses rather than falling back to a plaintext journal.
 /// Silently degrading is the failure mode a privacy tool must not have.
 fn sealer() -> Option<KeychainSeal> {
-    match etude_keep::key() {
+    let result = etude_keep::key();
+    etude_core::scan::record_read_outcome("key_material", result.is_ok());
+    match result {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             refuse("could not get the journal key", &e);
@@ -1313,6 +1337,17 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
     drop(progress);
     match result {
         Ok(r) => {
+            etude_cli_support::envelope::effect("items_moved", r.moved);
+            etude_cli_support::envelope::detail(etude_core::json::obj(&[
+                ("moved", etude_core::json::num(r.moved)),
+                (
+                    "journal",
+                    r.journal_path
+                        .as_deref()
+                        .map(etude_core::json::path)
+                        .unwrap_or_else(|| "null".into()),
+                ),
+            ]));
             println!("\nMoved {} files.", r.moved);
             match r.journal_path {
                 Some(jp) => {
@@ -1325,6 +1360,7 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
+            etude_cli_support::envelope::status("incomplete");
             refuse_apply(&e);
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
             apply_exit_code(&e)
@@ -1600,6 +1636,23 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
+    etude_cli_support::envelope::detail(etude_core::json::obj(&[
+        ("restored", etude_core::json::num(r.restored)),
+        (
+            "skipped_changed",
+            etude_core::json::num(r.skipped_changed.len()),
+        ),
+        (
+            "skipped_missing",
+            etude_core::json::num(r.skipped_missing.len()),
+        ),
+    ]));
+    if !r.skipped_changed.is_empty() || r.error.is_some() {
+        etude_cli_support::envelope::status("incomplete");
+    }
+    etude_cli_support::envelope::effect("items_restored", r.restored);
+    etude_cli_support::envelope::effect("changed_items_left", r.skipped_changed.len());
+    etude_cli_support::envelope::effect("missing_items", r.skipped_missing.len());
     println!("\nRestored {} files.", r.restored);
     if !r.skipped_changed.is_empty() {
         println!(

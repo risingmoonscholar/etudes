@@ -421,13 +421,14 @@ impl Journal {
     /// to opening the whole file as one sealed blob (the pre-framing format).
     pub fn load_sealed(tool: &str, id: &str, sealer: &dyn Sealer) -> Result<Journal, JournalError> {
         let path = state_dir().join(format!("{tool}-{id}.journal"));
-        let metadata = fs::symlink_metadata(&path).map_err(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                JournalError::NotFound
-            } else {
-                JournalError::Io(e)
-            }
-        })?;
+        let metadata =
+            crate::scan::observe_read("metadata", fs::symlink_metadata(&path)).map_err(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    JournalError::NotFound
+                } else {
+                    JournalError::Io(e)
+                }
+            })?;
         JournalCandidate {
             path,
             metadata,
@@ -665,7 +666,8 @@ pub fn prune_expired() -> usize {
             Some(c) => c,
             None => return 0,
         };
-    let Ok(rd) = fs::read_dir(state_dir()) else {
+    let Ok(rd) = crate::scan::observe_read("directory_enumeration", fs::read_dir(state_dir()))
+    else {
         return 0;
     };
     let mut removed = 0;
@@ -742,21 +744,32 @@ impl JournalCandidate {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(0x20000 | 0x800);
         }
-        let mut file = options.open(&self.path).map_err(JournalError::Io)?;
-        if !same_journal(&self.metadata, &file.metadata().map_err(JournalError::Io)?) {
+        let mut file = crate::scan::observe_read("file_open", options.open(&self.path))
+            .map_err(JournalError::Io)?;
+        if !same_journal(
+            &self.metadata,
+            &crate::scan::observe_read("metadata", file.metadata()).map_err(JournalError::Io)?,
+        ) {
             return Err(changed());
         }
         let mut raw = Vec::new();
-        file.read_to_end(&mut raw).map_err(JournalError::Io)?;
-        if !same_journal(&self.metadata, &file.metadata().map_err(JournalError::Io)?)
-            || !same_journal(
-                &self.metadata,
-                &fs::symlink_metadata(&self.path).map_err(JournalError::Io)?,
-            )
-        {
+        crate::scan::observe_read("journal_bytes", file.read_to_end(&mut raw))
+            .map_err(JournalError::Io)?;
+        if !same_journal(
+            &self.metadata,
+            &crate::scan::observe_read("metadata", file.metadata()).map_err(JournalError::Io)?,
+        ) || !same_journal(
+            &self.metadata,
+            &crate::scan::observe_read("metadata", fs::symlink_metadata(&self.path))
+                .map_err(JournalError::Io)?,
+        ) {
             return Err(changed());
         }
-        Journal::decode_sealed(tool, &self.id, &raw, sealer)
+        let decoded = Journal::decode_sealed(tool, &self.id, &raw, sealer);
+        if decoded.is_ok() {
+            crate::scan::verify_read("journal_bytes");
+        }
+        decoded
     }
 }
 
@@ -775,13 +788,14 @@ pub fn candidates_by_recency(tool: &str) -> Result<Vec<JournalCandidate>, Journa
     let prefix = format!("{tool}-");
     let dir = state_dir();
     let mut journals = Vec::new();
-    let entries = fs::read_dir(&dir).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            JournalError::NotFound
-        } else {
-            JournalError::Io(e)
-        }
-    })?;
+    let entries =
+        crate::scan::observe_read("directory_enumeration", fs::read_dir(&dir)).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                JournalError::NotFound
+            } else {
+                JournalError::Io(e)
+            }
+        })?;
     for e in entries {
         let e = e.map_err(JournalError::Io)?;
         let name = e.file_name().to_string_lossy().into_owned();
@@ -793,7 +807,8 @@ pub fn candidates_by_recency(tool: &str) -> Result<Vec<JournalCandidate>, Journa
         };
         // A symlink, directory, or missing metadata cannot establish a
         // journal's position in history. Never silently omit that barrier.
-        let md = fs::symlink_metadata(e.path()).map_err(JournalError::Io)?;
+        let md = crate::scan::observe_read("metadata", fs::symlink_metadata(e.path()))
+            .map_err(JournalError::Io)?;
         if !md.is_file() {
             return Err(JournalError::Malformed("journal is not a regular file"));
         }
@@ -836,7 +851,8 @@ fn restrict_dir(p: &Path) {
 fn sync_dir(dir: &Path) -> Result<(), JournalError> {
     #[cfg(test)]
     SYNC_DIR_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let d = fs::File::open(dir).map_err(JournalError::Io)?;
+    let d =
+        crate::scan::observe_read("file_open", fs::File::open(dir)).map_err(JournalError::Io)?;
     d.sync_all().map_err(JournalError::Io)
 }
 #[cfg(not(unix))]
@@ -862,7 +878,7 @@ pub fn fingerprint(p: &Path) -> io::Result<(u64, i64, u64, u64)> {
     // whenever the target does. stash found this with a link pointing at the
     // folder being emptied. It reported the link as modified and refused to
     // restore it.
-    let md = fs::symlink_metadata(p)?;
+    let md = crate::scan::observe_read("metadata", fs::symlink_metadata(p))?;
     let size = md.len();
     // Neither a directory nor a symlink can be opened for hashing.
     let opaque = md.is_dir() || md.file_type().is_symlink();
@@ -890,7 +906,7 @@ pub fn fingerprint(p: &Path) -> io::Result<(u64, i64, u64, u64)> {
 /// as one: an adversary can trivially preserve it.
 pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
     const EDGE: u64 = 4096;
-    let mut f = fs::File::open(p)?;
+    let mut f = crate::scan::observe_read("file_open", fs::File::open(p))?;
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let feed = |buf: &[u8], h: &mut u64| {
         for b in buf {
@@ -901,14 +917,14 @@ pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
 
     let head_len = size.min(EDGE) as usize;
     let mut head = vec![0u8; head_len];
-    f.read_exact(&mut head)?;
+    crate::scan::observe_read("fingerprint_bytes", f.read_exact(&mut head))?;
     feed(&head, &mut h);
 
     if size > EDGE {
         let tail_len = EDGE.min(size - EDGE) as usize;
         f.seek(SeekFrom::End(-(tail_len as i64)))?;
         let mut tail = vec![0u8; tail_len];
-        f.read_exact(&mut tail)?;
+        crate::scan::observe_read("fingerprint_bytes", f.read_exact(&mut tail))?;
         feed(&tail, &mut h);
     }
     // Length is part of the identity, so truncation alone changes the hash.

@@ -51,6 +51,8 @@ def canonical(contract):
     result = dict(contract)
     result["operation_id"] = "<per-invocation>"
     result["tool_version"] = "<manifest-version>"
+    if isinstance(result.get("details"), dict) and result["details"].get("kind") == "capability_contract":
+        result["details"] = canonical(result["details"])
     return result
 
 
@@ -67,6 +69,7 @@ def negative_controls(tool, binary):
         for mutation, expected in (
             ("schema", "without a schema_version bump"),
             ("schema_type", "without a schema_version bump"),
+            ("result_schema", "without a schema_version bump"),
             ("behaviour", "archive list left mutations behind" if tool == "unpack"
              else "tool mutated outside its selected tree"),
         ):
@@ -83,11 +86,15 @@ def negative_controls(tool, binary):
                 f"mutation = {mutation!r}\n"
                 "if sys.argv[1:2] == ['contract'] and mutation == 'schema' and result.returncode == 0:\n"
                 "    data = json.loads(output)\n"
-                "    del data['overwrite']\n"
+                "    del data['details']['overwrite']\n"
                 "    output = json.dumps(data).encode()\n"
                 "elif sys.argv[1:2] == ['contract'] and mutation == 'schema_type' and result.returncode == 0:\n"
                 "    data = json.loads(output)\n"
-                "    data['evidence']['access_verified'] = 0\n"
+                "    data['details']['evidence']['access_verified'] = 0\n"
+                "    output = json.dumps(data).encode()\n"
+                "elif '--json' in sys.argv and mutation == 'result_schema':\n"
+                "    data = json.loads(output)\n"
+                "    del data['recovery']\n"
                 "    output = json.dumps(data).encode()\n"
                 "elif sys.argv[1:2] != ['contract'] and mutation == 'behaviour':\n"
                 "    sentinel = pathlib.Path.cwd() / 'outside/sentinel'\n"
@@ -141,6 +148,8 @@ class Probe:
                 f"exited {result.returncode}, expected {codes}")
         require(self.environment["ETUDE_JOURNAL_KEY"].encode() not in
                 result.stdout + result.stderr, "a supplied key was disclosed")
+        if "--json" in arguments:
+            self.envelope(json.loads(result.stdout))
         return result
 
     def query(self):
@@ -153,7 +162,9 @@ class Probe:
         output = self.run("contract", "--json", environment=environment)
         require(b"malformed-do-not-echo" not in output.stdout + output.stderr,
                 "contract disclosed a supplied environment value")
-        contract = json.loads(output.stdout)
+        envelope = json.loads(output.stdout)
+        self.envelope(envelope)
+        contract = envelope["details"]
         require(contract["tool"] == self.tool, "wrong tool in contract")
         require(contract["kind"] == "capability_contract", "wrong contract kind")
         require(contract["status"] == "done", "contract status must be done")
@@ -164,7 +175,8 @@ class Probe:
                 "contract must declare no application filesystem access")
         require(snapshot(self.directory) == before,
                 "contract mutated files, migrated state or pruned expired journals")
-        plain = json.loads(self.run("contract").stdout)
+        plain_envelope = json.loads(self.run("contract").stdout)
+        plain = plain_envelope["details"]
         require(canonical(plain) == canonical(contract), "plain contract disagrees")
         require(plain["operation_id"] != contract["operation_id"],
                 "operation_id was reused")
@@ -177,13 +189,64 @@ class Probe:
         require(type(contract["schema_version"]) is int, "schema version must be an integer")
         pin = ROOT / "docs/contracts" / f"v{contract['schema_version']}" / f"{self.tool}.json"
         require(pin.is_file(), "schema version has no retained contract pin")
-        require(pinned_encoding(canonical(contract)) == pinned_encoding(json.loads(pin.read_text())),
+        require(pinned_encoding(canonical(envelope)) == pinned_encoding(json.loads(pin.read_text())),
                 "contract schema or semantics changed without a schema_version bump; "
                 "retain the old pin and add a new version")
+        current_fixture = ROOT / "docs/contracts/v1" / f"{self.tool}.json"
+        require(current_fixture.read_bytes() == pin.read_bytes(), "published contract fixture differs from versioned pin")
+        historical_hashes = {'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
+        historical = ROOT / "docs/contracts/history/v1" / f"{self.tool}.json"
+        require(hashlib.sha256(historical.read_bytes()).hexdigest() == historical_hashes[self.tool], "historical v1 contract pin changed")
         self.contract = contract
+        self.result_probes()
         # The query immutability probe has finished; remove its fake journals.
         for path in self.state.glob("*.journal"):
             path.unlink()
+
+    def envelope(self, value):
+        pin = ROOT / "docs/contracts" / f"v{value['schema_version']}" / "envelope.json"
+        require(pin.is_file(), "result schema has no version pin")
+        shape = json.loads(pin.read_text())
+        require(sorted(value) == sorted(shape["fields"]),
+                "result fields changed without a schema_version bump")
+        require(value["status"] in shape["statuses"], "invalid result status")
+        require(type(value["schema_version"]) is int, "invalid result schema version")
+        require(isinstance(value["tool_version"], str), "invalid tool version")
+        require(isinstance(value["operation_id"], str) and value["operation_id"], "invalid operation id")
+        for field in ("scope", "observations", "effects", "recovery", "disclosure", "details"):
+            require(type(value[field]) is dict, f"invalid {field} object")
+        for field, members in shape["objects"].items():
+            require(sorted(value[field]) == sorted(members), f"{field} changed without a schema_version bump")
+            for member, kind in members.items():
+                require(type(value[field][member]).__name__ == kind, f"{field}.{member} type changed without a schema_version bump")
+        for domain in (value["scope"]["domains"], value["scope"]["startup"]):
+            require(sorted(domain) == sorted(shape["domain_fields"]), "scope domains changed without a schema_version bump")
+            for member, kind in shape["domain_fields"].items():
+                require(type(domain[member]).__name__ == kind, "scope domain type changed without a schema_version bump")
+            require(all(type(item) is str for field in ("reads", "writes") for item in domain[field]), "invalid scope domain item")
+        for counter in value["effects"]["counters"]:
+            require(sorted(counter) == ["count", "name"] and type(counter["name"]) is str and type(counter["count"]) is int and counter["count"] >= 0, "effects counter changed without a schema_version bump")
+        require(type(value["verification"]) is list, "invalid verification array")
+        for claim in value["verification"]:
+            require(sorted(claim) == ["claim", "status"] and type(claim["claim"]) is str, "verification fields changed without a schema_version bump")
+            require(claim["status"] in ("pass", "fail", "unproven"), "invalid verification verdict")
+        receipt = value["observations"]
+        require(receipt["unproven"], "receipt must disclose coverage limits")
+        for row in receipt["categories"]:
+            require(sorted(row) == ["attempted", "category", "failed", "observed", "verified"], "receipt fields drift")
+            require(type(row["category"]) is str and all(type(row[key]) is int and row[key] >= 0 for key in ("attempted", "observed", "verified", "failed")), "invalid receipt category or count type")
+            require(row["attempted"] == row["observed"] + row["failed"], "receipt outcomes do not partition attempts")
+            require(0 <= row["verified"] <= row["observed"], "verification exceeds observed reads")
+        require("not evidence" in value["disclosure"]["zero_counters"], "zero counter overclaims")
+
+    def result_probes(self):
+        missing = self.directory / "does-not-exist"
+        output = self.run(missing, "--json", codes=(2, 3))
+        envelope = json.loads(output.stdout)
+        self.envelope(envelope)
+        require(envelope["status"] in ("refused", "error"), "error result claims success")
+        invalid = self.run("--unknown", "--json", codes=(2,))
+        self.envelope(json.loads(invalid.stdout))
 
     def operation(self, name):
         return next(row for row in self.contract["mutation_scope"]["operations"]
@@ -365,10 +428,17 @@ class Probe:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", required=True, choices=("sweep", "stash", "unpack"))
-    parser.add_argument("--bin", required=True, type=Path)
+    parser.add_argument("--tool", choices=("sweep", "stash", "unpack"))
+    parser.add_argument("--bin", type=Path)
     parser.add_argument("--negative-controls", action="store_true")
     arguments = parser.parse_args()
+    if arguments.tool is None:
+        require(arguments.bin is None, "--bin requires --tool")
+        for tool in ("sweep", "stash", "unpack"):
+            result = subprocess.run(["python3", __file__, "--tool", tool, "--bin", str(ROOT / "target/debug" / tool)], check=False)
+            require(result.returncode == 0, f"{tool} contract witness failed")
+        return
+    require(arguments.bin is not None, "--tool requires --bin")
     if arguments.negative_controls:
         negative_controls(arguments.tool, arguments.bin)
         print(f"ok {arguments.tool}: witness rejects unversioned schema and scope mutations")

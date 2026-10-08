@@ -210,7 +210,7 @@ def transaction(tag, injected=None):
                 "failed audit leaves no destination or staging and reports exactly what remains (nothing)")
     else:
         import json
-        result = json.loads(stdout)
+        result = json.loads(stdout)['details']
         require(process.returncode == 0 and result["paths_audited"] == 1,
                 "successful extraction reports its final tree audit")
         require(complete_at_visibility and (dest / "transaction").read_bytes() == b"x" * large_size,

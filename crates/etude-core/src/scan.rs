@@ -8,6 +8,87 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
+#[derive(Default)]
+struct ReadCounts {
+    attempted: u64,
+    observed: u64,
+    verified: u64,
+    failed: u64,
+}
+
+thread_local! {
+    static READ_RECEIPT: std::cell::RefCell<std::collections::BTreeMap<&'static str, ReadCounts>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// Reset instrumentation for the current command on this thread.
+pub fn reset_receipt() {
+    READ_RECEIPT.with(|r| r.borrow_mut().clear());
+}
+
+/// Record an actual I/O attempt without retaining its inputs or error text.
+pub fn observe_read<T>(category: &'static str, outcome: io::Result<T>) -> io::Result<T> {
+    record_read_outcome(category, outcome.is_ok());
+    outcome
+}
+
+/// Record outcomes for instrumented reads whose errors are not std::io::Error.
+pub fn record_read_outcome(category: &'static str, success: bool) {
+    READ_RECEIPT.with(|r| {
+        let mut receipt = r.borrow_mut();
+        let counts = receipt.entry(category).or_default();
+        counts.attempted += 1;
+        if success {
+            counts.observed += 1;
+        } else {
+            counts.failed += 1;
+        }
+    });
+}
+
+/// Mark a successful independently checked operation, never a claimed absence.
+pub fn verify_read(category: &'static str) {
+    READ_RECEIPT.with(|r| {
+        let mut receipt = r.borrow_mut();
+        let counts = receipt.entry(category).or_default();
+        if counts.verified < counts.observed {
+            counts.verified += 1;
+        }
+    });
+}
+
+/// Emit scoped evidence; missing or zero counters do not prove no access.
+pub fn receipt_json() -> String {
+    use crate::json;
+    READ_RECEIPT.with(|r| {
+        let receipt = r.borrow();
+        let categories = json::arr(receipt.iter().map(|(category, counts)| {
+            json::obj(&[
+                ("category", json::str(category)),
+                ("attempted", json::num(counts.attempted)),
+                ("observed", json::num(counts.observed)),
+                ("verified", json::num(counts.verified)),
+                ("failed", json::num(counts.failed)),
+            ])
+        }));
+        json::obj(&[
+            ("categories", categories),
+            (
+                "scope",
+                json::str("instrumented operations on the command thread"),
+            ),
+            (
+                "unproven",
+                json::arr([
+                    json::str("subprocess reads"),
+                    json::str("environment access"),
+                    json::str("operations outside instrumentation"),
+                    json::str("absence of access when a counter is zero or missing"),
+                ]),
+            ),
+        ])
+    })
+}
+
 /// Directory names that are never entered, regardless of depth or location.
 /// A credential/noise directory is dangerous by NAME, wherever it appears.
 /// `.ssh` under a project checkout is still `.ssh`. This list must not carry
@@ -171,7 +252,7 @@ struct Unreadable;
 /// because a child folder holding EITHER kind is stepped over. Only the scan
 /// root distinguishes them: a root marker refuses, a document marker holds.
 fn root_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
-    let Ok(rd) = fs::read_dir(dir) else {
+    let Ok(rd) = observe_read("directory_enumeration", fs::read_dir(dir)) else {
         return Err(Unreadable);
     };
     for entry in rd {
@@ -180,7 +261,7 @@ fn root_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
         };
         let name = e.file_name().to_string_lossy().into_owned();
         if name_matches(&name, ROOT_MARKERS)
-            && fs::symlink_metadata(e.path())
+            && observe_read("metadata", fs::symlink_metadata(e.path()))
                 .map(|m| !m.is_dir())
                 .unwrap_or(true)
         {
@@ -202,7 +283,7 @@ fn project_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
     // sweep could not read into the project count, and an unreadable folder
     // has to stay visible as unreadable -- that was issue #4, and a test has
     // guarded it ever since.
-    let Ok(rd) = fs::read_dir(dir) else {
+    let Ok(rd) = observe_read("directory_enumeration", fs::read_dir(dir)) else {
         return Err(Unreadable);
     };
     for entry in rd {
@@ -240,7 +321,7 @@ fn project_marker_in(dir: &Path) -> Result<Option<String>, Unreadable> {
         // last group is a real over-refusal, measured, and it fails closed --
         // filed rather than fixed here. No path outside the root is resolved.
         if (name_matches(&name, ROOT_MARKERS) || name_matches(&name, DOCUMENT_MARKERS))
-            && fs::symlink_metadata(e.path())
+            && observe_read("metadata", fs::symlink_metadata(e.path()))
                 .map(|m| !m.is_dir())
                 .unwrap_or(true)
         {
@@ -289,25 +370,28 @@ fn check_access(path: &Path, meta: &fs::Metadata) -> Result<(), Unreadable> {
             #[cfg(not(target_os = "macos"))]
             options.custom_flags(0x20000 | 0x800); // O_NOFOLLOW | O_NONBLOCK
         }
-        options.open(path).map_err(|_| Unreadable)?;
+        observe_read("file_open", options.open(path)).map_err(|_| Unreadable)?;
     }
     Ok(())
 }
 
 fn document_scope(root: &Path, dir: &Path) -> DocumentScope {
     let probe = || -> Result<Option<String>, Unreadable> {
-        let meta = fs::symlink_metadata(dir).map_err(|_| Unreadable)?;
+        let meta = observe_read("metadata", fs::symlink_metadata(dir)).map_err(|_| Unreadable)?;
         if !meta.is_dir() {
             return Err(Unreadable);
         }
         check_access(dir, &meta)?;
         let mut markers = Vec::new();
-        for item in fs::read_dir(dir).map_err(|_| Unreadable)? {
+        for item in
+            observe_read("directory_enumeration", fs::read_dir(dir)).map_err(|_| Unreadable)?
+        {
             let item = item.map_err(|_| Unreadable)?;
             if !is_document_marker(&item.file_name().to_string_lossy()) {
                 continue;
             }
-            let meta = fs::symlink_metadata(item.path()).map_err(|_| Unreadable)?;
+            let meta = observe_read("metadata", fs::symlink_metadata(item.path()))
+                .map_err(|_| Unreadable)?;
             if meta.is_dir() {
                 continue;
             }
@@ -350,7 +434,7 @@ fn hold_scope(out: &mut ScanOutcome, start: usize, dir: &Path, scope: &DocumentS
     for e in candidates {
         let document = !e.is_dir && is_document_marker(&e.name);
         let nested = e.path.parent() != Some(dir);
-        let link = fs::symlink_metadata(&e.path)
+        let link = observe_read("metadata", fs::symlink_metadata(&e.path))
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(true);
         if document || nested || e.is_dir || link || reference_file(&e) {
@@ -852,7 +936,7 @@ fn walk(
         return Ok(());
     }
 
-    let rd = match fs::read_dir(dir) {
+    let rd = match observe_read("directory_enumeration", fs::read_dir(dir)) {
         Ok(rd) => rd,
         Err(_) => {
             // A genuine I/O failure, not a policy refusal. sweep tried to
@@ -870,7 +954,7 @@ fn walk(
     let mut items = Vec::new();
     let mut children = Vec::new();
     for item in rd {
-        let item = match item {
+        let item = match observe_read("directory_entry", item) {
             Ok(item) => item,
             Err(_) => {
                 scope.unreadable = true;
@@ -915,7 +999,7 @@ fn walk(
         let name = item.file_name().to_string_lossy().into_owned();
 
         // symlink_metadata does not follow. This is the TOCTOU-safe read.
-        let meta = match fs::symlink_metadata(&path) {
+        let meta = match observe_read("metadata", fs::symlink_metadata(&path)) {
             Ok(m) => m,
             Err(_) => continue,
         };
@@ -1070,6 +1154,34 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receipt_counts_outcomes_without_retaining_values_or_errors() {
+        reset_receipt();
+        observe_read("user_bytes", Ok::<_, io::Error>(b"private contents")).unwrap();
+        verify_read("user_bytes");
+        let _ = observe_read::<()>("user_bytes", Err(io::Error::other("private path")));
+        let receipt = receipt_json();
+        assert!(receipt.contains("\"attempted\":2"));
+        assert!(receipt.contains("\"observed\":1"));
+        assert!(receipt.contains("\"verified\":1"));
+        assert!(receipt.contains("\"failed\":1"));
+        assert!(!receipt.contains("private"));
+        reset_receipt();
+        assert!(receipt_json().contains("\"categories\":[]"));
+    }
+
+    #[test]
+    fn receipts_are_scoped_to_the_command_thread() {
+        reset_receipt();
+        std::thread::spawn(|| {
+            observe_read("metadata", Ok::<_, io::Error>(())).unwrap();
+            assert!(receipt_json().contains("metadata"));
+        })
+        .join()
+        .unwrap();
+        assert!(receipt_json().contains("\"categories\":[]"));
+    }
 
     // Every entry in both lists is tested by DERIVING the test from the list,
     // not by restating it. The project-file-extension space is large and

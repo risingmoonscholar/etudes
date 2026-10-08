@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "fields": [
+    "schema_version",
+    "tool_version",
+    "operation_id",
+    "status",
+    "scope",
+    "observations",
+    "effects",
+    "verification",
+    "recovery",
+    "disclosure",
+    "details"
+  ],
+  "statuses": [
+    "done",
+    "nothing_to_do",
+    "refused",
+    "incomplete",
+    "error"
+  ],
+  "objects": {
+    "scope": {
+      "operation": "str",
+      "domains": "dict",
+      "startup": "dict",
+      "evidence": "str",
+      "tool": "str"
+    },
+    "effects": {
+      "outcome": "str",
+      "counters": "list",
+      "unproven": "list"
+    },
+    "observations": {
+      "categories": "list",
+      "scope": "str",
+      "unproven": "list"
+    },
+    "recovery": {
+      "mode": "str",
+      "conditions": "list",
+      "verification": "str"
+    },
+    "disclosure": {
+      "receipt_contains": "str",
+      "zero_counters": "str",
+      "details": "str"
+    }
+  },
+  "domain_fields": {
+    "operation": "str",
+    "reads": "list",
+    "writes": "list"
+  }
+}

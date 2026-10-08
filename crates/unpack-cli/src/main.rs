@@ -118,7 +118,10 @@ impl ArchiveAnchor {
                     // truncate and rewrite that inode after both preflights.
                     // The private copy is the one immutable input all later
                     // operations consume.
-                    match std::fs::symlink_metadata(archive) {
+                    match etude_core::scan::observe_read(
+                        "archive_metadata",
+                        std::fs::symlink_metadata(archive),
+                    ) {
                         Ok(metadata) if metadata.file_type().is_symlink() => {
                             let _ = std::fs::remove_dir_all(&dir);
                             return Err("the archive path is a symlink".into());
@@ -129,7 +132,10 @@ impl ArchiveAnchor {
                             return Err(error.to_string());
                         }
                     }
-                    if let Err(error) = std::fs::copy(archive, &path) {
+                    if let Err(error) = etude_core::scan::observe_read(
+                        "archive_bytes",
+                        std::fs::copy(archive, &path),
+                    ) {
                         let _ = std::fs::remove_dir_all(&dir);
                         return Err(error.to_string());
                     }
@@ -199,7 +205,20 @@ fn stem(path: &Path) -> String {
     if n.is_empty() { "unpacked".into() } else { n }
 }
 
+macro_rules! println {
+    () => { etude_cli_support::envelope::print(String::new()) };
+    ($($arg:tt)*) => { etude_cli_support::envelope::print(format!($($arg)*)) };
+}
+
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    etude_cli_support::envelope::begin("unpack", env!("CARGO_PKG_VERSION"), &args);
+    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    etude_cli_support::envelope::finish(code);
+    code
+}
+
+fn run_main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "contract") {
         return etude_cli_support::contract::command(
@@ -266,7 +285,9 @@ fn value(args: &[String], f: &str) -> Option<String> {
 }
 
 fn run(archive: &Path, args: &[String]) -> ExitCode {
-    if !archive.is_file() {
+    if !etude_core::scan::observe_read("archive_metadata", std::fs::metadata(archive))
+        .is_ok_and(|metadata| metadata.is_file())
+    {
         eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
         return ExitCode::from(3);
     }
@@ -577,6 +598,9 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::from(3);
     }
 
+    etude_cli_support::envelope::effect("entries_published", entries.len() - junk);
+    etude_cli_support::envelope::effect("paths_audited", audited);
+    etude_cli_support::envelope::effect("metadata_files_removed", removed);
     if flag(args, "--json") {
         use etude_core::json as j;
         println!(
