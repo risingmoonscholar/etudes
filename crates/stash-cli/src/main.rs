@@ -503,7 +503,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                         ("stash_id", j::str(&report.journal_id)),
                         ("moved", j::num(report.moved)),
                         ("selected", j::num(prepared.sources.len())),
-                        ("holding_root", j::str("<redacted>")),
+                        ("holding_root", j::path(&root)),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into()))
                     ])
                 );
@@ -672,7 +672,15 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
         Err(error) => {
-            eprintln!("stash: cannot restore: {error}");
+            if matches!(&error, etude_core::journal::JournalError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied)
+                || matches!(&error, etude_core::journal::JournalError::Seal(_))
+            {
+                eprintln!(
+                    "stash: journal is unreadable with the current permissions or key; cannot restore: {error}"
+                );
+            } else {
+                eprintln!("stash: cannot restore: {error}");
+            }
             return ExitCode::from(3);
         }
     };

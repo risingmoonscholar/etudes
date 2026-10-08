@@ -448,3 +448,94 @@ fn due_can_pass_without_mutating_until_explicit_pop() {
     );
     assert_eq!(fs::read(source).unwrap(), b"due");
 }
+
+#[test]
+fn selection_receipt_retains_a_working_recovery_locator() {
+    let f = Fixture::new();
+    let selected = f.file("PRIVATE_chosen.txt", b"selected synthetic bytes");
+    let sibling = f.file("PRIVATE_sibling.txt", b"untouched synthetic bytes");
+    let out = f
+        .command()
+        .arg("select")
+        .arg(&selected)
+        .arg("--into")
+        .arg(f.0.join("holding"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    success(&out);
+    let locator = json_query(&out, "value['details']['holding_root']");
+    assert!(std::path::Path::new(&locator).is_dir());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("PRIVATE"));
+    assert_eq!(
+        std::fs::read(&sibling).unwrap(),
+        b"untouched synthetic bytes"
+    );
+    success(
+        &f.command()
+            .args(["pop", &locator, "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        std::fs::read(selected).unwrap(),
+        b"selected synthetic bytes"
+    );
+    assert!(!std::path::Path::new(&locator).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_journal_is_named_for_path_and_current_directory_pop() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let source = f.file("held.txt", b"held synthetic bytes");
+    f.stash(None);
+    let before = f.snapshot();
+    let journal = f.journals().pop().unwrap();
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let named = f
+        .command()
+        .arg("pop")
+        .arg(f.0.join("tree"))
+        .output()
+        .unwrap();
+    let current = f.command().arg("pop").output().unwrap();
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
+    for out in [named, current] {
+        assert_eq!(out.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("unreadable"));
+    }
+    assert!(!source.exists());
+    assert_eq!(before, f.snapshot());
+}
+
+#[test]
+fn unreadable_key_history_is_named_for_path_and_current_directory_pop() {
+    let f = Fixture::new();
+    f.file("older.txt", b"older synthetic bytes");
+    let older = f.stash(None);
+    success(&f.pop(&older));
+    let newer = f.file("newer.txt", b"newer synthetic bytes");
+    let out = f
+        .command()
+        .env("ETUDE_JOURNAL_KEY", "78".repeat(32))
+        .arg(f.0.join("tree"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    id(&out);
+    let before = f.snapshot();
+    for named in [false, true] {
+        let mut command = f.command();
+        command.env("ETUDE_JOURNAL_KEY", "78".repeat(32)).arg("pop");
+        if named {
+            command.arg(f.0.join("tree"));
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unreadable"));
+        assert!(!newer.exists());
+        assert_eq!(before, f.snapshot());
+    }
+}
