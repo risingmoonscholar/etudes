@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use etude_core::json as j;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy)]
 pub enum Tool {
@@ -134,14 +134,7 @@ pub fn declaration(
             .as_nanos()
     );
     let mut fields = vec![
-        (
-            "schema_version",
-            j::num(if matches!(tool, Tool::Sweep | Tool::Unpack) {
-                3
-            } else {
-                SCHEMA_VERSION
-            }),
-        ),
+        ("schema_version", j::num(SCHEMA_VERSION)),
         ("tool_version", j::str(version)),
         ("operation_id", j::str(&operation_id)),
         ("status", j::str("done")),
@@ -167,7 +160,11 @@ pub fn declaration(
                             "cross_device_copy",
                             "journal_fingerprint_prefixes",
                         ],
-                        Tool::Stash => &["cross_device_copy", "journal_fingerprint_prefixes"],
+                        Tool::Stash => &[
+                            "cross_device_copy",
+                            "journal_fingerprint_prefixes",
+                            "explicit_selection_path_list_bytes",
+                        ],
                         Tool::Unpack => &["system_extractor_reads_private_archive_copy"],
                     }),
                 ),
@@ -398,6 +395,23 @@ pub fn declaration(
             ("disclosure", j::str("counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values")),
         ])));
     }
+    if matches!(tool, Tool::Stash) {
+        fields.push(("explicit_selection", j::obj(&[
+            ("command", j::str("select")),
+            ("sources", j::str("multiple_exact_canonical_files_and_directories;_no_common_ancestor_or_sibling_scan")),
+            ("directories", j::str("whole_opaque_objects;_not_recursive_content_integrity_verified")),
+            ("path_input", j::str("positional_paths_or_from0_file_or_stdin;_nul_terminated_utf8")),
+            ("max_input_bytes", j::num(32 * 1024 * 1024)),
+            ("max_objects", j::num(100_000)),
+            ("overlaps", j::str("duplicate_paths_repeated_object_identities_and_ancestor_descendant_selections_refused_before_holding_or_moves")),
+            ("unsupported", strings(&["explicit_symlinks", "special_files", "cross_volume_directory_holding", "known_sync_sources_or_holding", "non_utf8_journal_paths"])),
+            ("journal", j::str("required_encrypted_original_absolute_parent_paths;_no_journal_refused_for_select_only")),
+            ("holding", j::str("one_private_operation_root_with_numbered_slots;_equal_basenames_do_not_collide")),
+            ("holding_parent", j::str("into_parent_or_first_canonical_source_parent;_inside_selected_object_refused")),
+            ("recovery", j::str("stash_pop_operation_root;_authenticated_owned_empty_directories_only")),
+            ("disclosure", j::str("counts_and_minimum_recovery_locator_only;_source_paths_and_basenames_not_listed")),
+        ])));
+    }
     if matches!(tool, Tool::Unpack) {
         fields.push(("quarantine", j::obj(&[
             ("source", j::str("captured_from_same_nofollow_descriptor_as_archive_bytes")),
@@ -501,12 +515,17 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &[
                     "selected_tree_metadata",
                     "ancestor_metadata",
+                    "explicit_selection_object_metadata",
+                    "explicit_selection_path_list_bytes",
+                    "os_random_bytes_for_selection_holding",
                     "journal_key",
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                 ],
                 &[
                     "selected_tree_entries",
+                    "explicit_selected_objects",
+                    "private_selection_holding_tree",
                     "journal_store",
                     "keychain_if_no_supplied_key",
                 ],

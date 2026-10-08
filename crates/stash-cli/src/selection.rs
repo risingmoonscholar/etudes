@@ -11,6 +11,7 @@ pub struct Options {
     pub sources: Vec<PathBuf>,
     pub into: Option<PathBuf>,
     pub duration: Option<String>,
+    pub json: bool,
 }
 #[derive(Debug)]
 pub enum Error {
@@ -53,6 +54,7 @@ pub fn parse(args: &[String]) -> Result<Options, Error> {
         sources: vec![],
         into: None,
         duration: None,
+        json: false,
     };
     let mut from0 = None;
     let mut positional = false;
@@ -80,6 +82,7 @@ pub fn parse(args: &[String]) -> Result<Options, Error> {
             continue;
         }
         if !positional && token == "--json" {
+            options.json = true;
             i += 1;
             continue;
         }
@@ -178,6 +181,11 @@ pub fn prepare(options: &Options) -> Result<Prepared, Error> {
                 return Err(Error::Refused("selection repeats an object identity"));
             }
         }
+        if scan::is_synced(&path) {
+            return Err(Error::Refused(
+                "explicit selection refuses known sync locations",
+            ));
+        }
         entries.push((path, metadata));
     }
     entries.sort_by(|a, b| a.0.components().cmp(b.0.components()));
@@ -198,8 +206,15 @@ pub fn prepare(options: &Options) -> Result<Prepared, Error> {
         .into
         .clone()
         .unwrap_or_else(|| first.parent().unwrap_or(Path::new("/")).to_path_buf());
+    let parent = scan::observe_read("selection_parent_metadata", parent.canonicalize())
+        .map_err(|_| Error::Refused("holding parent is unavailable"))?;
     let (parent, metadata) = scan::selected_object(&parent)
         .map_err(|_| Error::Refused("holding parent is unavailable or refused"))?;
+    if scan::is_synced(&parent) {
+        return Err(Error::Refused(
+            "selection holding refuses known sync locations",
+        ));
+    }
     if !metadata.is_dir() {
         return Err(Error::Refused("holding parent must be a directory"));
     }
@@ -276,7 +291,7 @@ pub fn plan(prepared: &Prepared, root: PathBuf, holding: &str) -> Plan {
         skipped_package: 0,
         skipped_unreadable: 0,
         root_is_synced: false,
-        allow_sync: true,
+        allow_sync: false,
     }
 }
 

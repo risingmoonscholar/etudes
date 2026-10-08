@@ -7,11 +7,20 @@ fn observed_category(output: &Output, category: &str) -> Option<u64> {
     let mut child = Command::new("python3")
         .args(["-c", "import json,sys; data=json.load(sys.stdin); row=next((r for r in data['observations']['categories'] if r['category']==sys.argv[1]),None); print('none' if row is None else row['observed'])", category])
         .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(&output.stdout).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&output.stdout)
+        .unwrap();
     let parsed = child.wait_with_output().unwrap();
     assert!(parsed.status.success());
     let value = String::from_utf8(parsed.stdout).unwrap();
-    if value.trim() == "none" { None } else { Some(value.trim().parse().unwrap()) }
+    if value.trim() == "none" {
+        None
+    } else {
+        Some(value.trim().parse().unwrap())
+    }
 }
 
 struct Fixture {
@@ -365,11 +374,82 @@ fn positional_flag_named_files_do_not_change_receipt_mode_or_journal_policy() {
 #[cfg(unix)]
 fn unreadable_selected_file_fails_without_claiming_an_unwritten_journal() {
     use std::os::unix::fs::PermissionsExt;
-    let f=Fixture::new();let source=f.file("PRIVATE-unreadable", b"synthetic retained");
-    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0)).unwrap();
-    let output=f.select(&[&source]);assert_eq!(output.status.code(), Some(3));
-    let printed=format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-    assert!(!printed.contains("PRIVATE-unreadable"));assert!(!printed.contains("original paths are retained"));
+    let f = Fixture::new();
+    let source = f.file("PRIVATE-unreadable", b"synthetic retained");
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o0)).unwrap();
+    let output = f.select(&[&source]);
+    assert_eq!(output.status.code(), Some(3));
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!printed.contains("PRIVATE-unreadable"));
+    assert!(!printed.contains("original paths are retained"));
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(std::fs::read(source).unwrap(), b"synthetic retained");
+}
+
+#[test]
+fn selection_operation_container_is_not_reported_as_a_legacy_parent_stash() {
+    let f = Fixture::new();
+    let source = f.file("source", b"synthetic");
+    let output = f.select(&[&source]);
+    let holding = f.root_after(&output);
+    let status = f
+        .command()
+        .arg("status")
+        .arg(f.root.join("holding"))
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(status.status.code(), Some(1));
+    assert!(f.pop(&holding).status.success());
+    assert_eq!(std::fs::read(source).unwrap(), b"synthetic");
+}
+
+#[test]
+#[cfg(unix)]
+fn holding_parent_alias_is_resolved_and_literal_json_name_stays_a_source() {
+    let f = Fixture::new();
+    let source = f.file("--json", b"synthetic literal option");
+    let alias = f.root.join("holding-alias");
+    std::os::unix::fs::symlink(f.root.join("holding"), &alias).unwrap();
+    let output = f
+        .command()
+        .current_dir(&f.root)
+        .arg("select")
+        .arg("--into")
+        .arg(alias)
+        .args(["--", "--json"])
+        .output()
+        .unwrap();
+    let holding = f.root_after(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("Stashed 1 selected"));
+    assert!(f.pop(&holding).status.success());
+    assert_eq!(std::fs::read(source).unwrap(), b"synthetic literal option");
+}
+
+#[test]
+fn known_sync_sources_and_holding_parents_refuse_before_any_moves() {
+    let f = Fixture::new();
+    let synced = f.file("Dropbox/PRIVATE-source", b"synthetic synced marker");
+    assert_eq!(f.select(&[&synced]).status.code(), Some(2));
+    f.holding_empty();
+    assert_eq!(std::fs::read(&synced).unwrap(), b"synthetic synced marker");
+    let local = f.file("local", b"synthetic local");
+    let synced_parent = f.root.join("Dropbox");
+    let output = f
+        .command()
+        .arg("select")
+        .arg(&local)
+        .arg("--into")
+        .arg(&synced_parent)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(std::fs::read(local).unwrap(), b"synthetic local");
+    assert_eq!(std::fs::read_dir(synced_parent).unwrap().count(), 1);
+    f.holding_empty();
 }

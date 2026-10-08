@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 315 tests
+cargo test --all                # 330 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -267,13 +267,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 47 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 48 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 47 scenarios
+bash stress/run.sh        # 48 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
@@ -419,7 +419,9 @@ Opt in to versioned stderr progress with `sweep apply PATH --yes --progress-json
 parents. A selected directory moves as one opaque object; its children are not
 scanned. The existing `stash DIR` command still stashes that directory's visible
 contents. Explicit selections can include hidden files, but retain the existing
-system and credential-directory location refusals. Explicit symlinks and special
+system and credential-directory location refusals. Known sync locations matched
+by the existing path-marker rules are refused for selected sources and holding
+parents before any move. This mode has no cloud-support override. Explicit symlinks and special
 files are refused before holding storage is created. Directory selections require
 holding storage on their own volume; regular files retain the existing copy
 fallback when crossing volumes.

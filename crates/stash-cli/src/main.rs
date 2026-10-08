@@ -270,6 +270,7 @@ fn find_holding(root: &Path) -> Option<PathBuf> {
                 && p.file_name()
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| n.starts_with(".stash-"))
+                && !selection::is_selection_root(p)
         })
 }
 
@@ -471,7 +472,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
     match result {
         Ok(report) => {
             etude_cli_support::envelope::effect("items_moved", report.moved);
-            if flag(args, "--json") {
+            if options.json {
                 use etude_core::json as j;
                 println!(
                     "{}",
@@ -485,8 +486,13 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 );
             } else {
                 println!(
-                    "Stashed {} selected objects. Restore with: stash pop {}",
+                    "Stashed {} selected {}. Restore with: stash pop {}",
                     report.moved,
+                    if report.moved == 1 {
+                        "object"
+                    } else {
+                        "objects"
+                    },
                     etude_core::redact::path(&root)
                 );
             }
