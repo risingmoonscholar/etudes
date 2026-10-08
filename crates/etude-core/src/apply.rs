@@ -140,7 +140,24 @@ pub fn apply_with_progress(
     fail_at: FailAt,
     mut progress: impl FnMut(Progress),
 ) -> Result<ApplyReport, ApplyError> {
-    bound.validate(context).map_err(ApplyError::StalePlan)?;
+    if let Err(error) = bound.validate(context) {
+        if bound.is_live() {
+            if let Some(sl) = sealer {
+                let journal = Journal {
+                    id: journal_id(&bound.plan),
+                    tool: context.tool.clone(),
+                    root: bound.root.clone(),
+                    entries: Vec::new(),
+                    progress_tail_damaged: false,
+                };
+                journal.save_sealed(sl).map_err(ApplyError::Journal)?;
+            }
+            return Err(ApplyError::StalePlan(io::Error::other(format!(
+                "conflict: {error}; no moves from this attempt, existing journals remain recoverable"
+            ))));
+        }
+        return Err(ApplyError::StalePlan(error));
+    }
     let plan = &bound.plan;
     let tool = &context.tool;
     let id = journal_id(plan);
@@ -231,6 +248,23 @@ pub fn apply_with_progress(
         journal_id: id,
         journal_path: sealer.map(|_| j.path()),
     })
+}
+
+/// Retain a sealed empty record when an immediate attempt loses its planning race.
+pub fn record_refused_plan(
+    plan: &crate::plan::Plan,
+    context: &BindingContext,
+    sealer: &dyn Sealer,
+) -> Result<(), ApplyError> {
+    Journal {
+        id: journal_id(plan),
+        tool: context.tool.clone(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+        progress_tail_damaged: false,
+    }
+    .save_sealed(sealer)
+    .map_err(ApplyError::Journal)
 }
 
 /// Whether `dir` treats two names differing only in case as the same entry.

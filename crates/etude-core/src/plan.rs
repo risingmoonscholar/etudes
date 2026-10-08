@@ -1092,10 +1092,31 @@ pub struct BoundPlan {
     snapshot: crate::scan::TreeSnapshot,
     digest: String,
     allowed_sources: std::collections::HashSet<PathBuf>,
+    live: bool,
 }
 
 impl BoundPlan {
     pub fn from_plan(plan: Plan, context: BindingContext) -> std::io::Result<Self> {
+        Self::bind(plan, context, false)
+    }
+
+    pub fn from_live_plan(plan: Plan, context: BindingContext) -> std::io::Result<Self> {
+        Self::bind(plan, context, true)
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.live
+    }
+
+    fn validate_observations(&self) -> std::io::Result<()> {
+        if self.live {
+            self.snapshot.validate_live()
+        } else {
+            self.snapshot.validate()
+        }
+    }
+
+    fn bind(plan: Plan, context: BindingContext, live: bool) -> std::io::Result<Self> {
         let snapshot = plan.observations.clone().ok_or_else(|| {
             std::io::Error::other("plan has incomplete observations; replan required")
         })?;
@@ -1110,8 +1131,18 @@ impl BoundPlan {
             snapshot,
             digest: String::new(),
             allowed_sources,
+            live,
         };
-        bound.finalize_choices()?;
+        if live {
+            bound.check_members()?;
+            bound.digest = codec::digest(&codec::encode(
+                &bound.plan,
+                &bound.snapshot,
+                &bound.context,
+            )?);
+        } else {
+            bound.finalize_choices()?;
+        }
         Ok(bound)
     }
 
@@ -1124,7 +1155,7 @@ impl BoundPlan {
 
     fn check_members(&self) -> std::io::Result<()> {
         use std::path::Component;
-        if self.plan.root != self.snapshot.root || self.plan.skipped_unreadable != 0 {
+        if self.plan.root != self.snapshot.root {
             return Err(std::io::Error::other(
                 "plan root or observation coverage changed; replan required",
             ));
@@ -1168,7 +1199,7 @@ impl BoundPlan {
 
     pub fn finalize_choices(&mut self) -> std::io::Result<()> {
         self.check_members()?;
-        self.snapshot.validate()?;
+        self.validate_observations()?;
         self.digest = codec::digest(&codec::encode(&self.plan, &self.snapshot, &self.context)?);
         Ok(())
     }
@@ -1186,8 +1217,7 @@ impl BoundPlan {
                 "plan digest changed; replan required",
             ));
         }
-        self.snapshot
-            .validate()
+        self.validate_observations()
             .map_err(|_| std::io::Error::other("planned tree changed; replan required"))
     }
 
@@ -1212,6 +1242,7 @@ impl BoundPlan {
     pub fn export(&self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
         self.validate(&self.context)?;
+        self.snapshot.validate()?;
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -1306,6 +1337,7 @@ impl BoundPlan {
             context,
             digest: expected_digest.to_string(),
             allowed_sources,
+            live: false,
         };
         bound.check_members()?;
         Ok(bound)

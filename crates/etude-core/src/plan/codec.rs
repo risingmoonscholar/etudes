@@ -444,8 +444,8 @@ pub(super) fn digest(bytes: &[u8]) -> String {
             };
         }
         let mut words = [0u32; 64];
-        for (word, chunk) in words[..16].iter_mut().zip(block.chunks_exact(4)) {
-            *word = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        for (word, chunk) in words[..16].iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*chunk);
         }
         for i in 16..64 {
             let x = words[i - 15];

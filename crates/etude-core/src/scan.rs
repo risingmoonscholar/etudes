@@ -350,13 +350,50 @@ impl TreeSnapshot {
         children.sort_by(|a, b| a.0.cmp(&b.0));
         for (child, may_recurse) in children {
             let start = self.entries.len();
-            let marked = self.capture_directory(&child, level + 1, true)?;
+            let marked = match self.capture_directory(&child, level + 1, true) {
+                Ok(marked) => marked,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    self.entries.truncate(start);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if may_recurse && !marked && level + 1 < self.depth {
                 self.entries.truncate(start);
                 self.capture_directory(&child, level + 1, false)?;
             }
         }
         Ok(has_project)
+    }
+
+    /// Immediate rename planning binds identities and layout, not an open writer's byte count.
+    pub fn validate_live(&self) -> io::Result<()> {
+        let mut current = Self::capture_for_config(
+            &self.root,
+            &ScanConfig {
+                depth: self.depth as u8,
+                whole_units: self.whole_units,
+                ..Default::default()
+            },
+        )?;
+        let mut original = self.clone();
+        for snapshot in [&mut current, &mut original] {
+            for entry in &mut snapshot.entries {
+                if entry.identity.kind == 1 {
+                    entry.identity.size = 0;
+                    entry.identity.mtime_sec = 0;
+                    entry.identity.mtime_nsec = 0;
+                    entry.identity.ctime_sec = 0;
+                    entry.identity.ctime_nsec = 0;
+                }
+            }
+        }
+        if current != original {
+            return Err(io::Error::other(
+                "selected identities or layout changed since planning",
+            ));
+        }
+        Ok(())
     }
 
     /// Refuse changed identities, entries, permissions or timestamps before effects.
@@ -1090,6 +1127,15 @@ fn is_refused_system_location(path: &Path) -> bool {
 /// - treats package directories as single opaque entries
 /// - caps depth and total entries
 pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
+    scan_inner(root, cfg, false)
+}
+
+/// Scan for an immediate apply; exported previews retain strict metadata validation.
+pub fn scan_for_live_apply(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
+    scan_inner(root, cfg, true)
+}
+
+fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, ScanError> {
     #[cfg(unix)]
     {
         // Ownership preservation would need root, and a filesystem-mutating tool
@@ -1207,12 +1253,13 @@ pub fn scan(root: &Path, cfg: &ScanConfig) -> Result<ScanOutcome, ScanError> {
     // Visited device+inode pairs close the symlink-cycle case.
     let mut visited: HashSet<(u64, u64)> = HashSet::new();
     walk(&root, &root, 0, cfg, &mut out, &mut visited)?;
-    if out.skipped_unreadable > 0
-        || out
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.validate().is_err())
-    {
+    if out.snapshot.as_ref().is_some_and(|snapshot| {
+        if live {
+            snapshot.validate_live().is_err()
+        } else {
+            snapshot.validate().is_err()
+        }
+    }) {
         out.snapshot = None;
     }
 

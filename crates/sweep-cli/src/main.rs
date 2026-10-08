@@ -1615,7 +1615,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         },
         ..Default::default()
     };
-    let outcome = match scan::scan(&path, &cfg) {
+    let outcome = match scan::scan_for_live_apply(&path, &cfg) {
         Ok(o) => o,
         Err(e) => {
             refuse_scan(&e);
@@ -1671,9 +1671,21 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     };
 
     let context = current_binding_context(&planning_profile(args, false));
-    let bound = match bound_or_refuse(p, context.clone()) {
+    let bound = match plan::BoundPlan::from_live_plan(p.clone(), context.clone()) {
         Ok(plan) => plan,
-        Err(code) => return code,
+        Err(error) => {
+            if let Some(seal) = sl.as_ref()
+                && let Err(journal_error) =
+                    etude_core::apply::record_refused_plan(&p, &context, seal)
+            {
+                eprintln!("sweep: cannot record refused attempt ({journal_error})");
+                return ExitCode::from(3);
+            }
+            eprintln!(
+                "sweep: conflict: {error}; no moves from this attempt; existing journals remain recoverable; replan required"
+            );
+            return ExitCode::from(2);
+        }
     };
     run_apply(&bound, &context, sl)
 }

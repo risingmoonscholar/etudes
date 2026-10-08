@@ -209,3 +209,72 @@ fn unchanged_import_applies_exact_selected_members() {
         );
     }
 }
+
+#[test]
+fn immediate_apply_keeps_open_inode_while_exported_replay_remains_strict() {
+    let fixture = Fixture::new();
+    let out = scan::scan_for_live_apply(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let source = bound.groups[0].members[0].clone();
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&source)
+        .unwrap();
+    use std::io::Write;
+    writer.write_all(b" appended while open").unwrap();
+    assert!(bound.export(&fixture.export_path()).is_err());
+    let destination = fixture
+        .0
+        .join(&bound.groups[0].name)
+        .join(source.file_name().unwrap());
+    apply::apply(&bound, &Fixture::context(), None, None).unwrap();
+    writer.write_all(b" after move").unwrap();
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        b"synthetic payload appended while open after move"
+    );
+}
+
+#[test]
+fn immediate_apply_still_refuses_replaced_sources_and_new_markers() {
+    for marker in [false, true] {
+        let fixture = Fixture::new();
+        let out = scan::scan_for_live_apply(
+            &fixture.0,
+            &ScanConfig {
+                grace: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut proposal = plan::build(&out);
+        for group in &mut proposal.groups {
+            group.accepted = true;
+        }
+        let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+        if marker {
+            std::fs::write(fixture.0.join("Cargo.toml"), b"synthetic marker").unwrap();
+        } else {
+            let source = &bound.groups[0].members[0];
+            std::fs::rename(source, fixture.0.with_extension("saved")).unwrap();
+            std::fs::write(source, b"replacement").unwrap();
+            std::fs::remove_file(fixture.0.with_extension("saved")).unwrap();
+        }
+        assert!(matches!(
+            apply::apply(&bound, &Fixture::context(), None, None),
+            Err(ApplyError::StalePlan(_))
+        ));
+        assert!(!fixture.0.join(&bound.groups[0].name).exists());
+    }
+}
