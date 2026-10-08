@@ -250,7 +250,7 @@ pub fn deadline_of(name: &str) -> Option<u64> {
 }
 
 fn find_holding(root: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(root)
+    etude_core::scan::observe_read("holding_directory_enumeration", std::fs::read_dir(root))
         .ok()?
         .flatten()
         .map(|e| e.path())
@@ -857,9 +857,12 @@ fn cmd_status(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
         Some(dir) => {
-            let n = std::fs::read_dir(&dir)
-                .map(|r| r.flatten().count())
-                .unwrap_or(0);
+            let n = etude_core::scan::observe_read(
+                "holding_directory_enumeration",
+                std::fs::read_dir(&dir),
+            )
+            .map(|r| r.flatten().count())
+            .unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             if flag(args, "--json") {
                 use etude_core::json as j;

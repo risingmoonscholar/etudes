@@ -35,19 +35,23 @@ thread_local! { static RESULT: RefCell<ResultState> = RefCell::new(ResultState::
 
 pub fn begin(tool: &str, version: &str, args: &[String]) {
     etude_core::scan::reset_receipt();
-    let operation = match args.first().map(String::as_str) {
-        Some(
-            "contract" | "apply" | "undo" | "forget" | "verify" | "lesson" | "pop" | "status"
-            | "review",
-        ) => args[0].clone(),
-        _ if tool == "unpack" && args.iter().any(|arg| arg == "--list") => "list".into(),
+    let first = args.first().map(String::as_str);
+    let operation = match first {
+        Some("contract") => "contract",
+        Some("help" | "--help" | "-h") => "help",
+        Some("version" | "--version" | "-V") => "version",
+        Some("apply" | "undo" | "forget" | "verify" | "lesson" | "review") if tool == "sweep" => {
+            first.unwrap()
+        }
+        Some("pop" | "status") if tool == "stash" => first.unwrap(),
+        _ if tool == "unpack" && args.iter().any(|arg| arg == "--list") => "list",
         _ => match tool {
             "sweep" => "scan",
             "stash" => "stash",
             _ => "extract",
-        }
-        .into(),
-    };
+        },
+    }
+    .to_string();
     let operation = if operation == "scan" && args.iter().any(|arg| arg == "--inspect-content") {
         "scan_with_inspect_content".into()
     } else if operation == "status" && args.iter().any(|arg| arg == "--all") {

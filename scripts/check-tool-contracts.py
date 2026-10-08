@@ -70,6 +70,7 @@ def negative_controls(tool, binary):
             ("schema", "without a schema_version bump"),
             ("schema_type", "without a schema_version bump"),
             ("result_schema", "without a schema_version bump"),
+            ("receipt_type", "without a schema_version bump"),
             ("behaviour", "archive list left mutations behind" if tool == "unpack"
              else "tool mutated outside its selected tree"),
         ):
@@ -95,6 +96,10 @@ def negative_controls(tool, binary):
                 "elif '--json' in sys.argv and mutation == 'result_schema':\n"
                 "    data = json.loads(output)\n"
                 "    del data['recovery']\n"
+                "    output = json.dumps(data).encode()\n"
+                "elif '--json' in sys.argv and mutation == 'receipt_type':\n"
+                "    data = json.loads(output)\n"
+                "    data['observations']['scope'] = []\n"
                 "    output = json.dumps(data).encode()\n"
                 "elif sys.argv[1:2] != ['contract'] and mutation == 'behaviour':\n"
                 "    sentinel = pathlib.Path.cwd() / 'outside/sentinel'\n"
@@ -240,6 +245,14 @@ class Probe:
         require("not evidence" in value["disclosure"]["zero_counters"], "zero counter overclaims")
 
     def result_probes(self):
+        for command in ("help", "--version"):
+            result = self.run(command, "--json")
+            require(json.loads(result.stdout)["status"] == "done", "informational result claims failure")
+        empty = self.directory / "empty-tree"
+        empty.mkdir()
+        if self.tool != "unpack":
+            result = self.run(empty, "--json", codes=(1,))
+            require(json.loads(result.stdout)["status"] == "nothing_to_do", "empty operation is not reported")
         missing = self.directory / "does-not-exist"
         output = self.run(missing, "--json", codes=(2, 3))
         envelope = json.loads(output.stdout)
@@ -247,6 +260,14 @@ class Probe:
         require(envelope["status"] in ("refused", "error"), "error result claims success")
         invalid = self.run("--unknown", "--json", codes=(2,))
         self.envelope(json.loads(invalid.stdout))
+
+    def read_category(self, result, name):
+        categories = json.loads(result.stdout)["observations"]["categories"]
+        require(any(row["category"] == name and row["observed"] > 0 for row in categories),
+                f"receipt omitted successful {name} reads in the exercised fixture")
+        receipt = pinned_encoding(json.loads(result.stdout)["observations"])
+        require("synthetic private text" not in receipt and "synthetic archive payload" not in receipt,
+                "receipt disclosed fixture content")
 
     def operation(self, name):
         return next(row for row in self.contract["mutation_scope"]["operations"]
@@ -298,11 +319,12 @@ class Probe:
             self.run(tree, "--since", "0", "--json")
             require(snapshot(tree) == before, "scan changed selected files")
             # Noninteractive consent is declined; the metadata plan still runs.
-            self.run(tree, "--since", "0", "--inspect-content")
+            self.run(tree, "--since", "0", "--inspect-content", "--json")
             require(snapshot(tree) == before, "refused inspection mutated files")
             require("selected_tree_entries" in self.operation("apply")["writes"],
                     "apply moved entries outside its declared mutation scope")
-            self.run("apply", tree, "--yes", "--since", "0")
+            result = self.run("apply", tree, "--yes", "--since", "0", "--json")
+            self.read_category(result, "fingerprint_bytes")
             for name in names:
                 require((tree / "Screenshots" / name).read_bytes() ==
                         b"synthetic private text 123-45-6789", "sweep move lost bytes")
@@ -320,7 +342,8 @@ class Probe:
         else:
             require("selected_tree_entries" in self.operation("stash")["writes"],
                     "stash moved entries outside its declared mutation scope")
-            self.run(tree, "--for", "1d", "--json")
+            result = self.run(tree, "--for", "1d", "--json")
+            self.read_category(result, "fingerprint_bytes")
             holding = list(tree.glob(".stash-*"))
             require(len(holding) == 1, "stash did not create exactly one holding directory")
             require((holding[0] / sensitive.name).read_bytes() ==
@@ -396,7 +419,9 @@ class Probe:
                     writer.addfile(entry, io.BytesIO(payload))
             digest = hashlib.sha256(archive.read_bytes()).digest()
             before = snapshot(self.directory)
-            self.run(archive, "--list", "--json")
+            result = self.run(archive, "--list", "--json")
+            self.read_category(result, "archive_bytes")
+            self.read_category(result, "os_random_bytes")
             require(snapshot(self.directory) == before, "archive list left mutations behind")
             self.run(archive, "--into", destination, "--json")
             after = snapshot(self.directory)

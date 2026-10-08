@@ -206,7 +206,11 @@ fn steps_5_and_6_are_true_undo_walks_back_then_stops() {
         .output()
         .expect("run");
     let plan_text = String::from_utf8_lossy(&plan.stdout).to_string();
-    let Some(group) = plan_text
+    let plan_details = plan_text
+        .split_once("\"details\":")
+        .expect("versioned plan details")
+        .1;
+    let Some(group) = plan_details
         .split("\"name\":")
         .nth(1)
         .and_then(|rest| rest.split('"').nth(1))

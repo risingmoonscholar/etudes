@@ -686,6 +686,22 @@ fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+struct ReceiptInspector(inspect::ContentInspector);
+
+impl plan::Inspector for ReceiptInspector {
+    fn inspect(&mut self, path: &Path, ext: &str) -> Option<etude_core::Category> {
+        let before = self.0.stats;
+        let found = plan::Inspector::inspect(&mut self.0, path, ext);
+        if etude_read::scan::TEXT_EXTS.contains(&ext) {
+            let after = self.0.stats;
+            let read_completed = after.inspected + after.skipped_binary + after.skipped_slow
+                > before.inspected + before.skipped_binary + before.skipped_slow;
+            scan::record_read_outcome("consented_text_prefixes", read_completed);
+        }
+        found
+    }
+}
+
 fn scan_and_plan(
     path: &Path,
     args: &[String],
@@ -759,9 +775,9 @@ fn scan_and_plan(
         }
     }
 
-    let mut insp = inspect::ContentInspector::new();
+    let mut insp = ReceiptInspector(inspect::ContentInspector::new());
     let p = plan::build_with_maps(&outcome, Some(&mut insp), &maps);
-    Ok((p, Some(insp.stats)))
+    Ok((p, Some(insp.0.stats)))
 }
 
 fn run_scan(path: &Path, args: &[String]) -> ExitCode {
@@ -2402,7 +2418,7 @@ mod tests {
     /// point: a flag nobody reads is an error, not a no-op.
     #[test]
     fn a_command_that_reads_no_flags_accepts_none() {
-        for cmd in ["undo", "verify", "lesson"] {
+        for cmd in ["verify", "lesson"] {
             let (_, flags) = COMMAND_FLAGS
                 .iter()
                 .find(|(c, _)| *c == cmd)
@@ -2416,6 +2432,36 @@ mod tests {
                 check_flags(cmd, &["--yes".to_string()]).is_err(),
                 "{cmd} must refuse even a real flag that belongs elsewhere"
             );
+        }
+    }
+
+    #[test]
+    fn consented_inspection_receipt_reports_reads_without_contents() {
+        use plan::Inspector;
+        scan::reset_receipt();
+        let path = std::env::temp_dir().join(format!(
+            "etudes-receipt-inspection-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"synthetic ordinary text payload").unwrap();
+        let mut inspector = ReceiptInspector(inspect::ContentInspector::new());
+        let _ = inspector.inspect(&path, "txt");
+        std::fs::remove_file(&path).unwrap();
+        let receipt = scan::receipt_json();
+        assert!(receipt.contains("consented_text_prefixes"));
+        assert!(receipt.contains("\"observed\":1"));
+        assert!(!receipt.contains("synthetic ordinary text payload"));
+    }
+
+    #[test]
+    fn undo_accepts_json_and_refuses_mutation_flags() {
+        assert!(check_flags("undo", &["--json".into()]).is_ok());
+        for flag in ["--yes", "--no-journal", "--frobnicate"] {
+            assert!(check_flags("undo", &[flag.into()]).is_err());
         }
     }
 

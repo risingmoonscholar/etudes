@@ -87,9 +87,12 @@ impl ArchiveAnchor {
             // from the kernel CSPRNG that another process cannot derive the
             // anchor pathname and replace the copy after preflight.
             let mut nonce = [0_u8; 16];
-            std::fs::File::open("/dev/urandom")
-                .and_then(|mut random| random.read_exact(&mut nonce))
-                .map_err(|error| format!("could not generate private anchor name: {error}"))?;
+            etude_core::scan::observe_read(
+                "os_random_bytes",
+                std::fs::File::open("/dev/urandom")
+                    .and_then(|mut random| random.read_exact(&mut nonce)),
+            )
+            .map_err(|error| format!("could not generate private anchor name: {error}"))?;
             let dir = std::env::temp_dir().join(format!(
                 "unpack-{}",
                 nonce
@@ -951,7 +954,8 @@ fn cleanup_destination_with(
 /// Total logical bytes observed under `dir`, without following links.
 /// An unreadable entry makes the measurement fail, never silently smaller.
 fn written(dir: &Path) -> Result<u64, String> {
-    let rd = std::fs::read_dir(dir).map_err(|e| tree_error(dir, e))?;
+    let rd = etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
+        .map_err(|e| tree_error(dir, e))?;
     let mut total = 0_u64;
     for entry in rd {
         let path = entry.map_err(|e| tree_error(dir, e))?.path();
@@ -985,7 +989,10 @@ fn audit_staging(staging: &Path) -> Result<usize, String> {
     let root = staging.canonicalize().map_err(|e| tree_error(staging, e))?;
     fn walk(dir: &Path, root: &Path) -> Result<usize, String> {
         let mut count = 0;
-        for entry in std::fs::read_dir(dir).map_err(|e| tree_error(dir, e))? {
+        for entry in
+            etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
+                .map_err(|e| tree_error(dir, e))?
+        {
             let path = entry.map_err(|e| tree_error(dir, e))?.path();
             let md = path.symlink_metadata().map_err(|e| tree_error(&path, e))?;
             let kind = md.file_type();
@@ -1108,9 +1115,12 @@ fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
     for _ in 0..128 {
         let mut nonce = [0_u8; 16];
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut random| random.read_exact(&mut nonce))
-            .map_err(|error| format!("could not generate staging name: {error}"))?;
+        etude_core::scan::observe_read(
+            "os_random_bytes",
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut random| random.read_exact(&mut nonce)),
+        )
+        .map_err(|error| format!("could not generate staging name: {error}"))?;
         let candidate = parent.join(format!(
             ".{name}.unpack-{}.partial",
             nonce
@@ -1169,7 +1179,9 @@ fn extractor_command(fmt: Format, archive: &Path, dest: &Path) -> Command {
 
 fn remove_junk(dest: &Path) -> usize {
     fn walk(dir: &Path, n: &mut usize) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
+        let Ok(rd) =
+            etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
+        else {
             return;
         };
         for e in rd.flatten() {
@@ -1205,7 +1217,9 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
     if !inner.is_dir() {
         return false;
     }
-    let Ok(rd) = std::fs::read_dir(&inner) else {
+    let Ok(rd) =
+        etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(&inner))
+    else {
         return false;
     };
     for e in rd.flatten() {

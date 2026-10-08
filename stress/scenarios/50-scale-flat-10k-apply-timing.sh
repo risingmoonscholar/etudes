@@ -76,7 +76,7 @@ assert_snapshot_eq "$BEFORE_MANIFEST" "$AFTER_PLAN_MANIFEST" "planning changed n
 SCANNED=$(grep -o '"scanned":[0-9]*' <<<"$PLAN_JSON" | head -1 | cut -d: -f2)
 assert_eq "$N" "$SCANNED" "plan scanned all $N files (none silently dropped)"
 
-GROUP_COUNT=$(grep -o '"count":[0-9]*' <<<"$PLAN_JSON" | head -1 | cut -d: -f2)
+GROUP_COUNT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["details"]["groups"][0]["count"])' <<<"$PLAN_JSON")
 PERSONAL=$(grep -o '"looks_personal":[0-9]*' <<<"$PLAN_JSON" | head -1 | cut -d: -f2)
 
 printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
