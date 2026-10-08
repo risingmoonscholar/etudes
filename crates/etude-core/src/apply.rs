@@ -111,6 +111,23 @@ pub struct Progress {
     pub total: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressPhase {
+    Planning,
+    Advancing,
+    Done,
+    Error,
+}
+
+/// Counts contain no paths or payloads and distinguish moves from durable records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructuredProgress {
+    pub planned: usize,
+    pub completed: usize,
+    pub journalled: usize,
+    pub phase: ProgressPhase,
+}
+
 /// Test hook. Production callers pass `None`.
 pub type FailAt = Option<usize>;
 
@@ -138,94 +155,129 @@ pub fn apply_with_progress(
     fail_at: FailAt,
     mut progress: impl FnMut(Progress),
 ) -> Result<ApplyReport, ApplyError> {
-    let id = journal_id(plan);
-    let mut j = Journal {
-        id: id.clone(),
-        tool: tool.to_string(),
-        root: plan.root.clone(),
-        entries: Vec::new(),
-        // A journal being written now has no tail to have lost.
-        progress_tail_damaged: false,
-    };
-
-    // Build the full entry list first, so the journal describes the whole
-    // intended operation before any of it happens.
-    // Ask the destination filesystem once, not once per file.
-    let folds = folds_case(&plan.root);
-    let mut planned_destinations = HashSet::new();
-    for g in plan.groups.iter().filter(|g| g.accepted) {
-        let dest_dir = plan.root.join(&g.name);
-        if crate::scan::is_synced(&dest_dir) && !plan.allow_sync {
-            return Err(ApplyError::DestinationIsSynced(dest_dir));
-        }
-        for src in &g.members {
-            let Some(name) = src.file_name() else {
-                continue;
-            };
-            let dst = dest_dir.join(name);
-            if dst.exists() {
-                return Err(ApplyError::DestinationExists(dst));
-            }
-            if !planned_destinations.insert(dedupe_key(&dst, folds)?) {
-                return Err(ApplyError::DestinationCollision(dst));
-            }
-            let (size, mtime_secs, inode, edge_hash) = fingerprint(src).map_err(ApplyError::Io)?;
-            j.entries.push(Entry {
-                from: src.clone(),
-                to: dst,
-                method: Method::Rename, // corrected below if cross-device
-                size,
-                mtime_secs,
-                inode,
-                edge_hash,
-                state: EntryState::Planned,
+    apply_with_structured_progress(plan, tool, sealer, fail_at, |event| {
+        if event.phase == ProgressPhase::Advancing {
+            progress(Progress {
+                completed: event.completed,
+                total: event.planned,
             });
         }
-    }
-
-    if j.entries.is_empty() {
-        return Ok(ApplyReport {
-            moved: 0,
-            journal_id: id,
-            journal_path: None,
-        });
-    }
-
-    // Journal first. Nothing has moved yet.
-    if let Some(sl) = sealer {
-        j.save_sealed(sl).map_err(ApplyError::Journal)?;
-    }
-
-    let total = j.entries.len();
-    let mut moved = 0usize;
-    for i in 0..j.entries.len() {
-        if fail_at == Some(i) {
-            return Err(ApplyError::Injected(i));
-        }
-        let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
-        if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent).map_err(ApplyError::Io)?;
-        }
-        let method = move_one(&from, &to).map_err(ApplyError::Io)?;
-        j.entries[i].method = method;
-        j.entries[i].state = EntryState::Moved;
-        moved += 1;
-        // Append a sealed done-record (index + corrected method). The base
-        // journal was written before the loop; rewriting it here was O(n²).
-        if let Some(sl) = sealer {
-            j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
-        }
-        progress(Progress {
-            completed: moved,
-            total,
-        });
-    }
-
-    Ok(ApplyReport {
-        moved,
-        journal_id: id,
-        journal_path: sealer.map(|_| j.path()),
     })
+}
+
+/// Report successful moves separately from durable journal acknowledgements.
+pub fn apply_with_structured_progress(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    mut progress: impl FnMut(StructuredProgress),
+) -> Result<ApplyReport, ApplyError> {
+    let mut event = StructuredProgress {
+        planned: 0,
+        completed: 0,
+        journalled: 0,
+        phase: ProgressPhase::Planning,
+    };
+    let result = (|| {
+        let id = journal_id(plan);
+        let mut j = Journal {
+            id: id.clone(),
+            tool: tool.to_string(),
+            root: plan.root.clone(),
+            entries: Vec::new(),
+            // A journal being written now has no tail to have lost.
+            progress_tail_damaged: false,
+        };
+
+        // Build the full entry list first, so the journal describes the whole
+        // intended operation before any of it happens.
+        // Ask the destination filesystem once, not once per file.
+        let folds = folds_case(&plan.root);
+        let mut planned_destinations = HashSet::new();
+        for g in plan.groups.iter().filter(|g| g.accepted) {
+            let dest_dir = plan.root.join(&g.name);
+            if crate::scan::is_synced(&dest_dir) && !plan.allow_sync {
+                return Err(ApplyError::DestinationIsSynced(dest_dir));
+            }
+            for src in &g.members {
+                let Some(name) = src.file_name() else {
+                    continue;
+                };
+                let dst = dest_dir.join(name);
+                if dst.exists() {
+                    return Err(ApplyError::DestinationExists(dst));
+                }
+                if !planned_destinations.insert(dedupe_key(&dst, folds)?) {
+                    return Err(ApplyError::DestinationCollision(dst));
+                }
+                let (size, mtime_secs, inode, edge_hash) =
+                    fingerprint(src).map_err(ApplyError::Io)?;
+                j.entries.push(Entry {
+                    from: src.clone(),
+                    to: dst,
+                    method: Method::Rename, // corrected below if cross-device
+                    size,
+                    mtime_secs,
+                    inode,
+                    edge_hash,
+                    state: EntryState::Planned,
+                });
+            }
+        }
+
+        event.planned = j.entries.len();
+        progress(event);
+        if j.entries.is_empty() {
+            return Ok(ApplyReport {
+                moved: 0,
+                journal_id: id,
+                journal_path: None,
+            });
+        }
+
+        // Journal first. Nothing has moved yet.
+        if let Some(sl) = sealer {
+            j.save_sealed(sl).map_err(ApplyError::Journal)?;
+        }
+
+        let mut moved = 0usize;
+        for i in 0..j.entries.len() {
+            if fail_at == Some(i) {
+                return Err(ApplyError::Injected(i));
+            }
+            let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).map_err(ApplyError::Io)?;
+            }
+            let method = move_one(&from, &to).map_err(ApplyError::Io)?;
+            j.entries[i].method = method;
+            j.entries[i].state = EntryState::Moved;
+            moved += 1;
+            event.completed = moved;
+            // Append a sealed done-record (index + corrected method). The base
+            // journal was written before the loop; rewriting it here was O(n²).
+            if let Some(sl) = sealer {
+                j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
+                event.journalled += 1;
+            }
+            event.phase = ProgressPhase::Advancing;
+            progress(event);
+        }
+
+        Ok(ApplyReport {
+            moved,
+            journal_id: id,
+            journal_path: sealer.map(|_| j.path()),
+        })
+    })();
+    event.phase = if result.is_ok() {
+        ProgressPhase::Done
+    } else {
+        ProgressPhase::Error
+    };
+    progress(event);
+    result
 }
 
 /// Whether `dir` treats two names differing only in case as the same entry.
