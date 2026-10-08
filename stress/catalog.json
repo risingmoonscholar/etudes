@@ -44,5 +44,6 @@
   {"id":"70-content-blindness-traps","tier":"fast","capability":"fifo","contract":"Name-only planning avoids content reads and hostile archive members refuse safely.","disposition":"keep"},
   {"id":"80-finder-unpack","tier":"fast","capability":"zip","contract":"Ordinary archive listing and extraction preserve exact paths and bytes.","disposition":"keep"},
   {"id":"80-interrupted-extraction","tier":"load","capability":"signals","contract":"Killed unpack never publishes a partial target and retry extracts the exact archive.","disposition":"keep"},
+  {"id":"81-unpack-quarantine","tier":"platform","capability":"hdiutil-exfat","contract":"Captured archive quarantine is preserved and exactly read back before publication, including AppleDouble storage.","disposition":"keep"},
   {"id":"85-scenario-exit-status","tier":"fast","capability":"shell","contract":"The scenario wrapper propagates failure, signal, and completion status.","disposition":"keep"}
 ]

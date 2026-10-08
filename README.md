@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 296 tests
+cargo test --all                # 302 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -267,13 +267,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 46 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 47 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 46 scenarios
+bash stress/run.sh        # 47 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
@@ -375,3 +375,38 @@ need to be restored manually.
 Undo and pop also refuse when journal discovery or reads fail, when a journal
 entry is not a regular file, or when journals have identical modification times
 and their order cannot be established. They do not guess which operation is newer.
+
+### Download quarantine on extracted archives
+
+Unpack captures `com.apple.quarantine` from the same no-follow source descriptor
+used to copy the archive. A change to that attribute during copying refuses the
+operation. After junk removal and wrapper flattening, unpack applies the captured
+opaque value to every final file and directory, including the destination root,
+and reads it back before publishing. Attribute values are never printed. A source
+without that attribute does not cause unpack to add one.
+
+On macOS 27.0.1 (26A434), synthetic raw-extractor probes observed `/usr/bin/unzip
+-o -q` and `/usr/bin/tar -xf/-xzf/-xjf/-xJf` propagating the archive mark; repeated
+observations can include a changed mark rather than exact equality. `/usr/bin/gunzip
+-c` with stdout redirected to a file omitted it. The unmodified unpack binary
+anchored by copying the archive: ZIP/JAR and all TAR suffixes produced changed
+payload marks and no marked destination root; bare GZIP omitted the mark entirely.
+The complete extraction path is measured separately from the raw extractor.
+`crates/unpack-cli/tests/quarantine_matrix.py` probes all ten supported suffixes,
+with marked and unmarked sources, and checks final payload bytes and attributes.
+
+macOS can represent attributes as `._` AppleDouble companions on exFAT. These
+companions are retained when needed to store the final quarantine state. Unpack
+refuses publication and removes staging if the captured attribute cannot be set
+or read back exactly; it never reports a successful downgrade to unmarked output.
+A native extended-attribute filesystem is not required when the OS's companion
+representation supports exact readback. The quarantine receipt reports read
+attempts and verified comparisons, without recording the attribute value.
+
+Sources: Apple's [getxattr(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getxattr.2.html)
+and [fsetxattr(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsetxattr.2.html)
+document descriptor access, absent attributes, and unsupported storage. Extractor
+propagation and exFAT storage are measured behavior, rather than promises inferred
+from these manuals. The unpack capability declaration is version 3; the result
+envelope remains version 2. `docs/contracts/v3/unpack.json` is the canonical pin,
+`v1/unpack.json` mirrors it, and `v2/unpack.json` remains the prior immutable pin.
