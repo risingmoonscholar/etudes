@@ -34,11 +34,11 @@ BEFORE="$W/synced-before.json"
 snapshot_tree "$SYNCED" "$BEFORE"
 
 json=$("$SWEEP" "$SYNCED" --allow-sync --json 2>&1)
-scanned=$(python3 -c "import json,sys; print(json.load(sys.stdin)['scanned'])" <<<"$json" 2>/dev/null)
-hidden=$(python3 -c "import json,sys; print(json.load(sys.stdin)['skipped']['hidden'])" <<<"$json" 2>/dev/null)
+scanned=$(python3 -c "import json,sys; print(json.load(sys.stdin)['details']['scanned'])" <<<"$json" 2>/dev/null)
+hidden=$(python3 -c "import json,sys; print(json.load(sys.stdin)['details']['skipped']['hidden'])" <<<"$json" 2>/dev/null)
 stub_in_group=$(python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['details']
 members = [m for g in d['groups'] for m in g['members']]
 print(any('.icloud' in m for m in members))
 " <<<"$json" 2>/dev/null)

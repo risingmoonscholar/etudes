@@ -58,7 +58,20 @@ to organise. Hidden items are left in place, and it says how many.
 That is deliberate: clearing a folder for a screen share means clearing it.
 With a journal, everything is reversible. stash prints what it took.";
 
+macro_rules! println {
+    () => { etude_cli_support::envelope::print(String::new()) };
+    ($($arg:tt)*) => { etude_cli_support::envelope::print(format!($($arg)*)) };
+}
+
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    etude_cli_support::envelope::begin("stash", env!("CARGO_PKG_VERSION"), &args);
+    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    etude_cli_support::envelope::finish(code);
+    code
+}
+
+fn run_main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.first().is_some_and(|arg| arg == "contract") {
@@ -133,7 +146,7 @@ const STASH_FLAGS: &[&str] = &["--for", "--json", "--no-journal"];
 /// misspelling of it.
 const COMMAND_FLAGS: &[(&str, &[&str])] = &[
     ("", &["--for", "--json", "--no-journal"]),
-    ("pop", &["--if-due"]),
+    ("pop", &["--if-due", "--json"]),
     ("status", &["--json", "--all", "--paths"]),
 ];
 
@@ -237,7 +250,7 @@ pub fn deadline_of(name: &str) -> Option<u64> {
 }
 
 fn find_holding(root: &Path) -> Option<PathBuf> {
-    std::fs::read_dir(root)
+    etude_core::scan::observe_read("holding_directory_enumeration", std::fs::read_dir(root))
         .ok()?
         .flatten()
         .map(|e| e.path())
@@ -339,6 +352,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     drop(progress);
     match result {
         Ok(r) => {
+            etude_cli_support::envelope::effect("items_moved", r.moved);
             if json {
                 use etude_core::json as j;
                 println!(
@@ -381,6 +395,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
+            etude_cli_support::envelope::status("incomplete");
             eprintln!("stash: {e}");
             if sl.is_some() {
                 eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
@@ -611,6 +626,23 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
+    etude_cli_support::envelope::detail(etude_core::json::obj(&[
+        ("restored", etude_core::json::num(r.restored)),
+        (
+            "skipped_changed",
+            etude_core::json::num(r.skipped_changed.len()),
+        ),
+        (
+            "skipped_missing",
+            etude_core::json::num(r.skipped_missing.len()),
+        ),
+    ]));
+    if !r.skipped_changed.is_empty() || r.error.is_some() {
+        etude_cli_support::envelope::status("incomplete");
+    }
+    etude_cli_support::envelope::effect("items_restored", r.restored);
+    etude_cli_support::envelope::effect("changed_items_left", r.skipped_changed.len());
+    etude_cli_support::envelope::effect("missing_items", r.skipped_missing.len());
     println!("\nRestored {} items.", r.restored);
     if !r.skipped_changed.is_empty() {
         println!(
@@ -825,9 +857,12 @@ fn cmd_status(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
         Some(dir) => {
-            let n = std::fs::read_dir(&dir)
-                .map(|r| r.flatten().count())
-                .unwrap_or(0);
+            let n = etude_core::scan::observe_read(
+                "holding_directory_enumeration",
+                std::fs::read_dir(&dir),
+            )
+            .map(|r| r.flatten().count())
+            .unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             if flag(args, "--json") {
                 use etude_core::json as j;
@@ -1013,7 +1048,9 @@ impl etude_core::journal::Sealer for KeychainSeal {
 
 /// Refuses rather than writing an unencrypted record of what was stashed.
 fn sealer() -> Option<KeychainSeal> {
-    match etude_keep::key() {
+    let result = etude_keep::key();
+    etude_core::scan::record_read_outcome("key_material", result.is_ok());
+    match result {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             eprintln!("stash: {e}");

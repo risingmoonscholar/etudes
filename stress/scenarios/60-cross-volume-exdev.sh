@@ -109,7 +109,7 @@ printf 'selected-before-bulk-allocation\n' > "$INTERRUPT"
 INTERRUPT_PLAN=$("$SWEEP" "$OUTER" --depth 2 --json 2>&1)
 if python3 -c '
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)["details"]
 members = [m for g in d.get("groups", []) for m in g.get("members", [])]
 sys.exit(0 if any(m.endswith("interrupt_zzzbig.txt") for m in members) else 1)
 ' <<<"$INTERRUPT_PLAN"; then

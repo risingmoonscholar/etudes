@@ -8,11 +8,8 @@
 # makes that true. It said so here for weeks while nothing enforced it, which is
 # the shape of defect this repo keeps finding in its own checkers.
 #
-# The one edit made to captured output is a path substitution, declared in the
-# `substitution_rule` field of the output file. The fixture lives in a temporary
-# directory whose real name is machine-specific noise; the demos show `~/Desktop`
-# instead, and the real path is deliberately not recorded. Nothing else is
-# touched.
+# Fixture paths and volatile operation IDs are substituted as declared in substitution_rule.
+# All other captured output remains unchanged.
 #
 # No file of yours is read. The fixture is generated, used, and deleted.
 set -euo pipefail
@@ -109,8 +106,13 @@ for name in sorted(os.listdir(caps)):
     text = open(os.path.join(d, "output")).read()
     for frm, to in subs:
         text = text.replace(frm, to)
+    label = name.split("-", 1)[1]
+    if label.endswith("-json"):
+        captured = json.loads(text)
+        operation_id = json.dumps(captured["operation_id"])
+        text = text.replace(operation_id, json.dumps("<per-invocation>"), 1)
     transcripts.append({
-        "label": name.split("-", 1)[1],
+        "label": label,
         "command": open(os.path.join(d, "command")).read(),
         "exit": int(open(os.path.join(d, "exit")).read()),
         "output": text,
@@ -126,8 +128,10 @@ payload = {
              "synthetic mkfx fixture with temporary journal state and a disposable "
              "supplied key. Not hand-written; does not test login-keychain access."),
     "substitution_rule": ("The temporary directory the fixture was built in is "
-                          "rendered as ~/Desktop. No other edit is made to captured "
-                          "output. The real path is a mktemp name and is not recorded."),
+                          "rendered as ~/Desktop. Only the volatile envelope operation_id "
+                          "is additionally rendered as <per-invocation>; all other "
+                          "output bytes are retained. The real path is a mktemp name "
+                          "and is not recorded."),
     "transcripts": transcripts,
 }
 json.dump(payload, open(out, "w"), indent=2)

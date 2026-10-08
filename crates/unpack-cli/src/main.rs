@@ -87,9 +87,12 @@ impl ArchiveAnchor {
             // from the kernel CSPRNG that another process cannot derive the
             // anchor pathname and replace the copy after preflight.
             let mut nonce = [0_u8; 16];
-            std::fs::File::open("/dev/urandom")
-                .and_then(|mut random| random.read_exact(&mut nonce))
-                .map_err(|error| format!("could not generate private anchor name: {error}"))?;
+            etude_core::scan::observe_read(
+                "os_random_bytes",
+                std::fs::File::open("/dev/urandom")
+                    .and_then(|mut random| random.read_exact(&mut nonce)),
+            )
+            .map_err(|error| format!("could not generate private anchor name: {error}"))?;
             let dir = std::env::temp_dir().join(format!(
                 "unpack-{}",
                 nonce
@@ -118,7 +121,10 @@ impl ArchiveAnchor {
                     // truncate and rewrite that inode after both preflights.
                     // The private copy is the one immutable input all later
                     // operations consume.
-                    match std::fs::symlink_metadata(archive) {
+                    match etude_core::scan::observe_read(
+                        "archive_metadata",
+                        std::fs::symlink_metadata(archive),
+                    ) {
                         Ok(metadata) if metadata.file_type().is_symlink() => {
                             let _ = std::fs::remove_dir_all(&dir);
                             return Err("the archive path is a symlink".into());
@@ -129,7 +135,10 @@ impl ArchiveAnchor {
                             return Err(error.to_string());
                         }
                     }
-                    if let Err(error) = std::fs::copy(archive, &path) {
+                    if let Err(error) = etude_core::scan::observe_read(
+                        "archive_bytes",
+                        std::fs::copy(archive, &path),
+                    ) {
                         let _ = std::fs::remove_dir_all(&dir);
                         return Err(error.to_string());
                     }
@@ -199,7 +208,20 @@ fn stem(path: &Path) -> String {
     if n.is_empty() { "unpacked".into() } else { n }
 }
 
+macro_rules! println {
+    () => { etude_cli_support::envelope::print(String::new()) };
+    ($($arg:tt)*) => { etude_cli_support::envelope::print(format!($($arg)*)) };
+}
+
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    etude_cli_support::envelope::begin("unpack", env!("CARGO_PKG_VERSION"), &args);
+    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    etude_cli_support::envelope::finish(code);
+    code
+}
+
+fn run_main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "contract") {
         return etude_cli_support::contract::command(
@@ -266,7 +288,9 @@ fn value(args: &[String], f: &str) -> Option<String> {
 }
 
 fn run(archive: &Path, args: &[String]) -> ExitCode {
-    if !archive.is_file() {
+    if !etude_core::scan::observe_read("archive_metadata", std::fs::metadata(archive))
+        .is_ok_and(|metadata| metadata.is_file())
+    {
         eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
         return ExitCode::from(3);
     }
@@ -577,6 +601,9 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::from(3);
     }
 
+    etude_cli_support::envelope::effect("entries_published", entries.len() - junk);
+    etude_cli_support::envelope::effect("paths_audited", audited);
+    etude_cli_support::envelope::effect("metadata_files_removed", removed);
     if flag(args, "--json") {
         use etude_core::json as j;
         println!(
@@ -927,7 +954,8 @@ fn cleanup_destination_with(
 /// Total logical bytes observed under `dir`, without following links.
 /// An unreadable entry makes the measurement fail, never silently smaller.
 fn written(dir: &Path) -> Result<u64, String> {
-    let rd = std::fs::read_dir(dir).map_err(|e| tree_error(dir, e))?;
+    let rd = etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
+        .map_err(|e| tree_error(dir, e))?;
     let mut total = 0_u64;
     for entry in rd {
         let path = entry.map_err(|e| tree_error(dir, e))?.path();
@@ -961,7 +989,10 @@ fn audit_staging(staging: &Path) -> Result<usize, String> {
     let root = staging.canonicalize().map_err(|e| tree_error(staging, e))?;
     fn walk(dir: &Path, root: &Path) -> Result<usize, String> {
         let mut count = 0;
-        for entry in std::fs::read_dir(dir).map_err(|e| tree_error(dir, e))? {
+        for entry in
+            etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
+                .map_err(|e| tree_error(dir, e))?
+        {
             let path = entry.map_err(|e| tree_error(dir, e))?.path();
             let md = path.symlink_metadata().map_err(|e| tree_error(&path, e))?;
             let kind = md.file_type();
@@ -1084,9 +1115,12 @@ fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
     for _ in 0..128 {
         let mut nonce = [0_u8; 16];
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut random| random.read_exact(&mut nonce))
-            .map_err(|error| format!("could not generate staging name: {error}"))?;
+        etude_core::scan::observe_read(
+            "os_random_bytes",
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut random| random.read_exact(&mut nonce)),
+        )
+        .map_err(|error| format!("could not generate staging name: {error}"))?;
         let candidate = parent.join(format!(
             ".{name}.unpack-{}.partial",
             nonce
@@ -1145,7 +1179,9 @@ fn extractor_command(fmt: Format, archive: &Path, dest: &Path) -> Command {
 
 fn remove_junk(dest: &Path) -> usize {
     fn walk(dir: &Path, n: &mut usize) {
-        let Ok(rd) = std::fs::read_dir(dir) else {
+        let Ok(rd) =
+            etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
+        else {
             return;
         };
         for e in rd.flatten() {
@@ -1181,7 +1217,9 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
     if !inner.is_dir() {
         return false;
     }
-    let Ok(rd) = std::fs::read_dir(&inner) else {
+    let Ok(rd) =
+        etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(&inner))
+    else {
         return false;
     };
     for e in rd.flatten() {

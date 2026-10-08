@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 288 tests
+cargo test --all                # 296 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -185,8 +185,14 @@ Each carries `schema_version`, `tool_version`, `operation_id` and `status`.
 Binary probes in the test suite compare declarations with exercised filesystem
 behaviour and pin each contract's schema; deliberate schema and behaviour mutants
 must fail those probes. The declaration is not a receipt or proof of no access.
-Ordinary operation JSON is still unversioned; the shared result envelope and read
-receipts are the next stage. See [the contract specification and witness limits](docs/contracts/README.md).
+Every JSON result now uses schema version 2, including errors and refusals.
+Operation fields move under `details` (for example, `details.groups`,
+`details.moved`, and `details.paths_audited`). The shared envelope adds `scope`,
+`observations`, `effects`, named `verification` claims, `recovery` and `disclosure`.
+Status is `done`, `nothing_to_do`, `refused`, `incomplete` or `error`.
+Read receipts separate attempted, observed, verified and failed operations,
+and name unproven coverage. They contain categories and counts, never payloads,
+keys or environment values. Zero counts do not prove absence of access. See [the contract specification and witness limits](docs/contracts/README.md).
 
 ```sh
 sweep ~/Desktop --json          # the plan, including projects_skipped,

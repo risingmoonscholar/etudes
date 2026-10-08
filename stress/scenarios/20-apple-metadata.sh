@@ -26,8 +26,8 @@ for i in 0 1 2 3 4; do : > "$D/deck_notes_$i.pdf"; done
 
 # --- Apple's own dotfiles are ignored, not grouped, not counted as scanned ---
 json=$("$SWEEP" "$D" --json 2>&1)
-scanned=$(python3 -c "import json,sys; print(json.load(sys.stdin)['scanned'])" <<<"$json")
-hidden=$(python3 -c "import json,sys; print(json.load(sys.stdin)['skipped']['hidden'])" <<<"$json")
+scanned=$(python3 -c "import json,sys; print(json.load(sys.stdin)['details']['scanned'])" <<<"$json")
+hidden=$(python3 -c "import json,sys; print(json.load(sys.stdin)['details']['skipped']['hidden'])" <<<"$json")
 assert_eq 6 "$scanned" "scanned excludes .DS_Store, ._SomeFile.pdf and .localized (5 deck files + Icon<CR>)"
 assert_eq 3 "$hidden" "all three dotfiles counted as skipped-hidden"
 
@@ -39,7 +39,7 @@ assert_eq 3 "$hidden" "all three dotfiles counted as skipped-hidden"
 valid=$(python3 -c "
 import json, sys
 try:
-    json.load(sys.stdin)
+    json.load(sys.stdin)['details']
     print('ok')
 except Exception as e:
     print(f'INVALID: {e}')
@@ -48,7 +48,7 @@ assert_eq "ok" "$valid" "--json stays valid JSON with a carriage-return in a fil
 
 icon_present=$(python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['details']
 paths = d['left_alone']['no_clear_group_paths']
 print(any('Icon' in p for p in paths))
 " <<<"$json")

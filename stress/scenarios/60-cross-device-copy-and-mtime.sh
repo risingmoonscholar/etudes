@@ -87,7 +87,7 @@ import json
 import pathlib
 import sys
 
-plan = json.load(open(sys.argv[1]))
+plan = json.load(open(sys.argv[1]))['details']
 # `workdir` may begin at macOS's /var symlink while sweep emits canonical
 # /private/var member paths. Compare the same canonical spelling that the
 # plan records; this still requires the group to contain exactly the fixture.
@@ -175,7 +175,7 @@ RESCAN_FILE="$W/rescan.json"
 if ! python3 -c "
 import json, sys
 with open('$RESCAN_FILE') as f:
-    d = json.load(f)
+    d = json.load(f)['details']
 members = [m for g in d.get('groups', []) for m in g.get('members', [])]
 sidecar = [m for m in members if m.split('/')[-1].startswith('._')]
 sys.exit(1 if sidecar else 0)

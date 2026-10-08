@@ -127,7 +127,7 @@ for i in "${!NAMES[@]}"; do
     "$SWEEP" "$d" --json > "$W/$eng.json" 2>/dev/null || true
     LEAK=$(python3 -c "
 import json,sys
-d=json.load(open(sys.argv[1]))
+d=json.load(open(sys.argv[1]))['details']
 mem=[f for g in d['groups'] for f in g.get('members',[])]
 print(sum(1 for f in mem if f.rsplit('.',1)[-1].lower() in
   ('wav','mp3','aiff','flac','m4a','mp4','mov','png','jpg','jpeg','svg','tiff','gif','py','sh','js','csv')))
@@ -172,13 +172,13 @@ TW="$W/twins"; mkdir -p "$TW"
 for c in 1 2 3 4 5 6; do : > "$TW/take_$c.wav"; : > "$TW/._take_$c.wav"; done
 TWIN_GROUPED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$TW" --json 2>/dev/null | python3 -c "
 import json,sys
-d=json.load(sys.stdin)
+d=json.load(sys.stdin)['details']
 print(any('._' in f for g in d['groups'] for f in g.get('members',[])))
 ")
 assert_eq "False" "$TWIN_GROUPED" "no AppleDouble ._ twin is placed in a group (they are hidden)"
 REAL_GROUPED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$TW" --json 2>/dev/null | python3 -c "
 import json,sys
-d=json.load(sys.stdin)
+d=json.load(sys.stdin)['details']
 print(sum(g['count'] for g in d['groups']))
 ")
 assert_eq 6 "$REAL_GROUPED" "the six real .wav files still group; only the twins are skipped"
@@ -229,7 +229,7 @@ D2_OUT=$("$SWEEP" "$DL2" --depth 4 2>&1)
 # Nothing from inside the project may appear in any proposed group.
 LEAKED=$("$SWEEP" "$DL2" --depth 4 --json 2>/dev/null | python3 -c "
 import json,sys
-d=json.load(sys.stdin)
+d=json.load(sys.stdin)['details']
 mem=[f for g in d['groups'] for f in g.get('members',[])]
 print(sum(1 for f in mem if '/orbital-drift/' in f))
 ")

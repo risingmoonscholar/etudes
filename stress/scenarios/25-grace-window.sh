@@ -70,7 +70,7 @@ fi
 
 MOVED=$(SWEEP_GRACE_SECS=0 "$SWEEP" "$D" --json 2>/dev/null | python3 -c "
 import json,sys
-d=json.load(sys.stdin)
+d=json.load(sys.stdin)['details']
 print(any('.part' in f for g in d['groups'] for f in g.get('members',[])))
 ")
 assert_eq "False" "$MOVED" "the in-flight download is in no group"

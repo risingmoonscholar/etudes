@@ -453,11 +453,14 @@ fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
             COPY_DATA_AND_STAT_FLAGS,
         )
     };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
+    crate::scan::observe_read(
+        "cross_device_bytes",
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        },
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -490,7 +493,10 @@ fn move_one_macos_with(
 #[cfg(not(target_os = "macos"))]
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
     #[cfg(not(target_os = "macos"))]
-    if fs::symlink_metadata(from)?.file_type().is_file() {
+    if crate::scan::observe_read("metadata", fs::symlink_metadata(from))?
+        .file_type()
+        .is_file()
+    {
         return move_one_link_unlink(from, to);
     }
 
@@ -499,13 +505,14 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
         Err(e) if e.raw_os_error() == Some(18) => {
             // EXDEV: cross-device. rename(2) cannot do this, so copy, verify
             // the copy landed intact, and only then unlink the source.
-            fs::copy(from, to)?;
-            let src_md = fs::metadata(from)?;
-            let dst_md = fs::metadata(to)?;
+            crate::scan::observe_read("cross_device_bytes", fs::copy(from, to))?;
+            let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
+            let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
             if src_md.len() != dst_md.len() {
                 let _ = fs::remove_file(to);
                 return Err(io::Error::other("cross-device copy size mismatch"));
             }
+            crate::scan::verify_read("cross_device_bytes");
             fs::remove_file(from)?;
             Ok(Method::CopyUnlink)
         }
@@ -518,12 +525,13 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
 #[cfg(target_os = "macos")]
 fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     copy_data_and_stat(from, to)?;
-    let src_md = fs::metadata(from)?;
-    let dst_md = fs::metadata(to)?;
+    let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
+    let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
     if src_md.len() != dst_md.len() {
         let _ = fs::remove_file(to);
         return Err(io::Error::other("cross-device copy size mismatch"));
     }
+    crate::scan::verify_read("cross_device_bytes");
     fs::remove_file(from)?;
     Ok(Method::CopyUnlink)
 }
@@ -533,7 +541,10 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
 /// them leaves one file under two names; undo's successor-entry recovery is
 /// what makes that survivable.
 fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
-    if fs::symlink_metadata(from)?.file_type().is_file() {
+    if crate::scan::observe_read("metadata", fs::symlink_metadata(from))?
+        .file_type()
+        .is_file()
+    {
         match fs::hard_link(from, to) {
             Ok(()) => {
                 fs::remove_file(from)?;
@@ -614,7 +625,10 @@ pub struct UndoReport {
 #[cfg(unix)]
 fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+    match (
+        crate::scan::observe_read("metadata", fs::symlink_metadata(a)),
+        crate::scan::observe_read("metadata", fs::symlink_metadata(b)),
+    ) {
         (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
         _ => false,
     }

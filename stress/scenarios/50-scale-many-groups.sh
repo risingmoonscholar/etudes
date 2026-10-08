@@ -63,7 +63,7 @@ printf '    plan over %d files: %ss\n' "$TOTAL" "$(echo "$t1-$t0"|bc)" >&2
 assert_eq 0 "$PLAN_EC" "plan succeeds over a folder holding every kind of file at once"
 
 GROUP_NAMES_FILE="$W/group_names.txt"
-grep -o '"name":"[^"]*"' <<<"$PLAN_JSON" | sed 's/"name":"//;s/"$//' > "$GROUP_NAMES_FILE"
+python3 -c 'import json,sys; print("\n".join(g["name"] for g in json.load(sys.stdin)["details"]["groups"]))' <<<"$PLAN_JSON" > "$GROUP_NAMES_FILE"
 GROUP_COUNT=$(wc -l < "$GROUP_NAMES_FILE" | tr -d ' ')
 UNIQUE_COUNT=$(sort -u "$GROUP_NAMES_FILE" | wc -l | tr -d ' ')
 
@@ -77,7 +77,7 @@ else
   fail "sweep proposed $GROUP_COUNT groups. The namespace is meant to be a fixed set of at most 10 -- something is naming groups from user text again: $(sort -u "$GROUP_NAMES_FILE" | tr '\n' ' ')"
 fi
 
-GROUPED=$(grep -o '"count":[0-9]*' <<<"$PLAN_JSON" | cut -d: -f2 | awk '{s+=$1} END {print s+0}')
+GROUPED=$(python3 -c 'import json,sys; print(sum(g["count"] for g in json.load(sys.stdin)["details"]["groups"]))' <<<"$PLAN_JSON")
 assert_eq "$((TOTAL - UNMAPPED))" "$GROUPED" "every identifiable file is counted in exactly one group, and the $UNMAPPED unidentifiable ones in none"
 
 # --- human-readable output stays sane -----------------------------------

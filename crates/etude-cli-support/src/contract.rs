@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use etude_core::json as j;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy)]
 pub enum Tool {
@@ -79,7 +79,7 @@ pub fn command(
         eprintln!("contract accepts only --json");
         return ExitCode::from(2);
     }
-    println!("{}", declaration(tool, version, text_exts, text_max_bytes));
+    crate::envelope::print(declaration(tool, version, text_exts, text_max_bytes));
     ExitCode::SUCCESS
 }
 
@@ -95,178 +95,8 @@ pub fn declaration(
         Tool::Unpack => "unpack",
     };
     let custody = !matches!(tool, Tool::Unpack);
-    let operations = match tool {
-        Tool::Sweep => vec![
-            scope(
-                "scan",
-                &[
-                    "selected_tree_metadata",
-                    "ancestor_metadata",
-                    "project_marker_names",
-                ],
-                &[],
-            ),
-            scope(
-                "scan_with_inspect_content",
-                &[
-                    "selected_tree_metadata",
-                    "ancestor_metadata",
-                    "project_marker_names",
-                    "consented_text_prefixes",
-                ],
-                &[],
-            ),
-            scope(
-                "apply",
-                &[
-                    "selected_tree_metadata",
-                    "ancestor_metadata",
-                    "project_marker_names",
-                    "journal_key",
-                    "cross_device_source_bytes",
-                ],
-                &[
-                    "selected_tree_entries",
-                    "journal_store",
-                    "keychain_if_no_supplied_key",
-                ],
-            ),
-            scope(
-                "review",
-                &[
-                    "selected_tree_metadata",
-                    "ancestor_metadata",
-                    "project_marker_names",
-                    "terminal_input",
-                    "journal_key",
-                    "cross_device_source_bytes",
-                ],
-                &[
-                    "selected_tree_entries",
-                    "journal_store",
-                    "keychain_if_no_supplied_key",
-                ],
-            ),
-            scope(
-                "undo",
-                &[
-                    "journal_store",
-                    "journal_key",
-                    "journal_recorded_paths_metadata",
-                    "cross_device_source_bytes",
-                ],
-                &[
-                    "journal_recorded_entries",
-                    "journal_store",
-                    "empty_group_directories",
-                    "keychain_if_no_supplied_key",
-                ],
-            ),
-            scope(
-                "forget",
-                &["journal_store_metadata", "terminal_input"],
-                &["sweep_journals", "shared_keychain_key_if_authorized"],
-            ),
-            scope(
-                "verify",
-                &["journal_store_metadata", "ancestor_metadata"],
-                &[],
-            ),
-            scope("lesson", &[], &[]),
-        ],
-        Tool::Stash => vec![
-            scope(
-                "stash",
-                &[
-                    "selected_tree_metadata",
-                    "ancestor_metadata",
-                    "journal_key",
-                    "cross_device_source_bytes",
-                ],
-                &[
-                    "selected_tree_entries",
-                    "journal_store",
-                    "keychain_if_no_supplied_key",
-                ],
-            ),
-            scope(
-                "pop",
-                &[
-                    "journal_store",
-                    "journal_key",
-                    "journal_recorded_paths_metadata",
-                    "cross_device_source_bytes",
-                ],
-                &[
-                    "journal_recorded_entries",
-                    "journal_store",
-                    "empty_holding_directories",
-                    "keychain_if_no_supplied_key",
-                ],
-            ),
-            scope(
-                "status",
-                &[
-                    "selected_tree_metadata",
-                    "journal_store",
-                    "journal_key",
-                    "journal_recorded_paths_metadata",
-                ],
-                &["keychain_if_no_supplied_key"],
-            ),
-            scope(
-                "status_all",
-                &[
-                    "journal_store",
-                    "journal_key",
-                    "journal_recorded_paths_metadata",
-                ],
-                &["keychain_if_no_supplied_key"],
-            ),
-        ],
-        Tool::Unpack => vec![
-            scope(
-                "list",
-                &[
-                    "archive_bytes",
-                    "archive_metadata",
-                    "private_archive_copy",
-                    "os_random_bytes",
-                ],
-                &["private_archive_copy"],
-            ),
-            scope(
-                "extract",
-                &[
-                    "archive_bytes",
-                    "archive_metadata",
-                    "private_archive_copy",
-                    "destination_parent_metadata",
-                    "volume_free_space",
-                    "staging_tree_metadata",
-                    "os_random_bytes",
-                ],
-                &[
-                    "private_archive_copy",
-                    "private_staging_tree",
-                    "new_destination_tree",
-                ],
-            ),
-        ],
-    };
-    let startup = match tool {
-        Tool::Sweep => scope(
-            "startup_except_contract",
-            &["journal_store_metadata", "legacy_state_metadata"],
-            &["legacy_state_migration", "expired_journals_all_tools"],
-        ),
-        Tool::Stash => scope(
-            "startup_except_contract",
-            &["legacy_state_metadata"],
-            &["legacy_state_migration"],
-        ),
-        Tool::Unpack => scope("startup_except_contract", &[], &[]),
-    };
+    let operations = operation_scopes(tool);
+    let startup = startup_scope(tool);
     let content_formats = if matches!(tool, Tool::Sweep) {
         let suffixes: Vec<String> = text_exts.iter().map(|ext| format!(".{ext}")).collect();
         let suffixes: Vec<&str> = suffixes.iter().map(String::as_str).collect();
@@ -325,8 +155,12 @@ pub fn declaration(
                 (
                     "content_exceptions",
                     strings(match tool {
-                        Tool::Sweep => &["explicit_tty_consent_text_prefix", "cross_device_copy"],
-                        Tool::Stash => &["cross_device_copy"],
+                        Tool::Sweep => &[
+                            "explicit_tty_consent_text_prefix",
+                            "cross_device_copy",
+                            "journal_fingerprint_prefixes",
+                        ],
+                        Tool::Stash => &["cross_device_copy", "journal_fingerprint_prefixes"],
                         Tool::Unpack => &["system_extractor_reads_private_archive_copy"],
                     }),
                 ),
@@ -540,6 +374,221 @@ pub fn declaration(
                 ("access_verified", j::bool(false)),
                 ("witness", j::str("scripts/check-tool-contracts.py")),
             ]),
+        ),
+    ])
+}
+
+fn operation_scopes(tool: Tool) -> Vec<String> {
+    match tool {
+        Tool::Sweep => vec![
+            scope(
+                "scan",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                ],
+                &[],
+            ),
+            scope(
+                "scan_with_inspect_content",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "consented_text_prefixes",
+                ],
+                &[],
+            ),
+            scope(
+                "apply",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "journal_key",
+                    "cross_device_source_bytes",
+                    "journal_fingerprint_bytes",
+                ],
+                &[
+                    "selected_tree_entries",
+                    "journal_store",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
+            scope(
+                "review",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "terminal_input",
+                    "journal_key",
+                    "cross_device_source_bytes",
+                    "journal_fingerprint_bytes",
+                ],
+                &[
+                    "selected_tree_entries",
+                    "journal_store",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
+            scope(
+                "undo",
+                &[
+                    "journal_store",
+                    "journal_key",
+                    "journal_recorded_paths_metadata",
+                    "cross_device_source_bytes",
+                    "journal_fingerprint_bytes",
+                ],
+                &[
+                    "journal_recorded_entries",
+                    "journal_store",
+                    "empty_group_directories",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
+            scope(
+                "forget",
+                &["journal_store_metadata", "terminal_input"],
+                &["sweep_journals", "shared_keychain_key_if_authorized"],
+            ),
+            scope(
+                "verify",
+                &["journal_store_metadata", "ancestor_metadata"],
+                &[],
+            ),
+            scope("lesson", &[], &[]),
+        ],
+        Tool::Stash => vec![
+            scope(
+                "stash",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "journal_key",
+                    "cross_device_source_bytes",
+                    "journal_fingerprint_bytes",
+                ],
+                &[
+                    "selected_tree_entries",
+                    "journal_store",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
+            scope(
+                "pop",
+                &[
+                    "journal_store",
+                    "journal_key",
+                    "journal_recorded_paths_metadata",
+                    "cross_device_source_bytes",
+                    "journal_fingerprint_bytes",
+                ],
+                &[
+                    "journal_recorded_entries",
+                    "journal_store",
+                    "empty_holding_directories",
+                    "keychain_if_no_supplied_key",
+                ],
+            ),
+            scope(
+                "status",
+                &[
+                    "selected_tree_metadata",
+                    "journal_store",
+                    "journal_key",
+                    "journal_recorded_paths_metadata",
+                ],
+                &["keychain_if_no_supplied_key"],
+            ),
+            scope(
+                "status_all",
+                &[
+                    "journal_store",
+                    "journal_key",
+                    "journal_recorded_paths_metadata",
+                ],
+                &["keychain_if_no_supplied_key"],
+            ),
+        ],
+        Tool::Unpack => vec![
+            scope(
+                "list",
+                &[
+                    "archive_bytes",
+                    "archive_metadata",
+                    "private_archive_copy",
+                    "os_random_bytes",
+                ],
+                &["private_archive_copy"],
+            ),
+            scope(
+                "extract",
+                &[
+                    "archive_bytes",
+                    "archive_metadata",
+                    "private_archive_copy",
+                    "destination_parent_metadata",
+                    "volume_free_space",
+                    "staging_tree_metadata",
+                    "os_random_bytes",
+                ],
+                &[
+                    "private_archive_copy",
+                    "private_staging_tree",
+                    "new_destination_tree",
+                ],
+            ),
+        ],
+    }
+}
+
+fn startup_scope(tool: Tool) -> String {
+    match tool {
+        Tool::Sweep => scope(
+            "startup_except_contract",
+            &["journal_store_metadata", "legacy_state_metadata"],
+            &["legacy_state_migration", "expired_journals_all_tools"],
+        ),
+        Tool::Stash => scope(
+            "startup_except_contract",
+            &["legacy_state_metadata"],
+            &["legacy_state_migration"],
+        ),
+        Tool::Unpack => scope("startup_except_contract", &[], &[]),
+    }
+}
+
+pub fn invocation_scope(tool: Tool, operation: &str) -> String {
+    let prefix = format!("{{\"operation\":{}", j::str(operation));
+    let domains = operation_scopes(tool)
+        .into_iter()
+        .find(|row| row.starts_with(&prefix))
+        .unwrap_or_else(|| scope(operation, &[], &[]));
+    j::obj(&[
+        (
+            "tool",
+            j::str(match tool {
+                Tool::Sweep => "sweep",
+                Tool::Stash => "stash",
+                Tool::Unpack => "unpack",
+            }),
+        ),
+        ("operation", j::str(operation)),
+        ("domains", domains),
+        (
+            "startup",
+            if operation == "contract" {
+                scope("contract", &[], &[])
+            } else {
+                startup_scope(tool)
+            },
+        ),
+        (
+            "evidence",
+            j::str("conditional declared domains; observations report actual instrumented reads"),
         ),
     ])
 }

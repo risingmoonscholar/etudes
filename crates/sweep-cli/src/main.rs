@@ -4,6 +4,15 @@
 //! The undo journal is sealed with a key held in the login keychain; if sealing
 //! is unavailable sweep refuses rather than writing plaintext.
 
+macro_rules! println {
+    () => { etude_cli_support::envelope::print(String::new()) };
+    ($($arg:tt)*) => { etude_cli_support::envelope::print(format!($($arg)*)) };
+}
+
+macro_rules! print {
+    ($($arg:tt)*) => { etude_cli_support::envelope::prompt(format!($($arg)*)) };
+}
+
 mod inspect;
 mod review;
 
@@ -51,6 +60,14 @@ never moved, in any mode.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    etude_cli_support::envelope::begin("sweep", env!("CARGO_PKG_VERSION"), &args);
+    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    etude_cli_support::envelope::finish(code);
+    code
+}
+
+fn run_main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.first().is_some_and(|arg| arg == "contract") {
         return etude_cli_support::contract::command(
@@ -75,6 +92,7 @@ fn main() -> ExitCode {
     // Journals past their TTL are dropped before anything else. Keeping an
     // index of the user's filenames forever keeps the exposure forever.
     let expired = etude_core::journal::prune_expired();
+    etude_cli_support::envelope::effect("expired_journals_removed", expired);
     if expired > 0 {
         eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
     }
@@ -405,6 +423,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         "apply",
         &[
             ("--yes", false),
+            ("--json", false),
             ("--only", true),
             ("--no-journal", false),
             ("--depth", true),
@@ -423,7 +442,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         ],
     ),
     ("forget", &[("--yes", false)]),
-    ("undo", &[]),
+    ("undo", &[("--json", false)]),
     ("verify", &[]),
     ("lesson", &[]),
     ("contract", &[("--json", false)]),
@@ -667,6 +686,22 @@ fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
     Ok(out)
 }
 
+struct ReceiptInspector(inspect::ContentInspector);
+
+impl plan::Inspector for ReceiptInspector {
+    fn inspect(&mut self, path: &Path, ext: &str) -> Option<etude_core::Category> {
+        let before = self.0.stats;
+        let found = plan::Inspector::inspect(&mut self.0, path, ext);
+        if etude_read::scan::TEXT_EXTS.contains(&ext) {
+            let after = self.0.stats;
+            let read_completed = after.inspected + after.skipped_binary + after.skipped_slow
+                > before.inspected + before.skipped_binary + before.skipped_slow;
+            scan::record_read_outcome("consented_text_prefixes", read_completed);
+        }
+        found
+    }
+}
+
 fn scan_and_plan(
     path: &Path,
     args: &[String],
@@ -740,9 +775,9 @@ fn scan_and_plan(
         }
     }
 
-    let mut insp = inspect::ContentInspector::new();
+    let mut insp = ReceiptInspector(inspect::ContentInspector::new());
     let p = plan::build_with_maps(&outcome, Some(&mut insp), &maps);
-    Ok((p, Some(insp.stats)))
+    Ok((p, Some(insp.0.stats)))
 }
 
 fn run_scan(path: &Path, args: &[String]) -> ExitCode {
@@ -754,6 +789,9 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
+    if plan.skipped_unreadable > 0 {
+        etude_cli_support::envelope::status("incomplete");
+    }
     if plan.groups.is_empty() && has(args, "--json") {
         println!("{}", plan.to_json());
         return ExitCode::from(1);
@@ -1091,7 +1129,9 @@ impl etude_core::journal::Sealer for KeychainSeal {
 /// On failure sweep refuses rather than falling back to a plaintext journal.
 /// Silently degrading is the failure mode a privacy tool must not have.
 fn sealer() -> Option<KeychainSeal> {
-    match etude_keep::key() {
+    let result = etude_keep::key();
+    etude_core::scan::record_read_outcome("key_material", result.is_ok());
+    match result {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             refuse("could not get the journal key", &e);
@@ -1313,6 +1353,17 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
     drop(progress);
     match result {
         Ok(r) => {
+            etude_cli_support::envelope::effect("items_moved", r.moved);
+            etude_cli_support::envelope::detail(etude_core::json::obj(&[
+                ("moved", etude_core::json::num(r.moved)),
+                (
+                    "journal",
+                    r.journal_path
+                        .as_deref()
+                        .map(etude_core::json::path)
+                        .unwrap_or_else(|| "null".into()),
+                ),
+            ]));
             println!("\nMoved {} files.", r.moved);
             match r.journal_path {
                 Some(jp) => {
@@ -1325,6 +1376,7 @@ fn run_apply(p: &plan::Plan, sl: Option<KeychainSeal>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
+            etude_cli_support::envelope::status("incomplete");
             refuse_apply(&e);
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
             apply_exit_code(&e)
@@ -1600,6 +1652,23 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
+    etude_cli_support::envelope::detail(etude_core::json::obj(&[
+        ("restored", etude_core::json::num(r.restored)),
+        (
+            "skipped_changed",
+            etude_core::json::num(r.skipped_changed.len()),
+        ),
+        (
+            "skipped_missing",
+            etude_core::json::num(r.skipped_missing.len()),
+        ),
+    ]));
+    if !r.skipped_changed.is_empty() || r.error.is_some() {
+        etude_cli_support::envelope::status("incomplete");
+    }
+    etude_cli_support::envelope::effect("items_restored", r.restored);
+    etude_cli_support::envelope::effect("changed_items_left", r.skipped_changed.len());
+    etude_cli_support::envelope::effect("missing_items", r.skipped_missing.len());
     println!("\nRestored {} files.", r.restored);
     if !r.skipped_changed.is_empty() {
         println!(
@@ -2349,7 +2418,7 @@ mod tests {
     /// point: a flag nobody reads is an error, not a no-op.
     #[test]
     fn a_command_that_reads_no_flags_accepts_none() {
-        for cmd in ["undo", "verify", "lesson"] {
+        for cmd in ["verify", "lesson"] {
             let (_, flags) = COMMAND_FLAGS
                 .iter()
                 .find(|(c, _)| *c == cmd)
@@ -2363,6 +2432,36 @@ mod tests {
                 check_flags(cmd, &["--yes".to_string()]).is_err(),
                 "{cmd} must refuse even a real flag that belongs elsewhere"
             );
+        }
+    }
+
+    #[test]
+    fn consented_inspection_receipt_reports_reads_without_contents() {
+        use plan::Inspector;
+        scan::reset_receipt();
+        let path = std::env::temp_dir().join(format!(
+            "etudes-receipt-inspection-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"synthetic ordinary text payload").unwrap();
+        let mut inspector = ReceiptInspector(inspect::ContentInspector::new());
+        let _ = inspector.inspect(&path, "txt");
+        std::fs::remove_file(&path).unwrap();
+        let receipt = scan::receipt_json();
+        assert!(receipt.contains("consented_text_prefixes"));
+        assert!(receipt.contains("\"observed\":1"));
+        assert!(!receipt.contains("synthetic ordinary text payload"));
+    }
+
+    #[test]
+    fn undo_accepts_json_and_refuses_mutation_flags() {
+        assert!(check_flags("undo", &["--json".into()]).is_ok());
+        for flag in ["--yes", "--no-journal", "--frobnicate"] {
+            assert!(check_flags("undo", &[flag.into()]).is_err());
         }
     }
 

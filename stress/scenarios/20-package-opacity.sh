@@ -40,10 +40,10 @@ snapshot_tree "$D" "$BEFORE"
 # --- Opacity holds at every depth sweep supports ---
 for depth in 1 2 3 4 8; do
   json=$("$SWEEP" "$D" --depth "$depth" --json 2>&1)
-  scanned=$(python3 -c "import json,sys; print(json.load(sys.stdin)['scanned'])" <<<"$json" 2>/dev/null)
+  scanned=$(python3 -c "import json,sys; print(json.load(sys.stdin)['details']['scanned'])" <<<"$json" 2>/dev/null)
   leaked=$(python3 -c "
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(sys.stdin)['details']
 paths = []
 for g in d['groups']:
     paths += g['members']

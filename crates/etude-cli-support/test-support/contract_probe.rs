@@ -29,3 +29,8 @@ fn run_contract_witness(negative_controls: bool) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn result_envelope_schema_and_refusals_are_versioned() {
+    run_contract_witness(false);
+}
