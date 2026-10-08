@@ -136,7 +136,7 @@ pub fn declaration(
     let mut fields = vec![
         (
             "schema_version",
-            j::num(if matches!(tool, Tool::Unpack) {
+            j::num(if matches!(tool, Tool::Sweep | Tool::Unpack) {
                 3
             } else {
                 SCHEMA_VERSION
@@ -383,6 +383,21 @@ pub fn declaration(
             ]),
         ),
     ];
+    if matches!(tool, Tool::Sweep) {
+        fields.push(("structured_progress", j::obj(&[
+            ("flag", j::str("--progress-json")),
+            ("stream", j::str("stderr_ndjson_alongside_diagnostics")),
+            ("schema_version", j::num(crate::progress::SCHEMA_VERSION)),
+            ("operations", strings(&["apply", "review"])),
+            ("fields", strings(&["schema_version", "event", "tool_version", "operation_id", "operation", "phase", "planned", "completed", "journalled"])),
+            ("maximum_events", j::num(crate::progress::MAX_EVENTS)),
+            ("planned", j::str("entries_after_full_preflight_validation")),
+            ("completed", j::str("successful_moves_including_a_move_whose_done_record_failed")),
+            ("journalled", j::str("successful_durable_done_records;_zero_without_a_journal")),
+            ("ordering", j::str("each_done_record_is_durable_before_callback_and_next_move")),
+            ("disclosure", j::str("counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values")),
+        ])));
+    }
     if matches!(tool, Tool::Unpack) {
         fields.push(("quarantine", j::obj(&[
             ("source", j::str("captured_from_same_nofollow_descriptor_as_archive_bytes")),

@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 302 tests
+cargo test --all                # 315 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -410,3 +410,5 @@ propagation and exFAT storage are measured behavior, rather than promises inferr
 from these manuals. The unpack capability declaration is version 3; the result
 envelope remains version 2. `docs/contracts/v3/unpack.json` is the canonical pin,
 `v1/unpack.json` mirrors it, and `v2/unpack.json` remains the prior immutable pin.
+
+Opt in to versioned stderr progress with `sweep apply PATH --yes --progress-json` (also available during review). Records distinguish planned entries, successful moves, and durable journal acknowledgements; `--json` stdout remains one result envelope. See [structured progress](docs/sweep-progress.md) for the schema and failure counts. Journal persistence is unchanged; no speed improvement is claimed.
