@@ -36,13 +36,13 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
-| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.3 candidate |
-| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.3 candidate |
-| **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.3 candidate |
+| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.4 candidate |
+| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.4 candidate |
+| **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.4 candidate |
 
 ## Install
 
-**0.5.3 is a release candidate, not a published release.** The commands below
+**0.5.4 is a release candidate, not a published release.** The commands below
 are the proposed release pins and will work only after those tags are published.
 For currently published versions, see [Releases](https://github.com/risingmoonscholar/etudes/releases).
 To try this candidate from a checkout, use
@@ -50,9 +50,9 @@ To try this candidate from a checkout, use
 (or `crates/stash-cli`, `crates/unpack-cli`).
 
 ```sh
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.3 sweep-cli
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.3 stash-cli
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.3 unpack-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.4 sweep-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.4 stash-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.4 unpack-cli
 ```
 
 The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and

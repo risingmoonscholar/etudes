@@ -24,7 +24,7 @@ PY
 
 cd "$root"
 export ETUDE_STATE_DIR=../s
-printf '\033[2m~/Desktop · synthetic fixture · stash 0.5.3 candidate\033[0m\n'
+printf '\033[2m~/Desktop · synthetic fixture · stash 0.5.4 candidate\033[0m\n'
 printf '\033[33m$ stash ~/Desktop --for 3d\033[0m\n\n'
 "$bin/stash" . --for 3d
 

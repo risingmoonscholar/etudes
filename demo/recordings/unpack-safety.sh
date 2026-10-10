@@ -15,7 +15,7 @@ ln -s "$work/outside/secret_outside.txt" "$work/bad/escape_link"
 
 cd "$work"
 export ETUDE_STATE_DIR="$work/state"
-printf '\033[2m~/Desktop · synthetic fixture · unpack 0.5.3 candidate\033[0m\n'
+printf '\033[2m~/Desktop · synthetic fixture · unpack 0.5.4 candidate\033[0m\n'
 printf '\033[33m$ unpack site_export.zip --into site_export\033[0m\n\n'
 "$bin/unpack" site_export.zip --into site_export
 sleep 1.4

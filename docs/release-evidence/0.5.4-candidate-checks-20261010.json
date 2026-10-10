@@ -1,0 +1,77 @@
+{
+  "checked_at": "2026-10-10T09:22:14Z",
+  "revision": "2c975b824d6811175de2404ce3aea3f33f791dbc",
+  "candidate": "0.5.4",
+  "commands": {
+    "candidate_install": {
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
+      "environment": {
+        "CARGO_NET_OFFLINE": true,
+        "reason": "The host sandbox could not resolve crates.io; dependencies were installed from the existing Cargo cache."
+      },
+      "exit_code": 0,
+      "result": "PASS",
+      "stdout": [
+        "mode=candidate checkout=2c975b824d6811175de2404ce3aea3f33f791dbc",
+        "installing sweep 0.5.4",
+        "PASS sweep: install, version, synthetic operation and recovery/refusal",
+        "installing stash 0.5.4",
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.4",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ]
+    },
+    "release_gate_unit_tests": {
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_release.py",
+        "-v"
+      ],
+      "exit_code": 0,
+      "tests_run": 5,
+      "result": "PASS"
+    },
+    "full_stress_ratchet": {
+      "argv": [
+        "bash",
+        "scripts/stress-ratchet.sh"
+      ],
+      "bundle": "stress/results/20261010T091530Z-69161/summary.json",
+      "runner": {
+        "os": "Darwin",
+        "arch": "arm64"
+      },
+      "passed": 800,
+      "failed": 0,
+      "unproven": 4,
+      "not_run": [],
+      "result": "PASS",
+      "reported_revision": "30310e47d21b9bb6c980e81bb6b9f6c55786e16d",
+      "note": "The ratchet bundle reports the worktree base revision because the release candidate was validated from its working tree before commit 2c975b8; no source files changed between the run and that commit."
+    },
+    "host_gates": {
+      "format": "PASS",
+      "clippy_warnings_denied": "PASS",
+      "workspace_tests": "PASS (395 tests; one benchmark ignored)",
+      "claims_sync_and_check": "PASS",
+      "no_network_test": "PASS",
+      "tool_contract_witnesses": "PASS",
+      "demo_transcript_reproduction": "PASS (7 of 7)",
+      "issue_register": "PASS (117 issues and pull requests checked; legacy warning in merged PR #52 is non-gating)"
+    }
+  },
+  "scope": "Local release-candidate build, documentation checks, and behavior validation only. Published tags were not installed or tested.",
+  "independent_review": "not assessed",
+  "publication": "not performed"
+}

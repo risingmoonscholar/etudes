@@ -10,10 +10,22 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
-### 0.5.3 candidates — sweep, stash and unpack
+### 0.5.4 candidate — sweep, stash and unpack
 
-These versions are prepared but not published. No release date or completed
-independent review is claimed here.
+- **sweep:** `--scheme existing` routes eligible files using a versioned,
+  reviewable profile to folders already present in the selected directory.
+  Missing or ambiguous routes leave files in place, safety refusals still win,
+  and exported plans require replanning if the profile changes.
+- **Breaking for JSON consumers:** result envelopes use `schema_version: 2`.
+  Agents that parse JSON must check the schema version and read operation
+  fields under `details`; fields that were previously at the top level moved
+  there. The envelope also reports scope, observations, effects, verification,
+  recovery and disclosure. Capability-contract schema versions are separate.
+
+### 0.5.3 published — sweep, stash and unpack
+
+The sweep, stash and unpack 0.5.3 tags and releases are published. The earlier
+unpack 0.5.2 entry below was source-only and was never published.
 
 - **sweep:** project documents found in child directories now hold related
   sibling assets, while unrelated documents and screenshots remain eligible.
@@ -40,13 +52,13 @@ independent review is claimed here.
 The extraction budget remains a polled soft limit. Extraction now uses private
 staging and atomic publication, so an interrupted extraction never publishes a
 partial requested destination. Complete structured mutation receipts are not
-part of these candidates. Existing journal encryption and the 0/1/2/3
+part of the 0.5.3 candidates. Existing journal encryption and the 0/1/2/3
 exit-code convention remain unchanged.
 
 ### unpack 0.5.2 source changes — not published
 
 The earlier entry was dated 2026-08-23, but no `unpack-v0.5.2` tag or release
-was published. Its changes are included in the 0.5.3 candidate above.
+was published. Its changes were included in the 0.5.3 release above.
 
 ### Fixed
 
