@@ -100,7 +100,7 @@ impl Signal {
                 if *created {
                     format!(".{ext} (agent-named, one-shot)")
                 } else {
-                    format!(".{ext} (mapped, one-shot)")
+                    format!(".{ext} (mapped into an existing folder)")
                 }
             }
             Signal::CameraBurst { days } => {
@@ -437,6 +437,29 @@ pub fn validate_maps(
     raw: &[(String, String)],
     root: &std::path::Path,
 ) -> Result<Vec<MapSpec>, String> {
+    validate_maps_impl(raw, root, false)
+}
+
+/// Validate a saved existing-folder profile. Unlike a one-shot agent map, a
+/// profile may deliberately route an extension which a built-in detector
+/// would otherwise claim. Refusal detectors still run before these routes.
+/// Missing destinations are omitted: this scheme never creates them, and
+/// files with no usable route remain in place.
+pub fn validate_existing_maps(
+    raw: &[(String, String)],
+    root: &std::path::Path,
+) -> Result<Vec<MapSpec>, String> {
+    Ok(validate_maps_impl(raw, root, true)?
+        .into_iter()
+        .filter(|map| !map.created)
+        .collect())
+}
+
+fn validate_maps_impl(
+    raw: &[(String, String)],
+    root: &std::path::Path,
+    allow_built_in_extensions: bool,
+) -> Result<Vec<MapSpec>, String> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for (ext_raw, folder) in raw {
@@ -453,7 +476,9 @@ pub fn validate_maps(
                 "--map: {ext_raw:?} is not a single extension (like bpy)"
             ));
         }
-        if classify::type_family(&ext).is_some() || ext == "dmg" || ext == "pkg" {
+        if !allow_built_in_extensions
+            && (classify::type_family(&ext).is_some() || ext == "dmg" || ext == "pkg")
+        {
             return Err(format!(
                 "--map: .{ext} already belongs to a built-in group; a mapping may \
                  only route extensions sweep does not know"
@@ -543,7 +568,25 @@ pub fn build(scan: &ScanOutcome) -> Plan {
 }
 
 pub fn build_mapped(scan: &ScanOutcome, maps: &[MapSpec]) -> Plan {
-    build_with_maps(scan, None, maps)
+    build_with_policy(scan, None, maps, false)
+}
+
+/// Build using the user's persistent existing-folder profile. These routes
+/// are considered after every ordinary refusal and before the built-in
+/// grouping rules, so the profile can express the user's taxonomy without
+/// taking a file a safety rule has already held.
+pub fn build_existing(scan: &ScanOutcome, maps: &[MapSpec]) -> Plan {
+    build_with_policy(scan, None, maps, true)
+}
+
+/// Existing-folder profile variant with caller-supplied content inspection.
+/// Inspection can add refusals only; it does not change profile routing.
+pub fn build_existing_with(
+    scan: &ScanOutcome,
+    inspector: &mut dyn Inspector,
+    maps: &[MapSpec],
+) -> Plan {
+    build_with_policy(scan, Some(inspector), maps, true)
 }
 
 /// Build a plan, optionally inspecting contents to refuse more files.
@@ -556,8 +599,17 @@ pub fn build_with(scan: &ScanOutcome, inspector: Option<&mut dyn Inspector>) -> 
 
 pub fn build_with_maps(
     scan: &ScanOutcome,
+    inspector: Option<&mut dyn Inspector>,
+    maps: &[MapSpec],
+) -> Plan {
+    build_with_policy(scan, inspector, maps, false)
+}
+
+fn build_with_policy(
+    scan: &ScanOutcome,
     mut inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
+    profile_routes: bool,
 ) -> Plan {
     let mut untouched: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
     let mut remaining: Vec<&Entry> = Vec::new();
@@ -667,6 +719,35 @@ pub fn build_with_maps(
 
     let mut groups: Vec<Group> = Vec::new();
     let mut claimed: Vec<PathBuf> = Vec::new();
+
+    // A saved profile is an explicit user taxonomy. It may claim files that
+    // a built-in grouping would otherwise take, but only after pass 1 has
+    // removed every personal, project, in-flight, and too-recent refusal.
+    // The destination was verified as an existing direct child by the CLI;
+    // `created: false` also tells apply never to create it if it disappears.
+    if profile_routes {
+        for m in maps {
+            let members: Vec<&Entry> = remaining
+                .iter()
+                .filter(|e| !claimed.contains(&e.path))
+                .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
+                .copied()
+                .collect();
+            if members.len() < MIN_STRUCTURAL_GROUP {
+                continue;
+            }
+            claimed.extend(members.iter().map(|e| e.path.clone()));
+            groups.push(Group {
+                name: m.folder.clone(),
+                signal: Signal::Mapped {
+                    ext: m.ext.clone(),
+                    created: false,
+                },
+                members: members.iter().map(|e| e.path.clone()).collect(),
+                accepted: false,
+            });
+        }
+    }
 
     // Pass 2: structural detectors, highest precision first.
     let shots: Vec<&Entry> = remaining
@@ -794,7 +875,7 @@ pub fn build_with_maps(
     // in-flight download never reaches this point. Same three-file floor as
     // every structural group: below it, --map would be an arbitrary
     // one-file move command wearing a safety vocabulary.
-    for m in maps {
+    for m in maps.iter().filter(|_| !profile_routes) {
         let members: Vec<&Entry> = remaining
             .iter()
             .filter(|e| !claimed.contains(&e.path))

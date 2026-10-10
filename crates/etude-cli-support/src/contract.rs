@@ -136,10 +136,10 @@ pub fn declaration(
     let mut fields = vec![
         (
             "schema_version",
-            j::num(if matches!(tool, Tool::Stash) {
-                5
-            } else {
-                SCHEMA_VERSION
+            j::num(match tool {
+                Tool::Sweep => SCHEMA_VERSION + 1,
+                Tool::Stash => 5,
+                Tool::Unpack => SCHEMA_VERSION,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -518,6 +518,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "ancestor_metadata",
                     "project_marker_names",
                     "consented_text_prefixes",
+                    "sweep_existing_profile_bytes",
                 ],
                 &["explicit_plan_file"],
             ),
@@ -531,6 +532,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "journal_key",
                     "journal_fingerprint_bytes",
                     "cross_device_source_bytes",
+                    "sweep_existing_profile_bytes",
                 ],
                 &[
                     "selected_tree_entries",
@@ -544,6 +546,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "selected_tree_metadata",
                     "ancestor_metadata",
                     "project_marker_names",
+                    "sweep_existing_profile_bytes",
                 ],
                 &[],
             ),
@@ -554,6 +557,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "ancestor_metadata",
                     "project_marker_names",
                     "consented_text_prefixes",
+                    "sweep_existing_profile_bytes",
                 ],
                 &[],
             ),
@@ -566,6 +570,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "journal_key",
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
+                    "sweep_existing_profile_bytes",
                 ],
                 &[
                     "selected_tree_entries",
@@ -583,6 +588,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "journal_key",
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
+                    "sweep_existing_profile_bytes",
                 ],
                 &[
                     "selected_tree_entries",

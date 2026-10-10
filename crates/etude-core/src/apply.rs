@@ -266,6 +266,17 @@ fn apply_plan_with_structured_progress(
         // Ask the destination filesystem once, not once per file.
         let folds = folds_case(&plan.root);
         let mut planned_destinations = HashSet::new();
+        let existing_destinations: HashSet<PathBuf> = plan
+            .groups
+            .iter()
+            .filter(|group| {
+                matches!(
+                    group.signal,
+                    crate::plan::Signal::Mapped { created: false, .. }
+                )
+            })
+            .map(|group| plan.root.join(&group.name))
+            .collect();
         for g in plan.groups.iter().filter(|g| g.accepted) {
             let dest_dir = plan.root.join(&g.name);
             if crate::scan::is_synced(&dest_dir) && !plan.allow_sync {
@@ -318,7 +329,9 @@ fn apply_plan_with_structured_progress(
                 return Err(ApplyError::Injected(i));
             }
             let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
-            if let Some(parent) = to.parent() {
+            if let Some(parent) = to.parent()
+                && !existing_destinations.contains(parent)
+            {
                 fs::create_dir_all(parent).map_err(ApplyError::Io)?;
             }
             let method = move_one(&from, &to).map_err(ApplyError::Io)?;

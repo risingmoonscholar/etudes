@@ -13,6 +13,7 @@ macro_rules! print {
     ($($arg:tt)*) => { etude_cli_support::envelope::prompt(format!($($arg)*)) };
 }
 
+mod existing_profile;
 mod inspect;
 mod review;
 
@@ -39,6 +40,7 @@ USAGE
 
 FLAGS
     --scheme folders  group by file type and other built-in folder rules (default)
+    --scheme existing use the saved, versioned existing-folder profile
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
     --map EXT=Folder  route an unknown extension into a folder, this run only
@@ -320,9 +322,9 @@ fn value(args: &[String], flag: &str) -> Option<String> {
 fn parse_scheme(args: &[String]) -> Result<(), String> {
     match value(args, "--scheme") {
         None => Ok(()),
-        Some(name) if name == "folders" => Ok(()),
+        Some(name) if name == "folders" || name == "existing" => Ok(()),
         Some(name) => Err(format!(
-            "unsupported scheme {name:?}; this version supports `--scheme folders`"
+            "unsupported scheme {name:?}; this version supports `--scheme folders` and `--scheme existing`"
         )),
     }
 }
@@ -757,18 +759,81 @@ fn current_binding_context(profile: &str) -> plan::BindingContext {
     )
 }
 
-fn planning_profile(args: &[String], inspected: bool) -> String {
+#[derive(Debug, Clone)]
+struct SchemeConfig {
+    name: String,
+    maps: Vec<plan::MapSpec>,
+    profile_sha256: String,
+}
+
+fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, String> {
+    parse_scheme(args)?;
+    match value(args, "--scheme").as_deref().unwrap_or("folders") {
+        "folders" => {
+            let raw = map_flags(args)?;
+            let maps = if raw.is_empty() {
+                Vec::new()
+            } else {
+                plan::validate_maps(&raw, root)?
+            };
+            Ok(SchemeConfig {
+                name: "folders".into(),
+                maps,
+                profile_sha256: "none".into(),
+            })
+        }
+        "existing" => {
+            if has(args, "--map") {
+                return Err("--map cannot be combined with --scheme existing; edit the saved profile instead".into());
+            }
+            let profile = existing_profile::ExistingProfile::load()?;
+            let maps = plan::validate_existing_maps(&profile.routes, root)?;
+            Ok(SchemeConfig {
+                name: "existing".into(),
+                maps,
+                profile_sha256: profile.digest,
+            })
+        }
+        _ => unreachable!("parse_scheme checked the scheme name"),
+    }
+}
+
+fn planning_profile(args: &[String], inspected: bool, scheme: &SchemeConfig) -> String {
     let configuration = format!(
-        "scheme=folders;depth={:?};sync={};grace={:?};maps={:?};content={inspected}",
+        "scheme={};depth={:?};sync={};grace={:?};maps={:?};content={inspected};profile_sha256={}",
+        scheme.name,
         parse_depth(args),
         has(args, "--allow-sync"),
         since_flag(args).map(|value| value.or(ScanConfig::default().grace)),
-        map_flags(args)
+        scheme.maps,
+        scheme.profile_sha256
     );
     format!(
-        "sweep-metadata-v1;{}",
+        "sweep-metadata-v1;scheme={};profile_sha256={};configuration={}",
+        scheme.name,
+        scheme.profile_sha256,
         plan::binding_digest(configuration.as_bytes())
     )
+}
+
+fn binding_field<'a>(profile: &'a str, field: &str) -> Option<&'a str> {
+    profile.split(';').find_map(|part| {
+        part.strip_prefix(field)
+            .and_then(|value| value.strip_prefix('='))
+    })
+}
+
+fn verify_existing_profile(profile: &str) -> Result<(), String> {
+    if binding_field(profile, "scheme") != Some("existing") {
+        return Ok(());
+    }
+    let expected = binding_field(profile, "profile_sha256")
+        .ok_or_else(|| "existing-folder profile digest is missing; replan required".to_string())?;
+    let actual = existing_profile::ExistingProfile::load()?.digest;
+    if expected != actual {
+        return Err("existing-folder profile changed; replan required".into());
+    }
+    Ok(())
 }
 
 fn bound_or_refuse(
@@ -815,6 +880,12 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if binding_field(&bound.context().profile, "scheme") == Some("existing")
+        && let Err(error) = verify_existing_profile(&bound.context().profile)
+    {
+        eprintln!("sweep: {error}");
+        return ExitCode::from(2);
+    }
     if !bound.context().profile.starts_with("sweep-metadata-v1;") {
         eprintln!("sweep: plan scheme changed; replan required");
         return ExitCode::from(2);
@@ -862,11 +933,11 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
 fn scan_and_plan(
     path: &Path,
     args: &[String],
-) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
-    if let Err(msg) = parse_scheme(args) {
+) -> Result<(plan::Plan, Option<etude_read::Stats>, SchemeConfig), ExitCode> {
+    let scheme = resolve_scheme(args, path).map_err(|msg| {
         eprintln!("sweep: {msg}");
-        return Err(ExitCode::from(2));
-    }
+        ExitCode::from(2)
+    })?;
     let depth = match parse_depth(args) {
         Ok(d) => d,
         Err(msg) => {
@@ -894,32 +965,23 @@ fn scan_and_plan(
         }
     };
 
-    let maps = match map_flags(args) {
-        Ok(raw) if raw.is_empty() => Vec::new(),
-        Ok(raw) => match plan::validate_maps(&raw, path) {
-            Ok(m) => m,
-            Err(msg) => {
-                eprintln!("sweep: {msg}");
-                return Err(ExitCode::from(2));
-            }
-        },
-        Err(msg) => {
-            eprintln!("sweep: {msg}");
-            return Err(ExitCode::from(2));
-        }
-    };
     // Agent-directed moves without a journal would be moves nobody can
     // reverse, initiated by the party most likely to be wrong. Refused.
-    if !maps.is_empty() && has(args, "--no-journal") {
+    if !scheme.maps.is_empty() && has(args, "--no-journal") {
         eprintln!(
-            "sweep: --map with --no-journal is refused. A mapped move must stay\n\
+            "sweep: routed moves with --no-journal are refused. A mapped move must stay\n\
              reversible; drop --no-journal."
         );
         return Err(ExitCode::from(2));
     }
 
     if !has(args, "--inspect-content") {
-        return Ok((plan::build_mapped(&outcome, &maps), None));
+        let proposed = if scheme.name == "existing" {
+            plan::build_existing(&outcome, &scheme.maps)
+        } else {
+            plan::build_mapped(&outcome, &scheme.maps)
+        };
+        return Ok((proposed, None, scheme));
     }
 
     // Consent to reading is separate from consent to moving. --yes does not
@@ -928,7 +990,12 @@ fn scan_and_plan(
         Ok(true) => {}
         Ok(false) => {
             println!("  Contents were not read. Continuing on names and dates only.\n");
-            return Ok((plan::build_mapped(&outcome, &maps), None));
+            let proposed = if scheme.name == "existing" {
+                plan::build_existing(&outcome, &scheme.maps)
+            } else {
+                plan::build_mapped(&outcome, &scheme.maps)
+            };
+            return Ok((proposed, None, scheme));
         }
         Err(e) => {
             refuse("could not read your answer to the consent prompt", &e);
@@ -937,22 +1004,26 @@ fn scan_and_plan(
     }
 
     let mut insp = ReceiptInspector(inspect::ContentInspector::new());
-    let p = plan::build_with_maps(&outcome, Some(&mut insp), &maps);
-    Ok((p, Some(insp.0.stats)))
+    let p = if scheme.name == "existing" {
+        plan::build_existing_with(&outcome, &mut insp, &scheme.maps)
+    } else {
+        plan::build_with_maps(&outcome, Some(&mut insp), &scheme.maps)
+    };
+    Ok((p, Some(insp.0.stats), scheme))
 }
 
 fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     let quiet = has(args, "--quiet");
     let explain = has(args, "--explain");
 
-    let (plan, stats) = match scan_and_plan(path, args) {
+    let (plan, stats, scheme) = match scan_and_plan(path, args) {
         Ok(v) => v,
         Err(code) => return code,
     };
 
     let mut export_binding = None;
     if let Some(file) = value(args, "--export-plan") {
-        let context = current_binding_context(&planning_profile(args, stats.is_some()));
+        let context = current_binding_context(&planning_profile(args, stats.is_some(), &scheme));
         let bound = match bound_or_refuse(plan.clone(), context) {
             Ok(bound) => bound,
             Err(code) => return code,
@@ -1338,13 +1409,17 @@ fn sealer() -> Option<KeychainSeal> {
 /// a stored plan is a second plaintext index of the user's filenames, and
 /// deleting the asset beats protecting it.
 fn cmd_review(args: &[String]) -> ExitCode {
-    if let Err(msg) = parse_scheme(args) {
-        eprintln!("sweep: {msg}");
-        return ExitCode::from(2);
-    }
     let path = match path_arg("review", &args[1..]) {
         Ok(Some(p)) => p,
         Ok(None) => std::env::current_dir().unwrap_or_default(),
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let scheme = match resolve_scheme(args, &path) {
+        Ok(scheme) => scheme,
         Err(msg) => {
             eprintln!("sweep: {msg}");
             return ExitCode::from(2);
@@ -1377,7 +1452,11 @@ fn cmd_review(args: &[String]) -> ExitCode {
             return scan_exit_code(&e);
         }
     };
-    let mut p = plan::build(&outcome);
+    let mut p = if scheme.name == "existing" {
+        plan::build_existing(&outcome, &scheme.maps)
+    } else {
+        plan::build_mapped(&outcome, &scheme.maps)
+    };
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
     if p.groups.is_empty() {
@@ -1408,7 +1487,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
             } else {
                 None
             };
-            let context = current_binding_context(&planning_profile(args, false));
+            let context = current_binding_context(&planning_profile(args, false, &scheme));
             let bound = match bound_or_refuse(p, context.clone()) {
                 Ok(plan) => plan,
                 Err(code) => return code,
@@ -1546,6 +1625,10 @@ fn run_apply(
     structured: bool,
     operation: &'static str,
 ) -> ExitCode {
+    if let Err(error) = verify_existing_profile(&context.profile) {
+        eprintln!("sweep: {error}");
+        return ExitCode::from(2);
+    }
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
     let result = if structured {
         let mut progress = etude_cli_support::progress::JsonProgress::stderr(
@@ -1613,10 +1696,6 @@ fn run_apply(
 /// since the plan was printed, and a stale plan is the write-freshness failure:
 /// the record says one thing and the tree says another.
 fn cmd_apply(args: &[String]) -> ExitCode {
-    if let Err(msg) = parse_scheme(args) {
-        eprintln!("sweep: {msg}");
-        return ExitCode::from(2);
-    }
     if let Some(file) = value(args, "--plan") {
         return apply_exported_plan(args, &file);
     }
@@ -1626,6 +1705,13 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     }
     let path = match apply_path(&args[1..]) {
         Ok(path) => path,
+        Err(msg) => {
+            eprintln!("sweep: {msg}");
+            return ExitCode::from(2);
+        }
+    };
+    let scheme = match resolve_scheme(args, &path) {
+        Ok(scheme) => scheme,
         Err(msg) => {
             eprintln!("sweep: {msg}");
             return ExitCode::from(2);
@@ -1670,27 +1756,18 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             return scan_exit_code(&e);
         }
     };
-    let maps = match map_flags(args).and_then(|raw| {
-        if raw.is_empty() {
-            Ok(Vec::new())
-        } else {
-            plan::validate_maps(&raw, &path)
-        }
-    }) {
-        Ok(m) => m,
-        Err(msg) => {
-            eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
-        }
-    };
-    if !maps.is_empty() && !use_journal {
+    if !scheme.maps.is_empty() && !use_journal {
         eprintln!(
-            "sweep: --map with --no-journal is refused. A mapped move must stay\n\
+            "sweep: routed moves with --no-journal are refused. A mapped move must stay\n\
              reversible; drop --no-journal."
         );
         return ExitCode::from(2);
     }
-    let mut p = plan::build_mapped(&outcome, &maps);
+    let mut p = if scheme.name == "existing" {
+        plan::build_existing(&outcome, &scheme.maps)
+    } else {
+        plan::build_mapped(&outcome, &scheme.maps)
+    };
     for g in &mut p.groups {
         g.accepted = match &only {
             Some(n) => &g.name == n,
@@ -1731,7 +1808,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         None
     };
 
-    let context = current_binding_context(&planning_profile(args, false));
+    let context = current_binding_context(&planning_profile(args, false, &scheme));
     let bound = match plan::BoundPlan::from_live_plan(p.clone(), context.clone()) {
         Ok(plan) => plan,
         Err(error) => {
@@ -2261,7 +2338,10 @@ mod tests {
     fn folders_is_the_explicit_and_default_scheme() {
         assert_eq!(parse_scheme(&[]), Ok(()));
         assert_eq!(parse_scheme(&["--scheme".into(), "folders".into()]), Ok(()));
-        assert!(parse_scheme(&["--scheme".into(), "existing".into()]).is_err());
+        assert_eq!(
+            parse_scheme(&["--scheme".into(), "existing".into()]),
+            Ok(())
+        );
         assert!(parse_scheme(&["--scheme".into(), "tags".into()]).is_err());
     }
 
