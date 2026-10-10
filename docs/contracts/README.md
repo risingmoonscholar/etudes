@@ -104,7 +104,8 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v3/` for all three tools); `v2/envelope.json` pins the result structure. Editing fields or types without
+contract envelopes (`v4/sweep.json`, `v5/stash.json` and `v3/unpack.json`);
+`v2/envelope.json` pins the result structure. Editing fields or types without
 adding a new version is rejected by the independent binary witness.
 
 The envelope contains `schema_version`, `tool_version`, `operation_id`, `status`,
@@ -146,16 +147,22 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 Unpack's capability declaration under `details.schema_version` is version 3;
 its surrounding result envelope remains version 2. `v3/unpack.json` pins the
 new declaration and `v1/unpack.json` mirrors that current fixture. The preceding
-`v2/unpack.json` stays unchanged; all current tool declarations use version 3.
+`v2/unpack.json` stays unchanged. Sweep and stash use their own declaration
+versions, while the shared result envelope remains version 2.
 The declaration names captured archive quarantine metadata, staging attribute
 reads and writes, exact readback before publication, and refusal if preservation
 fails. On exFAT, macOS-generated AppleDouble companions are retained when they
 provide the attribute representation. Raw values are never disclosed.
 
 
-Sweep and stash capability version 3 declare explicit plan exports and replay.
-The result envelope remains version 2; the separate bounded plan artifact is
-version 1. Existing versioned pins remain immutable. A plan holds metadata
+Sweep capability declaration version 4 adds the read-only, versioned
+existing-folder profile to its declared scope. The plan digest binds the
+profile bytes; profile changes require a fresh plan. Safety refusals still
+outrank profile routes, and the scheme never creates a destination.
+
+Stash's capability version 3 and sweep's preceding version 3 declare explicit
+plan exports and replay. The result envelope remains version 2; the separate
+bounded plan artifact is version 1. Existing versioned pins remain immutable. A plan holds metadata
 observations and selected paths, with private held-name commitments. Replay uses
 the original digest and current tool/profile/observation contract, refusing stale
 observations before case probes, journals or relocations. Root/filesystem identity

@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "etude-cli-support"
-version = "0.5.1"
+version = "0.5.4"
 dependencies = [
  "etude-core",
 ]
@@ -89,18 +89,18 @@ dependencies = [
 
 [[package]]
 name = "etude-keep"
-version = "0.5.1"
+version = "0.5.4"
 dependencies = [
  "chacha20poly1305",
 ]
 
 [[package]]
 name = "etude-read"
-version = "0.5.1"
+version = "0.5.4"
 
 [[package]]
 name = "fixtures"
-version = "0.5.1"
+version = "0.5.4"
 
 [[package]]
 name = "generic-array"
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "journal-dump"
-version = "0.5.1"
+version = "0.5.4"
 dependencies = [
  "etude-core",
  "etude-keep",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "stash-cli"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "etude-cli-support",
  "etude-core",
@@ -190,7 +190,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sweep-cli"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "etude-cli-support",
  "etude-core",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "unpack-cli"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "etude-cli-support",
  "etude-core",

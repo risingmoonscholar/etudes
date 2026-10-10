@@ -24,7 +24,7 @@ PY
 
 cd "$root"
 export ETUDE_STATE_DIR=../s
-printf '\033[2m~/Desktop · synthetic fixture · sweep 0.5.3 candidate\033[0m\n'
+printf '\033[2m~/Desktop · synthetic fixture · sweep 0.5.4 candidate\033[0m\n'
 printf '\033[33m$ sweep apply ~/Desktop --yes\033[0m\n\n'
 "$bin/sweep" apply . --yes
 

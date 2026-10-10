@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>stash v0.5.3 — external journal key and bounded progress · études</title>
-  <meta name="description" content="Stash 0.5.3 adds external journal-key support and bounded progress reporting while keeping restore under your control.">
-  <meta property="og:title" content="stash v0.5.3 — external journal key and bounded progress">
+  <title>stash v0.5.4 candidate — external journal key and bounded progress · études</title>
+  <meta name="description" content="Stash 0.5.4 adds external journal-key support and bounded progress reporting while keeping restore under your control.">
+  <meta property="og:title" content="stash v0.5.4 candidate — external journal key and bounded progress">
   <meta property="og:description" content="Stash moves files only when asked, reports progress, and brings them back on request.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/stash-custody.gif">
   <link rel="stylesheet" href="release.css">
@@ -14,17 +14,21 @@
   <main class="wrap">
     <header class="chrome">
       <a href="../index.html">études / demos</a>
-      <a href="https://github.com/risingmoonscholar/etudes/releases/tag/stash-v0.5.3">GitHub release</a>
+      <a href="https://github.com/risingmoonscholar/etudes">GitHub repository</a>
     </header>
 
     <article>
-      <p class="release-id">stash · v0.5.3</p>
-      <h1>stash v0.5.3 — external journal key and bounded progress</h1>
+      <p class="release-id">stash · v0.5.4 candidate</p>
+      <h1>stash v0.5.4 candidate — external journal key and bounded progress</h1>
       <div class="release-copy">
         <ul>
           <li><code>ETUDE_JOURNAL_KEY</code> supports encrypted stash recovery when the login keychain is unavailable. Invalid supplied keys refuse without fallback; retain the same key for recovery.</li>
           <li>Long stash and pop operations report bounded progress on stderr, keeping machine-readable stdout separate.</li>
         </ul>
+        <p><strong>JSON migration:</strong> this candidate uses result envelope
+          <code>schema_version: 2</code>. Consumers must check that version and
+          read operation fields under <code>details</code>; they moved there
+          from the top level. Capability-contract versions are separate.</p>
       </div>
     </article>
 
@@ -37,14 +41,14 @@
     </section>
 
     <section class="install" aria-labelledby="install-title">
-      <h2 id="install-title">Install stash 0.5.3</h2>
+      <h2 id="install-title">Install stash 0.5.4</h2>
       <p>Run this command to install the pinned release:</p>
-      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.3 stash-cli</code></pre>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.4 stash-cli</code></pre>
     </section>
 
     <footer class="footer">
       <a href="../index.html">All tool demos</a>
-      <a href="https://github.com/risingmoonscholar/etudes/tree/stash-v0.5.3">Source at stash-v0.5.3</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
     </footer>
   </main>
 </body>
