@@ -242,7 +242,8 @@ Each carries `schema_version`, `tool_version`, `operation_id` and `status`.
 Binary probes in the test suite compare declarations with exercised filesystem
 behaviour and pin each contract's schema; deliberate schema and behaviour mutants
 must fail those probes. The declaration is not a receipt or proof of no access.
-Every JSON result now uses schema version 2, including errors and refusals.
+**Breaking in 0.5.4 for JSON consumers:** every JSON result uses schema version 2,
+including errors and refusals. Check the outer `schema_version` before parsing.
 Operation fields move under `details` (for example, `details.groups`,
 `details.moved`, and `details.paths_audited`). The shared envelope adds `scope`,
 `observations`, `effects`, named `verification` claims, `recovery` and `disclosure`.
@@ -404,8 +405,9 @@ random source, then keep the same environment for apply and restore:
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 sweep apply /path/to/folder --yes
 sweep undo /path/to/folder
-stash /path/to/another-folder
-stash pop /path/to/another-folder
+stash /path/to/another-folder --json
+# Save details.stash_id from the receipt, then restore that exact batch:
+stash pop --id ID
 ```
 
 Keep a durable copy in your secret manager if you need undo after that shell
@@ -421,8 +423,13 @@ The encrypted journal format and cipher are unchanged. `sweep forget` cannot
 destroy a supplied key and refuses key destruction while the variable is set;
 you must remove all retained copies yourself. Losing the key loses undo.
 Use a separate `ETUDE_STATE_DIR` for each key if you maintain multiple keys.
-Undo/pop refuse to search past an unreadable newer journal, even for a named
-folder, because it could describe a newer operation on those same files.
+Sweep undo refuses to search past an unreadable newer journal, even for a named
+folder. Stash folder pop authenticates every stash journal before filtering by
+folder. An unreadable older journal also blocks it, even if already completed
+or from another folder: exit 3 says the journal is unreadable and cannot restore,
+with files and journal bytes unchanged. This also applies to `stash pop` in the
+current directory. Restore a known batch with `stash pop --id ID` and its original
+key; exact-ID selection does not search unrelated journals.
 
 If key acquisition fails, the only way to move files without a journal is
 explicit `--no-journal` on `sweep apply` or `stash`. This writes no journal
@@ -499,8 +506,9 @@ otherwise the first canonical selected object's parent is used. A holding parent
 inside a selected directory is refused.
 
 The result prints counts and a persistent operation id; it does not list source
-paths, basenames, or the holding path by default. Restore the whole operation
-with `stash pop --id ID`. Use `stash inspect --id ID` to see path-free opaque item
+paths, basenames, or the holding path. JSON carries `details.stash_id`; selection
+still includes `details.holding_root: "<redacted>"`, not a usable path.
+Restore the whole operation with `stash pop --id ID`. Use `stash inspect --id ID` to see path-free opaque item
 ids and which items remain held, then `stash pop --id ID --item ITEM` to restore
 one item. Each selected restore is durably recorded, and inspection reports the
 actual held count after partial restores. Pop uses the original absolute parents

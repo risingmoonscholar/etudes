@@ -16,6 +16,23 @@ reviewers were pointed at the tools before anyone else could be.
   reviewable profile to folders already present in the selected directory.
   Missing or ambiguous routes leave files in place, safety refusals still win,
   and exported plans require replanning if the profile changes.
+- **stash:** independent journalled batches return an opaque `stash_id`.
+  Restore the chosen batch with `stash pop --id ID`; `operation_id` identifies
+  only the invocation. Receipts expose no holding path; selection still carries
+  `holding_root: "<redacted>"`, which is not a restore selector.
+  `stash inspect --id ID` lists opaque item ids for partial restoration with
+  `stash pop --id ID --item ITEM`.
+- **stash folder restore:** `stash pop <folder>` (or `stash pop` in that folder)
+  requires one live matching batch and authenticates all stash journals first.
+  An unreadable older journal, completed or live and even from another folder,
+  blocks selection of a newer batch: exit 3 with an unreadable-journal/cannot-restore
+  diagnostic, leaving files and journal bytes unchanged. Use the selected batch's
+  `--id` and its original key for exact restoration; isolate different keys with
+  separate `ETUDE_STATE_DIR` directories.
+- **sweep and stash:** exported plans bind the reviewed filesystem observations;
+  stale plans refuse and require replanning.
+- **unpack:** preserves the source archive's quarantine attribute on the final
+  tree and verifies exact readback before publication; preservation failure refuses.
 - **Breaking for JSON consumers:** result envelopes use `schema_version: 2`.
   Agents that parse JSON must check the schema version and read operation
   fields under `details`; fields that were previously at the top level moved

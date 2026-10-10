@@ -71,7 +71,8 @@ must treat declarations separately from observed or independently verified acces
 
 The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
-pins the preceding version-3 declarations. `v4/` pins the current version-4 sweep declaration and unchanged stash and unpack declarations.
+pins the preceding version-3 declarations. `v4/` pins the current version-4 sweep declaration and the preceding stash declaration;
+`v5/` pins the current stash declaration. Unpack remains at declaration version 3.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
 links; trust `schema_version`, not a fixture directory name. Only the per-run
@@ -98,7 +99,8 @@ exercise some of those paths separately.
 
 ## Result envelopes and read receipts
 
-Schema version 2 wraps every `--json` response, including parser refusals,
+**Breaking in 0.5.4:** schema version 2 wraps every `--json` response, including
+parser refusals,
 operational errors and recovered panics. Plain `contract` also returns this
 envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
@@ -168,10 +170,11 @@ the original digest and current tool/profile/observation contract, refusing stal
 observations before case probes, journals or relocations. Root/filesystem identity
 values and plan digests are meaningful binding evidence, not proof of payload
 integrity or complete access coverage. See [plan binding](../plan-binding.md).
-## Stash explicit selection declaration version 3
+## Stash explicit selection introduced in declaration version 3
 
-Stash's capability declaration is version 3 and its surrounding result envelope
-remains version 2. `v3/stash.json` pins declaration version 3; `v1/stash.json`
+Explicit selection was introduced in stash declaration version 3; the current
+declaration is version 5 and its surrounding result envelope remains version 2.
+`v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
 Selection reads only its path list, selected object metadata and necessary ancestors,
@@ -187,8 +190,10 @@ volume checks. `explicit_selection_path_list_bytes` is the supplied NUL-terminat
 UTF-8 list from a file or stdin, not arbitrary payload inspection.
 `os_random_bytes_for_selection_holding` names its private operation root.
 `explicit_selected_objects` and `private_selection_holding_tree` include the
-chosen relocations, numbered slots and case-probe files. Agent-facing output
-redacts `holding_root`; the persistent operation id is the recovery selector.
+chosen relocations, numbered slots and case-probe files. Selection JSON retains
+`details.holding_root: "<redacted>"` and exposes no holding
+path. Use `details.stash_id` with `stash pop --id ID` as the recovery selector;
+the envelope `operation_id` identifies only this invocation.
 `stash inspect --id ID` returns path-free item ids, and `stash pop --id ID --item
 ITEM` records a single item's restore while reporting what remains held. Original
 source paths remain in the encrypted journal and are not listed in the receipt.
@@ -210,3 +215,12 @@ no restorable ID and require manual recovery. `inspect --id ID` enumerates stabl
 path-free item ids and actual held state; `pop --id ID --item ITEM` restores one
 item with per-entry journal progress, so a later whole-operation pop resumes the
 remaining entries.
+
+Folder pop (`stash pop <folder>` or `stash pop` in the current directory) requires
+one live matching batch. Discovery authenticates all stash journals before
+filtering by folder or discarding completed batches. An older journal unreadable
+under the current key therefore blocks even a newer matching batch, whether the
+older batch is completed or live, including one from another folder. Exit 3 names
+the unreadable journal and says it cannot restore; files and journal bytes remain
+unchanged. Exact `stash pop --id ID` loads only that selected journal with its
+original key. Keep different key histories in separate `ETUDE_STATE_DIR` stores.
