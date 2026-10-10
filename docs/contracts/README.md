@@ -151,11 +151,20 @@ reads and writes, exact readback before publication, and refusal if preservation
 fails. On exFAT, macOS-generated AppleDouble companions are retained when they
 provide the attribute representation. Raw values are never disclosed.
 
+
+Sweep and stash capability version 3 declare explicit plan exports and replay.
+The result envelope remains version 2; the separate bounded plan artifact is
+version 1. Existing versioned pins remain immutable. A plan holds metadata
+observations and selected paths, with private held-name commitments. Replay uses
+the original digest and current tool/profile/observation contract, refusing stale
+observations before case probes, journals or relocations. Root/filesystem identity
+values and plan digests are meaningful binding evidence, not proof of payload
+integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection declaration version 3
 
 Stash's capability declaration is version 3 and its surrounding result envelope
-remains version 2. `v3/stash.json` is the canonical pin; `v1/stash.json` mirrors it.
-The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
+remains version 2. `v3/stash.json` pins declaration version 3; `v1/stash.json`
+tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
 Selection reads only its path list, selected object metadata and necessary ancestors,
 plus the existing journal fingerprints and cross-volume file copying. Its writes
@@ -174,3 +183,16 @@ chosen relocations, numbered slots and case-probe files. The result's `holding_r
 is the minimum locator for recovery; original source paths remain in the encrypted
 journal and are not listed in the receipt. `--no-journal` is refused for selection,
 while legacy whole-folder behavior is retained.
+
+
+## Stash batch declaration version 4
+
+Stash's batch capability is declaration version 4 in `v4/stash.json`; `v1/stash.json`
+tracks the current declaration, while the version 3 pin remains available for the
+preceding interface. Every journalled stash has a persistent `stash_id`, separate
+from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
+malformed, unreadable or mismatched IDs without falling back to another operation.
+`--latest` uses creation time for current IDs and refuses ties; legacy IDs use
+modification time and also refuse ties. Due dates are informational: `--if-due`
+only gates an explicitly requested pop. Explicit `--no-journal` folder stashes have
+no restorable ID and require manual recovery.

@@ -1,6 +1,7 @@
 use etude_core::apply::{self, ApplyError, ProgressPhase, StructuredProgress};
 use etude_core::journal::{self, EntryState, Journal, Sealer};
-use etude_core::plan::{Group, Plan, Signal};
+use etude_core::plan::{BindingContext, BoundPlan, Group, Plan, Signal};
+use etude_core::scan::{self, ScanConfig};
 use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
@@ -18,7 +19,8 @@ fn lock() -> MutexGuard<'static, ()> {
 
 struct Fixture {
     base: PathBuf,
-    plan: Plan,
+    plan: BoundPlan,
+    context: BindingContext,
 }
 impl Fixture {
     fn new(count: usize) -> Self {
@@ -40,27 +42,32 @@ impl Fixture {
         unsafe {
             std::env::set_var("ETUDE_STATE_DIR", base.join("state"));
         }
-        let plan = Plan {
-            root,
-            groups: vec![Group {
+        let outcome = scan::scan(
+            &root,
+            &ScanConfig {
+                depth: 1,
+                grace: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let plan = Plan::with_groups(
+            &outcome,
+            vec![Group {
                 name: "Destination".into(),
                 signal: Signal::Collected { count },
                 members,
                 accepted: true,
             }],
-            untouched: Vec::new(),
-            scanned: count,
-            skipped_hidden: 0,
-            skipped_symlink: 0,
-            skipped_system: 0,
-            skipped_project: 0,
-            skipped_in_flight: 0,
-            skipped_package: 0,
-            skipped_unreadable: 0,
-            root_is_synced: false,
-            allow_sync: false,
-        };
-        Self { base, plan }
+        );
+        let context =
+            BindingContext::new(TOOL, "0.0.0", "progress-test-v1", "progress-test-contract");
+        let plan = BoundPlan::from_plan(plan, context.clone()).unwrap();
+        Self {
+            base,
+            plan,
+            context,
+        }
     }
 }
 impl Drop for Fixture {
@@ -122,8 +129,12 @@ fn advancing_arrives_after_durable_record_and_before_next_move() {
     let fixture = Fixture::new(4);
     let seal = TestSeal::new(None);
     let mut events = Vec::new();
-    let report =
-        apply::apply_with_structured_progress(&fixture.plan, TOOL, Some(&seal), None, |event| {
+    let report = apply::apply_with_structured_progress(
+        &fixture.plan.plan,
+        TOOL,
+        Some(&seal),
+        None,
+        |event| {
             if event.phase == ProgressPhase::Advancing {
                 let id = journal::latest_id(TOOL).unwrap();
                 let journal = Journal::load_sealed(TOOL, &id, &seal).unwrap();
@@ -146,8 +157,9 @@ fn advancing_arrives_after_durable_record_and_before_next_move() {
                 }
             }
             events.push(event);
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     assert_eq!(report.moved, 4);
     assert_eq!(
         events.first(),
@@ -174,11 +186,14 @@ fn failed_done_record_reports_actual_move_without_claiming_journal_acknowledgeme
     let fixture = Fixture::new(4);
     let seal = TestSeal::new(Some(2));
     let mut events = Vec::new();
-    let error =
-        apply::apply_with_structured_progress(&fixture.plan, TOOL, Some(&seal), None, |event| {
-            events.push(event)
-        })
-        .unwrap_err();
+    let error = apply::apply_with_structured_progress(
+        &fixture.plan.plan,
+        TOOL,
+        Some(&seal),
+        None,
+        |event| events.push(event),
+    )
+    .unwrap_err();
     assert!(matches!(error, ApplyError::Journal(_)));
     terminal(&events, ProgressPhase::Error, 4, 1, 0);
     assert!(
@@ -203,7 +218,7 @@ fn no_journal_moves_report_zero_durable_records() {
     let _guard = lock();
     let fixture = Fixture::new(4);
     let mut events = Vec::new();
-    apply::apply_with_structured_progress(&fixture.plan, TOOL, None, None, |event| {
+    apply::apply_with_structured_progress(&fixture.plan.plan, TOOL, None, None, |event| {
         events.push(event)
     })
     .unwrap();
@@ -217,11 +232,14 @@ fn injected_failure_reports_prior_durable_prefix() {
     let fixture = Fixture::new(4);
     let seal = TestSeal::new(None);
     let mut events = Vec::new();
-    let error =
-        apply::apply_with_structured_progress(&fixture.plan, TOOL, Some(&seal), Some(2), |event| {
-            events.push(event)
-        })
-        .unwrap_err();
+    let error = apply::apply_with_structured_progress(
+        &fixture.plan.plan,
+        TOOL,
+        Some(&seal),
+        Some(2),
+        |event| events.push(event),
+    )
+    .unwrap_err();
     assert!(matches!(error, ApplyError::Injected(2)));
     terminal(&events, ProgressPhase::Error, 4, 2, 2);
     assert!(fixture.plan.groups[0].members[2].exists());
@@ -232,7 +250,7 @@ fn empty_operation_still_reports_terminal_done() {
     let _guard = lock();
     let fixture = Fixture::new(0);
     let mut events = Vec::new();
-    apply::apply_with_structured_progress(&fixture.plan, TOOL, None, None, |event| {
+    apply::apply_with_structured_progress(&fixture.plan.plan, TOOL, None, None, |event| {
         events.push(event)
     })
     .unwrap();
@@ -245,11 +263,14 @@ fn base_journal_failure_reports_validated_plan_with_zero_moves() {
     let fixture = Fixture::new(4);
     let seal = TestSeal::new(Some(1));
     let mut events = Vec::new();
-    let error =
-        apply::apply_with_structured_progress(&fixture.plan, TOOL, Some(&seal), None, |event| {
-            events.push(event)
-        })
-        .unwrap_err();
+    let error = apply::apply_with_structured_progress(
+        &fixture.plan.plan,
+        TOOL,
+        Some(&seal),
+        None,
+        |event| events.push(event),
+    )
+    .unwrap_err();
     assert!(matches!(error, ApplyError::Journal(_)));
     terminal(&events, ProgressPhase::Error, 4, 0, 0);
     assert!(
@@ -267,8 +288,13 @@ fn legacy_callback_keeps_one_event_per_acknowledged_move() {
     let seal = TestSeal::new(Some(3));
     let mut completed = Vec::new();
     assert!(
-        apply::apply_with_progress(&fixture.plan, TOOL, Some(&seal), None, |event| completed
-            .push((event.completed, event.total)))
+        apply::apply_with_progress(
+            &fixture.plan,
+            &fixture.context,
+            Some(&seal),
+            None,
+            |event| completed.push((event.completed, event.total))
+        )
         .is_err()
     );
     assert_eq!(completed, vec![(1, 4)]);
@@ -287,10 +313,11 @@ fn preflight_refusal_reports_terminal_error_without_claiming_moves() {
     )
     .unwrap();
     let mut events = Vec::new();
-    let error = apply::apply_with_structured_progress(&fixture.plan, TOOL, None, None, |event| {
-        events.push(event)
-    })
-    .unwrap_err();
+    let error =
+        apply::apply_with_structured_progress(&fixture.plan.plan, TOOL, None, None, |event| {
+            events.push(event)
+        })
+        .unwrap_err();
     assert!(matches!(error, ApplyError::DestinationExists(_)));
     assert_eq!(events.len(), 1);
     terminal(&events, ProgressPhase::Error, 0, 0, 0);

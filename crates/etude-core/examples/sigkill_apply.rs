@@ -7,7 +7,17 @@ use std::fs;
 
 use etude_core::apply;
 use etude_core::journal::Sealer;
-use etude_core::plan::{self, Plan};
+use etude_core::plan::{self, BindingContext, BoundPlan, Plan};
+use etude_core::scan::{self, ScanConfig};
+
+fn context() -> BindingContext {
+    BindingContext::new(
+        "sigkilltest",
+        env!("CARGO_PKG_VERSION"),
+        "fixture-v1",
+        "metadata-v1",
+    )
+}
 
 struct TestSeal;
 impl Sealer for TestSeal {
@@ -38,31 +48,24 @@ fn main() {
             p
         })
         .collect();
-    let plan = Plan {
-        root: root.clone(),
-        groups: vec![plan::Group {
-            name: "Bench".to_string(),
-            signal: plan::Signal::Screenshot,
-            members,
-            accepted: true,
-        }],
-        untouched: Vec::new(),
-        scanned: n,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
+    let plan = {
+        let out = scan::scan(&root, &ScanConfig::default()).expect("scan benchmark fixture");
+        let proposal = Plan::with_groups(
+            &out,
+            vec![plan::Group {
+                name: "Bench".to_string(),
+                signal: plan::Signal::Screenshot,
+                members,
+                accepted: true,
+            }],
+        );
+        BoundPlan::from_plan(proposal, context()).expect("bind benchmark fixture")
     };
     println!(
         "sigkill_apply: starting apply of {n} files, pid={}",
         std::process::id()
     );
-    let rep = apply::apply(&plan, "sigkilltest", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&plan, &context(), Some(&TestSeal), None).expect("apply");
     println!(
         "sigkill_apply: completed without being killed, moved={}",
         rep.moved

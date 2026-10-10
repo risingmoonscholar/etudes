@@ -21,7 +21,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::journal::{Entry, EntryState, Journal, Method, Sealer, fingerprint};
-use crate::plan::Plan;
+use crate::plan::{BindingContext, BoundPlan, Plan};
 
 #[derive(Debug)]
 pub enum ApplyError {
@@ -36,6 +36,7 @@ pub enum ApplyError {
     CannotCompareNames(PathBuf),
     /// Injected by tests to prove the journal stays resumable.
     Injected(usize),
+    StalePlan(io::Error),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -70,6 +71,7 @@ impl std::fmt::Display for ApplyError {
             // io::Error::other with a formatted path is the one who breaks
             // it, and an_io_error_names_the_os_reason_without_naming_the_path
             // is what should catch them.
+            ApplyError::StalePlan(e) => write!(f, "refused: {e}; replan required"),
             ApplyError::Io(e) => write!(f, "io error: {e}"),
             ApplyError::Journal(e) => write!(f, "{e}"),
             ApplyError::DestinationExists(p) => {
@@ -138,24 +140,24 @@ pub type FailAt = Option<usize>;
 ///
 /// There is no plaintext journal path. Either it is sealed or it is absent.
 pub fn apply(
-    plan: &Plan,
-    tool: &str,
+    plan: &BoundPlan,
+    context: &BindingContext,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
 ) -> Result<ApplyReport, ApplyError> {
-    apply_with_progress(plan, tool, sealer, fail_at, |_| {})
+    apply_with_progress(plan, context, sealer, fail_at, |_| {})
 }
 
 /// Execute the accepted groups and report each completed move to the caller.
 /// The callback is deliberately output-agnostic; the CLI owns presentation.
 pub fn apply_with_progress(
-    plan: &Plan,
-    tool: &str,
+    bound: &BoundPlan,
+    context: &BindingContext,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
     mut progress: impl FnMut(Progress),
 ) -> Result<ApplyReport, ApplyError> {
-    apply_with_structured_progress(plan, tool, sealer, fail_at, |event| {
+    apply_bound_with_structured_progress(bound, context, sealer, fail_at, |event| {
         if event.phase == ProgressPhase::Advancing {
             progress(Progress {
                 completed: event.completed,
@@ -165,13 +167,81 @@ pub fn apply_with_progress(
     })
 }
 
+/// Execute a bound plan and report structured progress. Binding validation
+/// runs before any filesystem mutation; a live-plan conflict retains the
+/// existing empty sealed journal behavior.
+pub fn apply_bound_with_structured_progress(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    progress: impl FnMut(StructuredProgress),
+) -> Result<ApplyReport, ApplyError> {
+    apply_plan_with_structured_progress(
+        &bound.plan,
+        &context.tool,
+        sealer,
+        fail_at,
+        progress,
+        || {
+            if let Err(error) = bound.validate(context) {
+                if bound.is_live() {
+                    if let Some(sl) = sealer {
+                        let journal = Journal {
+                            id: journal_id(&bound.plan),
+                            tool: context.tool.clone(),
+                            root: bound.root.clone(),
+                            entries: Vec::new(),
+                            progress_tail_damaged: false,
+                        };
+                        journal.save_sealed(sl).map_err(ApplyError::Journal)?;
+                    }
+                    return Err(ApplyError::StalePlan(io::Error::other(format!(
+                        "conflict: {error}; no moves from this attempt, existing journals remain recoverable"
+                    ))));
+                }
+                return Err(ApplyError::StalePlan(error));
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Retain a sealed empty record when an immediate attempt loses its planning race.
+pub fn record_refused_plan(
+    plan: &Plan,
+    context: &BindingContext,
+    sealer: &dyn Sealer,
+) -> Result<(), ApplyError> {
+    Journal {
+        id: journal_id(plan),
+        tool: context.tool.clone(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+        progress_tail_damaged: false,
+    }
+    .save_sealed(sealer)
+    .map_err(ApplyError::Journal)
+}
+
 /// Report successful moves separately from durable journal acknowledgements.
 pub fn apply_with_structured_progress(
     plan: &Plan,
     tool: &str,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
+    progress: impl FnMut(StructuredProgress),
+) -> Result<ApplyReport, ApplyError> {
+    apply_plan_with_structured_progress(plan, tool, sealer, fail_at, progress, || Ok(()))
+}
+
+fn apply_plan_with_structured_progress(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
     mut progress: impl FnMut(StructuredProgress),
+    validate: impl FnOnce() -> Result<(), ApplyError>,
 ) -> Result<ApplyReport, ApplyError> {
     let mut event = StructuredProgress {
         planned: 0,
@@ -180,6 +250,7 @@ pub fn apply_with_structured_progress(
         phase: ProgressPhase::Planning,
     };
     let result = (|| {
+        validate()?;
         let id = journal_id(plan);
         let mut j = Journal {
             id: id.clone(),
@@ -1390,21 +1461,7 @@ mod tests {
     fn journal_id_is_unique_across_tight_loop() {
         // Tight loop finishes well under one second; under seconds+hash-only
         // ids this fails every time, proving the counter (not wall-clock luck).
-        let plan = Plan {
-            root: PathBuf::from("/tmp/journal_id_test_root"),
-            groups: Vec::new(),
-            untouched: Vec::new(),
-            scanned: 0,
-            skipped_hidden: 0,
-            skipped_symlink: 0,
-            skipped_system: 0,
-            skipped_project: 0,
-            skipped_in_flight: 0,
-            skipped_package: 0,
-            skipped_unreadable: 0,
-            root_is_synced: false,
-            allow_sync: false,
-        };
+        let plan = Plan::display_only(PathBuf::from("/tmp/journal_id_test_root"), Vec::new());
         const N: usize = 200;
         let mut ids = HashSet::with_capacity(N);
         for _ in 0..N {

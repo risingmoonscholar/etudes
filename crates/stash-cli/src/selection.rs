@@ -267,10 +267,9 @@ pub fn reserve(parent: &Path) -> Result<PathBuf, Error> {
 }
 
 pub fn plan(prepared: &Prepared, root: PathBuf, holding: &str) -> Plan {
-    let count = prepared.sources.len();
-    Plan {
+    Plan::display_only(
         root,
-        groups: prepared
+        prepared
             .sources
             .iter()
             .enumerate()
@@ -281,18 +280,7 @@ pub fn plan(prepared: &Prepared, root: PathBuf, holding: &str) -> Plan {
                 accepted: true,
             })
             .collect(),
-        untouched: vec![],
-        scanned: count,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
-    }
+    )
 }
 
 pub fn is_selection_root(root: &Path) -> bool {

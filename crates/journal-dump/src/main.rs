@@ -19,6 +19,7 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 struct KeychainSeal {
     key: [u8; 32],
@@ -34,6 +35,10 @@ impl etude_core::journal::Sealer for KeychainSeal {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "--watch-undo") {
+        return watch_undo(&args);
+    }
     // A decrypted journal is the full pathname history of everything the
     // tools ever moved. That answers only to a person at a terminal, for the
     // same reason stash's --paths does: the reach of the read is the whole
@@ -46,7 +51,7 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     }
-    let Some(arg) = std::env::args().nth(1) else {
+    let Some(arg) = args.first() else {
         eprintln!("usage: journal-dump <path-to-.journal>");
         return ExitCode::from(2);
     };
@@ -93,4 +98,115 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// Observe the journal's durable per-entry undo records, then stop the undo
+/// process while it is still in the witnessed partial state. This is a
+/// stress-only diagnostic: it emits counts and never prints journal paths.
+fn watch_undo(args: &[String]) -> ExitCode {
+    if args.len() != 4 {
+        eprintln!("usage: journal-dump --watch-undo <journal> <target> <pid>");
+        return ExitCode::from(2);
+    }
+    let path = Path::new(&args[1]);
+    let Ok(target) = args[2].parse::<usize>() else {
+        eprintln!("journal-dump: invalid progress target");
+        return ExitCode::from(2);
+    };
+    let Ok(pid) = args[3].parse::<i32>() else {
+        eprintln!("journal-dump: invalid process id");
+        return ExitCode::from(2);
+    };
+    if pid <= 0 {
+        eprintln!("journal-dump: invalid process id");
+        return ExitCode::from(2);
+    }
+    let Some(dir) = path.parent() else {
+        eprintln!("journal-dump: journal has no parent directory");
+        return ExitCode::from(2);
+    };
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        eprintln!("journal-dump: invalid journal name");
+        return ExitCode::from(2);
+    };
+    let Some((tool, id)) = stem.split_once('-') else {
+        eprintln!("journal-dump: invalid journal name");
+        return ExitCode::from(2);
+    };
+    if tool != "sweep" {
+        eprintln!("journal-dump: undo progress requires a sweep journal");
+        return ExitCode::from(2);
+    }
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", dir) };
+    let key = match etude_keep::key() {
+        Ok(key) => key,
+        Err(_) => {
+            eprintln!("journal-dump: journal key unavailable");
+            return ExitCode::from(1);
+        }
+    };
+    let sealer = KeychainSeal { key };
+    let started = Instant::now();
+    let timeout = Duration::from_secs(10);
+    loop {
+        let journal = match etude_core::Journal::load_sealed(tool, id, &sealer) {
+            Ok(journal) => journal,
+            // Undo may be appending a frame while the diagnostic opens it.
+            // A truncated in-flight frame is transient; retry until its
+            // fsync completes or the bounded observation window expires.
+            Err(_) => {
+                if started.elapsed() >= timeout {
+                    eprintln!("journal-dump: undo journal could not be read consistently");
+                    return ExitCode::from(1);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+        };
+        let reversed = journal
+            .entries
+            .iter()
+            .filter(|entry| entry.state == etude_core::journal::EntryState::Reversed)
+            .count();
+        let total = journal.entries.len();
+        if reversed >= target && reversed < total {
+            // SIGSTOP preserves the precise journal/filesystem state long
+            // enough for the caller to deliver its SIGKILL and test recovery.
+            #[cfg(unix)]
+            // SAFETY: pid is validated as positive; the caller supplies the
+            // undo process it just started in this stress scenario.
+            let stopped = unsafe { kill(pid, sigstop()) == 0 };
+            #[cfg(not(unix))]
+            let stopped = false;
+            if stopped {
+                println!("{reversed} {total}");
+                return ExitCode::SUCCESS;
+            }
+        }
+        if started.elapsed() >= timeout {
+            eprintln!("journal-dump: undo did not reach a stoppable partial state");
+            return ExitCode::from(1);
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, signal: i32) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+const fn sigstop() -> i32 {
+    17
+}
+
+#[cfg(target_os = "linux")]
+const fn sigstop() -> i32 {
+    19
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+const fn sigstop() -> i32 {
+    17
 }

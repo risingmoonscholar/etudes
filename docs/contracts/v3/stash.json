@@ -90,6 +90,34 @@
     "mutation_scope": {
       "operations": [
         {
+          "operation": "export_plan",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names"
+          ],
+          "writes": [
+            "explicit_plan_file"
+          ]
+        },
+        {
+          "operation": "apply_exported_plan",
+          "reads": [
+            "explicit_plan_file_bytes",
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "journal_key",
+            "journal_fingerprint_bytes",
+            "cross_device_source_bytes"
+          ],
+          "writes": [
+            "selected_tree_entries",
+            "journal_store",
+            "keychain_if_no_supplied_key"
+          ]
+        },
+        {
           "operation": "stash",
           "reads": [
             "selected_tree_metadata",
@@ -231,6 +259,23 @@
       "kind": "declaration_not_receipt",
       "access_verified": false,
       "witness": "scripts/check-tool-contracts.py"
+    },
+    "plan_binding": {
+      "artifact_schema_version": 1,
+      "digest": "sha256_metadata_configuration_and_choices",
+      "identity": [
+        "root_device_and_inode",
+        "selected_file_device_inode_size_mode_nanosecond_mtime_ctime",
+        "observed_directory_names_and_project_markers"
+      ],
+      "profile": "stash-metadata-v1",
+      "observation_contract": "stable_capability_declaration_digest_excluding_operation_id",
+      "stale": "refused_before_case_probe_journal_and_moves_replan_required",
+      "export": "explicit_mode_0600_file_outside_selected_tree",
+      "sensitivity": "selected_paths_and_metadata_held_names_are_commitments_no_payload_bytes",
+      "limit_bytes": 67108864,
+      "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
+      "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
     },
     "explicit_selection": {
       "command": "select",

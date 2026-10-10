@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use etude_core::apply::{self, ApplyError};
 use etude_core::journal::{Entry, Journal, Method};
-use etude_core::plan::{self, Plan};
+use etude_core::plan::{self, BindingContext, BoundPlan, Plan};
 use etude_core::scan::{self, ScanConfig};
 
 /// `ETUDE_STATE_DIR` is process-global, so these tests cannot run concurrently
@@ -44,7 +44,38 @@ impl etude_core::journal::Sealer for TestSeal {
     }
 }
 
-fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, Plan) {
+fn context() -> BindingContext {
+    BindingContext::new(
+        "test",
+        env!("CARGO_PKG_VERSION"),
+        "fixture-v1",
+        "metadata-v1",
+    )
+}
+
+fn proposal_from_scan(out: &scan::ScanOutcome, groups: Vec<plan::Group>) -> BoundPlan {
+    BoundPlan::from_plan(Plan::with_groups(out, groups), context()).expect("bind fixture proposal")
+}
+
+fn manual_proposal(
+    root: &std::path::Path,
+    groups: Vec<plan::Group>,
+    allow_sync: bool,
+) -> BoundPlan {
+    let out = scan::scan(
+        root,
+        &ScanConfig {
+            depth: 8,
+            allow_sync,
+            whole_units: false,
+            ..Default::default()
+        },
+    )
+    .expect("scan completed fixture");
+    proposal_from_scan(&out, groups)
+}
+
+fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, BoundPlan) {
     let root = std::env::temp_dir().join(format!("sweep_au_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let fx = fixtures::build(&root).expect("fixture");
@@ -59,6 +90,7 @@ fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, Plan) {
     for g in &mut p.groups {
         g.accepted = true;
     }
+    let p = BoundPlan::from_plan(p, context()).expect("bind fixture plan");
     (root, fx, p)
 }
 
@@ -84,7 +116,7 @@ fn sensitive_files_survive_a_full_apply_untouched() {
         })
         .collect();
 
-    apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
 
     for (path, len) in before {
         assert!(
@@ -113,7 +145,7 @@ fn apply_then_undo_restores_every_path() {
         .collect();
     assert!(!expected.is_empty(), "fixture produced no moves to test");
 
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
     assert_eq!(rep.moved, expected.len());
     for src in &expected {
         assert!(
@@ -149,7 +181,7 @@ fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
     let (root, _fx, p) = setup("resumable");
     const FAIL: usize = 7;
 
-    let err = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL))
+    let err = apply::apply(&p, &context(), Some(&TestSeal), Some(FAIL))
         .expect_err("injected failure should propagate");
     assert!(matches!(err, ApplyError::Injected(FAIL)));
 
@@ -180,7 +212,7 @@ fn undo_after_a_partial_apply_restores_only_what_moved() {
     let (root, _fx, p) = setup("partialundo");
     const FAIL: usize = 5;
 
-    let _ = apply::apply(&p, "test", Some(&TestSeal), Some(FAIL));
+    let _ = apply::apply(&p, &context(), Some(&TestSeal), Some(FAIL));
     let mut j = Journal::latest_sealed("test", &TestSeal).expect("journal");
     let r = apply::undo(&mut j, &TestSeal);
 
@@ -211,7 +243,7 @@ fn undo_skips_a_file_whose_only_difference_is_its_contents() {
     // field differs" to "every field differs" left the whole suite green,
     // which would let a restore overwrite edited work.
     let (root, _fx, p) = setup("hash-only");
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal");
 
     let victim = j.entries[0].to.clone();
@@ -251,7 +283,7 @@ fn undo_refuses_to_overwrite_a_file_changed_since_apply() {
     let _g = lock();
     // Blind restoration would destroy newer work.
     let (root, _fx, p) = setup("mutated");
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("journal");
 
     let victim = j.entries[0].to.clone();
@@ -279,7 +311,7 @@ fn no_journal_mode_writes_nothing_and_still_moves() {
     let (root, _fx, p) = setup("nojournal");
     let expected: usize = p.groups.iter().map(|g| g.members.len()).sum();
 
-    let rep = apply::apply(&p, "test", None, None).expect("apply");
+    let rep = apply::apply(&p, &context(), None, None).expect("apply");
 
     assert_eq!(rep.moved, expected);
     assert!(
@@ -298,13 +330,15 @@ fn apply_refuses_when_a_destination_already_exists() {
     let _g = lock();
     let (root, _fx, p) = setup("collision");
     // Pre-create a colliding destination.
-    let g = &p.groups[0];
+    let groups = p.groups.clone();
+    let g = &groups[0];
     let dir = root.canonicalize().unwrap().join(&g.name);
     fs::create_dir_all(&dir).expect("mkdir");
     let name = g.members[0].file_name().unwrap();
     fs::write(dir.join(name), b"pre-existing\n").expect("write");
+    let p = manual_proposal(&root, groups.clone(), false);
 
-    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    let err = apply::apply(&p, &context(), Some(&TestSeal), None).expect_err("should refuse");
     assert!(matches!(err, ApplyError::DestinationExists(_)));
 
     // And nothing moved.
@@ -337,28 +371,18 @@ fn apply_refuses_when_two_planned_destinations_collide() {
     let _ = fs::remove_dir_all(&state);
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
-    let p = Plan {
-        root: root.clone(),
-        groups: vec![plan::Group {
+    let p = manual_proposal(
+        &root,
+        vec![plan::Group {
             name: "Screenshots".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![src1.clone(), src2.clone()],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 2,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
-    };
+        false,
+    );
 
-    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    let err = apply::apply(&p, &context(), Some(&TestSeal), None).expect_err("should refuse");
     assert!(matches!(err, ApplyError::DestinationCollision(_)));
     assert!(src1.exists(), "first source moved despite the refusal");
     assert!(src2.exists(), "second source moved despite the refusal");
@@ -412,28 +436,18 @@ fn apply_refuses_when_two_planned_destinations_are_nfc_nfd_of_same_name() {
     let _ = fs::remove_dir_all(&state);
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
-    let p = Plan {
-        root: root.clone(),
-        groups: vec![plan::Group {
+    let p = manual_proposal(
+        &root,
+        vec![plan::Group {
             name: "invoice".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![src1.clone(), src2.clone()],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 2,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
-    };
+        false,
+    );
 
-    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    let err = apply::apply(&p, &context(), Some(&TestSeal), None).expect_err("should refuse");
     assert!(
         matches!(err, ApplyError::DestinationCollision(_)),
         "expected a clean pre-flight DestinationCollision, got: {err:?}"
@@ -463,55 +477,37 @@ fn two_applies_same_root_same_second_get_distinct_journal_ids() {
     let src_b = sub_b.join("beta.txt");
     fs::write(&src_a, b"alpha\n").expect("write a");
     fs::write(&src_b, b"beta\n").expect("write b");
+    let src_a = src_a.canonicalize().expect("canonical a");
+    let src_b = src_b.canonicalize().expect("canonical b");
 
     let state =
         std::env::temp_dir().join(format!("sweep_state_jid_collision_{}", std::process::id()));
     let _ = fs::remove_dir_all(&state);
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
-    let plan_a = Plan {
-        root: root.clone(),
-        groups: vec![plan::Group {
+    let plan_a = manual_proposal(
+        &root,
+        vec![plan::Group {
             name: "GroupA".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![src_a.clone()],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 1,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
-    };
-    let plan_b = Plan {
-        root: root.clone(),
-        groups: vec![plan::Group {
+        false,
+    );
+    let rep_a = apply::apply(&plan_a, &context(), Some(&TestSeal), None).expect("apply a");
+    let plan_b = manual_proposal(
+        &root,
+        vec![plan::Group {
             name: "GroupB".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![src_b.clone()],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 1,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
-    };
+        false,
+    );
 
-    let rep_a = apply::apply(&plan_a, "test", Some(&TestSeal), None).expect("apply a");
-    let rep_b = apply::apply(&plan_b, "test", Some(&TestSeal), None).expect("apply b");
+    let rep_b = apply::apply(&plan_b, &context(), Some(&TestSeal), None).expect("apply b");
 
     assert_ne!(
         rep_a.journal_id, rep_b.journal_id,
@@ -539,7 +535,7 @@ fn no_filename_is_readable_in_the_written_journal() {
     // The M7 claim, checked against the bytes on disk rather than the API.
     let _g = lock();
     let (root, _fx, p) = setup("sealed");
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
     let raw = fs::read(rep.journal_path.expect("path")).expect("read");
     let hay = String::from_utf8_lossy(&raw);
 
@@ -585,28 +581,18 @@ fn apply_refuses_synced_destination_when_allow_sync_was_never_granted() {
     // is_synced(dest) is true even though this plan was never granted
     // allow_sync. This is today's default-refusal behaviour and it must not
     // change: no flag, no unlock.
-    let p = Plan {
-        root: root.clone(),
-        groups: vec![plan::Group {
+    let p = manual_proposal(
+        &root,
+        vec![plan::Group {
             name: "Dropbox".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![src.clone()],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 1,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: false,
-        allow_sync: false,
-    };
+        false,
+    );
 
-    let err = apply::apply(&p, "test", Some(&TestSeal), None).expect_err("should refuse");
+    let err = apply::apply(&p, &context(), Some(&TestSeal), None).expect_err("should refuse");
     assert!(matches!(err, ApplyError::DestinationIsSynced(_)));
     assert!(src.exists(), "source moved despite the refusal");
     cleanup(&root);
@@ -641,28 +627,17 @@ fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
 
     let entry_path = out.entries[0].path.clone();
     let entry_name = out.entries[0].name.clone();
-    let p = Plan {
-        root: out.root.clone(),
-        groups: vec![plan::Group {
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
             name: "Docs".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![entry_path],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 1,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: out.root_is_synced,
-        allow_sync: out.allow_sync,
-    };
+    );
 
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None)
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None)
         .expect("allow_sync granted at scan time should let apply proceed");
     assert_eq!(rep.moved, 1);
     assert!(out.root.join("Docs").join(&entry_name).exists());
@@ -712,28 +687,17 @@ fn allow_sync_granted_on_an_unsynced_root_still_covers_a_destination_that_looks_
 
     // The user renamed this group to "Dropbox". That is coincidence, not
     // intent to touch real Dropbox. The destination now matches a sync marker.
-    let p = Plan {
-        root: out.root.clone(),
-        groups: vec![plan::Group {
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
             name: "Dropbox".to_string(),
             signal: plan::Signal::Screenshot,
             members: vec![src.clone()],
             accepted: true,
         }],
-        untouched: Vec::new(),
-        scanned: 1,
-        skipped_hidden: 0,
-        skipped_symlink: 0,
-        skipped_system: 0,
-        skipped_project: 0,
-        skipped_in_flight: 0,
-        skipped_package: 0,
-        skipped_unreadable: 0,
-        root_is_synced: out.root_is_synced,
-        allow_sync: out.allow_sync,
-    };
+    );
 
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None)
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None)
         .expect("the --allow-sync flag granted at scan time must still cover this");
     assert_eq!(rep.moved, 1);
     assert!(root.join("Dropbox").join("deck_notes.pdf").exists());
@@ -1157,7 +1121,7 @@ fn a_torn_final_frame_still_lets_undo_restore_everything() {
     let _g = lock();
     let (root, _fx, p) = setup("torn_tail");
 
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
     let moved: Vec<PathBuf> = Journal::load_sealed("test", &rep.journal_id, &TestSeal)
         .expect("journal loads")
         .entries
@@ -1232,7 +1196,7 @@ fn a_journal_missing_several_records_restores_nothing() {
     let _g = lock();
     let (root, _fx, p) = setup("deep_trunc");
 
-    let rep = apply::apply(&p, "test", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
     let full = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("loads");
     assert!(
         full.entries.len() > 3,

@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use etude_core::apply;
 use etude_core::journal::{Journal, Sealer};
-use etude_core::plan::{Group, Plan, Signal};
+use etude_core::plan::{BindingContext, BoundPlan, Group, Plan, Signal};
 use etude_core::scan::{self, ScanConfig};
 
 /// `ETUDE_STATE_DIR` is process-global; serialise rather than rely on a flag.
@@ -46,7 +46,16 @@ fn cleanup(root: &Path) {
 }
 
 /// Mirrors what the binary builds: one group, everything in it.
-fn stash_plan(root: &Path) -> (Plan, usize) {
+fn context() -> BindingContext {
+    BindingContext::new(
+        "stash",
+        env!("CARGO_PKG_VERSION"),
+        "fixture-v1",
+        "metadata-v1",
+    )
+}
+
+fn stash_plan(root: &Path) -> (BoundPlan, usize) {
     let cfg = ScanConfig {
         depth: 1,
         allow_sync: true,
@@ -57,26 +66,19 @@ fn stash_plan(root: &Path) -> (Plan, usize) {
     let members: Vec<PathBuf> = out.entries.iter().map(|e| e.path.clone()).collect();
     let count = members.len();
     (
-        Plan {
-            root: out.root.clone(),
-            groups: vec![Group {
-                name: ".stash-0".into(),
-                signal: Signal::Collected { count },
-                members,
-                accepted: true,
-            }],
-            untouched: Vec::new(),
-            scanned: count,
-            skipped_hidden: out.skipped_hidden,
-            skipped_symlink: out.skipped_symlink,
-            skipped_system: out.skipped_system,
-            skipped_project: 0,
-            skipped_in_flight: 0,
-            skipped_package: 0,
-            skipped_unreadable: out.skipped_unreadable,
-            root_is_synced: out.root_is_synced,
-            allow_sync: out.allow_sync,
-        },
+        BoundPlan::from_plan(
+            Plan::with_groups(
+                &out,
+                vec![Group {
+                    name: ".stash-0".into(),
+                    signal: Signal::Collected { count },
+                    members,
+                    accepted: true,
+                }],
+            ),
+            context(),
+        )
+        .expect("bind stash fixture"),
         count,
     )
 }
@@ -102,7 +104,7 @@ fn the_folder_is_actually_empty_afterwards() {
     assert!(visible(&root) > 0, "fixture produced nothing to stash");
 
     let (plan, count) = stash_plan(&root);
-    let r = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    let r = apply::apply(&plan, &context(), Some(&TestSeal), None).expect("apply");
 
     assert_eq!(r.moved, count);
     assert_eq!(visible(&root), 0, "items remained visible after stashing");
@@ -116,7 +118,7 @@ fn everything_comes_back_including_directories_and_symlinks() {
     let (plan, count) = stash_plan(&root);
     let before: Vec<PathBuf> = plan.groups[0].members.clone();
 
-    let rep = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&plan, &context(), Some(&TestSeal), None).expect("apply");
     let mut j = Journal::load_sealed("stash", &rep.journal_id, &TestSeal).expect("journal");
     let ur = apply::undo(&mut j, &TestSeal);
 
@@ -146,7 +148,7 @@ fn a_symlink_is_fingerprinted_by_the_link_not_its_target() {
     let root = setup("symlink");
     let (plan, _) = stash_plan(&root);
 
-    let rep = apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    let rep = apply::apply(&plan, &context(), Some(&TestSeal), None).expect("apply");
     let mut j = Journal::load_sealed("stash", &rep.journal_id, &TestSeal).expect("journal");
     let ur = apply::undo(&mut j, &TestSeal);
 
@@ -179,7 +181,7 @@ fn stash_moves_the_files_sweep_refuses() {
         );
     }
 
-    apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    apply::apply(&plan, &context(), Some(&TestSeal), None).expect("apply");
     for name in fixtures::SENSITIVE_NAMES {
         assert!(
             !root.canonicalize().unwrap().join(name).exists(),
@@ -195,7 +197,7 @@ fn hidden_items_are_left_where_they_are() {
     let _g = lock();
     let root = setup("hidden");
     let (plan, _) = stash_plan(&root);
-    apply::apply(&plan, "stash", Some(&TestSeal), None).expect("apply");
+    apply::apply(&plan, &context(), Some(&TestSeal), None).expect("apply");
 
     assert!(
         root.join(".ssh").exists(),
