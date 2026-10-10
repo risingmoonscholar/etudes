@@ -137,7 +137,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(if matches!(tool, Tool::Stash) {
-                4
+                5
             } else {
                 SCHEMA_VERSION
             }),
@@ -476,7 +476,7 @@ pub fn declaration(
             ("holding", j::str("one_private_operation_root_with_numbered_slots;_equal_basenames_do_not_collide")),
             ("holding_parent", j::str("into_parent_or_first_canonical_source_parent;_inside_selected_object_refused")),
             ("recovery", j::str("stash_pop_operation_root;_authenticated_owned_empty_directories_only")),
-            ("disclosure", j::str("counts_and_minimum_recovery_locator_only;_source_paths_and_basenames_not_listed")),
+            ("disclosure", j::str("opaque_operation_and_item_ids_by_default;_paths_redacted_in_agent_output;_source_paths_and_basenames_not_listed")),
         ])));
     }
     if matches!(tool, Tool::Stash) {
@@ -484,6 +484,8 @@ pub fn declaration(
             ("persistent_id", j::str("stash_id_is_the_encrypted_journal_id;_distinct_from_invocation_operation_id")),
             ("identity", j::str("new_stash_journal_v2_authenticates_id_and_tool_before_progress_replay;_legacy_v1_filename_binding_unproven")),
             ("exact_restore", j::str("pop_--id_ID_or_current_creation_ID;_bounded_selector;_missing_or_damaged_id_never_falls_back")),
+            ("partial_restore", j::str("inspect_--id_ID_lists_path_free_opaque_item_ids;_pop_--id_ID_--item_ITEM_durably_restores_one_item")),
+            ("remaining_held", j::str("reported_from_nofollow_destination_metadata_after_partial_restore;_changed_or_missing_items_are_not_claimed_restored")),
             ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier")),
             ("latest_scope", j::str("no_path_means_machine_wide_stash_journals;_path_limits_to_exact_journal_root")),
             ("path_restore", j::str("one_live_batch_required;_multiple_matches_refused")),
@@ -678,6 +680,15 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "empty_holding_directories",
                     "keychain_if_no_supplied_key",
                 ],
+            ),
+            scope(
+                "inspect",
+                &[
+                    "journal_store",
+                    "journal_key",
+                    "journal_recorded_paths_metadata",
+                ],
+                &["keychain_if_no_supplied_key"],
             ),
             scope(
                 "status",

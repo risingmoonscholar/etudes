@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 384 tests
+cargo test --all                # 386 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -449,12 +449,16 @@ from different parents cannot collide. `--into PARENT` chooses the holding paren
 otherwise the first canonical selected object's parent is used. A holding parent
 inside a selected directory is refused.
 
-The result prints counts and the minimum operation-root locator needed for
-`stash pop LOCATOR`; it does not list source paths or basenames. Pop uses the
-original absolute parents stored in the encrypted journal, and removes only
-empty holding directories authenticated by that journal. Selected directories
-retain the existing opaque directory fingerprint behavior; this is not a recursive
-content-integrity claim. Receipts continue to name uninstrumented access as
-unproven, and no zero counter proves absence of reads.
+The result prints counts and a persistent operation id; it does not list source
+paths, basenames, or the holding path by default. Restore the whole operation
+with `stash pop --id ID`. Use `stash inspect --id ID` to see path-free opaque item
+ids and which items remain held, then `stash pop --id ID --item ITEM` to restore
+one item. Each selected restore is durably recorded, and inspection reports the
+actual held count after partial restores. Pop uses the original absolute parents
+stored in the encrypted journal, and removes only empty holding directories
+authenticated by that journal. Selected directories retain the existing opaque
+directory fingerprint behavior; this is not a recursive content-integrity
+claim. Receipts continue to name uninstrumented access as unproven, and no zero
+counter proves absence of reads.
 
 Journalled stash operations return a persistent `stash_id`. Use `stash pop --id ID` for exact restoration, or `stash pop --latest` to explicitly select the latest live batch. Folder operations can coexist; ambiguous path-based restores refuse. Deadlines remain information until an explicit pop. See [independent stash batches](docs/stash-batches.md) for identity, legacy compatibility and disclosure semantics.

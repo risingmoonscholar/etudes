@@ -821,6 +821,30 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
 pub fn undo_with_progress(
     j: &mut Journal,
     sealer: &dyn Sealer,
+    progress: impl FnMut(Progress),
+) -> UndoReport {
+    undo_selected_with_progress(j, sealer, None, progress)
+}
+
+/// Reverse one journal entry, preserving every other entry's durable state.
+/// The index is the entry's stable position in the sealed journal, not a path.
+/// Returns `Err(len)` when the requested index is outside the journal.
+///
+/// Like [`undo`], this verifies the recorded fingerprint before touching the
+/// destination and persists the reversal before returning. The ordinary undo
+/// progress stream already supports holes, so selective reversals remain
+/// replayable alongside later whole-operation restores.
+pub fn undo_entry(j: &mut Journal, index: usize, sealer: &dyn Sealer) -> Result<UndoReport, usize> {
+    if index >= j.entries.len() {
+        return Err(j.entries.len());
+    }
+    Ok(undo_selected_with_progress(j, sealer, Some(index), |_| {}))
+}
+
+fn undo_selected_with_progress(
+    j: &mut Journal,
+    sealer: &dyn Sealer,
+    selected: Option<usize>,
     mut progress: impl FnMut(Progress),
 ) -> UndoReport {
     let mut r = UndoReport::default();
@@ -855,7 +879,7 @@ pub fn undo_with_progress(
     }
 
     // Reverse order, so nested destinations empty before their parents.
-    let total = j.entries.len();
+    let total = selected.map_or(j.entries.len(), |_| 1);
     let mut completed = 0usize;
     macro_rules! advance {
         () => {{
@@ -864,6 +888,9 @@ pub fn undo_with_progress(
         }};
     }
     for i in (0..j.entries.len()).rev() {
+        if selected.is_some_and(|selected| selected != i) {
+            continue;
+        }
         let e = j.entries[i].clone();
         if !e.is_moved() {
             // Only the successor entry gets recovery. Everything past it never

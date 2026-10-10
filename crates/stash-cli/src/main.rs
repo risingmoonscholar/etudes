@@ -41,12 +41,14 @@ USAGE
     stash select --from0 FILE|-     read NUL-terminated UTF-8 paths; '-' reads stdin
     --into PARENT                   holding parent for an explicit selection
     stash pop --id ID               restore exactly one operation
+    stash pop --id ID --item ITEM   restore one item from an operation
     stash pop ID                    restore an operation id directly
     stash pop [PATH]                restore the unique batch for PATH (or here)
     stash pop [PATH] --latest       restore the latest live batch; no PATH means all
     stash pop [PATH] --if-due       pop only if the deadline has passed;
                                     exit 2 when early, 1 when nothing stashed
     stash status [PATH]             what is stashed, and when it is due back
+    stash inspect --id ID           inspect item ids and what remains held
     stash status --all              every stash this machine's journals know,
                                     paths redacted; --paths shows them
     stash contract --json           print the versioned capability contract
@@ -124,6 +126,13 @@ fn run_main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("inspect") => match check_flags("inspect", &args) {
+            Ok(()) => cmd_inspect(&args),
+            Err(m) => {
+                eprintln!("stash: {m}");
+                ExitCode::from(2)
+            }
+        },
         Some("status" | "list") => match check_flags("status", &args) {
             Ok(()) => cmd_status(&args),
             Err(m) => {
@@ -180,7 +189,8 @@ const COMMAND_FLAGS: &[(&str, &[&str])] = &[
             "--plan-digest",
         ],
     ),
-    ("pop", &["--id", "--latest", "--if-due", "--json"]),
+    ("pop", &["--id", "--item", "--latest", "--if-due", "--json"]),
+    ("inspect", &["--id", "--json"]),
     ("status", &["--json", "--all", "--paths"]),
 ];
 
@@ -200,7 +210,7 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
         let a = &args[i];
         if matches!(
             a.as_str(),
-            "--for" | "--export-plan" | "--plan" | "--plan-digest" | "--id"
+            "--for" | "--export-plan" | "--plan" | "--plan-digest" | "--id" | "--item"
         ) && allowed.contains(&a.as_str())
         {
             if args.get(i + 1).is_none_or(|value| value.starts_with('-')) {
@@ -654,20 +664,21 @@ fn cmd_select(args: &[String]) -> ExitCode {
                         ("stash_id", j::str(&report.journal_id)),
                         ("moved", j::num(report.moved)),
                         ("selected", j::num(prepared.sources.len())),
-                        ("holding_root", j::path(&root)),
+                        ("holding_root", j::str("<redacted>")),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into()))
                     ])
                 );
             } else {
                 println!(
-                    "Stashed {} selected {}. Restore with: stash pop {}",
+                    "Stashed {} selected {}. Operation id: {}. Restore with: stash pop --id {}",
                     report.moved,
                     if report.moved == 1 {
                         "object"
                     } else {
                         "objects"
                     },
-                    etude_core::redact::path(&root)
+                    report.journal_id,
+                    report.journal_id
                 );
             }
             ExitCode::SUCCESS
@@ -808,13 +819,24 @@ fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<Pa
 }
 
 fn cmd_pop(args: &[String]) -> ExitCode {
-    let selector = match batches::selector(args) {
+    let (selector_args, item_id) = match pop_item_args(args) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("stash: {error}");
             return ExitCode::from(2);
         }
     };
+    let selector = match batches::selector(&selector_args) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("stash: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if item_id.is_some() && !matches!(&selector, batches::Selector::Id(_)) {
+        eprintln!("stash: --item requires --id OPERATION");
+        return ExitCode::from(2);
+    }
     let Some(sl) = sealer() else {
         return ExitCode::from(2);
     };
@@ -853,6 +875,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             println!("due {}; popping {human} early.", iso_utc(due))
         }
         ClockDecision::Pop => {}
+    }
+    if let Some(item_id) = item_id {
+        return pop_one_item(&mut j, &item_id, &sl);
     }
     if journal_is_fully_undone(&j) {
         println!("\nNothing to restore. This stash was already popped.");
@@ -980,6 +1005,227 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if r.skipped_changed.is_empty() {
         selection::remove_empty_root(&j);
+    }
+    ExitCode::SUCCESS
+}
+
+fn pop_item_args(args: &[String]) -> Result<(Vec<String>, Option<String>), &'static str> {
+    let mut cleaned = Vec::with_capacity(args.len());
+    let mut item = None;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--item" {
+            if item.is_some() {
+                return Err("--item may be supplied once");
+            }
+            let value = args.get(index + 1).ok_or("--item requires an item id")?;
+            if value.starts_with('-') {
+                return Err("--item requires an item id");
+            }
+            item = Some(value.clone());
+            index += 2;
+        } else {
+            cleaned.push(args[index].clone());
+            index += 1;
+        }
+    }
+    if item.is_some() && !cleaned.iter().any(|arg| arg == "--id") {
+        return Err("--item requires --id OPERATION");
+    }
+    Ok((cleaned, item))
+}
+
+fn opaque_item_id(journal: &etude_core::Journal, index: usize) -> String {
+    // A stable, path-independent handle. The id is only a selector, not an
+    // authentication token; journal access remains protected by its sealer.
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in journal.id.bytes().chain((index as u64).to_le_bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    format!("item-{hash:016x}")
+}
+
+fn item_state(journal: &etude_core::Journal, index: usize) -> Result<&'static str, std::io::Error> {
+    let entry = &journal.entries[index];
+    if entry.state == etude_core::journal::EntryState::Reversed {
+        return Ok("restored");
+    }
+    match std::fs::symlink_metadata(&entry.to) {
+        Ok(_) => Ok("held"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("not_held"),
+        Err(error) => Err(error),
+    }
+}
+
+fn pop_one_item(
+    journal: &mut etude_core::Journal,
+    item_id: &str,
+    sealer: &dyn etude_core::journal::Sealer,
+) -> ExitCode {
+    let mut selected = None;
+    for index in 0..journal.entries.len() {
+        if opaque_item_id(journal, index) == item_id && selected.replace(index).is_some() {
+            eprintln!("stash: item id collision; refusing to restore an ambiguous item");
+            return ExitCode::from(3);
+        }
+    }
+    let Some(index) = selected else {
+        eprintln!("stash: no item found for that id in this operation");
+        return ExitCode::from(1);
+    };
+    if journal.entries[index].state == etude_core::journal::EntryState::Reversed {
+        println!("That item is already restored.");
+        return ExitCode::from(1);
+    }
+
+    let report = match etude_core::apply::undo_entry(journal, index, sealer) {
+        Ok(report) => report,
+        Err(_) => {
+            eprintln!("stash: item index is outside the operation");
+            return ExitCode::from(3);
+        }
+    };
+    if report.unrecorded_moves > 1 {
+        eprintln!("stash: journal has multiple unrecorded moves; refusing partial restore");
+        return ExitCode::from(3);
+    }
+    let saved = journal.save_sealed(sealer);
+    let remaining = match batches::held(journal) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("stash: could not count items still held: {error}");
+            return ExitCode::from(3);
+        }
+    };
+    etude_cli_support::envelope::detail(etude_core::json::obj(&[
+        ("stash_id", etude_core::json::str(&journal.id)),
+        ("item_id", etude_core::json::str(item_id)),
+        ("restored", etude_core::json::num(report.restored)),
+        ("remaining_held", etude_core::json::num(remaining)),
+        (
+            "skipped_changed",
+            etude_core::json::num(report.skipped_changed.len()),
+        ),
+        (
+            "skipped_missing",
+            etude_core::json::num(report.skipped_missing.len()),
+        ),
+    ]));
+    etude_cli_support::envelope::effect("items_restored", report.restored);
+    etude_cli_support::envelope::effect("items_still_held", remaining);
+    if report.error.is_some() || report.restored == 0 {
+        etude_cli_support::envelope::status("incomplete");
+    }
+    match saved {
+        Ok(()) => {}
+        Err(error) => {
+            eprintln!("stash: item restore finished, but its journal could not be saved: {error}");
+            return ExitCode::from(3);
+        }
+    }
+    if let Some(error) = report.error {
+        eprintln!(
+            "stash: item restore could not finish: {}",
+            apply_error_reason(&error)
+        );
+        eprintln!("{remaining} items remain held in this operation.");
+        return ExitCode::from(3);
+    }
+    println!(
+        "Restored {} item; {remaining} remain held in this operation.",
+        report.restored
+    );
+    if !report.skipped_changed.is_empty() {
+        println!(
+            "  {} changed item(s) were left in holding.",
+            report.skipped_changed.len()
+        );
+    }
+    if !report.skipped_missing.is_empty() {
+        println!(
+            "  {} item(s) were already missing.",
+            report.skipped_missing.len()
+        );
+    }
+    if report.restored == 0 {
+        ExitCode::from(2)
+    } else {
+        selection::remove_empty_root(journal);
+        ExitCode::SUCCESS
+    }
+}
+
+fn cmd_inspect(args: &[String]) -> ExitCode {
+    let selector = match batches::selector(args) {
+        Ok(batches::Selector::Id(id)) => batches::Selector::Id(id),
+        Ok(_) => {
+            eprintln!("stash: inspect requires --id OPERATION");
+            return ExitCode::from(2);
+        }
+        Err(error) => {
+            eprintln!("stash: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let Some(sealer) = sealer() else {
+        return ExitCode::from(2);
+    };
+    let journal = match batches::select(selector, &sealer) {
+        Ok(Some(journal)) => journal,
+        Ok(None) => {
+            eprintln!("stash: no operation found for that id");
+            return ExitCode::from(1);
+        }
+        Err(error) => {
+            eprintln!("stash: cannot inspect operation: {error}");
+            return ExitCode::from(3);
+        }
+    };
+    let mut items = Vec::with_capacity(journal.entries.len());
+    let mut held = 0usize;
+    for index in 0..journal.entries.len() {
+        let state = match item_state(&journal, index) {
+            Ok(state) => state,
+            Err(error) => {
+                eprintln!("stash: cannot inspect item state: {error}");
+                return ExitCode::from(3);
+            }
+        };
+        held += usize::from(state == "held");
+        items.push((opaque_item_id(&journal, index), state));
+    }
+    if flag(args, "--json") {
+        use etude_core::json as j;
+        let rows = items
+            .iter()
+            .map(|(id, state)| {
+                j::obj(&[
+                    ("id", j::str(id)),
+                    ("state", j::str(state)),
+                    ("held", j::bool(*state == "held")),
+                ])
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "{}",
+            j::obj(&[
+                ("id", j::str(&journal.id)),
+                ("held", j::num(held)),
+                ("total", j::num(items.len())),
+                ("items", j::arr(rows)),
+                ("paths_shown", j::bool(false)),
+            ])
+        );
+    } else {
+        println!(
+            "Operation {}: {held} of {} items remain held.",
+            journal.id,
+            items.len()
+        );
+        for (id, state) in &items {
+            println!("  {id}  {state}");
+        }
     }
     ExitCode::SUCCESS
 }
