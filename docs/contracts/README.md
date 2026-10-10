@@ -28,6 +28,7 @@ Scope domains resolve as follows:
 | `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
 | `project_marker_names` | Names of project markers; no parsing of marker contents |
+| `sweep_existing_profile_bytes` | The versioned plain-data routing profile in the configured etudes state directory; read to plan and verify before applying an existing-folder plan |
 | `consented_text_prefixes` | Prefix bytes of allowlisted files, after separate terminal consent; only increases refusal |
 | `journal_fingerprint_bytes` | First and last 4 KiB of regular files used by custody and restoration fingerprints; directories and links stay opaque |
 | `cross_device_source_bytes` | Data read by the copy fallback after EXDEV; applies to moves and restores, independently of inspection consent |
@@ -70,7 +71,7 @@ must treat declarations separately from observed or independently verified acces
 
 The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
-pins the current version-3 declarations for all three tools in version-2 result envelopes.
+pins the preceding version-3 declarations. `v4/` pins the current version-4 sweep declaration and unchanged stash and unpack declarations.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
 links; trust `schema_version`, not a fixture directory name. Only the per-run

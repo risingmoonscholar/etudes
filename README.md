@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 390 tests
+cargo test --all                # 395 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -112,8 +112,35 @@ can skip a group, and `apply --only NAME` selects only the named group. Safety
 holds come next and remove files from every grouping rule. Built-in grouping
 then claims eligible files; an agent `--map` can claim only what those built-in
 rules leave behind. This is the policy order, not a claim that sweep detects
-every filesystem state. The roadmap declares the names `folders`, `existing`
-and `tags`; only `folders` is implemented here.
+every filesystem state. The declared schemes are `folders`, `existing` and
+`tags`. `folders` and `existing` are implemented; `tags` is not.
+
+### Use folders you already have
+
+`sweep --scheme existing PATH` reads the plain profile
+`~/Library/Application Support/etudes/sweep-existing-profile.toml` (or the same
+filename under `ETUDE_STATE_DIR` when that variable is set). Sweep never
+creates this file. Add routes as versioned data you can review before use:
+
+```toml
+schema_version = 1
+
+[[routes]]
+extension = "bpy"
+folder = "Blender Files"
+
+[[routes]]
+extension = "pdf"
+folder = "Reading"
+```
+
+Each route applies only when its destination is already a direct, visible
+folder in the selected directory. Missing destinations are ignored and their
+files stay where they are. A route needs at least three eligible files to form
+a group. Duplicate or malformed routes refuse the plan before anything moves.
+Safety refusals still take precedence over the profile; eligible profile routes
+take precedence over built-in grouping. Sweep records the profile's SHA-256 in
+an exported plan, and refuses replay if the profile changes.
 
 | State | Current behavior |
 |---|---|
