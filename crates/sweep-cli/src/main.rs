@@ -38,6 +38,7 @@ USAGE
     sweep lesson [N]             seven exercises against a folder you throw away
 
 FLAGS
+    --scheme folders  group by file type and other built-in folder rules (default)
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
     --map EXT=Folder  route an unknown extension into a folder, this run only
@@ -313,6 +314,19 @@ fn value(args: &[String], flag: &str) -> Option<String> {
     args.get(i + 1).cloned()
 }
 
+/// `folders` is the currently implemented organization scheme. Keep its name
+/// explicit in the CLI so later schemes cannot silently change today's
+/// default behavior.
+fn parse_scheme(args: &[String]) -> Result<(), String> {
+    match value(args, "--scheme") {
+        None => Ok(()),
+        Some(name) if name == "folders" => Ok(()),
+        Some(name) => Err(format!(
+            "unsupported scheme {name:?}; this version supports `--scheme folders`"
+        )),
+    }
+}
+
 /// Parses `--depth N`. Absent means the documented default of 1.
 /// Present-but-invalid (not a number, or outside 1..=8) is an explicit
 /// error, never a silent fallback -- a wrong depth changes what gets
@@ -421,6 +435,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--inspect-content", false),
             ("--since", true),
             ("--map", true),
+            ("--scheme", true),
         ],
     ),
     (
@@ -437,6 +452,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--allow-sync", false),
             ("--since", true),
             ("--map", true),
+            ("--scheme", true),
         ],
     ),
     (
@@ -447,6 +463,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--no-journal", false),
             ("--depth", true),
             ("--since", true),
+            ("--scheme", true),
         ],
     ),
     ("forget", &[("--yes", false)]),
@@ -742,7 +759,7 @@ fn current_binding_context(profile: &str) -> plan::BindingContext {
 
 fn planning_profile(args: &[String], inspected: bool) -> String {
     let configuration = format!(
-        "depth={:?};sync={};grace={:?};maps={:?};content={inspected}",
+        "scheme=folders;depth={:?};sync={};grace={:?};maps={:?};content={inspected}",
         parse_depth(args),
         has(args, "--allow-sync"),
         since_flag(args).map(|value| value.or(ScanConfig::default().grace)),
@@ -777,6 +794,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         "--allow-sync",
         "--inspect-content",
         "--export-plan",
+        "--scheme",
     ]
     .iter()
     .any(|flag| has(args, flag))
@@ -845,6 +863,10 @@ fn scan_and_plan(
     path: &Path,
     args: &[String],
 ) -> Result<(plan::Plan, Option<etude_read::Stats>), ExitCode> {
+    if let Err(msg) = parse_scheme(args) {
+        eprintln!("sweep: {msg}");
+        return Err(ExitCode::from(2));
+    }
     let depth = match parse_depth(args) {
         Ok(d) => d,
         Err(msg) => {
@@ -1316,6 +1338,10 @@ fn sealer() -> Option<KeychainSeal> {
 /// a stored plan is a second plaintext index of the user's filenames, and
 /// deleting the asset beats protecting it.
 fn cmd_review(args: &[String]) -> ExitCode {
+    if let Err(msg) = parse_scheme(args) {
+        eprintln!("sweep: {msg}");
+        return ExitCode::from(2);
+    }
     let path = match path_arg("review", &args[1..]) {
         Ok(Some(p)) => p,
         Ok(None) => std::env::current_dir().unwrap_or_default(),
@@ -1587,6 +1613,10 @@ fn run_apply(
 /// since the plan was printed, and a stale plan is the write-freshness failure:
 /// the record says one thing and the tree says another.
 fn cmd_apply(args: &[String]) -> ExitCode {
+    if let Err(msg) = parse_scheme(args) {
+        eprintln!("sweep: {msg}");
+        return ExitCode::from(2);
+    }
     if let Some(file) = value(args, "--plan") {
         return apply_exported_plan(args, &file);
     }
@@ -2225,6 +2255,14 @@ mod tests {
         assert!(parse_depth(&["--depth".to_string(), "999".to_string()]).is_err());
         assert!(parse_depth(&["--depth".to_string(), "0".to_string()]).is_err());
         assert!(parse_depth(&["--depth".to_string(), "banana".to_string()]).is_err());
+    }
+
+    #[test]
+    fn folders_is_the_explicit_and_default_scheme() {
+        assert_eq!(parse_scheme(&[]), Ok(()));
+        assert_eq!(parse_scheme(&["--scheme".into(), "folders".into()]), Ok(()));
+        assert!(parse_scheme(&["--scheme".into(), "existing".into()]).is_err());
+        assert!(parse_scheme(&["--scheme".into(), "tags".into()]).is_err());
     }
 
     /// A grace window the parser could not read must not become the default.
