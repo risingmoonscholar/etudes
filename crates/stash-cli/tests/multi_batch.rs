@@ -450,7 +450,7 @@ fn due_can_pass_without_mutating_until_explicit_pop() {
 }
 
 #[test]
-fn selection_receipt_retains_a_working_recovery_locator() {
+fn selection_receipt_redacts_paths_and_retains_an_operation_id_for_recovery() {
     let f = Fixture::new();
     let selected = f.file("PRIVATE_chosen.txt", b"selected synthetic bytes");
     let sibling = f.file("PRIVATE_sibling.txt", b"untouched synthetic bytes");
@@ -464,8 +464,12 @@ fn selection_receipt_retains_a_working_recovery_locator() {
         .output()
         .unwrap();
     success(&out);
-    let locator = json_query(&out, "value['details']['holding_root']");
-    assert!(std::path::Path::new(&locator).is_dir());
+    assert_eq!(
+        json_query(&out, "value['details']['holding_root']"),
+        "<redacted>"
+    );
+    let operation_id = json_query(&out, "value['details']['stash_id']");
+    assert!(!operation_id.is_empty());
     assert!(!String::from_utf8_lossy(&out.stdout).contains("PRIVATE"));
     assert_eq!(
         std::fs::read(&sibling).unwrap(),
@@ -473,7 +477,7 @@ fn selection_receipt_retains_a_working_recovery_locator() {
     );
     success(
         &f.command()
-            .args(["pop", &locator, "--json"])
+            .args(["pop", "--id", &operation_id, "--json"])
             .output()
             .unwrap(),
     );
@@ -481,7 +485,7 @@ fn selection_receipt_retains_a_working_recovery_locator() {
         std::fs::read(selected).unwrap(),
         b"selected synthetic bytes"
     );
-    assert!(!std::path::Path::new(&locator).exists());
+    assert_eq!(fs::read_dir(f.0.join("holding")).unwrap().count(), 0);
 }
 
 #[cfg(unix)]

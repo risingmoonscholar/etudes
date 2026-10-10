@@ -1102,6 +1102,70 @@ fn a_skip_between_two_reversals_still_reloads() {
     unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
 }
 
+#[test]
+fn selective_undo_records_holes_and_preserves_unselected_entries() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("selective_undo_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let state = root.join("state");
+    let destination = root.join("holding");
+    fs::create_dir_all(&state).expect("mkdir state");
+    fs::create_dir_all(&destination).expect("mkdir destination");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let sealer = TestSeal;
+    let mut entries = Vec::new();
+    for index in 0..3 {
+        let from = root.join(format!("source-{index}"));
+        let to = destination.join(format!("item-{index}"));
+        fs::write(&to, format!("synthetic item {index}")).expect("write held item");
+        let (size, mtime_secs, inode, edge_hash) =
+            etude_core::journal::fingerprint(&to).expect("fingerprint");
+        entries.push(Entry {
+            from,
+            to,
+            method: Method::Rename,
+            size,
+            mtime_secs,
+            inode,
+            edge_hash,
+            state: etude_core::journal::EntryState::Moved,
+        });
+    }
+    let mut journal = Journal {
+        id: "selective".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries,
+        progress_tail_damaged: false,
+    };
+    journal.save_sealed(&sealer).expect("save base journal");
+
+    // Restore entries 2 and 0, leaving entry 1 held. This is the same sparse
+    // progress shape as the skip-between-reversals regression below.
+    for index in [2usize, 0] {
+        let report = apply::undo_entry(&mut journal, index, &sealer).expect("valid index");
+        assert_eq!(report.restored, 1);
+    }
+    assert!(journal.entries[0].from.exists());
+    assert!(!journal.entries[1].from.exists());
+    assert!(journal.entries[1].to.exists());
+    assert!(journal.entries[2].from.exists());
+
+    let reloaded = Journal::load_sealed("test", &journal.id, &sealer)
+        .expect("selective reversal frames must reload");
+    use etude_core::journal::EntryState::{Moved, Reversed};
+    assert_eq!(
+        reloaded
+            .entries
+            .iter()
+            .map(|entry| entry.state)
+            .collect::<Vec<_>>(),
+        vec![Reversed, Moved, Reversed]
+    );
+    let _ = fs::remove_dir_all(&root);
+    unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+}
+
 /// A journal whose last progress frame was cut mid-write still restores every
 /// file, including the one whose frame never landed.
 ///

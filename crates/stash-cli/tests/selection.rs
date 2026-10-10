@@ -23,6 +23,32 @@ fn observed_category(output: &Output, category: &str) -> Option<u64> {
     }
 }
 
+fn json_query(output: &Output, expression: &str) -> String {
+    let mut child = Command::new("python3")
+        .args([
+            "-c",
+            "import json,sys; value=json.load(sys.stdin); print(eval(sys.argv[1]))",
+            expression,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&output.stdout)
+        .unwrap();
+    let parsed = child.wait_with_output().unwrap();
+    assert!(
+        parsed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8(parsed.stdout).unwrap().trim().to_string()
+}
+
 struct Fixture {
     root: PathBuf,
 }
@@ -127,6 +153,64 @@ fn identical_basenames_from_different_parents_restore_without_disclosing_paths()
     assert_eq!(std::fs::read(a).unwrap(), b"synthetic alpha");
     assert_eq!(std::fs::read(b).unwrap(), b"synthetic beta");
     f.holding_empty();
+}
+
+#[test]
+fn operation_inspection_and_one_item_restore_use_opaque_ids_and_report_remaining_items() {
+    let f = Fixture::new();
+    let first = f.file("alpha/PRIVATE-one", b"synthetic first");
+    let second = f.file("beta/PRIVATE-two", b"synthetic second");
+    let third = f.file("gamma/PRIVATE-three", b"synthetic third");
+    let operation = f.select(&[&first, &second, &third]);
+    let operation_id = json_query(&operation, "value['details']['stash_id']");
+    assert!(!String::from_utf8_lossy(&operation.stdout).contains("PRIVATE-one"));
+    assert!(String::from_utf8_lossy(&operation.stdout).contains("\"holding_root\":\"<redacted>\""));
+
+    let inspected = f
+        .command()
+        .args(["inspect", "--id", &operation_id, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        inspected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
+    let item_id = json_query(&inspected, "value['details']['items'][0]['id']");
+    assert!(item_id.starts_with("item-"));
+    let inspect_text = String::from_utf8_lossy(&inspected.stdout);
+    assert!(!inspect_text.contains("PRIVATE-one"));
+    assert!(!inspect_text.contains(&f.root.to_string_lossy().to_string()));
+    assert_eq!(json_query(&inspected, "value['details']['held']"), "3");
+
+    let restored = f
+        .command()
+        .args(["pop", "--id", &operation_id, "--item", &item_id, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        restored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restored.stderr)
+    );
+    assert_eq!(std::fs::read(&first).unwrap(), b"synthetic first");
+    assert!(!second.exists() && !third.exists());
+    assert_eq!(
+        json_query(&restored, "value['details']['remaining_held']"),
+        "2"
+    );
+    assert!(!String::from_utf8_lossy(&restored.stdout).contains("PRIVATE-two"));
+
+    let after = f
+        .command()
+        .args(["inspect", "--id", &operation_id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(json_query(&after, "value['details']['held']"), "2");
+    assert_eq!(
+        json_query(&after, "value['details']['items'][0]['state']"),
+        "restored"
+    );
 }
 
 #[test]

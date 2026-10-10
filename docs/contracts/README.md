@@ -179,20 +179,26 @@ volume checks. `explicit_selection_path_list_bytes` is the supplied NUL-terminat
 UTF-8 list from a file or stdin, not arbitrary payload inspection.
 `os_random_bytes_for_selection_holding` names its private operation root.
 `explicit_selected_objects` and `private_selection_holding_tree` include the
-chosen relocations, numbered slots and case-probe files. The result's `holding_root`
-is the minimum locator for recovery; original source paths remain in the encrypted
-journal and are not listed in the receipt. `--no-journal` is refused for selection,
-while legacy whole-folder behavior is retained.
+chosen relocations, numbered slots and case-probe files. Agent-facing output
+redacts `holding_root`; the persistent operation id is the recovery selector.
+`stash inspect --id ID` returns path-free item ids, and `stash pop --id ID --item
+ITEM` records a single item's restore while reporting what remains held. Original
+source paths remain in the encrypted journal and are not listed in the receipt.
+`--no-journal` is refused for selection, while legacy whole-folder behavior is
+retained.
 
 
-## Stash batch declaration version 4
+## Stash batch declaration version 5
 
-Stash's batch capability is declaration version 4 in `v4/stash.json`; `v1/stash.json`
-tracks the current declaration, while the version 3 pin remains available for the
-preceding interface. Every journalled stash has a persistent `stash_id`, separate
+Stash's batch capability is declaration version 5 in `v5/stash.json`; `v1/stash.json`
+tracks the current declaration, while version 4 remains pinned in `v4/stash.json`.
+Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
 malformed, unreadable or mismatched IDs without falling back to another operation.
 `--latest` uses creation time for current IDs and refuses ties; legacy IDs use
 modification time and also refuse ties. Due dates are informational: `--if-due`
 only gates an explicitly requested pop. Explicit `--no-journal` folder stashes have
-no restorable ID and require manual recovery.
+no restorable ID and require manual recovery. `inspect --id ID` enumerates stable,
+path-free item ids and actual held state; `pop --id ID --item ITEM` restores one
+item with per-entry journal progress, so a later whole-operation pop resumes the
+remaining entries.

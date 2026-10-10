@@ -24,8 +24,8 @@ paths=root/'paths0';paths.write_bytes(b''.join(str(p).encode()+b'\0' for p in (a
 result=run('select','--from0',paths,'--into',holding,'--json');assert result.returncode==0,result.stderr
 receipt=json.loads(result.stdout);assert receipt['status']=='done';assert 'PRIVATE' not in result.stdout+result.stderr
 assert sibling.read_bytes()==b'synthetic untouched' and not a.exists() and not b.exists() and not tree.exists()
-operation=pathlib.Path(receipt['details']['holding_root']);result=run('pop',operation,'--json');assert result.returncode==0,result.stderr
+operation=receipt['details']['stash_id'];result=run('pop','--id',operation,'--json');assert result.returncode==0,result.stderr
 assert a.read_bytes()==b'synthetic alpha' and b.read_bytes()==b'synthetic beta' and (tree/'payload').read_bytes()==b'synthetic tree'
-assert not operation.exists()
+assert not list(holding.iterdir())
 PYTHON
 then pass "exact selection retains parents, isolates duplicate names and restores the opaque directory"; else fail "exact selection filesystem or receipt comparison failed"; fi
