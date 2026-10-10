@@ -121,6 +121,19 @@ chmod 600 "$newest"
 assert_eq "$before" "$(find "$W/stash-mixed" -type f -exec shasum {} \; | sort)" 'unreadable newer stash moves nothing'
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'unreadable newer stash preserves journal bytes'
 batch_b_id=$(basename "$newest" .journal); batch_b_id=${batch_b_id#stash-}
+# Folder discovery must authenticate every journal, including the older,
+# completed A batch: its contents cannot be inferred under key B.
+for selection in named current-directory; do
+  if [ "$selection" = named ]; then
+    out=$(env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop "$W/stash-mixed" 2>&1); code=$?
+  else
+    out=$(cd "$W/stash-mixed" && env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop 2>&1); code=$?
+  fi
+  assert_eq 3 "$code" "$selection B refuses older completed A under another key"
+  [[ "$out" == *'journal is unreadable'* && "$out" == *'cannot restore'* ]] && pass "$selection explains older wrong-key refusal" || fail "$selection hides older wrong-key journal"
+done
+assert_eq "$before" "$(find "$W/stash-mixed" -type f -exec shasum {} \; | sort)" 'older wrong-key refusal leaves mixed stash files intact'
+assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'older wrong-key refusal preserves mixed stash journal bytes'
 assert_exit 0 'stash B exact id restores its operation' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop --id "$batch_b_id"
 restored "$W/stash-mixed" 'stash B original bytes restored'
 
@@ -142,6 +155,11 @@ journals=$(shasum "$ETUDE_STATE_DIR"/*.journal)
 assert_exit 3 'stash A cannot skip live B from another root' -- "$STASH" pop "$W/stash-live-a"
 assert_eq "$before" "$(find "$W/stash-live-a" "$W/stash-live-b" -type f -exec shasum {} \; | sort)" 'mixed live stash refusal moves nothing'
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'mixed live stash refusal preserves journal bytes'
+out=$(env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop "$W/stash-live-b" 2>&1); code=$?
+assert_eq 3 "$code" 'named B refuses older live A from another root'
+[[ "$out" == *'journal is unreadable'* && "$out" == *'cannot restore'* ]] && pass 'named B explains older live wrong-key refusal' || fail 'named B hides older live wrong-key journal'
+assert_eq "$before" "$(find "$W/stash-live-a" "$W/stash-live-b" -type f -exec shasum {} \; | sort)" 'older live wrong-key refusal moves nothing'
+assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'older live wrong-key refusal preserves journal bytes'
 assert_exit 0 'stash B exact id restores its live operation' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop --id "$live_b_id"
 restored "$W/stash-live-b" 'newest live stash original bytes restored'
 
