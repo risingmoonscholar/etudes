@@ -134,7 +134,14 @@ pub fn declaration(
             .as_nanos()
     );
     let mut fields = vec![
-        ("schema_version", j::num(SCHEMA_VERSION)),
+        (
+            "schema_version",
+            j::num(if matches!(tool, Tool::Stash) {
+                4
+            } else {
+                SCHEMA_VERSION
+            }),
+        ),
         ("tool_version", j::str(version)),
         ("operation_id", j::str(&operation_id)),
         ("status", j::str("done")),
@@ -410,6 +417,19 @@ pub fn declaration(
             ("holding_parent", j::str("into_parent_or_first_canonical_source_parent;_inside_selected_object_refused")),
             ("recovery", j::str("stash_pop_operation_root;_authenticated_owned_empty_directories_only")),
             ("disclosure", j::str("counts_and_minimum_recovery_locator_only;_source_paths_and_basenames_not_listed")),
+        ])));
+    }
+    if matches!(tool, Tool::Stash) {
+        fields.push(("batches", j::obj(&[
+            ("persistent_id", j::str("stash_id_is_the_encrypted_journal_id;_distinct_from_invocation_operation_id")),
+            ("identity", j::str("new_stash_journal_v2_authenticates_id_and_tool_before_progress_replay;_legacy_v1_filename_binding_unproven")),
+            ("exact_restore", j::str("pop_--id_ID_or_current_creation_ID;_bounded_selector;_missing_or_damaged_id_never_falls_back")),
+            ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier")),
+            ("latest_scope", j::str("no_path_means_machine_wide_stash_journals;_path_limits_to_exact_journal_root")),
+            ("path_restore", j::str("one_live_batch_required;_multiple_matches_refused")),
+            ("status", j::str("one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure")),
+            ("due", j::str("deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop")),
+            ("no_journal", j::str("explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required")),
         ])));
     }
     if matches!(tool, Tool::Unpack) {

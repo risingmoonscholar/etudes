@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 330 tests
+cargo test --all                # 354 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -448,3 +448,5 @@ empty holding directories authenticated by that journal. Selected directories
 retain the existing opaque directory fingerprint behavior; this is not a recursive
 content-integrity claim. Receipts continue to name uninstrumented access as
 unproven, and no zero counter proves absence of reads.
+
+Journalled stash operations return a persistent `stash_id`. Use `stash pop --id ID` for exact restoration, or `stash pop --latest` to explicitly select the latest live batch. Folder operations can coexist; ambiguous path-based restores refuse. Deadlines remain information until an explicit pop. See [independent stash batches](docs/stash-batches.md) for identity, legacy compatibility and disclosure semantics.

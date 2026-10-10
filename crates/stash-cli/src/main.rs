@@ -22,6 +22,7 @@
 //! file, no second state store, nothing to fall out of sync. The deadline is
 //! derived from the filesystem rather than recorded next to it.
 
+mod batches;
 mod selection;
 
 use std::path::{Path, PathBuf};
@@ -39,7 +40,10 @@ USAGE
     stash select PATH...           stash exactly the chosen objects; folders move whole
     stash select --from0 FILE|-     read NUL-terminated UTF-8 paths; '-' reads stdin
     --into PARENT                   holding parent for an explicit selection
-    stash pop [PATH]                bring back the stash for PATH (or here)
+    stash pop --id ID               restore exactly one operation
+    stash pop ID                    restore an operation id directly
+    stash pop [PATH]                restore the unique batch for PATH (or here)
+    stash pop [PATH] --latest       restore the latest live batch; no PATH means all
     stash pop [PATH] --if-due       pop only if the deadline has passed;
                                     exit 2 when early, 1 when nothing stashed
     stash status [PATH]             what is stashed, and when it is due back
@@ -157,7 +161,7 @@ const STASH_FLAGS: &[&str] = &["--for", "--json", "--no-journal"];
 /// misspelling of it.
 const COMMAND_FLAGS: &[(&str, &[&str])] = &[
     ("", &["--for", "--json", "--no-journal"]),
-    ("pop", &["--if-due", "--json"]),
+    ("pop", &["--id", "--latest", "--if-due", "--json"]),
     ("status", &["--json", "--all", "--paths"]),
 ];
 
@@ -175,7 +179,7 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     }
     while i < args.len() {
         let a = &args[i];
-        if a == "--for" && allowed.contains(&"--for") {
+        if (a == "--for" || a == "--id") && allowed.contains(&a.as_str()) {
             i += 2;
             continue;
         }
@@ -256,7 +260,12 @@ fn holding_name(deadline: Option<u64>) -> String {
 
 /// Read the deadline back out of a holding directory name.
 pub fn deadline_of(name: &str) -> Option<u64> {
-    let t: u64 = name.strip_prefix(".stash-")?.parse().ok()?;
+    let t: u64 = name
+        .strip_prefix(".stash-")?
+        .split('-')
+        .next()?
+        .parse()
+        .ok()?;
     (t > 0).then_some(t)
 }
 
@@ -311,13 +320,11 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    if find_holding(&outcome.root).is_some() {
-        eprintln!(
-            "stash: this folder already has a stash. Run `stash pop` first,\n\
-             or stash a different folder."
-        );
-        return ExitCode::from(2);
-    }
+    let holding = format!(
+        "{}-{}",
+        holding_name(deadline),
+        etude_cli_support::envelope::operation_id()
+    );
 
     // One group, everything in it. No detectors, no decisions.
     let members: Vec<PathBuf> = outcome.entries.iter().map(|e| e.path.clone()).collect();
@@ -325,7 +332,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     let plan = Plan {
         root: outcome.root.clone(),
         groups: vec![Group {
-            name: holding_name(deadline),
+            name: holding.clone(),
             signal: Signal::Collected { count },
             members,
             accepted: true,
@@ -371,9 +378,17 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                     "{}",
                     j::obj(&[
                         ("action", j::str("stash")),
-                        ("root", j::path(&outcome.root)),
+                        (
+                            "stash_id",
+                            if sl.is_some() {
+                                j::str(&r.journal_id)
+                            } else {
+                                "null".into()
+                            }
+                        ),
+                        ("root", j::str("<redacted>")),
                         ("moved", j::num(r.moved)),
-                        ("holding", j::str(&holding_name(deadline))),
+                        ("holding", j::str(&holding)),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into())),
                         ("skipped_hidden", j::num(outcome.skipped_hidden)),
                         ("skipped_unreadable", j::num(outcome.skipped_unreadable)),
@@ -382,8 +397,12 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             println!("\nStashed {} items.", r.moved);
-            println!("{} is clear.\n", path.display());
+            println!("The selected folder is clear.\n");
             if sl.is_some() {
+                println!(
+                    "  Operation id: {}. Restore with: stash pop --id {}",
+                    r.journal_id, r.journal_id
+                );
                 match deadline {
                     Some(t) => {
                         println!("  Due back: {}", human_time(t));
@@ -408,7 +427,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         }
         Err(e) => {
             etude_cli_support::envelope::status("incomplete");
-            eprintln!("stash: {e}");
+            eprintln!(
+                "stash: operation could not finish ({})",
+                apply_error_reason(&e)
+            );
             if sl.is_some() {
                 eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
             } else {
@@ -478,6 +500,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     "{}",
                     j::obj(&[
                         ("action", j::str("stash_selected")),
+                        ("stash_id", j::str(&report.journal_id)),
                         ("moved", j::num(report.moved)),
                         ("selected", j::num(prepared.sources.len())),
                         ("holding_root", j::path(&root)),
@@ -503,13 +526,28 @@ fn cmd_select(args: &[String]) -> ExitCode {
             eprintln!(
                 "stash: selection could not finish; inspect its holding locator before retrying."
             );
-            eprintln!("Recovery: stash pop {}", etude_core::redact::path(&root));
+            eprintln!(
+                "Recovery: stash status --all --json lists operation ids for stash pop --id ID."
+            );
             apply_exit_code(&error)
         }
     }
 }
 
 /// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
+fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
+    use etude_core::apply::ApplyError::*;
+    match error {
+        DestinationExists(_) => "destination exists",
+        DestinationCollision(_) => "destination names collide",
+        DestinationIsSynced(_) => "destination is synced",
+        CannotCompareNames(_) => "destination names cannot be compared",
+        Io(_) => "I/O failure",
+        Journal(_) => "journal failure",
+        Injected(_) => "interrupted apply",
+    }
+}
+
 fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
     use etude_core::apply::ApplyError::*;
     match e {
@@ -574,6 +612,7 @@ fn load_or_warn(
 /// as "genuinely never existed" reports the wrong exit class. This is the
 /// same severity distinction `sweep undo` already makes between `NotFound` (exit
 /// 1) and any other load failure (exit 3).
+#[cfg(test)]
 fn journal_for_root(
     tool: &str,
     sealer: &dyn etude_core::journal::Sealer,
@@ -616,69 +655,52 @@ fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<Pa
 }
 
 fn cmd_pop(args: &[String]) -> ExitCode {
+    let selector = match batches::selector(args) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("stash: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(sl) = sealer() else {
         return ExitCode::from(2);
     };
-    let named = args.iter().skip(1).find(|a| !a.starts_with('-'));
-    let path = named
-        .map(|p| PathBuf::from(expand_tilde(p)))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let Ok(target) = path.canonicalize() else {
-        eprintln!("stash: no stash found for {}", path.display());
-        return ExitCode::from(1);
-    };
-    // The clock, before the journal. --if-due makes the deadline binding:
-    // an early call is refused (exit 2), same class as sweep refusing a
-    // project, and distinct from exit 1 (nothing stashed) so an automation
-    // job can tell "fire again later" from "clean yourself up". A plain pop
-    // stays a human right -- decide-later includes deciding now -- and says
-    // in one line that it is early, never asks, never refuses.
-    if let Some(holding) = find_holding(&target) {
-        let name = holding
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        match pop_clock(deadline_of(name), now_secs(), flag(args, "--if-due")) {
-            ClockDecision::RefuseEarly { human } => {
-                eprintln!("stash: not due for {human}. Refusing --if-due.");
-                return ExitCode::from(2);
-            }
-            ClockDecision::NoticeEarly { human, due } => {
-                println!("due {}; popping {human} early.", iso_utc(due));
-            }
-            ClockDecision::Pop => {}
+    let mut j = match batches::select(selector, &sl) {
+        Ok(Some(journal)) => journal,
+        Ok(None) => {
+            eprintln!("stash: no stash found for this id or folder; nothing is stashed here");
+            return ExitCode::from(1);
         }
-    }
-
-    let (found, damaged) = journal_for_root("stash", &sl, &target);
-    let mut j = match found {
-        Some(j) => j,
-        // load_or_warn already printed which journal is damaged and why;
-        // exit 3 (a real failure) rather than 1 (nothing to do) so a caller
-        // that only checks the exit class doesn't read this the same as a
-        // folder that was simply never stashed.
-        None if damaged => {
-            eprintln!("stash: cannot restore {}. See above", target.display());
+        Err(error) => {
+            if matches!(&error, etude_core::journal::JournalError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied)
+                || matches!(&error, etude_core::journal::JournalError::Seal(_))
+            {
+                eprintln!(
+                    "stash: journal is unreadable with the current permissions or key; cannot restore: {error}"
+                );
+            } else {
+                eprintln!("stash: cannot restore: {error}");
+            }
             return ExitCode::from(3);
         }
-        None if named.is_some() => {
-            eprintln!("stash: no stash found for {}", target.display());
-            return ExitCode::from(1);
-        }
-        None => {
-            eprintln!("stash: nothing is stashed here: {}", target.display());
-            let mut others = Vec::new();
-            for root in journal_roots("stash", &sl) {
-                if root != target && !others.contains(&root) {
-                    others.push(root);
-                }
-            }
-            for root in others {
-                eprintln!("stash: a live stash exists in {}", root.display());
-            }
-            return ExitCode::from(1);
+    };
+    let due = match batches::due(&j) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("stash: {error}");
+            return ExitCode::from(3);
         }
     };
+    match pop_clock(due, now_secs(), flag(args, "--if-due")) {
+        ClockDecision::RefuseEarly { human } => {
+            eprintln!("stash: not due for {human}. Refusing --if-due.");
+            return ExitCode::from(2);
+        }
+        ClockDecision::NoticeEarly { human, due } => {
+            println!("due {}; popping {human} early.", iso_utc(due))
+        }
+        ClockDecision::Pop => {}
+    }
     if journal_is_fully_undone(&j) {
         println!("\nNothing to restore. This stash was already popped.");
         return ExitCode::from(1);
@@ -728,6 +750,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     // count is real even when `r.error` is set below.
     etude_cli_support::envelope::detail(etude_core::json::obj(&[
         ("restored", etude_core::json::num(r.restored)),
+        ("stash_id", etude_core::json::str(&j.id)),
         (
             "skipped_changed",
             etude_core::json::num(r.skipped_changed.len()),
@@ -749,11 +772,6 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             "  {} changed while stashed and were left alone:",
             r.skipped_changed.len()
         );
-        if !selection::is_selection_root(&target) {
-            for p in &r.skipped_changed {
-                println!("    {}", etude_core::redact::path(p));
-            }
-        }
     }
     if !r.skipped_missing.is_empty() {
         println!("  {} were already gone.", r.skipped_missing.len());
@@ -786,8 +804,11 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     // "resumable" while the save failed would repeat the exact lie this fix
     // exists to remove, just moved one line later.
     let saved = j.save_sealed(&sl);
-    if let Some(err) = r.error {
-        eprintln!("stash: {err}");
+    if r.error.is_some() {
+        eprintln!(
+            "stash: restore could not finish; operation {} remains incomplete",
+            j.id
+        );
         match saved {
             Ok(()) => {
                 eprintln!(
@@ -844,71 +865,67 @@ fn cmd_status_all(args: &[String]) -> ExitCode {
     let Some(sl) = sealer() else {
         return ExitCode::from(2);
     };
-    let now = now_secs();
-    let stashes = all_stashes(&sl);
+    let stashes = match batches::inventory(&sl) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("stash: could not inspect batches: {error}");
+            return ExitCode::from(3);
+        }
+    };
     if flag(args, "--json") {
         use etude_core::json as j;
-        let rows: Vec<String> = stashes
+        let rows = match stashes
             .iter()
-            .map(|(root, holding)| {
-                let name = holding
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default();
-                let due = deadline_of(name);
-                let root_field = if show_paths {
-                    j::path(root)
-                } else {
-                    j::str(&etude_core::redact::path(root))
-                };
-                j::obj(&[
-                    ("id", j::str(name)),
-                    ("root", root_field),
-                    (
-                        "due",
-                        due.map(|t| j::str(&iso_utc(t)))
-                            .unwrap_or_else(|| "null".into()),
-                    ),
-                    ("overdue", j::bool(due.is_some_and(|t| t <= now))),
-                ])
-            })
-            .collect();
+            .map(|batch| batches::row(batch, show_paths))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                eprintln!("stash: could not inspect batches: {error}");
+                return ExitCode::from(3);
+            }
+        };
         println!(
             "{}",
             j::obj(&[
-                ("stashes", format!("[{}]", rows.join(","))),
-                ("paths_shown", j::bool(show_paths)),
+                ("stashes", j::arr(rows)),
+                ("paths_shown", j::bool(show_paths))
             ])
         );
-        return ExitCode::from(if stashes.is_empty() { 1 } else { 0 });
-    }
-    if stashes.is_empty() {
-        println!("Nothing stashed anywhere this machine's journals know of.");
-        return ExitCode::from(1);
-    }
-    for (root, holding) in &stashes {
-        let name = holding
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        let shown = if show_paths {
-            root.display().to_string()
-        } else {
-            etude_core::redact::path(root)
-        };
-        match deadline_of(name) {
-            Some(t) if t <= now => println!("  {shown}  OVERDUE since {}", iso_utc(t)),
-            Some(t) => println!("  {shown}  due {}", iso_utc(t)),
-            None => println!("  {shown}  no deadline"),
+    } else if stashes.is_empty() {
+        println!("Nothing is stashed.");
+    } else {
+        println!("{} live operations:", stashes.len());
+        for batch in &stashes {
+            let due = match batches::due(batch) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("stash: {error}");
+                    return ExitCode::from(3);
+                }
+            };
+            let shown = if show_paths {
+                batch.root.display().to_string()
+            } else {
+                "<redacted>".to_string()
+            };
+            match due {
+                Some(value) if value <= now_secs() => {
+                    println!("  {}  {shown}  OVERDUE since {}", batch.id, iso_utc(value))
+                }
+                Some(value) => println!("  {}  {shown}  due {}", batch.id, iso_utc(value)),
+                None => println!("  {}  {shown}  no deadline", batch.id),
+            }
+        }
+        if !show_paths {
+            println!("  paths are redacted; `stash status --all --paths` shows them.");
         }
     }
-    if !show_paths {
-        println!(
-            "
-  paths are redacted; `stash status --all --paths` shows them."
-        );
+    if stashes.is_empty() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
-    ExitCode::SUCCESS
 }
 
 fn cmd_status(args: &[String]) -> ExitCode {
@@ -926,6 +943,99 @@ fn cmd_status(args: &[String]) -> ExitCode {
         eprintln!("stash: cannot read that folder");
         return ExitCode::from(2);
     };
+
+    if let Ok(key) = etude_keep::key() {
+        let sealer = KeychainSeal { key };
+        let batches = match batches::inventory(&sealer) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("stash: could not inspect batches: {error}");
+                return ExitCode::from(3);
+            }
+        };
+        let batches: Vec<_> = batches
+            .into_iter()
+            .filter(|batch| batches::matches_root(batch, &root))
+            .collect();
+        if !batches.is_empty() {
+            let rows = match batches
+                .iter()
+                .map(|batch| batches::row(batch, false))
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("stash: {error}");
+                    return ExitCode::from(3);
+                }
+            };
+            let counts = match batches
+                .iter()
+                .map(batches::held)
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("stash: {error}");
+                    return ExitCode::from(3);
+                }
+            };
+            let unique = batches.len() == 1;
+            let due = if unique {
+                batches::due(&batches[0]).ok().flatten()
+            } else {
+                None
+            };
+            if flag(args, "--json") {
+                use etude_core::json as j;
+                println!(
+                    "{}",
+                    j::obj(&[
+                        ("root", j::str("<redacted>")),
+                        ("stashed", j::num(counts.iter().sum::<usize>())),
+                        (
+                            "id",
+                            if unique {
+                                j::str(&batches[0].id)
+                            } else {
+                                "null".into()
+                            }
+                        ),
+                        ("due", due.map(j::num).unwrap_or_else(|| "null".into())),
+                        (
+                            "due_iso",
+                            due.map(|value| j::str(&iso_utc(value)))
+                                .unwrap_or_else(|| "null".into())
+                        ),
+                        (
+                            "overdue",
+                            j::bool(due.is_some_and(|value| value <= now_secs()))
+                        ),
+                        ("elsewhere", "null".into()),
+                        ("stashes", j::arr(rows))
+                    ])
+                );
+            } else {
+                println!(
+                    "{} items in {} operations stashed from {}.",
+                    counts.iter().sum::<usize>(),
+                    batches.len(),
+                    "the selected folder"
+                );
+                for batch in &batches {
+                    println!("  {}: restore with stash pop --id {}", batch.id, batch.id);
+                }
+                if let Some(due) = due {
+                    if due <= now_secs() {
+                        println!("  OVERDUE since {}", human_time(due));
+                    } else {
+                        println!("  Due back {}", human_time(due));
+                    }
+                }
+            }
+            return ExitCode::SUCCESS;
+        }
+    }
 
     // Was a folder named on the command line? If so the user asked about that
     // one folder and an answer about a different one would be noise.
@@ -1067,24 +1177,6 @@ fn iso_utc(epoch: u64) -> String {
     let mth = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if mth <= 2 { y + 1 } else { y };
     format!("{y:04}-{mth:02}-{d:02}T{h:02}:{m:02}:{sec:02}Z")
-}
-
-/// Every stash on this machine, from the journals stash already keeps.
-///
-/// The agent-delegation surface: one call yields everything needed to build
-/// calendar items or launchd jobs, so the agent holds no state. Roots are
-/// REDACTED unless the caller passes --paths: an invocation string has to
-/// advertise its own reach, because `stash status --all` reads as narrow in
-/// an agent's audit log while enumerating paths machine-wide. The flag is
-/// the disclosure.
-fn all_stashes(sl: &KeychainSeal) -> Vec<(PathBuf, PathBuf)> {
-    let mut out: Vec<(PathBuf, PathBuf)> = journal_roots("stash", sl)
-        .into_iter()
-        .filter_map(|root| find_holding(&root).map(|h| (root, h)))
-        .collect();
-    out.sort();
-    out.dedup();
-    out
 }
 
 fn stash_elsewhere(here: &Path) -> Option<PathBuf> {
