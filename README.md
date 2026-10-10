@@ -4,7 +4,7 @@ Three small command-line tools that tidy a folder without reading your private f
 
 **macOS only.**
 ```console
-$ sweep ~/Desktop
+$ sweep --scheme folders ~/Desktop
 
 Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
 
@@ -73,7 +73,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 386 tests
+cargo test --all                # 390 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -106,9 +106,31 @@ cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 
 ## What sweep refuses to touch
 
-Four things, and the output always says which one applied and to how many
-files. A count with no reason beside it is the defect this project keeps
-finding in itself.
+The current organization mode is named `--scheme folders` (and is the default
+when the flag is omitted). A user exclusion has the highest precedence: review
+can skip a group, and `apply --only NAME` selects only the named group. Safety
+holds come next and remove files from every grouping rule. Built-in grouping
+then claims eligible files; an agent `--map` can claim only what those built-in
+rules leave behind. This is the policy order, not a claim that sweep detects
+every filesystem state. The roadmap declares the names `folders`, `existing`
+and `tags`; only `folders` is implemented here.
+
+| State | Current behavior |
+|---|---|
+| locked | An unreadable subtree is counted and the scan reports incomplete; visible siblings remain usable. |
+| immutable | Sweep does not preflight the immutable flag. If the operating system refuses a move, apply reports the failure and leaves recovery to the journal; sweep does not claim it detected the flag. |
+| invisible | Hidden entries are skipped and counted. Unreadable entries are separately reported as incomplete. |
+| alias | Symlinks are skipped during scans; selected parent aliases are resolved for overlap checks. |
+| iCloud placeholder | Dot-prefixed `.icloud` stubs are skipped as hidden entries, not grouped as their missing original file. |
+| coordinated write | Recognized in-flight filename suffixes and recent modification times are held. Sweep does not query File Provider coordination, so those checks do not prove that no coordinated write is active. |
+
+The implementation declares the same precedence and state accounting in
+`etude_core::plan`; regression tests exercise safety holds against `--map` and
+keep the named state inventory reviewable.
+
+The four main plan-level refusal groups are named in the output with counts.
+A count with no reason beside it is the defect this project keeps finding in
+itself.
 
 **Your projects.** A folder holding `project.godot`, `Cargo.toml`, a `.flp`,
 a `.blend`, a `.ptx` -- 25 markers in all -- is stepped over rather than

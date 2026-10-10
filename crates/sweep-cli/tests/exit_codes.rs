@@ -118,6 +118,69 @@ fn a_destination_collision_on_apply_exits_2_not_3() {
 }
 
 #[test]
+fn only_selection_excludes_an_agent_mapped_group() {
+    let root = unique_temp("only-mapped-root");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let _root = TestDir(root.clone());
+    let state = unique_temp("only-mapped-state");
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let _state = TestDir(state.clone());
+
+    for i in 1..=3 {
+        std::fs::write(
+            root.join(format!("document_{i}.pdf")),
+            format!("document-{i}"),
+        )
+        .unwrap();
+        std::fs::write(root.join(format!("model_{i}.bpy")), format!("model-{i}")).unwrap();
+    }
+
+    let out = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", "42".repeat(32))
+        .args([
+            "apply",
+            "--since",
+            "0",
+            "--map",
+            "bpy=BlenderBits",
+            "--only",
+            "Documents",
+            "--yes",
+        ])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "selecting only Documents should apply: stderr={} stdout={}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let docs = root.join("Documents");
+    assert_eq!(std::fs::read_dir(&docs).unwrap().count(), 3);
+    for i in 1..=3 {
+        assert_eq!(
+            std::fs::read(docs.join(format!("document_{i}.pdf"))).unwrap(),
+            format!("document-{i}").as_bytes()
+        );
+        assert_eq!(
+            std::fs::read(root.join(format!("model_{i}.bpy"))).unwrap(),
+            format!("model-{i}").as_bytes(),
+            "a mapped item was moved despite being excluded by --only Documents"
+        );
+    }
+    assert!(
+        !root.join("BlenderBits").exists(),
+        "the excluded mapped group created its destination"
+    );
+}
+
+#[test]
 fn an_exhausted_undo_exits_1_not_0() {
     let root = unique_temp("undo");
     let _ = std::fs::remove_dir_all(&root);

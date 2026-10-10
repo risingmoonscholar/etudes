@@ -8,6 +8,57 @@ use crate::classify;
 use crate::scan::{Entry, ScanOutcome};
 use crate::{Category, Untouched};
 
+/// Decision classes in descending precedence. User choices can narrow a plan,
+/// safety holds can only remove candidates, built-in detectors claim the
+/// remaining files, and an agent mapping may claim only what those detectors
+/// leave behind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionClass {
+    UserExclusion,
+    SafetyRefusal,
+    BuiltInGrouping,
+    AgentMapping,
+}
+
+/// The declared policy order, highest precedence first.
+pub const DECISION_PRECEDENCE: &[DecisionClass] = &[
+    DecisionClass::UserExclusion,
+    DecisionClass::SafetyRefusal,
+    DecisionClass::BuiltInGrouping,
+    DecisionClass::AgentMapping,
+];
+
+/// Stable scheme names used by the roadmap. Only `folders` is implemented by
+/// this version; declaring a name does not make its behavior available.
+pub const DECLARED_SCHEMES: &[&str] = &["folders", "existing", "tags"];
+
+/// Filesystem states the sweep contract must account for by name. These are
+/// descriptions of current observability, not promises that the scan can
+/// detect an OS state which it does not query.
+pub const SCAN_STATE_ACCOUNTING: &[(&str, &str)] = &[
+    (
+        "locked",
+        "unreadable subtrees are counted; the scan is reported incomplete",
+    ),
+    (
+        "immutable",
+        "the immutable flag is not preflighted; an OS refusal is reported during apply",
+    ),
+    ("invisible", "hidden entries are skipped and counted"),
+    (
+        "alias",
+        "symlink aliases are skipped; selected-path aliases are normalized for overlap checks",
+    ),
+    (
+        "iCloud placeholder",
+        "dot-prefixed .icloud stubs are treated as hidden entries",
+    ),
+    (
+        "coordinated write",
+        "File Provider coordination is not queried; sweep does not claim to detect it",
+    ),
+];
+
 /// Why a group exists, in words the user can check by eye.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signal {
@@ -838,6 +889,34 @@ fn civil_date(secs: i64) -> (i64, String) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn decision_classes_are_declared_from_user_choice_to_builtin_grouping() {
+        assert_eq!(
+            DECISION_PRECEDENCE,
+            &[
+                DecisionClass::UserExclusion,
+                DecisionClass::SafetyRefusal,
+                DecisionClass::BuiltInGrouping,
+                DecisionClass::AgentMapping,
+            ]
+        );
+        assert_eq!(DECLARED_SCHEMES, &["folders", "existing", "tags"]);
+        assert_eq!(
+            SCAN_STATE_ACCOUNTING
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>(),
+            [
+                "locked",
+                "immutable",
+                "invisible",
+                "alias",
+                "iCloud placeholder",
+                "coordinated write",
+            ]
+        );
+    }
+
     fn cam_entry(name: &str, modified_secs: u64) -> Entry {
         let ext = name
             .rsplit_once('.')
@@ -1004,6 +1083,96 @@ mod tests {
                     && matches!(u, Untouched::LooksPersonal(_))),
             "the tax-named file is not in the personal hold"
         );
+
+        let mut photos = vec![
+            cam_entry("IMG_1001.jpg", 1000),
+            cam_entry("IMG_1002.jpg", 1000),
+            cam_entry("IMG_1003.jpg", 1000),
+        ];
+        for entry in &mut photos {
+            entry.modified = Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1000));
+        }
+        let scan = scan_outcome(photos);
+        let maps = vec![MapSpec {
+            ext: "jpg".into(),
+            folder: "AgentPhotos".into(),
+            created: true,
+        }];
+        let p = build_mapped(&scan, &maps);
+        assert!(
+            p.groups.iter().any(|g| g.name.starts_with("Photos")),
+            "the built-in camera detector did not claim its group"
+        );
+        assert!(
+            p.groups.iter().all(|g| g.name != "AgentPhotos"),
+            "an agent mapping outranked the built-in grouping"
+        );
+    }
+
+    #[test]
+    fn agent_maps_never_claim_files_held_by_safety_rules() {
+        let now = SystemTime::now();
+        let cases: &[(&str, Vec<Entry>, &str)] = &[
+            (
+                "recent",
+                vec![
+                    cam_entry("one.bpy", 0),
+                    cam_entry("two.bpy", 0),
+                    cam_entry("three.bpy", 0),
+                ],
+                "bpy",
+            ),
+            (
+                "in-flight",
+                vec![
+                    cam_entry("one.download", 0),
+                    cam_entry("two.download", 0),
+                    cam_entry("three.download", 0),
+                ],
+                "download",
+            ),
+            (
+                "project document",
+                vec![cam_entry("scene.blend", 0)],
+                "blend",
+            ),
+            (
+                "project reference surface",
+                vec![
+                    cam_entry("scene.blend", 0),
+                    cam_entry("texture_a.png", 0),
+                    cam_entry("texture_b.png", 0),
+                    cam_entry("texture_c.png", 0),
+                ],
+                "png",
+            ),
+        ];
+
+        for (reason, entries, ext) in cases {
+            let mut scan = scan_outcome(entries.clone());
+            if *reason == "recent" {
+                scan.grace = Some(Duration::from_secs(24 * 60 * 60));
+                for entry in &mut scan.entries {
+                    entry.modified = Some(now);
+                }
+            }
+            let mapped = build_mapped(
+                &scan,
+                &[MapSpec {
+                    ext: (*ext).into(),
+                    folder: "AgentChoice".into(),
+                    created: true,
+                }],
+            );
+            assert!(
+                mapped.groups.iter().all(|g| g.name != "AgentChoice"),
+                "agent mapping overrode the {reason} safety hold"
+            );
+            assert!(
+                !mapped.untouched.is_empty(),
+                "the {reason} safety hold was not represented in the plan"
+            );
+        }
     }
 
     #[test]
