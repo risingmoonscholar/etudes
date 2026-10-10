@@ -4,7 +4,11 @@
   "candidate": "0.5.4",
   "commands": {
     "candidate_install": {
-      "argv": ["python3", "scripts/check-release.py", "--candidate"],
+      "argv": [
+        "python3",
+        "scripts/check-release.py",
+        "--candidate"
+      ],
       "environment": {
         "CARGO_NET_OFFLINE": true,
         "reason": "The host sandbox could not resolve crates.io; dependencies were installed from the existing Cargo cache."
@@ -23,20 +27,38 @@
       ]
     },
     "release_gate_unit_tests": {
-      "argv": ["python3", "-m", "unittest", "discover", "-s", "scripts", "-p", "test_check_release.py", "-v"],
+      "argv": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_check_release.py",
+        "-v"
+      ],
       "exit_code": 0,
       "tests_run": 5,
       "result": "PASS"
     },
     "full_stress_ratchet": {
-      "argv": ["bash", "scripts/stress-ratchet.sh"],
+      "argv": [
+        "bash",
+        "scripts/stress-ratchet.sh"
+      ],
       "bundle": "stress/results/20261010T091530Z-69161/summary.json",
-      "runner": {"os": "Darwin", "arch": "arm64"},
+      "runner": {
+        "os": "Darwin",
+        "arch": "arm64"
+      },
       "passed": 800,
       "failed": 0,
       "unproven": 4,
       "not_run": [],
-      "result": "PASS"
+      "result": "PASS",
+      "reported_revision": "30310e47d21b9bb6c980e81bb6b9f6c55786e16d",
+      "note": "The ratchet bundle reports the worktree base revision because the release candidate was validated from its working tree before commit 2c975b8; no source files changed between the run and that commit."
     },
     "host_gates": {
       "format": "PASS",
