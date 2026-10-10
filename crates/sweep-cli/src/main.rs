@@ -45,6 +45,7 @@ FLAGS
     --json          machine-readable results on stdout (for agents)
     --export-plan F save a private bound plan outside the selected tree
     apply --plan F --plan-digest SHA --yes applies that exact observed plan
+    --progress-json bounded versioned progress on stderr for apply or review
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
@@ -429,6 +430,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--json", false),
             ("--plan", true),
             ("--plan-digest", true),
+            ("--progress-json", false),
             ("--only", true),
             ("--no-journal", false),
             ("--depth", true),
@@ -440,6 +442,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
     (
         "review",
         &[
+            ("--progress-json", false),
             ("--allow-sync", false),
             ("--no-journal", false),
             ("--depth", true),
@@ -835,7 +838,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         };
         Some(sl)
     };
-    run_apply(&bound, &context, sl)
+    run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
 }
 
 fn scan_and_plan(
@@ -1384,7 +1387,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
                 Ok(plan) => plan,
                 Err(code) => return code,
             };
-            run_apply(&bound, &context, sl)
+            run_apply(&bound, &context, sl, has(args, "--progress-json"), "review")
         }
     }
 }
@@ -1514,16 +1517,31 @@ fn run_apply(
     p: &plan::BoundPlan,
     context: &plan::BindingContext,
     sl: Option<KeychainSeal>,
+    structured: bool,
+    operation: &'static str,
 ) -> ExitCode {
-    let mut progress = etude_cli_support::ProgressReporter::stderr("sweep apply", p.moves());
-    let result = etude_core::apply::apply_with_progress(
-        p,
-        context,
-        sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
-        None,
-        |p| progress.update(p.completed, p.total),
-    );
-    drop(progress);
+    let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
+    let result = if structured {
+        let mut progress = etude_cli_support::progress::JsonProgress::stderr(
+            env!("CARGO_PKG_VERSION"),
+            &etude_cli_support::envelope::operation_id(),
+            operation,
+        );
+        let result = etude_core::apply::apply_bound_with_structured_progress(
+            p,
+            context,
+            sealer,
+            None,
+            |event| progress.update(event),
+        );
+        drop(progress);
+        result
+    } else {
+        let mut progress = etude_cli_support::ProgressReporter::stderr("sweep apply", p.moves());
+        etude_core::apply::apply_with_progress(p, context, sealer, None, |event| {
+            progress.update(event.completed, event.total)
+        })
+    };
     match result {
         Ok(r) => {
             etude_cli_support::envelope::effect("items_moved", r.moved);
@@ -1654,6 +1672,19 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     print_agent_named_note(&p);
     if p.moves() == 0 {
         eprintln!("sweep: nothing to apply.");
+        if has(args, "--progress-json") {
+            etude_cli_support::progress::JsonProgress::stderr(
+                env!("CARGO_PKG_VERSION"),
+                &etude_cli_support::envelope::operation_id(),
+                "apply",
+            )
+            .update(etude_core::apply::StructuredProgress {
+                planned: 0,
+                completed: 0,
+                journalled: 0,
+                phase: etude_core::apply::ProgressPhase::Done,
+            });
+        }
         return ExitCode::from(1);
     }
 
@@ -1687,7 +1718,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    run_apply(&bound, &context, sl)
+    run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
 }
 
 /// The newest sweep journal that still has entries to reverse.

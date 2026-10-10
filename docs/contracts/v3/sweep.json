@@ -343,6 +343,32 @@
       "limit_bytes": 67108864,
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
+    },
+    "structured_progress": {
+      "flag": "--progress-json",
+      "stream": "stderr_ndjson_alongside_diagnostics",
+      "schema_version": 1,
+      "operations": [
+        "apply",
+        "review"
+      ],
+      "fields": [
+        "schema_version",
+        "event",
+        "tool_version",
+        "operation_id",
+        "operation",
+        "phase",
+        "planned",
+        "completed",
+        "journalled"
+      ],
+      "maximum_events": 12,
+      "planned": "entries_after_full_preflight_validation",
+      "completed": "successful_moves_including_a_move_whose_done_record_failed",
+      "journalled": "successful_durable_done_records;_zero_without_a_journal",
+      "ordering": "each_done_record_is_durable_before_callback_and_next_move",
+      "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
     }
   }
 }

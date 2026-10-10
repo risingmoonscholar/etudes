@@ -22,9 +22,9 @@ pub const FIELDS: &[&str] = &[
 #[derive(Default)]
 struct ResultState {
     enabled: bool,
-    tool: String,
     version: String,
     operation: String,
+    operation_id: String,
     payloads: Vec<String>,
     status: Option<&'static str>,
     scope: String,
@@ -75,9 +75,17 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
     RESULT.with(|state| {
         *state.borrow_mut() = ResultState {
             enabled: args.iter().any(|arg| arg == "--json") || operation == "contract",
-            tool: tool.into(),
             version: version.into(),
             operation,
+            operation_id: format!(
+                "{}-{}-{}",
+                tool,
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ),
             payloads: Vec::new(),
             status: None,
             scope,
@@ -132,13 +140,17 @@ pub fn effect(name: &'static str, count: usize) {
     });
 }
 
+pub fn operation_id() -> String {
+    RESULT.with(|state| state.borrow().operation_id.clone())
+}
+
 pub fn finish(code: ExitCode) {
     RESULT.with(|state| {
         let state = state.borrow();
         if !state.enabled { return; }
         let details = match state.payloads.as_slice() { [] => "{}".into(), [value] => value.clone(), values => j::arr(values.iter().cloned()) };
         let status = state.status.unwrap_or(if code == ExitCode::from(1) { "nothing_to_do" } else if code == ExitCode::from(2) { "refused" } else if code != ExitCode::SUCCESS { "error" } else { "done" });
-        let id = format!("{}-{}-{}", state.tool, std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+        let id = &state.operation_id;
         let recovery = match state.operation.as_str() {
             "apply" | "stash" | "review" | "apply_exported_plan" if !state.journal_enabled => "manual_restore_required",
             "apply" | "stash" | "review" | "apply_exported_plan" => "conditional_journal_restore",
@@ -151,7 +163,7 @@ pub fn finish(code: ExitCode) {
         std::println!("{}", j::obj(&[
             ("schema_version", j::num(SCHEMA_VERSION)),
             ("tool_version", j::str(&state.version)),
-            ("operation_id", j::str(&id)),
+            ("operation_id", j::str(id)),
             ("status", j::str(status)),
             ("scope", state.scope.clone()),
             ("observations", etude_core::scan::receipt_json()),

@@ -69,8 +69,8 @@ enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.
 
 The original immutable declarations remain under `history/v1/`; their byte
-digests are checked by the witness. Canonical pins in `v2/` retain the version-2 declarations; `v3/unpack.json`
-pins the current version-3 unpack declaration in a version-2 result envelope.
+digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
+pins the current version-3 declarations for all three tools in version-2 result envelopes.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
 links; trust `schema_version`, not a fixture directory name. Only the per-run
@@ -103,7 +103,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v2/` for sweep and stash, `v3/` for unpack); `v2/envelope.json` pins the result structure. Editing fields or types without
+contract envelopes (`v3/` for all three tools); `v2/envelope.json` pins the result structure. Editing fields or types without
 adding a new version is rejected by the independent binary witness.
 
 The envelope contains `schema_version`, `tool_version`, `operation_id`, `status`,
@@ -145,7 +145,7 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 Unpack's capability declaration under `details.schema_version` is version 3;
 its surrounding result envelope remains version 2. `v3/unpack.json` pins the
 new declaration and `v1/unpack.json` mirrors that current fixture. The preceding
-`v2/unpack.json` stays unchanged; sweep and stash declarations remain version 2.
+`v2/unpack.json` stays unchanged; all current tool declarations use version 3.
 The declaration names captured archive quarantine metadata, staging attribute
 reads and writes, exact readback before publication, and refusal if preservation
 fails. On exFAT, macOS-generated AppleDouble companions are retained when they
@@ -160,3 +160,39 @@ the original digest and current tool/profile/observation contract, refusing stal
 observations before case probes, journals or relocations. Root/filesystem identity
 values and plan digests are meaningful binding evidence, not proof of payload
 integrity or complete access coverage. See [plan binding](../plan-binding.md).
+## Stash explicit selection declaration version 3
+
+Stash's capability declaration is version 3 and its surrounding result envelope
+remains version 2. `v3/stash.json` pins declaration version 3; `v1/stash.json`
+tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
+conditional legacy folder scanning and explicit selection access separately.
+Selection reads only its path list, selected object metadata and necessary ancestors,
+plus the existing journal fingerprints and cross-volume file copying. Its writes
+are relocations of explicitly selected objects, private numbered holding slots,
+and the existing encrypted journal. A selected directory is opaque; its children
+are not enumerated. Explicit links, special files and known sync source or holding
+locations are refused before holding; no sync override is offered for selection.
+
+`explicit_selection_object_metadata` includes canonical parent resolution and
+no-follow selected-object metadata used for location, type, identity, overlap and
+volume checks. `explicit_selection_path_list_bytes` is the supplied NUL-terminated
+UTF-8 list from a file or stdin, not arbitrary payload inspection.
+`os_random_bytes_for_selection_holding` names its private operation root.
+`explicit_selected_objects` and `private_selection_holding_tree` include the
+chosen relocations, numbered slots and case-probe files. The result's `holding_root`
+is the minimum locator for recovery; original source paths remain in the encrypted
+journal and are not listed in the receipt. `--no-journal` is refused for selection,
+while legacy whole-folder behavior is retained.
+
+
+## Stash batch declaration version 4
+
+Stash's batch capability is declaration version 4 in `v4/stash.json`; `v1/stash.json`
+tracks the current declaration, while the version 3 pin remains available for the
+preceding interface. Every journalled stash has a persistent `stash_id`, separate
+from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
+malformed, unreadable or mismatched IDs without falling back to another operation.
+`--latest` uses creation time for current IDs and refuses ties; legacy IDs use
+modification time and also refuse ties. Due dates are informational: `--if-due`
+only gates an explicitly requested pop. Explicit `--no-journal` folder stashes have
+no restorable ID and require manual recovery.

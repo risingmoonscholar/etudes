@@ -1,0 +1,9 @@
+# Structured sweep progress
+
+`sweep apply PATH --yes --progress-json` and `sweep review PATH --progress-json` emit newline-delimited JSON progress records on stderr alongside normal diagnostics. `--json` still emits one result envelope on stdout. Progress and the result envelope share an operation ID. Without `--progress-json`, existing human progress remains unchanged.
+
+Progress schema 1 has exactly these fields: `schema_version`, `event` (`progress`), `tool_version`, `operation_id`, `operation`, `phase`, `planned`, `completed`, and `journalled`. Phases are `planning`, `advancing`, `done`, and `error`. Events contain no paths, contents, keys, or environment values. There are at most twelve records per engine invocation: one fully validated plan, at most ten advancing milestones, and one terminal record. Empty applies emit a terminal zero record. Refusals before engine invocation use the usual diagnostics and result envelope.
+
+`planned` counts entries after full preflight validation. `completed` counts successful moves. `journalled` counts successful durable done-record writes and is zero with `--no-journal`. A move followed by a failed journal write increases `completed` without increasing `journalled`; the terminal error preserves those counts. A preflight refusal reports zero validated entries and zero moves. These counts describe this apply, not every startup state change.
+
+The journal base is persisted before any move. Each applied move's done record is persisted before the callback and before the next move begins. Tests independently reload the sealed journal during callbacks and check that later sources remain untouched. Progress output errors do not change this persistence order. This change makes progress observable; it makes no speed claim and does not batch journal writes.

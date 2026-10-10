@@ -120,7 +120,8 @@ done
 chmod 600 "$newest"
 assert_eq "$before" "$(find "$W/stash-mixed" -type f -exec shasum {} \; | sort)" 'unreadable newer stash moves nothing'
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'unreadable newer stash preserves journal bytes'
-assert_exit 0 'stash B restores newest operation' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop "$W/stash-mixed"
+batch_b_id=$(basename "$newest" .journal); batch_b_id=${batch_b_id#stash-}
+assert_exit 0 'stash B exact id restores its operation' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop --id "$batch_b_id"
 restored "$W/stash-mixed" 'stash B original bytes restored'
 
 # Both roots still have live operations; the wrong-key barrier must prevent
@@ -130,12 +131,18 @@ make_tree "$W/stash-live-a"; make_tree "$W/stash-live-b"
 assert_exit 0 'stash live older A' -- "$STASH" "$W/stash-live-a"
 sleep 1
 assert_exit 0 'stash live newer B' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" "$W/stash-live-b"
+live_b_id=$(python3 - "$ETUDE_STATE_DIR" <<'BATCH'
+import pathlib, sys
+path = max(pathlib.Path(sys.argv[1]).glob('stash-*.journal'), key=lambda p: p.stat().st_mtime_ns)
+print(path.name.removeprefix('stash-').removesuffix('.journal'))
+BATCH
+)
 before=$(find "$W/stash-live-a" "$W/stash-live-b" -type f -exec shasum {} \; | sort)
 journals=$(shasum "$ETUDE_STATE_DIR"/*.journal)
 assert_exit 3 'stash A cannot skip live B from another root' -- "$STASH" pop "$W/stash-live-a"
 assert_eq "$before" "$(find "$W/stash-live-a" "$W/stash-live-b" -type f -exec shasum {} \; | sort)" 'mixed live stash refusal moves nothing'
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'mixed live stash refusal preserves journal bytes'
-assert_exit 0 'stash B restores live newest root' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop "$W/stash-live-b"
+assert_exit 0 'stash B exact id restores its live operation' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop --id "$live_b_id"
 restored "$W/stash-live-b" 'newest live stash original bytes restored'
 
 # Discovery and filesystem failures must be barriers too, including ties:

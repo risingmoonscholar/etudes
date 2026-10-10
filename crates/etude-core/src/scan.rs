@@ -1119,6 +1119,60 @@ fn is_refused_system_location(path: &Path) -> bool {
     false
 }
 
+/// Resolve one explicitly chosen object without enumerating its parent or children.
+/// Parent aliases resolve for overlap checks; a terminal symlink remains the chosen link.
+pub fn selected_object(path: &Path) -> Result<(PathBuf, fs::Metadata), ScanError> {
+    #[cfg(unix)]
+    {
+        // SAFETY: getuid reads a process property and takes no pointers.
+        if unsafe { libc_getuid() } == 0 {
+            return Err(ScanError::RefusedRunningAsRoot);
+        }
+    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(ScanError::Io)?.join(path)
+    };
+    let resolved = if let Some(name) = absolute.file_name() {
+        let parent = absolute.parent().unwrap_or(Path::new("/"));
+        observe_read("selection_parent_metadata", parent.canonicalize())
+            .map_err(ScanError::Io)?
+            .join(name)
+    } else {
+        observe_read("selection_parent_metadata", absolute.canonicalize()).map_err(ScanError::Io)?
+    };
+    if is_refused_system_location(&resolved)
+        || resolved
+            .components()
+            .any(|c| matches!(c, Component::Normal(name) if never_enter(&name.to_string_lossy())))
+    {
+        return Err(ScanError::RefusedSystemLocation(resolved));
+    }
+    let metadata = observe_read("selection_metadata", fs::symlink_metadata(&resolved))
+        .map_err(ScanError::Io)?;
+    if metadata.file_type().is_symlink() {
+        return Ok((resolved, metadata));
+    }
+    let canonical = observe_read("selection_parent_metadata", resolved.canonicalize())
+        .map_err(ScanError::Io)?;
+    if is_refused_system_location(&canonical) {
+        return Err(ScanError::RefusedSystemLocation(canonical));
+    }
+    let checked = observe_read("selection_metadata", fs::symlink_metadata(&canonical))
+        .map_err(ScanError::Io)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (metadata.dev(), metadata.ino()) != (checked.dev(), checked.ino()) {
+            return Err(ScanError::Io(io::Error::other(
+                "selected object changed while resolving",
+            )));
+        }
+    }
+    Ok((canonical, checked))
+}
+
 /// Walk `root` and return the entries eligible for organisation.
 ///
 /// Safety rules enforced here:

@@ -136,8 +136,8 @@ pub fn declaration(
     let mut fields = vec![
         (
             "schema_version",
-            j::num(if matches!(tool, Tool::Unpack) {
-                3
+            j::num(if matches!(tool, Tool::Stash) {
+                4
             } else {
                 SCHEMA_VERSION
             }),
@@ -167,7 +167,11 @@ pub fn declaration(
                             "cross_device_copy",
                             "journal_fingerprint_prefixes",
                         ],
-                        Tool::Stash => &["cross_device_copy", "journal_fingerprint_prefixes"],
+                        Tool::Stash => &[
+                            "cross_device_copy",
+                            "journal_fingerprint_prefixes",
+                            "explicit_selection_path_list_bytes",
+                        ],
                         Tool::Unpack => &["system_extractor_reads_private_archive_copy"],
                     }),
                 ),
@@ -443,6 +447,51 @@ pub fn declaration(
             ]),
         ));
     }
+    if matches!(tool, Tool::Sweep) {
+        fields.push(("structured_progress", j::obj(&[
+            ("flag", j::str("--progress-json")),
+            ("stream", j::str("stderr_ndjson_alongside_diagnostics")),
+            ("schema_version", j::num(crate::progress::SCHEMA_VERSION)),
+            ("operations", strings(&["apply", "review"])),
+            ("fields", strings(&["schema_version", "event", "tool_version", "operation_id", "operation", "phase", "planned", "completed", "journalled"])),
+            ("maximum_events", j::num(crate::progress::MAX_EVENTS)),
+            ("planned", j::str("entries_after_full_preflight_validation")),
+            ("completed", j::str("successful_moves_including_a_move_whose_done_record_failed")),
+            ("journalled", j::str("successful_durable_done_records;_zero_without_a_journal")),
+            ("ordering", j::str("each_done_record_is_durable_before_callback_and_next_move")),
+            ("disclosure", j::str("counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values")),
+        ])));
+    }
+    if matches!(tool, Tool::Stash) {
+        fields.push(("explicit_selection", j::obj(&[
+            ("command", j::str("select")),
+            ("sources", j::str("multiple_exact_canonical_files_and_directories;_no_common_ancestor_or_sibling_scan")),
+            ("directories", j::str("whole_opaque_objects;_not_recursive_content_integrity_verified")),
+            ("path_input", j::str("positional_paths_or_from0_file_or_stdin;_nul_terminated_utf8")),
+            ("max_input_bytes", j::num(32 * 1024 * 1024)),
+            ("max_objects", j::num(100_000)),
+            ("overlaps", j::str("duplicate_paths_repeated_object_identities_and_ancestor_descendant_selections_refused_before_holding_or_moves")),
+            ("unsupported", strings(&["explicit_symlinks", "special_files", "cross_volume_directory_holding", "known_sync_sources_or_holding", "non_utf8_journal_paths"])),
+            ("journal", j::str("required_encrypted_original_absolute_parent_paths;_no_journal_refused_for_select_only")),
+            ("holding", j::str("one_private_operation_root_with_numbered_slots;_equal_basenames_do_not_collide")),
+            ("holding_parent", j::str("into_parent_or_first_canonical_source_parent;_inside_selected_object_refused")),
+            ("recovery", j::str("stash_pop_operation_root;_authenticated_owned_empty_directories_only")),
+            ("disclosure", j::str("counts_and_minimum_recovery_locator_only;_source_paths_and_basenames_not_listed")),
+        ])));
+    }
+    if matches!(tool, Tool::Stash) {
+        fields.push(("batches", j::obj(&[
+            ("persistent_id", j::str("stash_id_is_the_encrypted_journal_id;_distinct_from_invocation_operation_id")),
+            ("identity", j::str("new_stash_journal_v2_authenticates_id_and_tool_before_progress_replay;_legacy_v1_filename_binding_unproven")),
+            ("exact_restore", j::str("pop_--id_ID_or_current_creation_ID;_bounded_selector;_missing_or_damaged_id_never_falls_back")),
+            ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier")),
+            ("latest_scope", j::str("no_path_means_machine_wide_stash_journals;_path_limits_to_exact_journal_root")),
+            ("path_restore", j::str("one_live_batch_required;_multiple_matches_refused")),
+            ("status", j::str("one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure")),
+            ("due", j::str("deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop")),
+            ("no_journal", j::str("explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required")),
+        ])));
+    }
     if matches!(tool, Tool::Unpack) {
         fields.push(("quarantine", j::obj(&[
             ("source", j::str("captured_from_same_nofollow_descriptor_as_archive_bytes")),
@@ -599,12 +648,17 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &[
                     "selected_tree_metadata",
                     "ancestor_metadata",
+                    "explicit_selection_object_metadata",
+                    "explicit_selection_path_list_bytes",
+                    "os_random_bytes_for_selection_holding",
                     "journal_key",
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                 ],
                 &[
                     "selected_tree_entries",
+                    "explicit_selected_objects",
+                    "private_selection_holding_tree",
                     "journal_store",
                     "keychain_if_no_supplied_key",
                 ],

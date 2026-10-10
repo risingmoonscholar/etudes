@@ -75,7 +75,8 @@
       "default_user_content": "metadata_only",
       "content_exceptions": [
         "cross_device_copy",
-        "journal_fingerprint_prefixes"
+        "journal_fingerprint_prefixes",
+        "explicit_selection_path_list_bytes"
       ],
       "symlinks": "move_link_itself",
       "environment": [
@@ -121,12 +122,17 @@
           "reads": [
             "selected_tree_metadata",
             "ancestor_metadata",
+            "explicit_selection_object_metadata",
+            "explicit_selection_path_list_bytes",
+            "os_random_bytes_for_selection_holding",
             "journal_key",
             "cross_device_source_bytes",
             "journal_fingerprint_bytes"
           ],
           "writes": [
             "selected_tree_entries",
+            "explicit_selected_objects",
+            "private_selection_holding_tree",
             "journal_store",
             "keychain_if_no_supplied_key"
           ]
@@ -270,6 +276,27 @@
       "limit_bytes": 67108864,
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
+    },
+    "explicit_selection": {
+      "command": "select",
+      "sources": "multiple_exact_canonical_files_and_directories;_no_common_ancestor_or_sibling_scan",
+      "directories": "whole_opaque_objects;_not_recursive_content_integrity_verified",
+      "path_input": "positional_paths_or_from0_file_or_stdin;_nul_terminated_utf8",
+      "max_input_bytes": 33554432,
+      "max_objects": 100000,
+      "overlaps": "duplicate_paths_repeated_object_identities_and_ancestor_descendant_selections_refused_before_holding_or_moves",
+      "unsupported": [
+        "explicit_symlinks",
+        "special_files",
+        "cross_volume_directory_holding",
+        "known_sync_sources_or_holding",
+        "non_utf8_journal_paths"
+      ],
+      "journal": "required_encrypted_original_absolute_parent_paths;_no_journal_refused_for_select_only",
+      "holding": "one_private_operation_root_with_numbered_slots;_equal_basenames_do_not_collide",
+      "holding_parent": "into_parent_or_first_canonical_source_parent;_inside_selected_object_refused",
+      "recovery": "stash_pop_operation_root;_authenticated_owned_empty_directories_only",
+      "disclosure": "counts_and_minimum_recovery_locator_only;_source_paths_and_basenames_not_listed"
     }
   }
 }
