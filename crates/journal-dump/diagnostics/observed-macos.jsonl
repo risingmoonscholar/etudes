@@ -1,0 +1,4 @@
+{"mode": "delete", "stopped_after_moves": 1, "apply_exit": 3, "moved": 375, "files_after_undo": 499, "exact_recovery": true}
+{"mode": "chmod", "stopped_after_moves": 1, "apply_exit": 3, "moved": 1, "files_after_undo": 500, "exact_recovery": true}
+{"mode": "rm-race", "stopped_after_moves": 1, "apply_exit": 0, "moved": 500, "files_after_undo": 500, "exact_recovery": true}
+{"mode": "late-chmod", "stopped_after_moves": 1, "apply_exit": 0, "moved": 500, "files_after_undo": 500, "exact_recovery": true}
