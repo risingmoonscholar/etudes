@@ -255,6 +255,7 @@ pub(super) fn encode(
                 });
             }
             Untouched::NoClearGroup => w.byte(1),
+            Untouched::AlreadyInDestination => w.byte(6),
             Untouched::TooRecent => w.byte(2),
             Untouched::InFlight => w.byte(3),
             Untouched::ProjectDocument => w.byte(4),
@@ -366,6 +367,7 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
                 _ => return Err(invalid()),
             }),
             1 => Untouched::NoClearGroup,
+            6 => Untouched::AlreadyInDestination,
             2 => Untouched::TooRecent,
             3 => Untouched::InFlight,
             4 => Untouched::ProjectDocument,
@@ -522,6 +524,7 @@ mod tests {
             Untouched::LooksPersonal(Category::Credential),
             Untouched::LooksPersonal(Category::Legal),
             Untouched::NoClearGroup,
+            Untouched::AlreadyInDestination,
             Untouched::TooRecent,
             Untouched::InFlight,
             Untouched::ProjectDocument,
@@ -597,7 +600,39 @@ mod tests {
         );
         assert_eq!(decoded_snapshot, snapshot);
         assert_eq!(decoded_plan.groups.len(), 6);
-        assert_eq!(decoded_plan.untouched.len(), 11);
+        assert_eq!(decoded_plan.untouched.len(), 12);
+    }
+
+    #[test]
+    fn plans_without_the_new_in_place_reason_keep_the_legacy_encoding() {
+        let (mut plan, snapshot, context) = fixture();
+        plan.untouched
+            .retain(|(_, reason)| *reason != Untouched::AlreadyInDestination);
+
+        let bytes = encode(&plan, &snapshot, &context).unwrap();
+        let (decoded_plan, decoded_snapshot, decoded_context) = decode(&bytes).unwrap();
+
+        assert_eq!(decoded_plan.untouched.len(), plan.untouched.len());
+        let mut decoded_reasons: Vec<_> = decoded_plan
+            .untouched
+            .iter()
+            .map(|(_, reason)| reason.clone())
+            .collect();
+        let mut original_reasons: Vec<_> = plan
+            .untouched
+            .iter()
+            .map(|(_, reason)| reason.clone())
+            .collect();
+        for reason in &mut decoded_reasons {
+            if let Untouched::NearProjectDocument(path) = reason {
+                *path = "project.blend".to_owned();
+            }
+        }
+        decoded_reasons.sort_by_key(|reason| format!("{reason:?}"));
+        original_reasons.sort_by_key(|reason| format!("{reason:?}"));
+        assert_eq!(decoded_reasons, original_reasons);
+        assert_eq!(decoded_snapshot, snapshot);
+        assert_eq!(decoded_context, context);
     }
 
     #[test]

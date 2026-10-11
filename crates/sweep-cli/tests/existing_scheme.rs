@@ -150,6 +150,183 @@ fn existing_profile_routes_builtin_extensions_only_into_a_folder_that_exists() {
 }
 
 #[test]
+fn missing_builtin_route_does_not_fall_back_to_documents() {
+    let fixture = Fixture::new();
+    fixture.profile(&route("pdf", "Reading"));
+    fixture.add_files("pdf", 3);
+
+    let output = fixture.run(&[
+        "apply",
+        fixture.root.to_str().unwrap(),
+        "--scheme",
+        "existing",
+        "--since",
+        "0",
+        "--yes",
+        "--json",
+    ]);
+
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Reading")
+            || String::from_utf8_lossy(&output.stderr).contains("Reading"),
+        "the refusal should name the missing destination: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fixture.source_count("pdf"), 3);
+    assert!(!fixture.root.join("Documents").exists());
+}
+
+#[test]
+fn profile_routed_screenshots_are_not_claimed_again_by_screenshot_grouping() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("Captures");
+    std::fs::create_dir(&destination).unwrap();
+    fixture.profile(&route("png", "Captures"));
+    for index in 1..=3 {
+        std::fs::write(
+            fixture.root.join(format!("Screenshot {index}.png")),
+            b"synthetic screenshot",
+        )
+        .unwrap();
+    }
+
+    let output = fixture.run(&[
+        "apply",
+        fixture.root.to_str().unwrap(),
+        "--scheme",
+        "existing",
+        "--since",
+        "0",
+        "--yes",
+        "--json",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fixture.source_count("png"), 0);
+    assert_eq!(std::fs::read_dir(destination).unwrap().count(), 3);
+    assert!(!fixture.root.join("Screenshots").exists());
+}
+
+#[test]
+fn depth_two_existing_destination_files_are_reported_in_place() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("Reading");
+    std::fs::create_dir(&destination).unwrap();
+    fixture.profile(&route("pdf", "Reading"));
+    for index in 0..3 {
+        std::fs::write(
+            destination.join(format!("already-{index}.pdf")),
+            b"already in destination",
+        )
+        .unwrap();
+    }
+
+    let output = fixture.run(&[
+        fixture.root.to_str().unwrap(),
+        "--scheme",
+        "existing",
+        "--depth",
+        "2",
+        "--since",
+        "0",
+        "--json",
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("\"name\":\"Reading\""));
+    assert!(stdout.contains("\"in_place\":3"), "{stdout}");
+    assert_eq!(std::fs::read_dir(destination).unwrap().count(), 3);
+}
+
+#[test]
+fn depth_three_nested_destination_files_still_promote_to_the_destination() {
+    let fixture = Fixture::new();
+    let destination = fixture.root.join("Reading");
+    let nested = destination.join("sub");
+    std::fs::create_dir_all(&nested).unwrap();
+    fixture.profile(&route("pdf", "Reading"));
+    for index in 0..3 {
+        std::fs::write(nested.join(format!("nested-{index}.pdf")), b"nested file").unwrap();
+    }
+
+    let output = fixture.run(&[
+        fixture.root.to_str().unwrap(),
+        "--scheme",
+        "existing",
+        "--depth",
+        "3",
+        "--since",
+        "0",
+        "--json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stdout.contains("\"name\":\"Reading\""), "{stdout}");
+    assert!(stdout.contains("\"count\":3"), "{stdout}");
+}
+
+#[test]
+fn two_profile_extensions_refusal_names_the_profile_not_a_map_flag() {
+    let fixture = Fixture::new();
+    std::fs::create_dir(fixture.root.join("Shared")).unwrap();
+    fixture.profile(
+        "schema_version = 1\n\
+         [[routes]]\nextension = \"qoi\"\nfolder = \"Shared\"\n\
+         [[routes]]\nextension = \"webp\"\nfolder = \"Shared\"\n",
+    );
+    fixture.add_files("qoi", 3);
+    fixture.add_files("webp", 3);
+
+    let output = fixture.run(&[
+        fixture.root.to_str().unwrap(),
+        "--scheme",
+        "existing",
+        "--since",
+        "0",
+        "--json",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("profile"), "{stderr}");
+    assert!(!stderr.contains("--map"), "{stderr}");
+    assert_eq!(fixture.source_count("qoi"), 3);
+    assert_eq!(fixture.source_count("webp"), 3);
+}
+
+#[test]
+fn no_journal_json_apply_writes_only_json_to_stdout() {
+    let fixture = Fixture::new();
+    fixture.add_files("pdf", 3);
+
+    let output = fixture.run(&[
+        "apply",
+        fixture.root.to_str().unwrap(),
+        "--since",
+        "0",
+        "--yes",
+        "--no-journal",
+        "--json",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        stdout.trim_start().starts_with('{') && stdout.trim_end().ends_with('}'),
+        "stdout is not JSON: {stdout}"
+    );
+}
+
+#[test]
 fn missing_destinations_and_ambiguous_profile_routes_leave_sources_untouched() {
     let missing = Fixture::new();
     missing.profile(&route("qoi", "Missing"));
@@ -162,7 +339,8 @@ fn missing_destinations_and_ambiguous_profile_routes_leave_sources_untouched() {
         "0",
         "--json",
     ]);
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Missing"));
     assert!(!missing.root.join("Missing").exists());
     assert_eq!(missing.source_count("qoi"), 3);
 

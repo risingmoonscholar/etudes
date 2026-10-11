@@ -14,8 +14,12 @@ reviewers were pointed at the tools before anyone else could be.
 
 - **sweep:** `--scheme existing` routes eligible files using a versioned,
   reviewable profile to folders already present in the selected directory.
-  Missing or ambiguous routes leave files in place, safety refusals still win,
-  and exported plans require replanning if the profile changes.
+  A missing destination is named and refused instead of falling through to a
+  built-in folder; ambiguous routes identify the profile, and safety refusals
+  still win. Routed files are claimed once even when they also match a built-in
+  detector. At depth 2, files already directly inside their destination are
+  reported in place; deeper files remain eligible for promotion. Exported plans
+  require replanning if the profile changes.
 - **stash:** independent journalled batches return an opaque `stash_id`.
   Restore the chosen batch with `stash pop --id ID`; `operation_id` identifies
   only the invocation. Receipts expose no holding path; selection still carries

@@ -1197,12 +1197,22 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     let recent = p.too_recent();
     let downloading = p.in_flight();
     let unclear = p.no_clear_group();
+    let in_place = p.already_in_destination();
     let projects = p.skipped_project;
     let incomplete = p.skipped_in_flight;
     let packages = p.skipped_package;
 
     let doc_held = p.project_documents() + p.near_document().map(|(n, _)| n).unwrap_or(0);
-    if personal + recent + downloading + unclear + projects + incomplete + packages + doc_held == 0
+    if personal
+        + recent
+        + downloading
+        + unclear
+        + in_place
+        + projects
+        + incomplete
+        + packages
+        + doc_held
+        == 0
     {
         return;
     }
@@ -1245,6 +1255,11 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
         println!("  1 file matched no group and was left where it is");
     } else if unclear > 1 {
         println!("  {unclear} files matched no group and were left where they are");
+    }
+    if in_place == 1 {
+        println!("  1 file is already in its destination and was left in place");
+    } else if in_place > 1 {
+        println!("  {in_place} files are already in their destination and were left in place");
     }
     if projects == 1 {
         println!("  1 folder was left alone because it holds a project file");

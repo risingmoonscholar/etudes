@@ -160,7 +160,11 @@ provide the attribute representation. Raw values are never disclosed.
 Sweep capability declaration version 4 adds the read-only, versioned
 existing-folder profile to its declared scope. The plan digest binds the
 profile bytes; profile changes require a fresh plan. Safety refusals still
-outrank profile routes, and the scheme never creates a destination.
+outrank profile routes, and the scheme never creates a destination. A missing
+profile destination is named and refused so built-in grouping cannot silently
+route its files elsewhere. The plan reports files already directly inside a
+profile destination as in place; deeper files can still be promoted when the
+selected scan depth includes them.
 
 Stash's capability version 3 and sweep's preceding version 3 declare explicit
 plan exports and replay. The result envelope remains version 2; the separate

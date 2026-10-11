@@ -270,6 +270,14 @@ impl Plan {
             .count()
     }
 
+    /// Files already directly inside the destination selected by a profile.
+    pub fn already_in_destination(&self) -> usize {
+        self.untouched
+            .iter()
+            .filter(|(_, reason)| *reason == Untouched::AlreadyInDestination)
+            .count()
+    }
+
     pub fn moves(&self) -> usize {
         self.groups
             .iter()
@@ -331,6 +339,12 @@ impl Plan {
                 .filter(|(_, u)| *u == Untouched::NoClearGroup)
                 .map(|(p, _)| j::path(p)),
         );
+        let in_place = j::arr(
+            self.untouched
+                .iter()
+                .filter(|(_, reason)| *reason == Untouched::AlreadyInDestination)
+                .map(|(path, _)| j::path(path)),
+        );
 
         j::obj(&[
             ("root", j::path(&self.root)),
@@ -373,6 +387,8 @@ impl Plan {
                     ("downloads_skipped", j::num(self.skipped_in_flight)),
                     ("packages_skipped", j::num(self.skipped_package)),
                     ("in_flight", j::num(self.in_flight())),
+                    ("in_place", j::num(self.already_in_destination())),
+                    ("in_place_paths", in_place),
                     ("no_clear_group", j::num(self.no_clear_group())),
                     ("no_clear_group_paths", no_group),
                 ]),
@@ -443,16 +459,21 @@ pub fn validate_maps(
 /// Validate a saved existing-folder profile. Unlike a one-shot agent map, a
 /// profile may deliberately route an extension which a built-in detector
 /// would otherwise claim. Refusal detectors still run before these routes.
-/// Missing destinations are omitted: this scheme never creates them, and
-/// files with no usable route remain in place.
+/// A missing destination refuses the profile route by name: this scheme
+/// never creates destinations, and silently dropping a route could let a
+/// built-in grouping take the file somewhere else.
 pub fn validate_existing_maps(
     raw: &[(String, String)],
     root: &std::path::Path,
 ) -> Result<Vec<MapSpec>, String> {
-    Ok(validate_maps_impl(raw, root, true)?
-        .into_iter()
-        .filter(|map| !map.created)
-        .collect())
+    let maps = validate_maps_impl(raw, root, true)?;
+    if let Some(missing) = maps.iter().find(|map| map.created) {
+        return Err(format!(
+            "existing-folder profile destination {:?} does not exist; create it or edit the profile",
+            missing.folder
+        ));
+    }
+    Ok(maps)
 }
 
 fn validate_maps_impl(
@@ -523,9 +544,15 @@ fn validate_maps_impl(
             .iter()
             .any(|m: &MapSpec| m.folder.eq_ignore_ascii_case(folder))
         {
-            return Err(format!(
-                "--map: two extensions map to {folder:?}; each mapping needs its own folder"
-            ));
+            return Err(if allow_built_in_extensions {
+                format!(
+                    "existing-folder profile: two extensions route to {folder:?}; each route needs its own folder"
+                )
+            } else {
+                format!(
+                    "--map: two extensions map to {folder:?}; each mapping needs its own folder"
+                )
+            });
         }
         // A target that differs from an existing folder only by case or
         // Unicode normalisation is the on-disk folder wearing a different
@@ -727,6 +754,18 @@ fn build_with_policy(
     // `created: false` also tells apply never to create it if it disappears.
     if profile_routes {
         for m in maps {
+            let destination = scan.root.join(&m.folder);
+            let in_place: Vec<&Entry> = remaining
+                .iter()
+                .filter(|e| !claimed.contains(&e.path))
+                .filter(|e| e.path.parent().is_some_and(|parent| parent == destination))
+                .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
+                .copied()
+                .collect();
+            for entry in in_place {
+                claimed.push(entry.path.clone());
+                untouched.push((entry.path.clone(), Untouched::AlreadyInDestination));
+            }
             let members: Vec<&Entry> = remaining
                 .iter()
                 .filter(|e| !claimed.contains(&e.path))
@@ -753,7 +792,7 @@ fn build_with_policy(
     let shots: Vec<&Entry> = remaining
         .iter()
         .copied()
-        .filter(|e| classify::is_screenshot(e))
+        .filter(|e| classify::is_screenshot(e) && !claimed.contains(&e.path))
         .collect();
     if shots.len() >= MIN_STRUCTURAL_GROUP {
         claimed.extend(shots.iter().map(|e| e.path.clone()));

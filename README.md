@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 395 tests
+cargo test --all                # 402 tests
 scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
 ```
 
@@ -136,12 +136,17 @@ folder = "Reading"
 ```
 
 Each route applies only when its destination is already a direct, visible
-folder in the selected directory. Missing destinations are ignored and their
-files stay where they are. A route needs at least three eligible files to form
-a group. Duplicate or malformed routes refuse the plan before anything moves.
-Safety refusals still take precedence over the profile; eligible profile routes
-take precedence over built-in grouping. Sweep records the profile's SHA-256 in
-an exported plan, and refuses replay if the profile changes.
+folder in the selected directory. If a destination is missing, sweep refuses
+and names it rather than letting a built-in rule send those files elsewhere.
+A route needs at least three eligible files to form a group, and each extension
+needs its own destination. Duplicate or malformed routes refuse before anything
+moves. Safety refusals still take precedence over the profile; eligible profile
+routes take precedence over built-in grouping. A routed file is claimed once,
+even when its name also matches a built-in detector such as Screenshots. At
+`--depth 2`, files already directly inside their route destination are reported
+as in place and are not proposed again; deeper files remain eligible for
+promotion into that destination. Sweep records the profile's SHA-256 in an
+exported plan, and refuses replay if the profile changes.
 
 | State | Current behavior |
 |---|---|
