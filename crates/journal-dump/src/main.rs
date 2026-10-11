@@ -39,6 +39,9 @@ fn main() -> ExitCode {
     if args.first().is_some_and(|arg| arg == "--watch-undo") {
         return watch_undo(&args);
     }
+    if args.first().is_some_and(|arg| arg == "--watch-apply") {
+        return watch_apply(&args);
+    }
     // A decrypted journal is the full pathname history of everything the
     // tools ever moved. That answers only to a person at a terminal, for the
     // same reason stash's --paths does: the reach of the read is the whole
@@ -189,6 +192,180 @@ fn watch_undo(args: &[String]) -> ExitCode {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// Read only the supplied trial directory and root. Successful observation
+/// transfers a confirmed stopped child to the caller; every missed window
+/// resumes it. No pathname history is printed by this stress-only mode.
+fn watch_apply(args: &[String]) -> ExitCode {
+    use etude_core::journal::EntryState;
+    if args.len() != 5 {
+        eprintln!("usage: journal-dump --watch-apply <state-dir> <root> <victim> <pid>");
+        return ExitCode::from(2);
+    }
+    let Ok(pid) = args[4].parse::<i32>() else {
+        return ExitCode::from(2);
+    };
+    if pid <= 0 {
+        return ExitCode::from(2);
+    }
+    let state_dir = Path::new(&args[1]);
+    let Ok(root) = std::fs::canonicalize(&args[2]) else {
+        eprintln!("journal-dump: trial root unavailable; injection unproven");
+        return ExitCode::from(1);
+    };
+    let victim = Path::new(&args[3]);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", state_dir) };
+    let Ok(key) = etude_keep::key() else {
+        eprintln!("journal-dump: apply journal key unavailable; injection unproven");
+        return ExitCode::from(1);
+    };
+    let sealer = KeychainSeal { key };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        // A zombie is not an injectable live apply, even though kill(pid, 0)
+        // can still succeed for it while its parent has not called wait().
+        let Some(state) = process_state(pid) else {
+            break;
+        };
+        if state.contains('Z') || Instant::now() >= deadline {
+            break;
+        }
+        if let Ok(files) = std::fs::read_dir(state_dir) {
+            for file in files.flatten() {
+                let name = file.file_name();
+                let Some(id) = name
+                    .to_str()
+                    .and_then(|s| s.strip_prefix("sweep-"))
+                    .and_then(|s| s.strip_suffix(".journal"))
+                else {
+                    continue;
+                };
+                let Ok(observed) = etude_core::Journal::load_sealed_exact("sweep", id, &sealer)
+                else {
+                    continue;
+                };
+                if observed.root != root {
+                    continue;
+                }
+                let moved = observed.entries.iter().filter(|e| e.is_moved()).count();
+                if moved == 0 {
+                    continue;
+                }
+                if moved == observed.entries.len() {
+                    eprintln!("journal-dump: apply already finished; injection unproven");
+                    return ExitCode::from(1);
+                }
+                // Signal only after real journal progress. A successful
+                // signal delivery alone does not prove the OS stopped it.
+                let Some(mut stopped) = StoppedApply::stop(pid, deadline) else {
+                    continue;
+                };
+                let Ok(paused) = etude_core::Journal::load_sealed_exact("sweep", id, &sealer)
+                else {
+                    // Drop resumes a child stopped inside a journal write.
+                    continue;
+                };
+                if paused.root != root || paused.progress_tail_damaged {
+                    continue;
+                }
+                let moved = paused.entries.iter().filter(|e| e.is_moved()).count();
+                let Some((index, target)) = paused
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .find(|(_, entry)| entry.from == victim)
+                else {
+                    continue;
+                };
+                if moved > 0
+                    && moved < paused.entries.len()
+                    && target.state == EntryState::Planned
+                    && target.from.is_file()
+                    && !target.to.exists()
+                {
+                    // The caller owns resume/termination from this point.
+                    stopped.resume_on_drop = false;
+                    println!("{moved} {} {index}", paused.entries.len());
+                    return ExitCode::SUCCESS;
+                }
+                // A pre-signal observation may already be stale. Never
+                // relabel that missed injection as a pass or tool failure.
+                eprintln!(
+                    "journal-dump: target no longer pending while stopped; injection unproven"
+                );
+                return ExitCode::from(1);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    eprintln!("journal-dump: no stopped apply with a pending target; injection unproven");
+    ExitCode::from(1)
+}
+
+fn process_state(pid: i32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let state = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (output.status.success() && !state.is_empty()).then_some(state)
+}
+
+struct StoppedApply {
+    pid: i32,
+    resume_on_drop: bool,
+}
+
+impl StoppedApply {
+    fn stop(pid: i32, deadline: Instant) -> Option<Self> {
+        if !signal_process(pid, sigstop()) {
+            return None;
+        }
+        let guard = Self {
+            pid,
+            resume_on_drop: true,
+        };
+        while Instant::now() < deadline {
+            let state = process_state(pid)?;
+            if state.contains('T') {
+                return Some(guard);
+            }
+            if state.contains('Z') {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        None
+    }
+}
+
+impl Drop for StoppedApply {
+    fn drop(&mut self) {
+        if self.resume_on_drop {
+            signal_process(self.pid, sigcont());
+        }
+    }
+}
+
+fn signal_process(pid: i32, signal: i32) -> bool {
+    #[cfg(unix)]
+    // SAFETY: the watcher validates a positive PID supplied by its caller.
+    {
+        unsafe { kill(pid, signal) == 0 }
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+#[cfg(target_os = "linux")]
+const fn sigcont() -> i32 {
+    18
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn sigcont() -> i32 {
+    19
 }
 
 #[cfg(unix)]
