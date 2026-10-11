@@ -25,6 +25,7 @@ Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
 Nothing has been moved.  Nothing left this machine.
 Note: this listing is in your terminal scrollback.
 Review: sweep review <path>     Apply: sweep apply <path> --yes
+Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed.
 ```
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
@@ -190,7 +191,13 @@ $ sweep ~/Downloads
 
 ### What it does not protect
 
-`sweep` never reads your files, and that has a cost worth stating plainly.
+`sweep` reads no file contents to decide what to move, and that has a cost
+worth stating plainly.
+
+It does read some bytes once you apply. `sweep apply` reads the first and last
+4 KiB of each file it moves, so `sweep undo` can tell whether a file changed.
+It reads whole contents only if you pass `--inspect-content` and consent, or
+when a move crosses volumes and the file has to be copied.
 
 A project *document* -- a `.blend`, an `.flp`, an `.als` -- references its
 assets relative to itself and freely upward, out of its own folder. In this

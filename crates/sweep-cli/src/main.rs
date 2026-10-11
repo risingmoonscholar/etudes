@@ -1367,6 +1367,10 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
         println!("Note: this listing is in your terminal scrollback.");
     }
     println!("Review: sweep review <path>     Apply: sweep apply <path> --yes");
+    // The scan read no contents; an apply does. Say so before the yes.
+    println!(
+        "Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed."
+    );
 }
 
 /// Binds the keychain-held key to the journal's `Sealer` interface.
