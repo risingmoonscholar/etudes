@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>unpack v0.5.4 candidate — staged extraction with archive checks · études</title>
-  <meta name="description" content="Unpack 0.5.4 checks archive members, stages extraction privately, and publishes the destination only after audit.">
-  <meta property="og:title" content="unpack v0.5.4 candidate — staged extraction with archive checks">
+  <title>unpack v0.5.4 candidate — verified quarantine preservation · études</title>
+  <meta name="description" content="Unpack 0.5.4 preserves archive quarantine and verifies it before publishing the extracted tree.">
+  <meta property="og:title" content="unpack v0.5.4 candidate — verified quarantine preservation">
   <meta property="og:description" content="A normal archive extracts; an unsafe archive is refused before a destination is published.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/unpack-safety.gif">
   <link rel="stylesheet" href="release.css">
@@ -19,17 +19,17 @@
 
     <article>
       <p class="release-id">unpack · v0.5.4 candidate</p>
-      <h1>unpack v0.5.4 candidate — staged extraction with archive checks</h1>
+      <h1>unpack v0.5.4 candidate — verified quarantine preservation</h1>
       <div class="release-copy">
-        <p>Unpack 0.5.4 hardens archive inspection and publishes extracted trees only after staging and audit.</p>
+        <p>Unpack preserves the source archive’s download quarantine on the final extracted tree.</p>
         <ul>
-          <li>Refuses dangerous ZIP and TAR member types and validates ZIP central and local records.</li>
-          <li>Runs listing and extraction against a private archive copy.</li>
-          <li>Extracts into private staging and publishes the destination atomically after the tree audit passes. Refusals report cleanup state.</li>
+          <li>Captures quarantine from the same source descriptor used for the private archive copy; a changed attribute during copying refuses.</li>
+          <li>Applies the captured attribute to final files and directories, including the destination root, and verifies exact readback before publication. An unmarked archive adds no mark.</li>
+          <li>Publishes only after staging, tree audit and quarantine preservation pass. Preservation failure refuses and reports cleanup state; AppleDouble companions are retained where needed for attributes.</li>
           <li>The extraction budget remains a monitored soft limit, not a hard write-time cap.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
-          <code>schema_version: 2</code>. Consumers must check that version and
+          <code>schema_version: 2</code>. This is a breaking change for scripts and agents. Consumers must check that version and
           read operation fields under <code>details</code>; they moved there
           from the top level. Capability-contract versions are separate.</p>
       </div>
@@ -39,13 +39,13 @@
       <h2 id="demo-title">The demo</h2>
       <figure>
         <img src="../gifs/unpack-safety.gif" alt="A light terminal demo extracts a synthetic ZIP archive and refuses a second ZIP archive containing a symlink." width="860" height="294">
-        <figcaption>A normal synthetic archive extracts and its two output paths pass the tree audit; a ZIP archive containing a symlink is refused before extraction. The terminal recording is shown in its original light theme.</figcaption>
+        <figcaption>Earlier 0.5.3 recording. A normal synthetic archive extracts and its two output paths pass the tree audit; a ZIP archive containing a symlink is refused before extraction. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 
     <section class="install" aria-labelledby="install-title">
       <h2 id="install-title">Install unpack 0.5.4</h2>
-      <p>Run this command to install the pinned release:</p>
+      <p>This candidate is not published yet. After the tag is published, install the pinned release:</p>
       <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.4 unpack-cli</code></pre>
     </section>
 

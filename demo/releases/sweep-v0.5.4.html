@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sweep v0.5.4 candidate — safer holds and bounded progress · études</title>
-  <meta name="description" content="Sweep 0.5.4 adds safer project holds, external journal-key support, cross-device collision protection, and bounded progress reporting.">
-  <meta property="og:title" content="sweep v0.5.4 candidate — safer holds and bounded progress">
-  <meta property="og:description" content="Project documents hold related assets; private records remain untouched. See the 9,999-file progress demo.">
+  <title>sweep v0.5.4 candidate — existing-folder routing and bound plans · études</title>
+  <meta name="description" content="Sweep 0.5.4 adds existing-folder routing, bound plan replay, and structured progress.">
+  <meta property="og:title" content="sweep v0.5.4 candidate — existing-folder routing and bound plans">
+  <meta property="og:description" content="Review existing-folder routes and replay a plan only while its observations still match.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/sweep-progress.gif">
   <link rel="stylesheet" href="release.css">
 </head>
@@ -19,18 +19,16 @@
 
     <article>
       <p class="release-id">sweep · v0.5.4 candidate</p>
-      <h1>sweep v0.5.4 candidate — safer holds and bounded progress</h1>
+      <h1>sweep v0.5.4 candidate — existing-folder routing and bound plans</h1>
       <div class="release-copy">
-        <p>Project documents inside child folders now hold related sibling assets without blocking unrelated files. This release also adds:</p>
+        <p>Route eligible files into existing folders with a reviewable profile.</p>
         <ul>
-          <li><code>--scheme existing</code> reads a versioned profile and routes eligible files only into folders already present in the selected directory. Missing or ambiguous routes stay put, and safety refusals still win.</li>
-          <li>Content-inspection buffers erase their full allocation when dropped.</li>
-          <li><code>ETUDE_JOURNAL_KEY</code> supports encrypted undo when the login keychain is unavailable. Invalid supplied keys refuse without fallback; retain the key for undo.</li>
-          <li>The cross-device copy fallback refuses NFC/NFD-equivalent destination collisions without changing either original.</li>
-          <li>Long apply and undo operations report bounded progress on stderr, keeping JSON output on stdout. The 9,999-file scenario checks that progress reaches the final item and stays within ten milestones.</li>
+          <li><code>--scheme existing</code> reads a versioned profile and uses only folders already present in the selected directory. Missing or ambiguous routes stay put, and safety refusals still win.</li>
+          <li>Exported plans bind the reviewed filesystem observations. Changed observations or an existing-folder profile change require replanning before apply.</li>
+          <li>Opt in to versioned progress records on stderr with <code>--progress-json</code>; <code>--json</code> stdout remains one result envelope. No speed improvement is claimed.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
-          <code>schema_version: 2</code>. Consumers must check that version and
+          <code>schema_version: 2</code>. This is a breaking change for scripts and agents. Consumers must check that version and
           read operation fields under <code>details</code>; they moved there
           from the top level. Capability-contract versions are separate.</p>
       </div>
@@ -40,13 +38,13 @@
       <h2 id="demo-title">The demo</h2>
       <figure>
         <img src="../gifs/sweep-progress.gif" alt="A light terminal demo applies sweep to a synthetic 9,999-item folder, shows progress, then undoes the changes while leaving personal records untouched." width="860" height="294">
-        <figcaption>A synthetic large folder: apply, bounded progress, then undo. The terminal recording is shown in its original light theme.</figcaption>
+        <figcaption>Earlier 0.5.3 recording. A synthetic large folder: apply, bounded progress, then undo. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 
     <section class="install" aria-labelledby="install-title">
       <h2 id="install-title">Install sweep 0.5.4</h2>
-      <p>Run this command to install the pinned release:</p>
+      <p>This candidate is not published yet. After the tag is published, install the pinned release:</p>
       <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.4 sweep-cli</code></pre>
     </section>
 

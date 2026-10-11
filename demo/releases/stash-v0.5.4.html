@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>stash v0.5.4 candidate — external journal key and bounded progress · études</title>
-  <meta name="description" content="Stash 0.5.4 adds external journal-key support and bounded progress reporting while keeping restore under your control.">
-  <meta property="og:title" content="stash v0.5.4 candidate — external journal key and bounded progress">
+  <title>stash v0.5.4 candidate — independent batches and exact restore · études</title>
+  <meta name="description" content="Stash 0.5.4 gives journalled batches persistent ids and exact or partial restore.">
+  <meta property="og:title" content="stash v0.5.4 candidate — independent batches and exact restore">
   <meta property="og:description" content="Stash moves files only when asked, reports progress, and brings them back on request.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/stash-custody.gif">
   <link rel="stylesheet" href="release.css">
@@ -19,14 +19,17 @@
 
     <article>
       <p class="release-id">stash · v0.5.4 candidate</p>
-      <h1>stash v0.5.4 candidate — external journal key and bounded progress</h1>
+      <h1>stash v0.5.4 candidate — independent batches and exact restore</h1>
       <div class="release-copy">
         <ul>
-          <li><code>ETUDE_JOURNAL_KEY</code> supports encrypted stash recovery when the login keychain is unavailable. Invalid supplied keys refuse without fallback; retain the same key for recovery.</li>
-          <li>Long stash and pop operations report bounded progress on stderr, keeping machine-readable stdout separate.</li>
+          <li>Journalled stashes return an opaque <code>details.stash_id</code>. Restore the chosen batch with <code>stash pop --id ID</code>; the envelope's <code>operation_id</code> identifies only the invocation.</li>
+          <li>Receipts expose no holding path. Selection still includes <code>holding_root: "&lt;redacted&gt;"</code>; use the stash id, not that field, for recovery.</li>
+          <li><code>stash inspect --id ID</code> lists opaque item ids; <code>stash pop --id ID --item ITEM</code> restores one item and records progress for later restoration.</li>
+          <li>Folder pop requires one live matching batch and authenticates all stash journals first. An unreadable older completed or live journal, even from another folder, blocks a newer folder restore with exit 3 and an unreadable-journal/cannot-restore diagnostic. Files and journal bytes remain unchanged. Exact <code>--id</code> restoration uses only the chosen journal and its original key.</li>
+          <li>Keep different journal keys in separate <code>ETUDE_STATE_DIR</code> stores. Deadlines remain informational until you explicitly request pop.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
-          <code>schema_version: 2</code>. Consumers must check that version and
+          <code>schema_version: 2</code>. This is a breaking change for scripts and agents. Consumers must check that version and
           read operation fields under <code>details</code>; they moved there
           from the top level. Capability-contract versions are separate.</p>
       </div>
@@ -36,13 +39,13 @@
       <h2 id="demo-title">The demo</h2>
       <figure>
         <img src="../gifs/stash-custody.gif" alt="A light terminal demo stashes a synthetic folder, reports progress, then restores the visible items while leaving one hidden item in place." width="860" height="294">
-        <figcaption>A synthetic folder: stash, then pop it back. The hidden item stays in place. The terminal recording is shown in its original light theme.</figcaption>
+        <figcaption>Earlier 0.5.3 recording. A synthetic folder: stash, then pop it back. The hidden item stays in place. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 
     <section class="install" aria-labelledby="install-title">
       <h2 id="install-title">Install stash 0.5.4</h2>
-      <p>Run this command to install the pinned release:</p>
+      <p>This candidate is not published yet. After the tag is published, install the pinned release:</p>
       <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.4 stash-cli</code></pre>
     </section>
 
