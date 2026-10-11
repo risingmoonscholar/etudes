@@ -4,9 +4,9 @@
 # in one call. The "plan" and "apply" the family targets are two passes
 # inside that single invocation: pass 1 fingerprints every accepted file and
 # writes the journal, pass 2 actually moves each one, and journal writes are
-# fsynced per entry. That fsync cost gives every move a real, multi-millisecond
-# footprint, so a big enough tree opens a real window for a background
-# deleter to land inside.
+# fsynced per entry. The dev-only watcher observes this trial journal, stops
+# apply after progress, confirms OS stopped state, and reloads the journal
+# before plain rm deletes a still-present, pending source.
 #
 # What must hold, with the source deleted mid-run:
 #   - apply does not crash or leave an inconsistent tree
@@ -40,81 +40,143 @@ for i in range(n):
 PY
 }
 
-now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
 
-# The one group's member list, in the exact order apply() will process it.
+# The actual journal watcher will verify this earlier scan's target belongs
+# to the accepted apply and is still Planned while the OS confirms SIGSTOP.
 pick_target() {
   "$SWEEP" "$1" --json 2>/dev/null | python3 -c '
 import json, sys
-p = json.load(sys.stdin)["details"]
-g = next(g for g in p["groups"] if g["name"] == "Data")
-m = g["members"]
-idx = int(len(m) * 0.75)
-print(idx)
-print(m[idx])
+g = next(g for g in json.load(sys.stdin)["details"]["groups"] if g["name"] == "Data")
+i = int(len(g["members"]) * 0.75)
+print(i)
+print(g["members"][i])
 '
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
-
-# Calibrate: how long does an uninterrupted apply take on a tree this size,
-# on this host, right now? Everything else is timed off this measurement
-# instead of a hardcoded constant.
-CTRL="$W/control/Desktop"; build_tree "$CTRL"
-T0_START=$(now_ms)
-"$SWEEP" apply "$CTRL" --yes >/dev/null 2>&1
-T0_END=$(now_ms)
-T0=$((T0_END - T0_START))
-if [ "$T0" -lt 20 ]; then
-  unproven "file vanishes mid-apply" "baseline apply of $N files finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
+CONTROL="${1:-}"
+case "$CONTROL" in ''|--control-late|--control-ignored) ;; *) fail "unknown mid-apply control"; exit 0;; esac
+DUMP="$(dirname "$SWEEP")/journal-dump"
+if [ ! -x "$DUMP" ]; then
+  unproven "mid-apply injection" "dev-only journal watcher unavailable"
   exit 0
 fi
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+W=$(workdir)
+PID=""
+D=""
+cleanup() {
+  [ -z "$D" ] || chmod 755 "$D" 2>/dev/null || true
+  if [ -n "$PID" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    kill -TERM "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
+  rm -rf "$W"
+  eval "$_stress_state_cleanup"
+}
+trap cleanup EXIT
+
+# Each control runs the complete witness with its own assertion channel.
+# Late apply must be all-unproven; masking a proven fault while stopped must
+# make the unchanged failure assertions reject a successful apply.
+run_controls() {
+  local control result expected output
+  for control in late ignored; do
+    output="$W/control-$control.out"
+    env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+      -u STRESS_FAILURE_ARTIFACTS /bin/bash "${BASH_SOURCE[0]}" "--control-$control" \
+      >"$output" 2>&1 198<&- 199>&-
+    result=$?
+    if [ "$control" = late ]; then
+      expected=2
+      if [ "$result" -eq "$expected" ] && grep -q 'unproven.*injection' "$output"; then
+        pass "late injection control is unproven, never a pass or a product failure"
+      else
+        fail "late injection control wanted unproven exit 2, got $result: $(cat "$output")"
+      fi
+    elif [ "$result" -eq 1 ] && grep -q 'confirmed stopped' "$output" && grep -q 'FAIL.*exit 0' "$output"; then
+      pass "paused ignored-fault control fails the success assertion after a proven injection"
+    else
+      fail "paused ignored-fault control did not reject success (exit $result): $(cat "$output")"
+    fi
+  done
+}
 
 INJECTED=0
 CODE=0
-TARGET=""
-IDX=0
-BEFORE=0
-D=""
-FRACTIONS=(70 45 25 12)
-
-for frac in "${FRACTIONS[@]}"; do
-  D="$W/attempt/Desktop"
-  rm -rf "$W/attempt"
+for trial in 1 2 3 4; do
+  D="$W/attempt-$trial/Desktop"
+  export ETUDE_STATE_DIR="$W/state-$trial"
+  mkdir -p "$ETUDE_STATE_DIR"
   build_tree "$D"
   PICK="$(pick_target "$D")"
   IDX="${PICK%%$'\n'*}"
   TARGET="${PICK#*$'\n'}"
   BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
-
+  snapshot_tree "$D" "$W/original.json"
   "$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err" &
   PID=$!
-  DELAY_MS=$((T0 * frac / 100))
-  python3 -c "import time; time.sleep($DELAY_MS/1000)"
-  # Deletion is a witness only when the planned source still exists at the
-  # instant we remove it. `rm -f` after sweep already moved it would otherwise
-  # look like a successful intervention although nothing was tested.
-  if [ -f "$TARGET" ] && rm -f "$TARGET" && [ ! -e "$TARGET" ]; then
-    INJECTED=1
-  else
+  # Force the late interleaving in the control, without guessing milliseconds.
+  if [ "$CONTROL" = --control-late ]; then
     wait "$PID" 2>/dev/null || true
+  fi
+  if ! WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$D" "$TARGET" "$PID" 2>"$W/watch.err"); then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    [ "$CONTROL" != --control-late ] || break
     continue
   fi
-  wait "$PID"
-  CODE=$?
+  read -r JOURNAL_MOVED JOURNAL_TOTAL PENDING_INDEX <<< "$WITNESS"
+  STOPPED=$(ps -o state= -p "$PID" 2>/dev/null)
+  if [ "$JOURNAL_TOTAL" != "$N" ] || [ "$PENDING_INDEX" != "$IDX" ] || \
+      [[ "$STOPPED" != *T* ]] || [ ! -f "$TARGET" ] || [ -e "$D/Data/$(basename "$TARGET")" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    continue
+  fi
+
+  # A stopped apply cannot relocate between this check and non-idempotent rm.
+  if rm -- "$TARGET" && [ ! -e "$TARGET" ] && [ ! -e "$D/Data/$(basename "$TARGET")" ]; then
+    INJECTED=1
+    # The expected recovery is the original layout minus the one victim,
+    # not the already-partially-moved layout observed while paused.
+    python3 - "$W/original.json" "$TARGET" > "$W/survivors.json" <<'PY_SURVIVORS'
+import json, os, sys
+manifest = json.load(open(sys.argv[1]))
+manifest['entries'] = [e for e in manifest['entries'] if e['path'] != os.path.basename(sys.argv[2])]
+json.dump(manifest, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+sys.stdout.write('\n')
+PY_SURVIVORS
+  else
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    continue
+  fi
+  pass "file vanishes mid-apply: deleted pending source at group position $IDX while apply was confirmed stopped ($JOURNAL_MOVED/$N journalled moves)"
+  if [ "$CONTROL" = --control-ignored ]; then
+    # Simulate an apply that ignores a proven deletion: restore the empty
+    # synthetic source while still paused, then let the real apply succeed.
+    touch "$TARGET"
+  fi
+  if ! kill -CONT "$PID"; then
+    fail "could not resume apply after a proven deletion"
+    exit 0
+  fi
+  wait "$PID"; CODE=$?
+  PID=""
   break
 done
-
-if [ "$INJECTED" != "1" ]; then
-  unproven "file vanishes mid-apply" "could not delete the still-present planned source across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms)"
+if [ "$INJECTED" != 1 ]; then
+  unproven "file vanishes mid-apply injection" "no confirmed stopped apply with a pending source across four trials: $(cat "$W/watch.err")"
   exit 0
 fi
 
-pass "file vanishes mid-apply: deleted the still-present planned source at ~${DELAY_MS}ms (group position $IDX)"
-
 # The witnessed deletion decides that the test ran. A silent success is a
 # failure, never a reason to relabel the attempt as unproven.
-assert_eq 1 "$([ "$CODE" != "0" ] && echo 1 || echo 0)" "apply reported the deletion as a failure, not a silent success (exit $CODE)"
+assert_eq 3 "$CODE" "apply reported the deletion as a failure, not a silent success (exit $CODE)"
 
 if [ -s "$W/apply.err" ] && grep -qi "sweep:" "$W/apply.err"; then
   pass "the failure was printed, not swallowed"
@@ -152,3 +214,8 @@ fi
 
 FINAL=$(find "$D" -type f | wc -l | tr -d ' ')
 assert_eq "$((BEFORE - 1))" "$FINAL" "after undo, every survivor is back where it started"
+
+snapshot_tree "$D" "$W/recovered.json"
+assert_snapshot_eq "$W/survivors.json" "$W/recovered.json" "undo restored exact survivor paths and bytes"
+[ -n "$CONTROL" ] || run_controls
+true
