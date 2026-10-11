@@ -222,12 +222,9 @@ fn watch_apply(args: &[String]) -> ExitCode {
     };
     let sealer = KeychainSeal { key };
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        // A zombie is not an injectable live apply, even though kill(pid, 0)
-        // can still succeed for it while its parent has not called wait().
-        let Some(state) = process_state(pid) else {
-            break;
-        };
+    // A zombie is not an injectable live apply, even though kill(pid, 0)
+    // can still succeed for it while its parent has not called wait().
+    while let Some(state) = process_state(pid) {
         if state.contains('Z') || Instant::now() >= deadline {
             break;
         }
