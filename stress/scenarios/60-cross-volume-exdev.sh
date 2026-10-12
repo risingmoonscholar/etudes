@@ -166,9 +166,10 @@ pause_on_partial_copy() {
 }
 
 # A completed move is a missed window, not a lost source. Resume/wait for it,
-# undo it when necessary, and leave the fixture byte-identical for escalation.
+# preserve the completed-probe undo assertion, report this attempt unproven,
+# and leave the fixture byte-identical for escalation.
 restore_missed_copy() {
-  local pid=$1 state_dir=$2 expected_size=$3 expected_hash=$4 apply_log=$5 dest_size state wait_status
+  local pid=$1 state_dir=$2 expected_size=$3 expected_hash=$4 apply_log=$5 payload_mib=$6 miss_reason=$7 dest_size state wait_status
   state=$(ps -p "$pid" -o state= 2>/dev/null | tr -d '[:space:]')
   case "$state" in T*) kill -CONT "$pid" 2>/dev/null || true ;; esac
   wait_status=0
@@ -181,9 +182,10 @@ restore_missed_copy() {
     return 1
   fi
   if ! source_matches_snapshot "$INTERRUPT" "$expected_size" "$expected_hash" && [ "$dest_size" = "$expected_size" ]; then
-    ETUDE_STATE_DIR="$state_dir" assert_exit 0 "cross-volume: completed probe undoes before escalation" -- "$SWEEP" undo
+    ETUDE_STATE_DIR="$state_dir" assert_exit 0 "cross-volume: completed ${payload_mib}MiB probe undoes before escalation" -- "$SWEEP" undo
     if source_matches_snapshot "$INTERRUPT" "$expected_size" "$expected_hash"; then
       rm -rf "$OUTER/Documents"
+      unproven "cross-volume: SIGKILL during the ${payload_mib}MiB copy was not witnessed" "$miss_reason"
       return 0
     fi
   fi
@@ -218,12 +220,12 @@ for mib in 32 96 256; do
           exit 0
         fi
         MISS_REASON="the control copy finished before source and destination could be rechecked while stopped"
-        restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" || exit 0
+        restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" "$mib" "$MISS_REASON" || exit 0
         continue
       fi
       if [ "$CONTROL_DEST_SIZE" -le 0 ] || [ "$CONTROL_DEST_SIZE" -ge "$SRC_SIZE_BEFORE" ]; then
         MISS_REASON="the control copy completed before the stopped-state size recheck"
-        restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" || exit 0
+        restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" "$mib" "$MISS_REASON" || exit 0
         continue
       fi
       CONTROL_RESCUE="$INNER/interrupt-control-rescue.txt"
@@ -267,7 +269,7 @@ for mib in 32 96 256; do
       rm -rf "$OUTER/Documents"
     else
       MISS_REASON="control copy completed before the partial destination could be frozen"
-      restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" || exit 0
+      restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" "$mib" "$MISS_REASON" || exit 0
       continue
     fi
   fi
@@ -295,7 +297,7 @@ sys.exit(0 if any(str(m).endswith("interrupt_zzzbig.txt") for m in members) else
         exit 0
       fi
       MISS_REASON="the copy completed before source and destination could be rechecked while stopped"
-      restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" || exit 0
+      restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" "$mib" "$MISS_REASON" || exit 0
       continue
     fi
     if [ "$STOPPED_DEST_SIZE" -gt 0 ] && [ "$STOPPED_DEST_SIZE" -lt "$SRC_SIZE_BEFORE" ]; then
@@ -318,11 +320,11 @@ sys.exit(0 if any(str(m).endswith("interrupt_zzzbig.txt") for m in members) else
       break
     fi
     MISS_REASON="the destination completed before the stopped-state size recheck"
-    restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" || exit 0
+    restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" "$mib" "$MISS_REASON" || exit 0
     continue
   fi
   MISS_REASON="copy completed before a partial destination could be frozen"
-  restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" || exit 0
+  restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" "$mib" "$MISS_REASON" || exit 0
 done
 
 if [ "$KILLED" = 0 ]; then
