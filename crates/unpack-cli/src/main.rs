@@ -297,6 +297,10 @@ fn run_main() -> ExitCode {
             None,
         );
     }
+    if let Err(input) = validate_args(&args) {
+        eprintln!("unpack: refused invalid input {input}");
+        return ExitCode::from(2);
+    }
     match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
@@ -350,6 +354,40 @@ fn flag(args: &[String], f: &str) -> bool {
 fn value(args: &[String], f: &str) -> Option<String> {
     let i = args.iter().position(|a| a == f)?;
     args.get(i + 1).cloned()
+}
+
+/// Reject typos and incomplete options before reading the archive or creating
+/// output. The archive is the first argument; every later argument must be a
+/// recognized option or the value consumed by one.
+fn validate_args(args: &[String]) -> Result<(), String> {
+    let _ = max_size_flag(args)?;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--list" | "--json" => i += 1,
+            "--into" => {
+                let Some(directory) = args.get(i + 1) else {
+                    return Err("--into (missing directory)".into());
+                };
+                if directory.starts_with('-') {
+                    return Err(format!("{directory} (value for --into)"));
+                }
+                i += 2;
+            }
+            "--max-size" => {
+                let Some(size) = args.get(i + 1) else {
+                    return Err("--max-size (missing size)".into());
+                };
+                if size.starts_with('-') {
+                    return Err(format!("{size} (value for --max-size)"));
+                }
+                i += 2;
+            }
+            option if option.starts_with('-') => return Err(option.into()),
+            value => return Err(format!("{value} (unexpected argument)")),
+        }
+    }
+    Ok(())
 }
 
 fn run(archive: &Path, args: &[String]) -> ExitCode {
@@ -589,8 +627,12 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // full one.
     let free = dest.parent().and_then(free_bytes);
     let budget = match max_size_flag(args) {
-        Some(n) => n,
-        None => safety::budget(free),
+        Ok(Some(n)) => n,
+        Ok(None) => safety::budget(free),
+        Err(input) => {
+            eprintln!("unpack: refused invalid input {input}");
+            return ExitCode::from(2);
+        }
     };
     match free {
         Some(f) if f < MIN_FREE_BYTES => {
@@ -933,15 +975,25 @@ fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
 /// indistinguishable from a 6 GB bomb from here. A refusal with no way past it
 /// is a wall rather than a safety feature, so the way past it is named in the
 /// refusal itself.
-fn max_size_flag(args: &[String]) -> Option<u64> {
-    let i = args.iter().position(|a| a == "--max-size")?;
-    let raw = args.get(i + 1)?;
+fn max_size_flag(args: &[String]) -> Result<Option<u64>, String> {
+    let Some(i) = args.iter().position(|a| a == "--max-size") else {
+        return Ok(None);
+    };
+    let Some(raw) = args.get(i + 1) else {
+        return Err("--max-size (missing size)".into());
+    };
     let (digits, mult) = match raw.chars().last() {
         Some('G' | 'g') => (&raw[..raw.len() - 1], 1024 * 1024 * 1024),
         Some('M' | 'm') => (&raw[..raw.len() - 1], 1024 * 1024),
         _ => (raw.as_str(), 1),
     };
-    digits.parse::<u64>().ok().map(|n| n * mult)
+    let amount = digits
+        .parse::<u64>()
+        .map_err(|_| format!("{raw} (invalid --max-size value)"))?;
+    let bytes = amount
+        .checked_mul(mult)
+        .ok_or_else(|| format!("{raw} (overflowing --max-size value)"))?;
+    Ok(Some(bytes))
 }
 
 /// Least free space extraction will start with.
