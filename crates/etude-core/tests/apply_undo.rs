@@ -461,6 +461,81 @@ fn apply_refuses_a_destination_directory_replaced_after_planning() {
 
 #[cfg(unix)]
 #[test]
+fn apply_refuses_a_planned_destination_replaced_by_an_outside_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!(
+        "sweep_au_destination_symlink_{}",
+        std::process::id()
+    ));
+    let outside = root.with_file_name(format!(
+        "sweep_au_destination_symlink_outside_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&outside);
+    fs::create_dir_all(&root).expect("create root");
+    fs::create_dir(&outside).expect("create outside folder");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let destination = root.join("Reading");
+    fs::create_dir(&destination).expect("create planned destination");
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_destination_symlink_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source and destination");
+    let p = Plan::with_groups(
+        &out,
+        vec![plan::Group {
+            name: "Reading".into(),
+            signal: plan::Signal::Mapped {
+                ext: "qoi".into(),
+                created: false,
+            },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    let bound = BoundPlan::from_plan(p, context()).expect("bind fixture plan");
+    let mut swapped = false;
+    let result = apply::apply_bound_with_structured_progress(
+        &bound,
+        &context(),
+        Some(&TestSeal),
+        None,
+        |progress| {
+            if progress.phase == ProgressPhase::Planning && !swapped {
+                // This is the source-review probe: validation has completed,
+                // but the first move has not started.
+                fs::remove_dir(&destination).expect("remove planned destination");
+                symlink(&outside, &destination).expect("install outside symlink");
+                swapped = true;
+            }
+        },
+    );
+
+    assert!(swapped, "planning callback did not run");
+    assert!(
+        matches!(result, Err(ApplyError::DestinationDirectoryChanged(_))),
+        "apply did not give the named refusal for an outside symlink: {result:?}"
+    );
+    assert!(
+        source.exists(),
+        "apply moved the source through the symlink"
+    );
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    cleanup(&root);
+    let _ = fs::remove_dir_all(outside);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
 fn undo_stops_when_its_source_folder_is_replaced() {
     use std::os::unix::fs::MetadataExt;
 
