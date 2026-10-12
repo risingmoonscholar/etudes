@@ -102,6 +102,13 @@ impl Entry {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct CreatedDirectory {
+    pub path: PathBuf,
+    pub device: u64,
+    pub inode: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Journal {
     pub id: String,
@@ -111,6 +118,8 @@ pub struct Journal {
     pub tool: String,
     pub root: PathBuf,
     pub entries: Vec<Entry>,
+    /// Destination directories this operation created, with their filesystem identity.
+    pub created_directories: Vec<CreatedDirectory>,
     /// Set at load time when the progress records end mid-frame: a crash
     /// between a length prefix and its body leaves bytes describing a record
     /// that was never written. The frames before it are individually sealed
@@ -264,6 +273,24 @@ fn valid_component(value: &str, limit: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn append_progress(
+    journal: &Journal,
+    payload: &[u8],
+    sealer: &dyn Sealer,
+) -> Result<(), JournalError> {
+    let sealed = sealer.seal(payload).map_err(JournalError::Seal)?;
+    let len = u32::try_from(sealed.len())
+        .map_err(|_| JournalError::Malformed("progress record too large"))?;
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(journal.path())
+        .map_err(JournalError::Io)?;
+    file.write_all(&len.to_le_bytes())
+        .map_err(JournalError::Io)?;
+    file.write_all(&sealed).map_err(JournalError::Io)?;
+    file.sync_all().map_err(JournalError::Io)
+}
+
 impl Journal {
     pub fn path(&self) -> PathBuf {
         state_dir().join(format!("{}-{}.journal", self.tool, self.id))
@@ -279,6 +306,14 @@ impl Journal {
             s.push_str("sweep-journal 1\n");
         }
         s.push_str(&format!("root\t{}\n", esc(&self.root)));
+        for directory in &self.created_directories {
+            s.push_str(&format!(
+                "dir\t{}\t{}\t{}\n",
+                esc(&directory.path),
+                directory.device,
+                directory.inode
+            ));
+        }
         for e in &self.entries {
             s.push_str(&format!(
                 "mv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -334,6 +369,17 @@ impl Journal {
             match f.first().copied() {
                 Some("root") => {
                     j.root = PathBuf::from(unesc(f.get(1).copied().unwrap_or_default()))
+                }
+                Some("dir") if f.len() == 4 => {
+                    j.created_directories.push(CreatedDirectory {
+                        path: PathBuf::from(unesc(f[1])),
+                        device: f[2]
+                            .parse()
+                            .map_err(|_| JournalError::Malformed("directory device"))?,
+                        inode: f[3]
+                            .parse()
+                            .map_err(|_| JournalError::Malformed("directory inode"))?,
+                    });
                 }
                 Some("mv") => {
                     if f.len() < 9 {
@@ -404,6 +450,39 @@ impl Journal {
         // directory fsync from write_bytes already covers the name. sync_all
         // on the file is enough. That's why this is O(1).
         f.sync_all().map_err(JournalError::Io)?;
+        Ok(())
+    }
+
+    /// Record a destination directory created by this apply operation.
+    /// The no-follow identity lets undo remove only the same still-empty folder.
+    pub fn record_created_dir(
+        &mut self,
+        path: &Path,
+        sealer: &dyn Sealer,
+    ) -> Result<(), JournalError> {
+        let metadata = fs::symlink_metadata(path).map_err(JournalError::Io)?;
+        if !metadata.is_dir() {
+            return Err(JournalError::Malformed(
+                "created destination is not a directory",
+            ));
+        }
+        #[cfg(unix)]
+        let (device, inode) = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let (device, inode) = (0, 0);
+        let record = CreatedDirectory {
+            path: path.to_path_buf(),
+            device,
+            inode,
+        };
+        let payload = format!("created-dir\t{}\t{device}\t{inode}\n", esc(path));
+        append_progress(self, payload.as_bytes(), sealer)?;
+        if !self.created_directories.contains(&record) {
+            self.created_directories.push(record);
+        }
         Ok(())
     }
 
@@ -606,6 +685,20 @@ impl Journal {
             let text = text.trim_end_matches('\n');
             let f: Vec<&str> = text.split('\t').collect();
             match f.first().copied() {
+                Some("created-dir") if f.len() == 4 => {
+                    let directory = CreatedDirectory {
+                        path: PathBuf::from(unesc(f[1])),
+                        device: f[2]
+                            .parse()
+                            .map_err(|_| JournalError::Malformed("created directory device"))?,
+                        inode: f[3]
+                            .parse()
+                            .map_err(|_| JournalError::Malformed("created directory inode"))?,
+                    };
+                    if !self.created_directories.contains(&directory) {
+                        self.created_directories.push(directory);
+                    }
+                }
                 // Apply's frames, written 0..n as it walks forward.
                 Some("done") if f.len() == 3 => {
                     let index: usize = f[1].parse().map_err(|_| {
@@ -1176,6 +1269,7 @@ mod tests {
             tool: "test".into(),
             root: PathBuf::from("/tmp/root"),
             entries: vec![],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         #[cfg(unix)]
@@ -1213,6 +1307,7 @@ mod tests {
                 edge_hash: 1234,
                 state: EntryState::Moved,
             }],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         let back = Journal::decode(&j.encode()).expect("decode");
@@ -1257,6 +1352,7 @@ mod tests {
                 edge_hash: 0,
                 state: EntryState::Planned,
             }],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -1314,6 +1410,7 @@ mod tests {
                 edge_hash: 0,
                 state: EntryState::Planned,
             }],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base");
@@ -1387,6 +1484,7 @@ mod tests {
                     state: EntryState::Planned,
                 },
             ],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -1503,6 +1601,7 @@ mod tests {
                     state: EntryState::Planned,
                 },
             ],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -1572,6 +1671,7 @@ mod tests {
                     state: EntryState::Planned,
                 },
             ],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         // Pre-framing write_bytes: sealed blob only, no length prefix.

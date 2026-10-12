@@ -192,6 +192,7 @@ pub fn apply_bound_with_structured_progress(
                             tool: context.tool.clone(),
                             root: bound.root.clone(),
                             entries: Vec::new(),
+                            created_directories: Vec::new(),
                             progress_tail_damaged: false,
                         };
                         journal.save_sealed(sl).map_err(ApplyError::Journal)?;
@@ -218,6 +219,7 @@ pub fn record_refused_plan(
         tool: context.tool.clone(),
         root: plan.root.clone(),
         entries: Vec::new(),
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     }
     .save_sealed(sealer)
@@ -258,6 +260,7 @@ fn apply_plan_with_structured_progress(
             root: plan.root.clone(),
             entries: Vec::new(),
             // A journal being written now has no tail to have lost.
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
 
@@ -293,8 +296,13 @@ fn apply_plan_with_structured_progress(
                 if !planned_destinations.insert(dedupe_key(&dst, folds)?) {
                     return Err(ApplyError::DestinationCollision(dst));
                 }
-                let (size, mtime_secs, inode, edge_hash) =
-                    fingerprint(src).map_err(ApplyError::Io)?;
+                let (size, mtime_secs, inode, edge_hash) = if sealer.is_some() {
+                    fingerprint(src).map_err(ApplyError::Io)?
+                } else {
+                    // Without a journal there is nowhere to retain this content
+                    // fingerprint, so do not open the user's file just to discard it.
+                    (0, 0, 0, 0)
+                };
                 j.entries.push(Entry {
                     from: src.clone(),
                     to: dst,
@@ -332,7 +340,7 @@ fn apply_plan_with_structured_progress(
             if let Some(parent) = to.parent()
                 && !existing_destinations.contains(parent)
             {
-                fs::create_dir_all(parent).map_err(ApplyError::Io)?;
+                create_destination_dirs(parent, &mut j, sealer)?;
             }
             let method = move_one(&from, &to).map_err(ApplyError::Io)?;
             j.entries[i].method = method;
@@ -362,6 +370,52 @@ fn apply_plan_with_structured_progress(
     };
     progress(event);
     result
+}
+
+fn create_destination_dirs(
+    destination: &Path,
+    journal: &mut Journal,
+    sealer: Option<&dyn Sealer>,
+) -> Result<(), ApplyError> {
+    let mut missing = Vec::new();
+    let mut current = destination.to_path_buf();
+    loop {
+        match fs::metadata(&current) {
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => {
+                return Err(ApplyError::Io(io::Error::other(
+                    "destination parent is not a directory",
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(current.clone()),
+            Err(error) => return Err(ApplyError::Io(error)),
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if parent == current {
+            break;
+        }
+        current = parent.to_path_buf();
+    }
+    for directory in missing.into_iter().rev() {
+        match fs::create_dir(&directory) {
+            Ok(()) => {
+                if let Some(sealer) = sealer {
+                    journal
+                        .record_created_dir(&directory, sealer)
+                        .map_err(ApplyError::Journal)?;
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if !fs::metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
+                    return Err(ApplyError::Io(error));
+                }
+            }
+            Err(error) => return Err(ApplyError::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 /// Whether `dir` treats two names differing only in case as the same entry.
@@ -1055,16 +1109,30 @@ fn undo_selected_with_progress(
         advance!();
     }
 
-    // Remove destination directories that we created and that are now empty.
-    // Safe to run even after a partial failure: it only ever removes
-    // directories that are already empty, so it can't erase evidence of
-    // entries that did not get restored.
-    let mut dirs: Vec<&Path> = j.entries.iter().filter_map(|e| e.to.parent()).collect();
-    dirs.sort();
-    dirs.dedup();
-    for d in dirs {
-        if d != j.root {
-            let _ = fs::remove_dir(d); // fails harmlessly when not empty
+    // Remove only destination directories this operation recorded creating,
+    // and only while the same real directory is still present and empty.
+    let mut dirs = j.created_directories.clone();
+    dirs.sort_by_key(|directory| std::cmp::Reverse(directory.path.components().count()));
+    for directory in dirs {
+        if directory.path == j.root {
+            continue;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&directory.path) else {
+            continue;
+        };
+        #[cfg(unix)]
+        let same_directory = {
+            use std::os::unix::fs::MetadataExt;
+            metadata.is_dir()
+                && metadata.dev() == directory.device
+                && metadata.ino() == directory.inode
+        };
+        #[cfg(not(unix))]
+        // Without a stable directory identity, retaining the folder is safer
+        // than claiming it still identifies as the operation-created object.
+        let same_directory = false;
+        if same_directory {
+            let _ = fs::remove_dir(&directory.path);
         }
     }
 

@@ -2640,6 +2640,7 @@ mod tests {
             tool: "sweep".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(false)],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         assert!(journal_is_fully_undone(&undone));
@@ -2649,6 +2650,7 @@ mod tests {
             tool: "sweep".into(),
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(true)],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));

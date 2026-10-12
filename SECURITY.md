@@ -22,10 +22,18 @@ worse than no witness.
 The suite witnesses the code paths it exercises. It does not exercise the
 `security`, `unzip`, `gunzip` or `tar` subprocess call sites.
 
-**Contents are not read by default.** `--inspect-content` is off, and needs
-consent at a prompt separate from `--yes`. What it reads can only move a file
-*into* "left alone" — it never influences a destination. Plain text only; no
-PDF, Office or archive parsing.
+**Apply reads a small part of regular-file contents when journalling.** Before
+the first move, journalled apply fingerprints each planned regular-file source
+by reading the first up to 4 KiB and, when bytes remain beyond that, up to 4 KiB
+from the end. Files up to 8 KiB are read in full. Directories and symlinks are
+identified from metadata and are not opened for this fingerprint. The hash
+detects accidental changes; it is not an integrity check. With `--no-journal`,
+this fingerprint read is skipped. A cross-volume move still reads the full
+source to copy and verify it; same-volume rename does not read its payload.
+`--inspect-content` is separate and off by default; it needs consent at a
+prompt separate from `--yes`. Its plain-text inspection can only move a file
+*into* "left alone" — it never influences a destination. There is no PDF,
+Office or archive parsing.
 
 **Symlinks are not followed during traversal.** The scanner reads entry
 metadata with `symlink_metadata`, which does not resolve the target

@@ -175,6 +175,160 @@ fn apply_then_undo_restores_every_path() {
 }
 
 #[test]
+fn undo_keeps_a_preexisting_empty_destination_directory() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_au_existing_empty_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Existing")).expect("create user folder");
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let path = root.join(format!("file{i}.qoi"));
+            fs::write(&path, b"fixture").expect("write source");
+            path
+        })
+        .collect();
+    let state =
+        std::env::temp_dir().join(format!("sweep_state_existing_empty_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan user folder");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "Existing".into(),
+            signal: plan::Signal::Collected {
+                count: sources.len(),
+            },
+            members: sources,
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
+    let mut journal = Journal::load_sealed("test", &report.journal_id, &TestSeal).expect("journal");
+    let undo = apply::undo(&mut journal, &TestSeal);
+    assert!(undo.error.is_none(), "undo error: {:?}", undo.error);
+    assert!(
+        root.join("Existing").is_dir(),
+        "undo removed the pre-existing empty folder"
+    );
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_removes_only_the_empty_destination_directory_it_created() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_au_created_dir_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let state =
+        std::env::temp_dir().join(format!("sweep_state_created_dir_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "NewFolder".into(),
+            signal: plan::Signal::Collected { count: 1 },
+            members: vec![source],
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
+    let destination = root.join("NewFolder");
+    assert!(destination.is_dir(), "apply did not create its destination");
+    let mut journal = Journal::load_sealed("test", &report.journal_id, &TestSeal).expect("journal");
+    let undo = apply::undo(&mut journal, &TestSeal);
+    assert!(undo.error.is_none(), "undo error: {:?}", undo.error);
+    assert!(
+        !destination.exists(),
+        "undo left its empty destination behind"
+    );
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_does_not_remove_a_replacement_for_its_created_directory() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_au_replaced_dir_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let state =
+        std::env::temp_dir().join(format!("sweep_state_replaced_dir_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "NewFolder".into(),
+            signal: plan::Signal::Collected { count: 1 },
+            members: vec![source],
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
+    let destination = root.join("NewFolder");
+    let mut journal = Journal::load_sealed("test", &report.journal_id, &TestSeal).expect("journal");
+    let mut replaced = false;
+    let undo = apply::undo_with_progress(&mut journal, &TestSeal, |progress| {
+        if progress.completed == progress.total && !replaced {
+            fs::remove_dir(&destination).expect("remove original empty destination");
+            fs::create_dir(&destination).expect("replace destination");
+            replaced = true;
+        }
+    });
+    assert!(undo.error.is_none(), "undo error: {:?}", undo.error);
+    assert!(replaced, "undo never reached the replacement point");
+    assert!(
+        destination.is_dir(),
+        "undo removed the replacement directory"
+    );
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn no_journal_apply_moves_a_source_that_cannot_be_opened_for_reading() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!("sweep_au_no_read_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("selected.qoi");
+    fs::write(&source, b"private fixture").expect("write source");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).expect("make unreadable");
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "Collected".into(),
+            signal: plan::Signal::Collected { count: 1 },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), None, None).expect("no-journal apply");
+    assert_eq!(report.moved, 1);
+    assert!(!source.exists(), "source was not moved");
+    assert!(
+        root.join("Collected/selected.qoi").exists(),
+        "destination missing"
+    );
+    cleanup(&root);
+}
+
+#[test]
 fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
     let _g = lock();
     // Fault injection, not hope.
@@ -752,6 +906,7 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
             // the user-hard-linked-something case and not this bug at all.
             state: etude_core::journal::EntryState::Planned,
         }],
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     };
 
@@ -830,6 +985,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
                 state: etude_core::journal::EntryState::Planned,
             },
         ],
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     };
 
@@ -925,6 +1081,7 @@ fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
         tool: "test".into(),
         root: root.clone(),
         entries,
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
@@ -1005,6 +1162,7 @@ fn a_reversal_survives_being_saved_and_reloaded() {
             edge_hash: edge,
             state: etude_core::journal::EntryState::Reversed,
         }],
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
@@ -1071,6 +1229,7 @@ fn a_skip_between_two_reversals_still_reloads() {
         tool: "test".into(),
         root: root.clone(),
         entries,
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
@@ -1136,6 +1295,7 @@ fn selective_undo_records_holes_and_preserves_unselected_entries() {
         tool: "test".into(),
         root: root.clone(),
         entries,
+        created_directories: Vec::new(),
         progress_tail_damaged: false,
     };
     journal.save_sealed(&sealer).expect("save base journal");
