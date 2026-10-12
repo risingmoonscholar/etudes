@@ -42,6 +42,7 @@ impl Fixture {
                 state: EntryState::Planned,
             }],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         }
     }
