@@ -41,6 +41,7 @@ impl Fixture {
                 edge_hash: 0,
                 state: EntryState::Planned,
             }],
+            created_directories: Vec::new(),
             progress_tail_damaged: false,
         }
     }

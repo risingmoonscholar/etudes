@@ -184,7 +184,9 @@ fn advancing_arrives_after_durable_record_and_before_next_move() {
 fn failed_done_record_reports_actual_move_without_claiming_journal_acknowledgement() {
     let _guard = lock();
     let fixture = Fixture::new(4);
-    let seal = TestSeal::new(Some(2));
+    // The newly-created destination directory is durably recorded between
+    // the base journal and the first completed-move frame.
+    let seal = TestSeal::new(Some(3));
     let mut events = Vec::new();
     let error = apply::apply_with_structured_progress(
         &fixture.plan.plan,
@@ -285,7 +287,9 @@ fn base_journal_failure_reports_validated_plan_with_zero_moves() {
 fn legacy_callback_keeps_one_event_per_acknowledged_move() {
     let _guard = lock();
     let fixture = Fixture::new(4);
-    let seal = TestSeal::new(Some(3));
+    // Base journal, created-directory record, first done record, then failure
+    // on the second move's done record so one callback remains observable.
+    let seal = TestSeal::new(Some(4));
     let mut completed = Vec::new();
     assert!(
         apply::apply_with_progress(

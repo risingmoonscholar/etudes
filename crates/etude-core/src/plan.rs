@@ -164,6 +164,24 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Whether a real directory was present at this destination in the scan
+    /// snapshot. Apply uses this to distinguish a pre-existing folder that a
+    /// user may intentionally target from one another operation created after
+    /// planning.
+    pub(crate) fn observed_directory(&self, path: &std::path::Path) -> bool {
+        let Some(snapshot) = &self.observations else {
+            return false;
+        };
+        let Ok(relative) = path.strip_prefix(&snapshot.root) else {
+            return false;
+        };
+        let committed = crate::scan::TreeSnapshot::path_commitment(relative);
+        snapshot
+            .entries
+            .iter()
+            .any(|entry| entry.path == committed && entry.identity.kind == 2)
+    }
+
     pub fn display_only(root: PathBuf, groups: Vec<Group>) -> Self {
         Self {
             observations: None,
