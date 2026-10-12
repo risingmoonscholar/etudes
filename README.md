@@ -74,13 +74,16 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 405 tests
-scripts/no-network-test.sh      # the same suite, with socket(2) denied by the OS
+cargo test --all                # 406 tests
+scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
 The second one proves the sandbox works *before* running the suite: a control
 program that opens a TCP connection must succeed unsandboxed and be denied
-under the profile. The suite witnesses that its exercised code paths open no
+under the profile. On macOS, all tests except the SIGTERM process-control
+witness run under denial; Seatbelt hides child enumeration from that test, so
+the script runs it separately outside denial. That witness makes no network
+calls. The denied suite witnesses that its exercised code paths open no
 sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
 subprocess call sites.
 

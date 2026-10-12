@@ -24,6 +24,8 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -35,6 +37,30 @@ use safety::Unsafe;
 const UNZIP: &str = "/usr/bin/unzip";
 const TAR: &str = "/usr/bin/tar";
 const GUNZIP: &str = "/usr/bin/gunzip";
+
+#[cfg(unix)]
+static SIGTERM_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn note_sigterm(_signal: i32) {
+    SIGTERM_REQUESTED.store(true, AtomicOrdering::Relaxed);
+}
+
+#[cfg(unix)]
+fn install_sigterm_handler() {
+    unsafe extern "C" {
+        fn signal(signal: i32, handler: usize) -> usize;
+    }
+    // SAFETY: the handler only sets an atomic flag and performs no allocation,
+    // I/O, locking, or other non-signal-safe work.
+    let previous = unsafe { signal(15, note_sigterm as *const () as usize) };
+    if previous == usize::MAX {
+        eprintln!("unpack: could not install SIGTERM cleanup handler");
+    }
+}
+
+#[cfg(not(unix))]
+fn install_sigterm_handler() {}
 
 const USAGE: &str = "\
 unpack: stop thinking about archive formats
@@ -279,6 +305,7 @@ macro_rules! println {
 }
 
 fn main() -> ExitCode {
+    install_sigterm_handler();
     let args: Vec<String> = std::env::args().skip(1).collect();
     etude_cli_support::envelope::begin("unpack", env!("CARGO_PKG_VERSION"), &args);
     let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
@@ -659,10 +686,13 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     };
     match extract(pinned.path(), fmt, &staging, budget) {
         Err(e) => {
-            eprintln!(
-                "unpack: extraction failed ({e}). {}",
-                cleanup_destination(&staging).message()
-            );
+            let cleanup = cleanup_destination(&staging);
+            if e == "stopped after SIGTERM" {
+                etude_cli_support::envelope::status("refused");
+                eprintln!("unpack: stopped after SIGTERM. {}", cleanup.message());
+                return ExitCode::from(2);
+            }
+            eprintln!("unpack: extraction failed ({e}). {}", cleanup.message());
             return ExitCode::from(3);
         }
         Ok(Err(breach)) => {
@@ -1203,6 +1233,18 @@ fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let result = (|| {
         loop {
+            #[cfg(unix)]
+            if SIGTERM_REQUESTED.swap(false, AtomicOrdering::Relaxed) {
+                if child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                    child
+                        .kill()
+                        .map_err(|e| format!("could not stop extractor after SIGTERM: {e}"))?;
+                }
+                child
+                    .wait()
+                    .map_err(|e| format!("could not reap extractor after SIGTERM: {e}"))?;
+                return Err("stopped after SIGTERM".into());
+            }
             let status = child.try_wait().map_err(|e| e.to_string())?;
             let total = written(dest)?;
             if total > budget {
