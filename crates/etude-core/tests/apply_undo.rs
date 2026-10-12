@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use etude_core::apply::{self, ApplyError, ProgressPhase};
-use etude_core::journal::{Entry, Journal, Method};
+use etude_core::journal::{Entry, Journal, Method, ValidatedDirectory};
 use etude_core::plan::{self, BindingContext, BoundPlan, Plan};
 use etude_core::scan::{self, ScanConfig};
 
@@ -55,6 +55,22 @@ fn context() -> BindingContext {
 
 fn proposal_from_scan(out: &scan::ScanOutcome, groups: Vec<plan::Group>) -> BoundPlan {
     BoundPlan::from_plan(Plan::with_groups(out, groups), context()).expect("bind fixture proposal")
+}
+
+fn directory_guard(path: &std::path::Path) -> ValidatedDirectory {
+    let metadata = fs::symlink_metadata(path).expect("stat guarded directory");
+    #[cfg(unix)]
+    let (device, inode) = {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let (device, inode) = (0, 0);
+    ValidatedDirectory {
+        path: path.to_path_buf(),
+        device,
+        inode,
+    }
 }
 
 fn manual_proposal(
@@ -365,6 +381,225 @@ fn apply_refuses_a_destination_directory_created_after_planning() {
         0,
         "the competing folder must remain untouched"
     );
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_refuses_a_destination_directory_replaced_after_planning() {
+    use std::os::unix::fs::MetadataExt;
+
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!(
+        "sweep_au_destination_replaced_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let destination = root.join("Reading");
+    fs::create_dir(&destination).expect("create planned destination");
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_destination_replaced_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source and destination");
+    let p = Plan::with_groups(
+        &out,
+        vec![plan::Group {
+            name: "Reading".into(),
+            signal: plan::Signal::Mapped {
+                ext: "qoi".into(),
+                created: false,
+            },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    let bound = BoundPlan::from_plan(p, context()).expect("bind fixture plan");
+    let reserved = root.join("reserved replacement");
+    let mut replaced = false;
+    let result = apply::apply_bound_with_structured_progress(
+        &bound,
+        &context(),
+        Some(&TestSeal),
+        None,
+        |progress| {
+            if progress.phase == ProgressPhase::Planning && !replaced {
+                // Reserve while Reading still exists so the filesystem cannot
+                // recycle its inode, then install the replacement at the same
+                // path after bound-plan validation but before any move.
+                fs::create_dir(&reserved).expect("reserve replacement directory");
+                let original = fs::symlink_metadata(&destination).expect("stat original");
+                let replacement = fs::symlink_metadata(&reserved).expect("stat replacement");
+                assert_ne!(
+                    (original.dev(), original.ino()),
+                    (replacement.dev(), replacement.ino())
+                );
+                fs::remove_dir(&destination).expect("remove original destination");
+                fs::rename(&reserved, &destination).expect("install replacement");
+                replaced = true;
+            }
+        },
+    );
+
+    assert!(replaced, "planning callback did not run");
+    assert!(
+        matches!(result, Err(ApplyError::DestinationDirectoryChanged(_))),
+        "apply did not give the named refusal for a replacement destination: {result:?}"
+    );
+    assert!(source.exists(), "apply moved the source before refusing");
+    assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_stops_when_its_source_folder_is_replaced() {
+    use std::os::unix::fs::MetadataExt;
+
+    let _g = lock();
+    let root =
+        std::env::temp_dir().join(format!("sweep_au_undo_folder_swap_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let sources: Vec<_> = (0..2)
+        .map(|i| {
+            let path = root.join(format!("file{i}.qoi"));
+            fs::write(&path, b"fixture").expect("write source");
+            path
+        })
+        .collect();
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_undo_folder_swap_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan sources");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "Reading".into(),
+            signal: plan::Signal::Collected {
+                count: sources.len(),
+            },
+            members: sources.clone(),
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
+    let mut journal = Journal::load_sealed("test", &report.journal_id, &TestSeal).expect("journal");
+    let displaced = root.with_file_name(format!("sweep_au_undo_displaced_{}", std::process::id()));
+    let replacement = root.with_file_name(format!("sweep_au_undo_reserved_{}", std::process::id()));
+    let mut swapped = false;
+    let undo = apply::undo_with_progress(&mut journal, &TestSeal, |progress| {
+        if progress.completed == 1 && !swapped {
+            fs::create_dir(&replacement).expect("reserve replacement root");
+            let original = fs::symlink_metadata(&root).expect("stat original root");
+            let reserved = fs::symlink_metadata(&replacement).expect("stat replacement root");
+            assert_ne!(
+                (original.dev(), original.ino()),
+                (reserved.dev(), reserved.ino())
+            );
+            fs::rename(&root, &displaced).expect("displace original root");
+            fs::rename(&replacement, &root).expect("install replacement root");
+            swapped = true;
+        }
+    });
+
+    assert!(swapped, "undo did not reach the injected swap point");
+    assert_eq!(
+        undo.restored, 1,
+        "undo moved files after the folder changed"
+    );
+    assert!(matches!(
+        undo.error,
+        Some(ApplyError::DestinationDirectoryChanged(_))
+    ));
+    assert!(displaced.join("file1.qoi").exists());
+    assert!(displaced.join("Reading/file0.qoi").exists());
+    assert!(
+        !root.join("Reading").exists(),
+        "replacement root was altered"
+    );
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    cleanup(&displaced);
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_recovery_refuses_a_replaced_source_folder() {
+    use std::os::unix::fs::MetadataExt;
+
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!(
+        "sweep_au_undo_recovery_swap_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_undo_recovery_swap_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "Reading".into(),
+            signal: plan::Signal::Collected { count: 1 },
+            members: vec![source],
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
+    let mut journal = Journal::load_sealed("test", &report.journal_id, &TestSeal).expect("journal");
+    // Simulate a process killed after the move but before the done frame.
+    journal.entries[0].state = etude_core::journal::EntryState::Planned;
+    journal
+        .save_sealed(&TestSeal)
+        .expect("write interrupted journal");
+
+    let displaced = root.with_file_name(format!(
+        "sweep_au_undo_recovery_displaced_{}",
+        std::process::id()
+    ));
+    let replacement = root.with_file_name(format!(
+        "sweep_au_undo_recovery_reserved_{}",
+        std::process::id()
+    ));
+    fs::create_dir(&replacement).expect("reserve replacement root");
+    let original_meta = fs::symlink_metadata(&root).expect("stat original root");
+    let replacement_meta = fs::symlink_metadata(&replacement).expect("stat replacement root");
+    assert_ne!(
+        (original_meta.dev(), original_meta.ino()),
+        (replacement_meta.dev(), replacement_meta.ino())
+    );
+    fs::rename(&root, &displaced).expect("displace original root");
+    fs::rename(&replacement, &root).expect("install replacement root");
+
+    let undo = apply::undo(&mut journal, &TestSeal);
+    assert!(matches!(
+        undo.error,
+        Some(ApplyError::DestinationDirectoryChanged(_))
+    ));
+    assert!(displaced.join("Reading/file.qoi").exists());
+    assert!(!root.join("file.qoi").exists());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    cleanup(&displaced);
     cleanup(&root);
     let _ = fs::remove_dir_all(state);
 }
@@ -980,6 +1215,7 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
             state: etude_core::journal::EntryState::Planned,
         }],
         created_directories: Vec::new(),
+        validated_directories: vec![directory_guard(&root)],
         progress_tail_damaged: false,
     };
 
@@ -1059,6 +1295,7 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
             },
         ],
         created_directories: Vec::new(),
+        validated_directories: Vec::new(),
         progress_tail_damaged: false,
     };
 
@@ -1155,6 +1392,7 @@ fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
         root: root.clone(),
         entries,
         created_directories: Vec::new(),
+        validated_directories: vec![directory_guard(&root)],
         progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
@@ -1236,6 +1474,7 @@ fn a_reversal_survives_being_saved_and_reloaded() {
             state: etude_core::journal::EntryState::Reversed,
         }],
         created_directories: Vec::new(),
+        validated_directories: Vec::new(),
         progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
@@ -1303,6 +1542,7 @@ fn a_skip_between_two_reversals_still_reloads() {
         root: root.clone(),
         entries,
         created_directories: Vec::new(),
+        validated_directories: vec![directory_guard(&root)],
         progress_tail_damaged: false,
     };
     j.save_sealed(&sealer).expect("save");
@@ -1369,6 +1609,7 @@ fn selective_undo_records_holes_and_preserves_unselected_entries() {
         root: root.clone(),
         entries,
         created_directories: Vec::new(),
+        validated_directories: vec![directory_guard(&root)],
         progress_tail_damaged: false,
     };
     journal.save_sealed(&sealer).expect("save base journal");

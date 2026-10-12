@@ -164,22 +164,24 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Whether a real directory was present at this destination in the scan
-    /// snapshot. Apply uses this to distinguish a pre-existing folder that a
-    /// user may intentionally target from one another operation created after
-    /// planning.
-    pub(crate) fn observed_directory(&self, path: &std::path::Path) -> bool {
+    /// Device and inode captured for a real directory in the scan snapshot.
+    /// The executor uses this to reject a directory swapped after planning.
+    pub(crate) fn observed_directory_identity(&self, path: &std::path::Path) -> Option<(u64, u64)> {
         let Some(snapshot) = &self.observations else {
-            return false;
+            return None;
         };
+        if path == snapshot.root {
+            return Some((snapshot.root_identity.device, snapshot.root_identity.inode));
+        }
         let Ok(relative) = path.strip_prefix(&snapshot.root) else {
-            return false;
+            return None;
         };
         let committed = crate::scan::TreeSnapshot::path_commitment(relative);
         snapshot
             .entries
             .iter()
-            .any(|entry| entry.path == committed && entry.identity.kind == 2)
+            .find(|entry| entry.path == committed && entry.identity.kind == 2)
+            .map(|entry| (entry.identity.device, entry.identity.inode))
     }
 
     pub fn display_only(root: PathBuf, groups: Vec<Group>) -> Self {

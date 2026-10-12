@@ -109,6 +109,14 @@ pub struct CreatedDirectory {
     pub inode: u64,
 }
 
+/// A directory whose identity was validated before a journalled move.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ValidatedDirectory {
+    pub path: PathBuf,
+    pub device: u64,
+    pub inode: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct Journal {
     pub id: String,
@@ -120,6 +128,9 @@ pub struct Journal {
     pub entries: Vec<Entry>,
     /// Destination directories this operation created, with their filesystem identity.
     pub created_directories: Vec<CreatedDirectory>,
+    /// Directory identities captured before apply so undo can verify the
+    /// folders it will move files back into. Older journals have no guards.
+    pub validated_directories: Vec<ValidatedDirectory>,
     /// Set at load time when the progress records end mid-frame: a crash
     /// between a length prefix and its body leaves bytes describing a record
     /// that was never written. The frames before it are individually sealed
@@ -314,6 +325,14 @@ impl Journal {
                 directory.inode
             ));
         }
+        for directory in &self.validated_directories {
+            s.push_str(&format!(
+                "guard\t{}\t{}\t{}\n",
+                esc(&directory.path),
+                directory.device,
+                directory.inode
+            ));
+        }
         for e in &self.entries {
             s.push_str(&format!(
                 "mv\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -379,6 +398,17 @@ impl Journal {
                         inode: f[3]
                             .parse()
                             .map_err(|_| JournalError::Malformed("directory inode"))?,
+                    });
+                }
+                Some("guard") if f.len() == 4 => {
+                    j.validated_directories.push(ValidatedDirectory {
+                        path: PathBuf::from(unesc(f[1])),
+                        device: f[2]
+                            .parse()
+                            .map_err(|_| JournalError::Malformed("directory guard device"))?,
+                        inode: f[3]
+                            .parse()
+                            .map_err(|_| JournalError::Malformed("directory guard inode"))?,
                     });
                 }
                 Some("mv") => {
@@ -458,6 +488,8 @@ impl Journal {
     pub fn record_created_dir(
         &mut self,
         path: &Path,
+        device: u64,
+        inode: u64,
         sealer: &dyn Sealer,
     ) -> Result<(), JournalError> {
         let metadata = fs::symlink_metadata(path).map_err(JournalError::Io)?;
@@ -467,12 +499,17 @@ impl Journal {
             ));
         }
         #[cfg(unix)]
-        let (device, inode) = {
+        let current_identity = {
             use std::os::unix::fs::MetadataExt;
             (metadata.dev(), metadata.ino())
         };
         #[cfg(not(unix))]
-        let (device, inode) = (0, 0);
+        let current_identity = (0, 0);
+        if current_identity != (device, inode) {
+            return Err(JournalError::Malformed(
+                "created destination changed before it was recorded",
+            ));
+        }
         let record = CreatedDirectory {
             path: path.to_path_buf(),
             device,
@@ -1270,6 +1307,7 @@ mod tests {
             root: PathBuf::from("/tmp/root"),
             entries: vec![],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         #[cfg(unix)]
@@ -1308,6 +1346,7 @@ mod tests {
                 state: EntryState::Moved,
             }],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         let back = Journal::decode(&j.encode()).expect("decode");
@@ -1353,6 +1392,7 @@ mod tests {
                 state: EntryState::Planned,
             }],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -1411,6 +1451,7 @@ mod tests {
                 state: EntryState::Planned,
             }],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base");
@@ -1485,6 +1526,7 @@ mod tests {
                 },
             ],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -1602,6 +1644,7 @@ mod tests {
                 },
             ],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         j.save_sealed(&Identity).expect("base journal");
@@ -1672,6 +1715,7 @@ mod tests {
                 },
             ],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         // Pre-framing write_bytes: sealed blob only, no length prefix.

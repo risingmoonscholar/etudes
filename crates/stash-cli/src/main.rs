@@ -703,6 +703,7 @@ fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
         DestinationExists(_) => "destination exists",
         DestinationCollision(_) => "destination names collide",
         DestinationIsSynced(_) => "destination is synced",
+        DestinationDirectoryChanged(_) => "destination folder identity changed or was unavailable",
         CannotCompareNames(_) => "destination names cannot be compared",
         Io(_) => "I/O failure",
         Journal(_) => "journal failure",
@@ -718,6 +719,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         | DestinationExists(_)
         | DestinationCollision(_)
         | DestinationIsSynced(_)
+        | DestinationDirectoryChanged(_)
         | CannotCompareNames(_) => ExitCode::from(2),
         Io(_) | Journal(_) | Injected(_) => ExitCode::from(3),
     }
@@ -1971,6 +1973,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(false)],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         assert!(journal_is_fully_undone(&undone));
@@ -1981,6 +1984,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             entries: vec![sample_entry(false), sample_entry(true)],
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
         assert!(!journal_is_fully_undone(&pending));

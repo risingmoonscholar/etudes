@@ -15,12 +15,12 @@
 //! move landed but whose record did not. See its doc comment for exactly what
 //! that promises and what it does not.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::journal::{Entry, EntryState, Journal, Method, Sealer, fingerprint};
+use crate::journal::{Entry, EntryState, Journal, Method, Sealer, ValidatedDirectory, fingerprint};
 use crate::plan::{BindingContext, BoundPlan, Plan};
 
 #[derive(Debug)]
@@ -30,6 +30,8 @@ pub enum ApplyError {
     DestinationExists(PathBuf),
     DestinationCollision(PathBuf),
     DestinationIsSynced(PathBuf),
+    /// A folder was replaced or ceased to be a real directory after planning.
+    DestinationDirectoryChanged(PathBuf),
     /// The OS could not tell us a filename's normalized form, so whether two
     /// destinations collide is unknown. Refusing is the only honest answer:
     /// guessing "they don't" is the guess that moves files.
@@ -80,6 +82,11 @@ impl std::fmt::Display for ApplyError {
             ApplyError::DestinationCollision(p) => write!(
                 f,
                 "two files in this plan would move to the same destination: {}",
+                crate::redact::path(p)
+            ),
+            ApplyError::DestinationDirectoryChanged(p) => write!(
+                f,
+                "refused: destination folder identity changed or was unavailable: {}",
                 crate::redact::path(p)
             ),
             ApplyError::CannotCompareNames(p) => write!(
@@ -193,6 +200,7 @@ pub fn apply_bound_with_structured_progress(
                             root: bound.root.clone(),
                             entries: Vec::new(),
                             created_directories: Vec::new(),
+                            validated_directories: Vec::new(),
                             progress_tail_damaged: false,
                         };
                         journal.save_sealed(sl).map_err(ApplyError::Journal)?;
@@ -220,6 +228,7 @@ pub fn record_refused_plan(
         root: plan.root.clone(),
         entries: Vec::new(),
         created_directories: Vec::new(),
+        validated_directories: Vec::new(),
         progress_tail_damaged: false,
     }
     .save_sealed(sealer)
@@ -261,6 +270,7 @@ fn apply_plan_with_structured_progress(
             entries: Vec::new(),
             // A journal being written now has no tail to have lost.
             created_directories: Vec::new(),
+            validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
 
@@ -317,6 +327,22 @@ fn apply_plan_with_structured_progress(
         }
 
         event.planned = j.entries.len();
+        for entry in &j.entries {
+            if let Some(parent) = entry.from.parent() {
+                let identity = plan
+                    .observed_directory_identity(parent)
+                    .or_else(|| directory_identity(parent))
+                    .ok_or_else(|| ApplyError::DestinationDirectoryChanged(parent.to_path_buf()))?;
+                let guard = ValidatedDirectory {
+                    path: parent.to_path_buf(),
+                    device: identity.0,
+                    inode: identity.1,
+                };
+                if !j.validated_directories.contains(&guard) {
+                    j.validated_directories.push(guard);
+                }
+            }
+        }
         progress(event);
         if j.entries.is_empty() {
             return Ok(ApplyReport {
@@ -332,17 +358,25 @@ fn apply_plan_with_structured_progress(
         }
 
         let mut moved = 0usize;
-        let mut created_directories = HashSet::new();
+        let mut created_directories = HashMap::new();
         for i in 0..j.entries.len() {
             if fail_at == Some(i) {
                 return Err(ApplyError::Injected(i));
             }
             let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
             if let Some(parent) = to.parent() {
+                let observed_identity = plan.observed_directory_identity(parent);
                 let existed_at_scan =
-                    existing_destinations.contains(parent) || plan.observed_directory(parent);
-                if !existed_at_scan && !created_directories.contains(parent) {
+                    existing_destinations.contains(parent) || observed_identity.is_some();
+                if !existed_at_scan && !created_directories.contains_key(parent) {
                     create_destination_dirs(parent, &mut j, sealer, &mut created_directories)?;
+                }
+                let expected =
+                    observed_identity.or_else(|| created_directories.get(parent).copied());
+                if !expected.is_some_and(|identity| directory_matches(parent, identity)) {
+                    return Err(ApplyError::DestinationDirectoryChanged(
+                        parent.to_path_buf(),
+                    ));
                 }
             }
             let method = move_one(&from, &to).map_err(ApplyError::Io)?;
@@ -379,14 +413,14 @@ fn create_destination_dirs(
     destination: &Path,
     journal: &mut Journal,
     sealer: Option<&dyn Sealer>,
-    created_this_apply: &mut HashSet<PathBuf>,
+    created_this_apply: &mut HashMap<PathBuf, (u64, u64)>,
 ) -> Result<(), ApplyError> {
     let mut missing = Vec::new();
     let mut current = destination.to_path_buf();
     loop {
         match fs::metadata(&current) {
             Ok(metadata) if metadata.is_dir() => {
-                if current == destination && !created_this_apply.contains(&current) {
+                if current == destination && !created_this_apply.contains_key(&current) {
                     return Err(ApplyError::Io(io::Error::new(
                         io::ErrorKind::AlreadyExists,
                         "destination already exists; it appeared after planning",
@@ -413,17 +447,40 @@ fn create_destination_dirs(
     for directory in missing.into_iter().rev() {
         match fs::create_dir(&directory) {
             Ok(()) => {
+                let identity = directory_identity(&directory)
+                    .ok_or_else(|| ApplyError::DestinationDirectoryChanged(directory.clone()))?;
                 if let Some(sealer) = sealer {
                     journal
-                        .record_created_dir(&directory, sealer)
+                        .record_created_dir(&directory, identity.0, identity.1, sealer)
                         .map_err(ApplyError::Journal)?;
                 }
-                created_this_apply.insert(directory);
+                created_this_apply.insert(directory, identity);
             }
             Err(error) => return Err(ApplyError::Io(error)),
         }
     }
     Ok(())
+}
+
+fn directory_identity(path: &Path) -> Option<(u64, u64)> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.is_dir() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+fn directory_matches(path: &Path, expected: (u64, u64)) -> bool {
+    directory_identity(path) == Some(expected)
 }
 
 /// Whether `dir` treats two names differing only in case as the same entry.
@@ -980,6 +1037,15 @@ fn undo_selected_with_progress(
                 advance!();
                 continue;
             }
+            if let Some(parent) = e.from.parent()
+                && !validated_directory_matches(j, parent)
+                && (e.to.exists() || !e.from.exists())
+            {
+                r.error = Some(ApplyError::DestinationDirectoryChanged(
+                    parent.to_path_buf(),
+                ));
+                break;
+            }
             if Some(i) != first_planned {
                 advance!();
                 continue;
@@ -1005,11 +1071,23 @@ fn undo_selected_with_progress(
                     && mtime == e.mtime_secs
                     && hash == e.edge_hash
                 {
-                    if let Some(parent) = e.from.parent()
-                        && let Err(err) = fs::create_dir_all(parent)
-                    {
-                        r.error = Some(ApplyError::Io(err));
-                        break;
+                    if let Some(parent) = e.from.parent() {
+                        if !validated_directory_matches(j, parent) {
+                            r.error = Some(ApplyError::DestinationDirectoryChanged(
+                                parent.to_path_buf(),
+                            ));
+                            break;
+                        }
+                        if let Err(err) = fs::create_dir_all(parent) {
+                            r.error = Some(ApplyError::Io(err));
+                            break;
+                        }
+                        if !validated_directory_matches(j, parent) {
+                            r.error = Some(ApplyError::DestinationDirectoryChanged(
+                                parent.to_path_buf(),
+                            ));
+                            break;
+                        }
                     }
                     match move_one(&e.to, &e.from) {
                         Ok(_) => r.restored += 1,
@@ -1023,6 +1101,15 @@ fn undo_selected_with_progress(
             // Only `from` exists: the move never started. Nothing to do.
             advance!();
             continue;
+        }
+        if let Some(parent) = e.from.parent()
+            && !validated_directory_matches(j, parent)
+            && (e.to.exists() || !e.from.exists())
+        {
+            r.error = Some(ApplyError::DestinationDirectoryChanged(
+                parent.to_path_buf(),
+            ));
+            break;
         }
         if !e.to.exists() {
             // The destination is gone and the entry still says Moved. That is
@@ -1090,11 +1177,23 @@ fn undo_selected_with_progress(
             advance!();
             continue;
         }
-        if let Some(parent) = e.from.parent()
-            && let Err(err) = fs::create_dir_all(parent)
-        {
-            r.error = Some(ApplyError::Io(err));
-            break;
+        if let Some(parent) = e.from.parent() {
+            if !validated_directory_matches(j, parent) {
+                r.error = Some(ApplyError::DestinationDirectoryChanged(
+                    parent.to_path_buf(),
+                ));
+                break;
+            }
+            if let Err(err) = fs::create_dir_all(parent) {
+                r.error = Some(ApplyError::Io(err));
+                break;
+            }
+            if !validated_directory_matches(j, parent) {
+                r.error = Some(ApplyError::DestinationDirectoryChanged(
+                    parent.to_path_buf(),
+                ));
+                break;
+            }
         }
         match move_one(&e.to, &e.from) {
             Ok(_) => {
@@ -1145,6 +1244,14 @@ fn undo_selected_with_progress(
     }
 
     r
+}
+
+fn validated_directory_matches(journal: &Journal, path: &Path) -> bool {
+    journal
+        .validated_directories
+        .iter()
+        .find(|directory| directory.path == path)
+        .is_some_and(|directory| directory_matches(path, (directory.device, directory.inode)))
 }
 
 // The counter makes same-process collisions impossible (monotonic, never

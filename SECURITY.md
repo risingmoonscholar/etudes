@@ -61,6 +61,15 @@ Journal reads also check the discovered file identity against the opened file
 before and after reading, refusing replacements or changes during that interval.
 This check does not serialize concurrent undo operations.
 
+Before each apply move, sweep checks that the destination folder is still a real
+directory with the device and inode recorded during planning (or immediately
+after sweep created it). Before each undo move-back, it checks the original
+source folder identity recorded in the journal. A replacement detected by
+these checks stops the operation before any further file moves. There is still
+a small race between checking a folder and moving the file into it; this check
+does not stop a swap in that instant. It does not defend against hostile code
+running as the same user.
+
 **`--json` discloses less than the human output.** For files that look like
 personal records it carries counts by category and never the paths.
 
