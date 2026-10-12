@@ -332,15 +332,18 @@ fn apply_plan_with_structured_progress(
         }
 
         let mut moved = 0usize;
+        let mut created_directories = HashSet::new();
         for i in 0..j.entries.len() {
             if fail_at == Some(i) {
                 return Err(ApplyError::Injected(i));
             }
             let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
-            if let Some(parent) = to.parent()
-                && !existing_destinations.contains(parent)
-            {
-                create_destination_dirs(parent, &mut j, sealer)?;
+            if let Some(parent) = to.parent() {
+                let existed_at_scan =
+                    existing_destinations.contains(parent) || plan.observed_directory(parent);
+                if !existed_at_scan && !created_directories.contains(parent) {
+                    create_destination_dirs(parent, &mut j, sealer, &mut created_directories)?;
+                }
             }
             let method = move_one(&from, &to).map_err(ApplyError::Io)?;
             j.entries[i].method = method;
@@ -376,12 +379,21 @@ fn create_destination_dirs(
     destination: &Path,
     journal: &mut Journal,
     sealer: Option<&dyn Sealer>,
+    created_this_apply: &mut HashSet<PathBuf>,
 ) -> Result<(), ApplyError> {
     let mut missing = Vec::new();
     let mut current = destination.to_path_buf();
     loop {
         match fs::metadata(&current) {
-            Ok(metadata) if metadata.is_dir() => break,
+            Ok(metadata) if metadata.is_dir() => {
+                if current == destination && !created_this_apply.contains(&current) {
+                    return Err(ApplyError::Io(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "destination already exists; it appeared after planning",
+                    )));
+                }
+                break;
+            }
             Ok(_) => {
                 return Err(ApplyError::Io(io::Error::other(
                     "destination parent is not a directory",
@@ -406,11 +418,7 @@ fn create_destination_dirs(
                         .record_created_dir(&directory, sealer)
                         .map_err(ApplyError::Journal)?;
                 }
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                if !fs::metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
-                    return Err(ApplyError::Io(error));
-                }
+                created_this_apply.insert(directory);
             }
             Err(error) => return Err(ApplyError::Io(error)),
         }

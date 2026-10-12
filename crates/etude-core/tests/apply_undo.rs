@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use etude_core::apply::{self, ApplyError};
+use etude_core::apply::{self, ApplyError, ProgressPhase};
 use etude_core::journal::{Entry, Journal, Method};
 use etude_core::plan::{self, BindingContext, BoundPlan, Plan};
 use etude_core::scan::{self, ScanConfig};
@@ -281,8 +281,22 @@ fn undo_does_not_remove_a_replacement_for_its_created_directory() {
     let mut replaced = false;
     let undo = apply::undo_with_progress(&mut journal, &TestSeal, |progress| {
         if progress.completed == progress.total && !replaced {
+            // Reserve a different inode while the original directory still
+            // exists. Removing and recreating the same path can immediately
+            // reuse its inode on filesystems such as ext4, which would make
+            // an inode-identity guard unable to distinguish the replacement.
+            let replacement = root.join("reserved replacement");
+            fs::create_dir(&replacement).expect("reserve replacement directory");
+            let original = fs::symlink_metadata(&destination).expect("stat original directory");
+            let reserved = fs::symlink_metadata(&replacement).expect("stat reserved directory");
+            use std::os::unix::fs::MetadataExt;
+            assert_ne!(
+                (original.dev(), original.ino()),
+                (reserved.dev(), reserved.ino()),
+                "replacement must be a distinct directory object"
+            );
             fs::remove_dir(&destination).expect("remove original empty destination");
-            fs::create_dir(&destination).expect("replace destination");
+            fs::rename(&replacement, &destination).expect("install reserved replacement");
             replaced = true;
         }
     });
@@ -291,6 +305,65 @@ fn undo_does_not_remove_a_replacement_for_its_created_directory() {
     assert!(
         destination.is_dir(),
         "undo removed the replacement directory"
+    );
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[test]
+fn apply_refuses_a_destination_directory_created_after_planning() {
+    let _g = lock();
+    let root =
+        std::env::temp_dir().join(format!("sweep_au_destination_race_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_destination_race_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    let p = Plan::with_groups(
+        &out,
+        vec![plan::Group {
+            name: "NewFolder".into(),
+            signal: plan::Signal::Collected { count: 1 },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    let destination = root.join("NewFolder");
+    let mut injected = false;
+    let result =
+        apply::apply_with_structured_progress(&p, "test", Some(&TestSeal), None, |progress| {
+            if progress.phase == ProgressPhase::Planning && progress.planned == 1 && !injected {
+                // Another apply can win the mkdir after this plan has been
+                // checked but before this apply reaches its first move.
+                fs::create_dir(&destination).expect("competing apply created destination");
+                injected = true;
+            }
+        });
+
+    assert!(injected, "the competing mkdir was not injected");
+    assert!(
+        result.is_err(),
+        "apply adopted a competing destination folder"
+    );
+    assert!(
+        source.exists(),
+        "apply moved a source into the competing folder"
+    );
+    assert!(destination.is_dir(), "apply removed the competing folder");
+    assert_eq!(
+        fs::read_dir(&destination)
+            .expect("read competing folder")
+            .count(),
+        0,
+        "the competing folder must remain untouched"
     );
     cleanup(&root);
     let _ = fs::remove_dir_all(state);
