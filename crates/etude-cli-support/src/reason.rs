@@ -29,6 +29,8 @@ pub enum Code {
     UnknownOption,
     MissingInput,
     UnsupportedFormat,
+    InsufficientSpace,
+    InternalError,
     ProjectFolder,
     DestinationExists,
     DestinationOutsideRoot,
@@ -53,6 +55,8 @@ impl Code {
         Self::UnknownOption,
         Self::MissingInput,
         Self::UnsupportedFormat,
+        Self::InsufficientSpace,
+        Self::InternalError,
         Self::ProjectFolder,
         Self::DestinationExists,
         Self::DestinationOutsideRoot,
@@ -114,6 +118,22 @@ pub const CODES: &[CodeSpec] = &[
         subject_kind: None,
         operations: &["unpack:extract"],
         explanation: "This format is outside the tool's supported set.",
+    },
+    CodeSpec {
+        code: Code::InsufficientSpace,
+        name: "insufficient_space",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("destination"),
+        operations: &["unpack:extract"],
+        explanation: "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input.",
+    },
+    CodeSpec {
+        code: Code::InternalError,
+        name: "internal_error",
+        retry: RetryClass::Never,
+        subject_kind: None,
+        operations: &["all"],
+        explanation: "The tool stopped on an internal failure; inspect its result and local state before choosing another action.",
     },
     CodeSpec {
         code: Code::ProjectFolder,
@@ -380,6 +400,8 @@ impl Reason {
             Code::UnknownOption => "unknown_option",
             Code::MissingInput => "missing_input",
             Code::UnsupportedFormat => "unsupported_format",
+            Code::InsufficientSpace => "insufficient_space",
+            Code::InternalError => "internal_error",
             Code::ProjectFolder => "project_folder",
             Code::DestinationExists => "destination_exists",
             Code::DestinationOutsideRoot => "destination_outside_root",
@@ -447,6 +469,12 @@ pub fn codes_json(tool: &str) -> String {
                     ("code", j::str(spec.name)),
                     ("retry", j::str(spec.retry.as_str())),
                     (
+                        "subject_kind",
+                        spec.subject_kind
+                            .map(j::str)
+                            .unwrap_or_else(|| "null".into()),
+                    ),
+                    (
                         "operations",
                         j::arr(operations.map(|operation| j::str(operation))),
                     ),
@@ -500,8 +528,28 @@ mod tests {
         let sweep = codes_json("sweep");
         assert!(sweep.contains("\"code\":\"folder_busy\""));
         assert!(sweep.contains("\"retry\":\"later\""));
+        assert!(sweep.contains("\"subject_kind\":\"other_operation\""));
+        assert!(sweep.contains("\"subject_kind\":null"));
         assert!(!sweep.contains("\"all\""));
         assert!(!codes_json("unpack").contains("\"code\":\"folder_busy\""));
+    }
+
+    #[test]
+    fn insufficient_space_and_internal_failure_have_explicit_contract_codes() {
+        let space = Reason::refusal(
+            Code::InsufficientSpace,
+            Some(Subject::wait("destination", None)),
+        );
+        assert_eq!(
+            space.json(),
+            r#"{"code":"insufficient_space","retry":"after_change","subject":{"kind":"destination"}}"#
+        );
+        let internal = Reason::refusal(Code::InternalError, None);
+        assert_eq!(
+            internal.json(),
+            r#"{"code":"internal_error","retry":"never"}"#
+        );
+        assert!(codes_json("unpack").contains("\"code\":\"insufficient_space\""));
     }
 
     #[test]

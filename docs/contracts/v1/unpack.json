@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "tool_version": "<manifest-version>",
   "operation_id": "<per-invocation>",
   "status": "done",
@@ -52,7 +52,8 @@
   "recovery": {
     "mode": "no_operation_undo_needed",
     "conditions": [],
-    "verification": "unproven; consult operation details and filesystem before retrying"
+    "verification": "unproven; consult operation details and filesystem before retrying",
+    "operation": ""
   },
   "disclosure": {
     "receipt_contains": "read categories and outcomes only; no contents, keys or environment values",
@@ -60,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 4,
+    "schema_version": 5,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -70,6 +71,7 @@
       {
         "code": "invalid_arguments",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "extract",
           "list"
@@ -79,6 +81,7 @@
       {
         "code": "unknown_option",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "extract",
           "list"
@@ -88,6 +91,7 @@
       {
         "code": "missing_input",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "extract",
           "list"
@@ -97,14 +101,35 @@
       {
         "code": "unsupported_format",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "extract"
         ],
         "why": "This format is outside the tool's supported set."
       },
       {
+        "code": "insufficient_space",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "extract"
+        ],
+        "why": "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input."
+      },
+      {
+        "code": "internal_error",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The tool stopped on an internal failure; inspect its result and local state before choosing another action."
+      },
+      {
         "code": "destination_exists",
         "retry": "after_change",
+        "subject_kind": "destination",
         "operations": [
           "extract"
         ],
@@ -113,6 +138,7 @@
       {
         "code": "download_in_flight",
         "retry": "later",
+        "subject_kind": "download_in_flight",
         "operations": [
           "extract"
         ],
@@ -121,6 +147,7 @@
       {
         "code": "unsafe_input",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "extract"
         ],
@@ -129,6 +156,7 @@
       {
         "code": "permission_denied",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "extract",
           "list"
@@ -138,6 +166,7 @@
       {
         "code": "operation_incomplete",
         "retry": "after_change",
+        "subject_kind": "journal",
         "operations": [
           "extract"
         ],

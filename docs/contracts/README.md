@@ -106,9 +106,9 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v5/sweep.json`, `v6/stash.json` and `v4/unpack.json`);
-`v2/envelope.json` retains the preceding result structure and `v3/envelope.json`
-pins the current one. Editing fields or types without adding a new version is
+contract envelopes (`v6/sweep.json`, `v7/stash.json` and `v5/unpack.json`);
+`v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
+`v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
 
 The envelope contains `schema_version`, `tool_version`, `operation_id`, `status`,
@@ -119,7 +119,8 @@ attempts require checking the filesystem and the journal before retrying.
 
 Each `TOOL contract --json` capability declaration lists every refusal under
 `refusal_codes`, with its stable code, retry class, operation names and reason
-for that class. `never` means the same request cannot work; `after_change`
+for that class and a `subject_kind` (null when the code has no subject).
+`never` means the same request cannot work; `after_change`
 requires a changed request or folder; `later` means the same request may work
 after waiting. Only the last two include a `subject`, which names the relevant
 input, plan, profile, journal or contention without disclosing extra file names.
@@ -129,6 +130,12 @@ input, plan, profile, journal or contention without disclosing extra file names.
 the caller to change something or wait include a typed subject. A successful
 result uses `done` or `nothing_to_do` with `retry: "not_needed"`. Adding this
 field is breaking for parsers that require exactly schema version 2.
+
+**Result envelope version 4:** version 4 is version 3 plus
+`recovery.operation`, the durable journal identifier for operations that can
+be queried later. The top-level `operation_id` remains the identifier for one
+invocation. The recovery operation field is empty when the operation has no
+durable journal identifier.
 
 `scope` identifies the tool and operation and includes its conditional declared
 read/write domains and startup domains. Those are capabilities, not observations.
@@ -161,17 +168,17 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 ## Unpack quarantine declaration version 3
 
 Unpack's capability declaration under `details.schema_version` is version 3;
-its surrounding result envelope is version 3. `v3/unpack.json` pins the
-new declaration and `v1/unpack.json` mirrors that current fixture. The preceding
-`v2/unpack.json` stays unchanged. Sweep and stash use their own declaration
-versions, while the shared result envelope uses version 3.
+its surrounding result envelope is version 4. `v5/unpack.json` pins the
+current declaration and `v1/unpack.json` mirrors that current fixture. Earlier
+unpack pins stay unchanged. Sweep and stash use their own declaration
+versions, while the shared result envelope uses version 4.
 The declaration names captured archive quarantine metadata, staging attribute
 reads and writes, exact readback before publication, and refusal if preservation
 fails. On exFAT, macOS-generated AppleDouble companions are retained when they
 provide the attribute representation. Raw values are never disclosed.
 
 
-Sweep capability declaration version 4 adds the read-only, versioned
+Sweep capability declaration version 6 adds the read-only, versioned
 existing-folder profile to its declared scope. The plan digest binds the
 profile bytes; profile changes require a fresh plan. Safety refusals still
 outrank profile routes, and the scheme never creates a destination. A missing
@@ -191,7 +198,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 5 and its surrounding result envelope remains version 2.
+declaration is version 7 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -221,8 +228,9 @@ retained.
 
 ## Stash batch declaration version 5
 
-Stash's batch capability is declaration version 5 in `v5/stash.json`; `v1/stash.json`
-tracks the current declaration, while version 4 remains pinned in `v4/stash.json`.
+Stash's batch capability was introduced in declaration version 5. The current
+declaration is version 7 in `v7/stash.json`; `v1/stash.json` mirrors it, while
+earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
 malformed, unreadable or mismatched IDs without falling back to another operation.
