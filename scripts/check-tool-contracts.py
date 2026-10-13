@@ -82,7 +82,7 @@ def negative_controls(tool, binary):
                 "#!/usr/bin/env python3\n"
                 "import json, pathlib, subprocess, sys\n"
                 f"real = {str(binary.resolve())!r}\n"
-                "result = subprocess.run([real, *sys.argv[1:]], capture_output=True)\n"
+                "result = subprocess.run([real, *sys.argv[1:]], stdin=subprocess.DEVNULL, capture_output=True)\n"
                 "output = result.stdout\n"
                 f"mutation = {mutation!r}\n"
                 "if sys.argv[1:2] == ['contract'] and mutation == 'schema' and result.returncode == 0:\n"
@@ -145,7 +145,7 @@ class Probe:
     def run(self, *arguments, codes=(0,), environment=None):
         result = subprocess.run(
             [self.binary, *map(str, arguments)], cwd=self.directory,
-            env=environment or self.environment, capture_output=True, timeout=30,
+            env=environment or self.environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
         )
         # Do not put the secret, or any environment values, in a failure report.
         require(result.returncode in codes,
@@ -275,7 +275,7 @@ class Probe:
 
     def network(self):
         require(self.contract["network"]["policy"] == "none", "network policy drift")
-        result = subprocess.run(["nm", "-u", self.binary], capture_output=True, timeout=30)
+        result = subprocess.run(["nm", "-u", self.binary], stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
         require(result.returncode == 0, "nm could not inspect the binary")
         symbols = [line.split()[-1].split("@")[0].removeprefix("_")
                    for line in result.stdout.decode().splitlines() if line.strip()]
@@ -460,7 +460,7 @@ def main():
     if arguments.tool is None:
         require(arguments.bin is None, "--bin requires --tool")
         for tool in ("sweep", "stash", "unpack"):
-            result = subprocess.run(["python3", __file__, "--tool", tool, "--bin", str(ROOT / "target/debug" / tool)], check=False)
+            result = subprocess.run(["python3", __file__, "--tool", tool, "--bin", str(ROOT / "target/debug" / tool)], stdin=subprocess.DEVNULL, check=False)
             require(result.returncode == 0, f"{tool} contract witness failed")
         return
     require(arguments.bin is not None, "--tool requires --bin")
