@@ -3,6 +3,7 @@
 pub mod contract;
 pub mod envelope;
 pub mod progress;
+pub mod reason;
 
 use std::io::{self, IsTerminal, Write};
 

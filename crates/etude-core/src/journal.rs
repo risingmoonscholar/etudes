@@ -142,6 +142,63 @@ pub struct Journal {
     pub progress_tail_damaged: bool,
 }
 
+/// Path-free, read-only counts for an operation status lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JournalState {
+    Completed,
+    Interrupted,
+    Reversed,
+    PartlyReversed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalSummary {
+    pub id: String,
+    pub tool: String,
+    pub state: JournalState,
+    pub planned: usize,
+    pub moved: usize,
+    pub reversed: usize,
+}
+
+impl Journal {
+    /// Summarize decrypted state without exposing paths or changing the journal.
+    pub fn summary(&self) -> JournalSummary {
+        let planned = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == EntryState::Planned)
+            .count();
+        let moved = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == EntryState::Moved)
+            .count();
+        let reversed = self
+            .entries
+            .iter()
+            .filter(|entry| entry.state == EntryState::Reversed)
+            .count();
+        let state = if reversed == self.entries.len() && reversed > 0 {
+            JournalState::Reversed
+        } else if reversed > 0 {
+            JournalState::PartlyReversed
+        } else if planned == 0 {
+            JournalState::Completed
+        } else {
+            JournalState::Interrupted
+        };
+        JournalSummary {
+            id: self.id.clone(),
+            tool: self.tool.clone(),
+            state,
+            planned,
+            moved,
+            reversed,
+        }
+    }
+}
+
 /// Supplied by the caller so `etude-core` need not depend on a cipher.
 pub trait Sealer {
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str>;
@@ -1153,6 +1210,65 @@ mod tests {
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn journal_summary_reports_path_free_states_and_exact_entry_counts() {
+        let entry = |state| Entry {
+            from: PathBuf::from("/private/source/name"),
+            to: PathBuf::from("/private/destination/name"),
+            method: Method::Rename,
+            size: 1,
+            mtime_secs: 1,
+            inode: 1,
+            edge_hash: 1,
+            state,
+        };
+        let summarize = |states: &[EntryState]| {
+            Journal {
+                id: "durable-id".into(),
+                tool: "sweep".into(),
+                entries: states.iter().copied().map(entry).collect(),
+                ..Journal::default()
+            }
+            .summary()
+        };
+
+        let completed = summarize(&[EntryState::Moved, EntryState::Moved]);
+        assert_eq!(completed.state, JournalState::Completed);
+        assert_eq!(
+            (completed.planned, completed.moved, completed.reversed),
+            (0, 2, 0)
+        );
+
+        let interrupted = summarize(&[EntryState::Planned, EntryState::Moved]);
+        assert_eq!(interrupted.state, JournalState::Interrupted);
+        assert_eq!(
+            (interrupted.planned, interrupted.moved, interrupted.reversed),
+            (1, 1, 0)
+        );
+
+        let reversed = summarize(&[EntryState::Reversed, EntryState::Reversed]);
+        assert_eq!(reversed.state, JournalState::Reversed);
+        assert_eq!(
+            (reversed.planned, reversed.moved, reversed.reversed),
+            (0, 0, 2)
+        );
+
+        let partly_reversed = summarize(&[EntryState::Reversed, EntryState::Moved]);
+        assert_eq!(partly_reversed.state, JournalState::PartlyReversed);
+        assert_eq!(
+            (
+                partly_reversed.planned,
+                partly_reversed.moved,
+                partly_reversed.reversed
+            ),
+            (0, 1, 1)
+        );
+        assert_eq!(
+            (completed.id.as_str(), completed.tool.as_str()),
+            ("durable-id", "sweep")
+        );
+    }
 
     #[test]
     #[cfg(unix)]

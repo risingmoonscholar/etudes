@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "tool_version": "<manifest-version>",
   "operation_id": "<per-invocation>",
   "status": "done",
@@ -60,12 +60,90 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 3,
+    "schema_version": 4,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
     "tool": "unpack",
     "kind": "capability_contract",
+    "refusal_codes": [
+      {
+        "code": "invalid_arguments",
+        "retry": "never",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The arguments do not form a supported request."
+      },
+      {
+        "code": "unknown_option",
+        "retry": "never",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "An option is not recognized by this command."
+      },
+      {
+        "code": "missing_input",
+        "retry": "after_change",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The requested input is absent or no longer available; choose an existing input."
+      },
+      {
+        "code": "unsupported_format",
+        "retry": "never",
+        "operations": [
+          "extract"
+        ],
+        "why": "This format is outside the tool's supported set."
+      },
+      {
+        "code": "destination_exists",
+        "retry": "after_change",
+        "operations": [
+          "extract"
+        ],
+        "why": "The destination is occupied; choose or make a vacant destination before retrying."
+      },
+      {
+        "code": "download_in_flight",
+        "retry": "later",
+        "operations": [
+          "extract"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
+        "code": "unsafe_input",
+        "retry": "after_change",
+        "operations": [
+          "extract"
+        ],
+        "why": "The input violates a safety rule; change the input before retrying."
+      },
+      {
+        "code": "permission_denied",
+        "retry": "after_change",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The request lacks required access; change the relevant permissions before retrying."
+      },
+      {
+        "code": "operation_incomplete",
+        "retry": "after_change",
+        "operations": [
+          "extract"
+        ],
+        "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      }
+    ],
     "contract_query": {
       "operation": "contract",
       "reads": [],
@@ -211,6 +289,10 @@
       "access_verified": false,
       "witness": "scripts/check-tool-contracts.py"
     },
+    "status_lookup": {
+      "support": "unsupported",
+      "why": "unpack does not persist an operation journal"
+    },
     "quarantine": {
       "source": "captured_from_same_nofollow_descriptor_as_archive_bytes",
       "changed_during_copy": "refused_before_extraction",
@@ -220,5 +302,9 @@
       "absent_source": "no_quarantine_attribute_added_by_unpack",
       "disclosure": "attribute_value_never_reported"
     }
+  },
+  "reason": {
+    "code": "done",
+    "retry": "not_needed"
   }
 }

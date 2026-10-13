@@ -1,0 +1,310 @@
+{
+  "schema_version": 3,
+  "tool_version": "<manifest-version>",
+  "operation_id": "<per-invocation>",
+  "status": "done",
+  "scope": {
+    "tool": "unpack",
+    "operation": "contract",
+    "domains": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "startup": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "evidence": "conditional declared domains; observations report actual instrumented reads"
+  },
+  "observations": {
+    "categories": [],
+    "scope": "instrumented operations on the command thread",
+    "unproven": [
+      "subprocess reads",
+      "environment access",
+      "operations outside instrumentation",
+      "absence of access when a counter is zero or missing"
+    ]
+  },
+  "effects": {
+    "outcome": "done",
+    "counters": [],
+    "unproven": [
+      "effects outside reported operation accounting; zero counters do not prove no effects"
+    ]
+  },
+  "verification": [
+    {
+      "claim": "command_completed",
+      "status": "pass"
+    },
+    {
+      "claim": "complete_read_coverage",
+      "status": "unproven"
+    },
+    {
+      "claim": "subprocess_network_absence",
+      "status": "unproven"
+    }
+  ],
+  "recovery": {
+    "mode": "no_operation_undo_needed",
+    "conditions": [],
+    "verification": "unproven; consult operation details and filesystem before retrying"
+  },
+  "disclosure": {
+    "receipt_contains": "read categories and outcomes only; no contents, keys or environment values",
+    "zero_counters": "not evidence of no access",
+    "details": "may contain operation paths; treat as sensitive"
+  },
+  "details": {
+    "schema_version": 4,
+    "tool_version": "<manifest-version>",
+    "operation_id": "<per-invocation>",
+    "status": "done",
+    "tool": "unpack",
+    "kind": "capability_contract",
+    "refusal_codes": [
+      {
+        "code": "invalid_arguments",
+        "retry": "never",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The arguments do not form a supported request."
+      },
+      {
+        "code": "unknown_option",
+        "retry": "never",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "An option is not recognized by this command."
+      },
+      {
+        "code": "missing_input",
+        "retry": "after_change",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The requested input is absent or no longer available; choose an existing input."
+      },
+      {
+        "code": "unsupported_format",
+        "retry": "never",
+        "operations": [
+          "extract"
+        ],
+        "why": "This format is outside the tool's supported set."
+      },
+      {
+        "code": "destination_exists",
+        "retry": "after_change",
+        "operations": [
+          "extract"
+        ],
+        "why": "The destination is occupied; choose or make a vacant destination before retrying."
+      },
+      {
+        "code": "download_in_flight",
+        "retry": "later",
+        "operations": [
+          "extract"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
+        "code": "unsafe_input",
+        "retry": "after_change",
+        "operations": [
+          "extract"
+        ],
+        "why": "The input violates a safety rule; change the input before retrying."
+      },
+      {
+        "code": "permission_denied",
+        "retry": "after_change",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The request lacks required access; change the relevant permissions before retrying."
+      },
+      {
+        "code": "operation_incomplete",
+        "retry": "after_change",
+        "operations": [
+          "extract"
+        ],
+        "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      }
+    ],
+    "contract_query": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "observation_scope": {
+      "default_user_content": "archive_bytes",
+      "content_exceptions": [
+        "system_extractor_reads_private_archive_copy"
+      ],
+      "symlinks": "refuse_or_skip",
+      "environment": [
+        "HOME",
+        "TMPDIR"
+      ],
+      "subprocess_environment": "inherited"
+    },
+    "mutation_scope": {
+      "operations": [
+        {
+          "operation": "list",
+          "reads": [
+            "archive_bytes",
+            "archive_metadata",
+            "archive_quarantine_metadata",
+            "private_archive_copy",
+            "os_random_bytes"
+          ],
+          "writes": [
+            "private_archive_copy"
+          ]
+        },
+        {
+          "operation": "extract",
+          "reads": [
+            "archive_bytes",
+            "archive_metadata",
+            "archive_quarantine_metadata",
+            "private_archive_copy",
+            "destination_parent_metadata",
+            "volume_free_space",
+            "staging_tree_metadata",
+            "staging_quarantine_metadata",
+            "os_random_bytes"
+          ],
+          "writes": [
+            "private_archive_copy",
+            "private_staging_tree",
+            "staging_quarantine_attributes",
+            "new_destination_tree"
+          ]
+        }
+      ],
+      "startup": {
+        "operation": "startup_except_contract",
+        "reads": [],
+        "writes": []
+      }
+    },
+    "network": {
+      "policy": "none",
+      "runtime_enforcement": "none",
+      "subprocesses": [
+        "/usr/bin/unzip",
+        "/usr/bin/tar",
+        "/usr/bin/gunzip"
+      ],
+      "subprocess_network_verified": false
+    },
+    "overwrite": {
+      "user_destinations": "refused",
+      "owned_state": "private_staging_only"
+    },
+    "deletion": {
+      "source_entries": "never",
+      "user_payloads": "never",
+      "owned_artifacts": [
+        "private_archive_copy",
+        "failed_staging_tree",
+        "junk_members_in_staging"
+      ]
+    },
+    "reversibility": {
+      "mode": "no_undo",
+      "conditions": [
+        "source_archive_retained"
+      ],
+      "disabled_by": []
+    },
+    "persistent_state": {
+      "journal_store": "none",
+      "journal_namespace": "none",
+      "journal_ttl_days": null,
+      "key": "none",
+      "result_artifacts": [
+        "destination_tree"
+      ]
+    },
+    "formats": {
+      "filesystem_handling": "archive_suffix_allowlist",
+      "content_inspection": {
+        "supported": [],
+        "unsupported": [
+          "all"
+        ],
+        "unlisted": "unsupported",
+        "matching": "case_insensitive_suffix"
+      },
+      "archive_extraction": {
+        "supported": [
+          ".tar.gz",
+          ".tgz",
+          ".tar.bz2",
+          ".tbz",
+          ".tar.xz",
+          ".txz",
+          ".tar",
+          ".zip",
+          ".jar",
+          ".gz"
+        ],
+        "unsupported": [
+          ".dmg",
+          ".rar",
+          ".7z",
+          ".bz2",
+          ".xz",
+          ".tbz2",
+          ".zst",
+          ".tar.zst"
+        ],
+        "unlisted": "unsupported",
+        "matching": "case_insensitive_suffix"
+      }
+    },
+    "limits": {
+      "platform": "macos",
+      "inspection_max_bytes": null,
+      "extraction_budget": "monitored_soft_limit_not_hard_cap"
+    },
+    "evidence": {
+      "kind": "declaration_not_receipt",
+      "access_verified": false,
+      "witness": "scripts/check-tool-contracts.py"
+    },
+    "status_lookup": {
+      "support": "unsupported",
+      "why": "unpack does not persist an operation journal"
+    },
+    "quarantine": {
+      "source": "captured_from_same_nofollow_descriptor_as_archive_bytes",
+      "changed_during_copy": "refused_before_extraction",
+      "output": "captured_attribute_applied_to_every_final_file_and_directory_and_readback_verified_before_publication",
+      "unsupported_storage": "refuse_publication_and_remove_staging_if_attribute_cannot_be_stored_or_exactly_read_back",
+      "appledouble": "filesystem_generated_companions_retained_when_they_store_quarantine;_not_a_promise_of_native_xattr_storage",
+      "absent_source": "no_quarantine_attribute_added_by_unpack",
+      "disclosure": "attribute_value_never_reported"
+    }
+  },
+  "reason": {
+    "code": "done",
+    "retry": "not_needed"
+  }
+}

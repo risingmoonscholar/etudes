@@ -137,9 +137,9 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 1,
-                Tool::Stash => 5,
-                Tool::Unpack => SCHEMA_VERSION,
+                Tool::Sweep => SCHEMA_VERSION + 2,
+                Tool::Stash => 6,
+                Tool::Unpack => SCHEMA_VERSION + 1,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -147,6 +147,7 @@ pub fn declaration(
         ("status", j::str("done")),
         ("tool", j::str(name)),
         ("kind", j::str("capability_contract")),
+        ("refusal_codes", crate::reason::codes_json(name)),
         ("contract_query", scope("contract", &[], &[])),
         (
             "observation_scope",
@@ -495,6 +496,16 @@ pub fn declaration(
         ])));
     }
     if matches!(tool, Tool::Unpack) {
+        fields.push((
+            "status_lookup",
+            j::obj(&[
+                ("support", j::str("unsupported")),
+                (
+                    "why",
+                    j::str("unpack does not persist an operation journal"),
+                ),
+            ]),
+        ));
         fields.push(("quarantine", j::obj(&[
             ("source", j::str("captured_from_same_nofollow_descriptor_as_archive_bytes")),
             ("changed_during_copy", j::str("refused_before_extraction")),
