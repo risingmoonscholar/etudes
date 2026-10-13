@@ -106,15 +106,29 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v4/sweep.json`, `v5/stash.json` and `v3/unpack.json`);
-`v2/envelope.json` pins the result structure. Editing fields or types without
-adding a new version is rejected by the independent binary witness.
+contract envelopes (`v5/sweep.json`, `v6/stash.json` and `v4/unpack.json`);
+`v2/envelope.json` retains the preceding result structure and `v3/envelope.json`
+pins the current one. Editing fields or types without adding a new version is
+rejected by the independent binary witness.
 
 The envelope contains `schema_version`, `tool_version`, `operation_id`, `status`,
-`scope`, `observations`, `effects`, `verification`, `recovery`, `disclosure` and
-`details`. Status is one of `done`, `nothing_to_do`, `refused`, `incomplete` or
+`scope`, `observations`, `effects`, `verification`, `recovery`, `disclosure`,
+`details` and `reason`. Status is one of `done`, `nothing_to_do`, `refused`, `incomplete` or
 `error`. Exit codes retain their existing meaning. Incomplete move or restore
 attempts require checking the filesystem and the journal before retrying.
+
+Each `TOOL contract --json` capability declaration lists every refusal under
+`refusal_codes`, with its stable code, retry class, operation names and reason
+for that class. `never` means the same request cannot work; `after_change`
+requires a changed request or folder; `later` means the same request may work
+after waiting. Only the last two include a `subject`, which names the relevant
+input, plan, profile, journal or contention without disclosing extra file names.
+
+**Result envelope version 3:** version 3 is version 2 plus the top-level
+`reason` field. A reason has a stable code and retry class; refusals that need
+the caller to change something or wait include a typed subject. A successful
+result uses `done` or `nothing_to_do` with `retry: "not_needed"`. Adding this
+field is breaking for parsers that require exactly schema version 2.
 
 `scope` identifies the tool and operation and includes its conditional declared
 read/write domains and startup domains. Those are capabilities, not observations.
@@ -147,10 +161,10 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 ## Unpack quarantine declaration version 3
 
 Unpack's capability declaration under `details.schema_version` is version 3;
-its surrounding result envelope remains version 2. `v3/unpack.json` pins the
+its surrounding result envelope is version 3. `v3/unpack.json` pins the
 new declaration and `v1/unpack.json` mirrors that current fixture. The preceding
 `v2/unpack.json` stays unchanged. Sweep and stash use their own declaration
-versions, while the shared result envelope remains version 2.
+versions, while the shared result envelope uses version 3.
 The declaration names captured archive quarantine metadata, staging attribute
 reads and writes, exact readback before publication, and refusal if preservation
 fails. On exFAT, macOS-generated AppleDouble companions are retained when they

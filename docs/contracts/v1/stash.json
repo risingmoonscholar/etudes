@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "tool_version": "<manifest-version>",
   "operation_id": "<per-invocation>",
   "status": "done",
@@ -60,12 +60,173 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 5,
+    "schema_version": 6,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
     "tool": "stash",
     "kind": "capability_contract",
+    "refusal_codes": [
+      {
+        "code": "invalid_arguments",
+        "retry": "never",
+        "operations": [
+          "stash",
+          "pop",
+          "status",
+          "inspect",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The arguments do not form a supported request."
+      },
+      {
+        "code": "unknown_option",
+        "retry": "never",
+        "operations": [
+          "stash",
+          "pop",
+          "status",
+          "inspect",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "An option is not recognized by this command."
+      },
+      {
+        "code": "missing_input",
+        "retry": "after_change",
+        "operations": [
+          "stash",
+          "pop",
+          "status",
+          "inspect",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The requested input is absent or no longer available; choose an existing input."
+      },
+      {
+        "code": "project_folder",
+        "retry": "never",
+        "operations": [
+          "stash"
+        ],
+        "why": "The folder is a project and this request is refused for that folder."
+      },
+      {
+        "code": "destination_exists",
+        "retry": "after_change",
+        "operations": [
+          "stash",
+          "pop"
+        ],
+        "why": "The destination is occupied; choose or make a vacant destination before retrying."
+      },
+      {
+        "code": "destination_outside_root",
+        "retry": "after_change",
+        "operations": [
+          "stash"
+        ],
+        "why": "The destination is outside the selected plan root; change the destination or plan."
+      },
+      {
+        "code": "plan_stale",
+        "retry": "after_change",
+        "operations": [
+          "stash"
+        ],
+        "why": "The observed plan is stale; create a fresh plan before applying."
+      },
+      {
+        "code": "folder_busy",
+        "retry": "later",
+        "operations": [
+          "stash",
+          "pop"
+        ],
+        "why": "Another operation currently holds the folder; the same request may work after it releases the folder."
+      },
+      {
+        "code": "journal_unreadable",
+        "retry": "later",
+        "operations": [
+          "stash",
+          "pop",
+          "status"
+        ],
+        "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
+      },
+      {
+        "code": "journal_key_unavailable",
+        "retry": "later",
+        "operations": [
+          "stash",
+          "pop",
+          "status"
+        ],
+        "why": "The required journal key is unavailable and may become available later."
+      },
+      {
+        "code": "unknown_operation",
+        "retry": "never",
+        "operations": [
+          "status"
+        ],
+        "why": "No journal contains the requested durable operation id."
+      },
+      {
+        "code": "unsafe_input",
+        "retry": "after_change",
+        "operations": [
+          "stash"
+        ],
+        "why": "The input violates a safety rule; change the input before retrying."
+      },
+      {
+        "code": "permission_denied",
+        "retry": "after_change",
+        "operations": [
+          "stash",
+          "pop",
+          "status",
+          "inspect",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The request lacks required access; change the relevant permissions before retrying."
+      },
+      {
+        "code": "empty_selection",
+        "retry": "after_change",
+        "operations": [
+          "stash"
+        ],
+        "why": "The selection contains no applicable entries; change the selection."
+      },
+      {
+        "code": "operation_incomplete",
+        "retry": "after_change",
+        "operations": [
+          "stash",
+          "pop"
+        ],
+        "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "user_cancelled",
+        "retry": "never",
+        "operations": [
+          "select"
+        ],
+        "why": "The user declined or cancelled this request."
+      }
+    ],
     "contract_query": {
       "operation": "contract",
       "reads": [],
@@ -322,5 +483,9 @@
       "due": "deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop",
       "no_journal": "explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required"
     }
+  },
+  "reason": {
+    "code": "done",
+    "retry": "not_needed"
   }
 }
