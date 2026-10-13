@@ -257,12 +257,14 @@ impl Drop for ArchiveAnchor {
 // deterministic.  It is compiled out of the shipped binary, so callers
 // cannot influence either the extractor path or the preflight/extract gap.
 #[cfg(test)]
-static AFTER_PREFLIGHT: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
-    std::sync::Mutex::new(None);
+thread_local! {
+    static AFTER_PREFLIGHT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(test)]
 fn after_preflight_for_test() {
-    if let Some(action) = AFTER_PREFLIGHT.lock().expect("preflight hook lock").take() {
+    let action = AFTER_PREFLIGHT.with(|hook| hook.borrow_mut().take());
+    if let Some(action) = action {
         action();
     }
 }
@@ -1678,6 +1680,35 @@ mod tests {
     }
 
     #[test]
+    fn preflight_fault_is_confined_to_its_installing_thread() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        AFTER_PREFLIGHT.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new({
+                let calls = calls.clone();
+                move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+        });
+        std::thread::spawn(after_preflight_for_test)
+            .join()
+            .expect("parallel preflight completes");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "another thread stole the fault"
+        );
+        after_preflight_for_test();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "installing thread did not inject its fault"
+        );
+        after_preflight_for_test();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "fault ran more than once");
+    }
+
+    #[test]
     fn run_extracts_the_anchored_zip_when_the_input_path_is_replaced() {
         static TEST_NEXT: AtomicU64 = AtomicU64::new(0);
         let serial = TEST_NEXT.fetch_add(1, Ordering::Relaxed);
@@ -1708,11 +1739,15 @@ mod tests {
             quarantine::platform_set_for_test(&replacement, b"0083;00000000;etudes-replacement")
                 .unwrap();
         }
-        *AFTER_PREFLIGHT.lock().expect("preflight hook lock") = Some(Box::new({
-            let archive = archive.clone();
-            let replacement = replacement.clone();
-            move || std::fs::rename(replacement, archive).expect("replace archive after listings")
-        }));
+        AFTER_PREFLIGHT.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new({
+                let archive = archive.clone();
+                let replacement = replacement.clone();
+                move || {
+                    std::fs::rename(replacement, archive).expect("replace archive after listings")
+                }
+            }));
+        });
         let result = run(
             &archive,
             &[
