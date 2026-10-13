@@ -191,7 +191,9 @@
         "operations": [
           "stash",
           "pop",
-          "status"
+          "status",
+          "inspect",
+          "select"
         ],
         "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
       },
@@ -202,7 +204,9 @@
         "operations": [
           "stash",
           "pop",
-          "status"
+          "status",
+          "inspect",
+          "select"
         ],
         "why": "The required journal key is unavailable and may become available later."
       },
@@ -220,7 +224,8 @@
         "retry": "after_change",
         "subject_kind": "input",
         "operations": [
-          "stash"
+          "stash",
+          "select"
         ],
         "why": "The input violates a safety rule; change the input before retrying."
       },
