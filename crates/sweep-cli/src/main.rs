@@ -32,6 +32,8 @@ USAGE
     sweep apply PATH --yes       move every proposed group
     sweep apply PATH --only NAME move one group
     sweep undo [PATH]            reverse the most recent apply, or that folder's
+    sweep status --id ID --json  report one encrypted journal without names
+    sweep status PATH --json     report that folder's journals, newest first
     sweep forget                 remove sweep's journals; ask before destroying
                                  a key stash also relies on
     sweep verify                 print sweep's own privacy posture
@@ -67,7 +69,10 @@ never moved, in any mode.";
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     etude_cli_support::envelope::begin("sweep", env!("CARGO_PKG_VERSION"), &args);
-    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    let code = std::panic::catch_unwind(run_main).unwrap_or_else(|_| {
+        set_reason(etude_cli_support::reason::Code::InternalError, None);
+        ExitCode::from(3)
+    });
     etude_cli_support::envelope::finish(code);
     code
 }
@@ -83,6 +88,22 @@ fn run_main() -> ExitCode {
             etude_read::scan::TEXT_EXTS,
             Some(etude_read::buf::MAX_READ),
         );
+    }
+
+    // Status is a strictly read-only journal query. It must run before legacy
+    // migration and expiry pruning, both of which can modify journal state.
+    if args.first().is_some_and(|arg| arg == "status") {
+        if let Err(msg) = check_flags("status", &args) {
+            eprintln!("sweep: {msg}");
+            let code = if msg.contains("unknown option") {
+                etude_cli_support::reason::Code::UnknownOption
+            } else {
+                etude_cli_support::reason::Code::InvalidArguments
+            };
+            return refusal(code, None);
+        }
+        disable_core_dumps();
+        return cmd_status(&args);
     }
 
     // Core dumps can carry filenames from the heap into a file the OS may offer
@@ -130,7 +151,12 @@ fn run_main() -> ExitCode {
     };
     if let Err(msg) = check_flags(cmd, &args) {
         eprintln!("sweep: {msg}");
-        return ExitCode::from(2);
+        let code = if msg.contains("unknown option") {
+            etude_cli_support::reason::Code::UnknownOption
+        } else {
+            etude_cli_support::reason::Code::InvalidArguments
+        };
+        return refusal(code, None);
     }
 
     match args.first().map(String::as_str) {
@@ -147,6 +173,7 @@ fn run_main() -> ExitCode {
         Some("lesson") => cmd_lesson(&args),
         Some("apply") => cmd_apply(&args),
         Some("undo") => cmd_undo(&args),
+        Some("status") => cmd_status(&args),
         Some("forget") => cmd_forget(&args),
         Some("review") => cmd_review(&args),
         // Every remaining shape -- a bare path, a path behind flags, `--`
@@ -159,10 +186,208 @@ fn run_main() -> ExitCode {
             Ok(None) => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
             Err(msg) => {
                 eprintln!("sweep: {msg}");
-                ExitCode::from(2)
+                refusal(etude_cli_support::reason::Code::InvalidArguments, None)
             }
         },
     }
+}
+
+/// Read-only journal status by durable id or operation root. This deliberately
+/// bypasses startup migration and pruning in `run_main`.
+fn cmd_status(args: &[String]) -> ExitCode {
+    use etude_cli_support::reason::{Code, Reason, Subject};
+    let json = has(args, "--json");
+    let tail: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .filter(|arg| *arg != "--json")
+        .collect();
+    let id_arg = if tail.first() == Some(&"--id") && tail.len() == 2 {
+        Some(tail[1].to_owned())
+    } else {
+        None
+    };
+    let path = if id_arg.is_none() && tail.len() == 1 && tail[0] != "--id" {
+        Some(PathBuf::from(tail[0]))
+    } else {
+        None
+    };
+    if id_arg.is_none() == path.is_none() {
+        eprintln!("sweep: status expects either --id OPERATION or one PATH");
+        etude_cli_support::envelope::reason(Reason::refusal(Code::InvalidArguments, None));
+        return ExitCode::from(2);
+    }
+    let candidates = match etude_core::journal::candidates_by_recency("sweep") {
+        Ok(candidates) => candidates,
+        Err(etude_core::journal::JournalError::NotFound) => {
+            if let Some(id) = id_arg {
+                return status_unknown(&id);
+            }
+            etude_cli_support::envelope::reason(Reason::nothing_to_do());
+            etude_cli_support::envelope::status("nothing_to_do");
+            etude_cli_support::envelope::detail(etude_core::json::arr([]));
+            return ExitCode::from(1);
+        }
+        Err(error) => return status_journal_error(error),
+    };
+    let key = match etude_keep::key_if_present() {
+        Ok(Some(key)) => key,
+        Ok(None) => {
+            etude_core::scan::record_read_outcome("key_material", false);
+            etude_cli_support::envelope::reason(Reason::refusal(
+                Code::JournalKeyUnavailable,
+                Some(Subject::wait("journal", None)),
+            ));
+            etude_cli_support::envelope::status("error");
+            eprintln!("sweep: journal key is not available; status did not create one");
+            return ExitCode::from(3);
+        }
+        Err(error) => {
+            etude_core::scan::record_read_outcome("key_material", false);
+            let code = key_error_code(&error);
+            etude_cli_support::envelope::reason(Reason::refusal(
+                code,
+                if code == Code::JournalKeyUnavailable {
+                    Some(Subject::wait("journal", None))
+                } else {
+                    None
+                },
+            ));
+            etude_cli_support::envelope::status("error");
+            eprintln!("sweep: {error}");
+            return ExitCode::from(3);
+        }
+    };
+    etude_core::scan::record_read_outcome("key_material", true);
+    let sealer = KeychainSeal { key };
+    let selected_root = path.as_deref().and_then(|p| std::fs::canonicalize(p).ok());
+    let mut summaries = Vec::new();
+    for candidate in candidates {
+        if id_arg.as_deref().is_some_and(|id| id != candidate.id) {
+            continue;
+        }
+        let journal = match candidate.load("sweep", &sealer) {
+            Ok(journal) => journal,
+            Err(error) => return status_journal_error(error),
+        };
+        if id_arg.is_none() && selected_root.as_deref() != Some(journal.root.as_path()) {
+            continue;
+        }
+        summaries.push((journal.summary(), journal.root));
+        if id_arg.is_some() {
+            break;
+        }
+    }
+    if summaries.is_empty() {
+        if let Some(id) = id_arg {
+            return status_unknown(&id);
+        }
+        etude_cli_support::envelope::reason(Reason::nothing_to_do());
+        etude_cli_support::envelope::status("nothing_to_do");
+        etude_cli_support::envelope::detail(etude_core::json::arr([]));
+        return ExitCode::from(1);
+    }
+    etude_cli_support::envelope::reason(Reason::completed());
+    etude_cli_support::envelope::status("done");
+    for (summary, root) in summaries {
+        let state = match summary.state {
+            etude_core::journal::JournalState::Completed => "completed",
+            etude_core::journal::JournalState::Interrupted => "interrupted",
+            etude_core::journal::JournalState::Reversed => "reversed",
+            etude_core::journal::JournalState::PartlyReversed => "partly_reversed",
+        };
+        let command = if summary.moved > summary.reversed {
+            format!("sweep undo {}", shell_quote(&root.to_string_lossy()))
+        } else {
+            String::new()
+        };
+        let item = etude_core::json::obj(&[
+            ("operation_id", etude_core::json::str(&summary.id)),
+            ("tool", etude_core::json::str(&summary.tool)),
+            ("state", etude_core::json::str(state)),
+            (
+                "counts",
+                etude_core::json::obj(&[
+                    ("planned", etude_core::json::num(summary.planned)),
+                    ("moved", etude_core::json::num(summary.moved)),
+                    ("reversed", etude_core::json::num(summary.reversed)),
+                ]),
+            ),
+            (
+                "command",
+                if command.is_empty() {
+                    "null".into()
+                } else {
+                    etude_core::json::str(&command)
+                },
+            ),
+        ]);
+        etude_cli_support::envelope::detail(item);
+        if !json {
+            println!(
+                "{} {} planned={} moved={} reversed={}{}",
+                summary.id,
+                state,
+                summary.planned,
+                summary.moved,
+                summary.reversed,
+                if command.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {command}")
+                }
+            );
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn status_unknown(id: &str) -> ExitCode {
+    use etude_cli_support::reason::{Code, Reason};
+    let _ = id;
+    etude_cli_support::envelope::reason(Reason::refusal(Code::UnknownOperation, None));
+    etude_cli_support::envelope::status("nothing_to_do");
+    eprintln!("sweep: unknown operation id");
+    ExitCode::from(1)
+}
+
+fn status_journal_error(error: etude_core::journal::JournalError) -> ExitCode {
+    use etude_cli_support::reason::{Code, Reason, Subject};
+    etude_cli_support::envelope::reason(Reason::refusal(
+        Code::JournalUnreadable,
+        Some(Subject::wait("journal", None)),
+    ));
+    etude_cli_support::envelope::status("error");
+    eprintln!("sweep: journal is unreadable: {error}");
+    ExitCode::from(3)
+}
+
+fn set_reason(
+    code: etude_cli_support::reason::Code,
+    subject: Option<etude_cli_support::reason::Subject>,
+) {
+    etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::refusal(code, subject));
+}
+
+fn refusal(
+    code: etude_cli_support::reason::Code,
+    subject: Option<etude_cli_support::reason::Subject>,
+) -> ExitCode {
+    set_reason(code, subject);
+    ExitCode::from(2)
+}
+
+fn failure(
+    code: etude_cli_support::reason::Code,
+    subject: Option<etude_cli_support::reason::Subject>,
+) -> ExitCode {
+    set_reason(code, subject);
+    ExitCode::from(3)
 }
 
 /// Seven exercises. Each one is a command to run and one thing to look at.
@@ -291,7 +516,7 @@ fn cmd_lesson(args: &[String]) -> ExitCode {
                     "sweep: lesson takes a step from 1 to {}, got {v:?}",
                     LESSON.len()
                 );
-                return ExitCode::from(2);
+                return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
         },
     };
@@ -470,6 +695,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
     ),
     ("forget", &[("--yes", false)]),
     ("undo", &[("--json", false)]),
+    ("status", &[("--json", false), ("--id", true)]),
     ("verify", &[]),
     ("lesson", &[]),
     ("contract", &[("--json", false)]),
@@ -843,14 +1069,17 @@ fn bound_or_refuse(
     plan::BoundPlan::from_plan(p, context).map_err(|error| {
         eprintln!("sweep: {error}; replan required");
         etude_cli_support::envelope::status("refused");
-        ExitCode::from(2)
+        refusal(
+            etude_cli_support::reason::Code::PlanStale,
+            Some(etude_cli_support::reason::Subject::wait("plan", None)),
+        )
     })
 }
 
 fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
     if path_arg("apply", &args[1..]).is_ok_and(|path| path.is_some()) {
         eprintln!("sweep: exported plan fixes its original root; do not supply another path");
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     if [
         "--map",
@@ -867,45 +1096,72 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         eprintln!(
             "sweep: an exported plan fixes its planning configuration; replan instead of overriding it"
         );
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     let Some(digest) = value(args, "--plan-digest") else {
         eprintln!("sweep: --plan requires the digest printed with the exported plan");
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     };
     let mut bound = match plan::BoundPlan::load(Path::new(file), &digest) {
         Ok(plan) => plan,
         Err(error) => {
             eprintln!("sweep: {error}; replan required");
-            return ExitCode::from(2);
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return failure(
+                    etude_cli_support::reason::Code::MissingInput,
+                    Some(etude_cli_support::reason::Subject::wait("input", None)),
+                );
+            }
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                return refusal(
+                    etude_cli_support::reason::Code::PermissionDenied,
+                    Some(etude_cli_support::reason::Subject::wait("input", None)),
+                );
+            }
+            return refusal(
+                etude_cli_support::reason::Code::PlanStale,
+                Some(etude_cli_support::reason::Subject::wait("plan", None)),
+            );
         }
     };
     if binding_field(&bound.context().profile, "scheme") == Some("existing")
         && let Err(error) = verify_existing_profile(&bound.context().profile)
     {
         eprintln!("sweep: {error}");
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::ProfileMissing,
+            Some(etude_cli_support::reason::Subject::wait("profile", None)),
+        );
     }
     if !bound.context().profile.starts_with("sweep-metadata-v1;") {
         eprintln!("sweep: plan scheme changed; replan required");
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::PlanStale,
+            Some(etude_cli_support::reason::Subject::wait("plan", None)),
+        );
     }
     let context = current_binding_context(&bound.context().profile);
     if let Err(error) = bound.validate(&context) {
         eprintln!("sweep: {error}");
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::PlanStale,
+            Some(etude_cli_support::reason::Subject::wait("plan", None)),
+        );
     }
     let only = value(args, "--only");
     if !has(args, "--yes") && only.is_none() {
         eprintln!("sweep: applying requires --yes or --only NAME");
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     for group in &mut bound.plan.groups {
         group.accepted = only.as_ref().is_none_or(|name| name == &group.name);
     }
     if let Err(error) = bound.finalize_choices() {
         eprintln!("sweep: {error}; replan required");
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::PlanStale,
+            Some(etude_cli_support::reason::Subject::wait("plan", None)),
+        );
     }
     if bound.moves() == 0 {
         return ExitCode::from(1);
@@ -917,7 +1173,10 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             .any(|group| group.accepted && matches!(group.signal, plan::Signal::Mapped { .. }))
     {
         eprintln!("sweep: mapped plans require a journal");
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::UnsafeInput,
+            Some(etude_cli_support::reason::Subject::wait("input", None)),
+        );
     }
     let sl = if has(args, "--no-journal") {
         None
@@ -936,13 +1195,23 @@ fn scan_and_plan(
 ) -> Result<(plan::Plan, Option<etude_read::Stats>, SchemeConfig), ExitCode> {
     let scheme = resolve_scheme(args, path).map_err(|msg| {
         eprintln!("sweep: {msg}");
-        ExitCode::from(2)
+        if msg.contains("profile") {
+            refusal(
+                etude_cli_support::reason::Code::ProfileMissing,
+                Some(etude_cli_support::reason::Subject::wait("profile", None)),
+            )
+        } else {
+            refusal(etude_cli_support::reason::Code::InvalidArguments, None)
+        }
     })?;
     let depth = match parse_depth(args) {
         Ok(d) => d,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return Err(ExitCode::from(2));
+            return Err(refusal(
+                etude_cli_support::reason::Code::InvalidArguments,
+                None,
+            ));
         }
     };
     let cfg = ScanConfig {
@@ -952,7 +1221,10 @@ fn scan_and_plan(
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
                 eprintln!("sweep: {msg}");
-                return Err(ExitCode::from(2));
+                return Err(refusal(
+                    etude_cli_support::reason::Code::InvalidArguments,
+                    None,
+                ));
             }
         },
         ..Default::default()
@@ -972,7 +1244,10 @@ fn scan_and_plan(
             "sweep: routed moves with --no-journal are refused. A mapped move must stay\n\
              reversible; drop --no-journal."
         );
-        return Err(ExitCode::from(2));
+        return Err(refusal(
+            etude_cli_support::reason::Code::UnsafeInput,
+            Some(etude_cli_support::reason::Subject::wait("input", None)),
+        ));
     }
 
     if !has(args, "--inspect-content") {
@@ -999,7 +1274,10 @@ fn scan_and_plan(
         }
         Err(e) => {
             refuse("could not read your answer to the consent prompt", &e);
-            return Err(ExitCode::from(3));
+            return Err(failure(
+                etude_cli_support::reason::Code::InternalError,
+                None,
+            ));
         }
     }
 
@@ -1030,7 +1308,10 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         };
         if let Err(error) = bound.export(Path::new(&file)) {
             eprintln!("sweep: cannot export plan ({error})");
-            return ExitCode::from(2);
+            return refusal(
+                etude_cli_support::reason::Code::PermissionDenied,
+                Some(etude_cli_support::reason::Subject::wait("input", None)),
+            );
         }
         if !has(args, "--json") {
             println!(
@@ -1406,12 +1687,29 @@ impl etude_core::journal::Sealer for KeychainSeal {
 ///
 /// On failure sweep refuses rather than falling back to a plaintext journal.
 /// Silently degrading is the failure mode a privacy tool must not have.
+fn key_error_code(error: &etude_keep::KeepError) -> etude_cli_support::reason::Code {
+    if matches!(error, etude_keep::KeepError::SuppliedKey) {
+        etude_cli_support::reason::Code::InvalidArguments
+    } else {
+        etude_cli_support::reason::Code::JournalKeyUnavailable
+    }
+}
+
 fn sealer() -> Option<KeychainSeal> {
     let result = etude_keep::key();
     etude_core::scan::record_read_outcome("key_material", result.is_ok());
     match result {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
+            let code = key_error_code(&e);
+            set_reason(
+                code,
+                if code == etude_cli_support::reason::Code::JournalKeyUnavailable {
+                    Some(etude_cli_support::reason::Subject::wait("journal", None))
+                } else {
+                    None
+                },
+            );
             refuse("could not get the journal key", &e);
             eprintln!(
                 "Refusing to write an unencrypted journal.\n\
@@ -1433,7 +1731,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
         Ok(None) => std::env::current_dir().unwrap_or_default(),
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
         }
     };
 
@@ -1441,7 +1739,18 @@ fn cmd_review(args: &[String]) -> ExitCode {
         Ok(scheme) => scheme,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(
+                if msg.contains("profile") {
+                    etude_cli_support::reason::Code::ProfileMissing
+                } else {
+                    etude_cli_support::reason::Code::InvalidArguments
+                },
+                if msg.contains("profile") {
+                    Some(etude_cli_support::reason::Subject::wait("profile", None))
+                } else {
+                    None
+                },
+            );
         }
     };
 
@@ -1449,7 +1758,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
         Ok(d) => d,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
         }
     };
     let cfg = ScanConfig {
@@ -1459,7 +1768,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
                 eprintln!("sweep: {msg}");
-                return ExitCode::from(2);
+                return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
         },
         ..Default::default()
@@ -1494,7 +1803,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
         Ok(review::Outcome::Cancelled) => ExitCode::SUCCESS,
         Err(e) => {
             refuse("could not finish the review", &e);
-            ExitCode::from(3)
+            failure(etude_cli_support::reason::Code::InternalError, None)
         }
         Ok(review::Outcome::Apply) => {
             let use_journal = !has(args, "--no-journal");
@@ -1588,24 +1897,61 @@ fn refuse_apply(e: &etude_core::apply::ApplyError) {
 }
 
 fn scan_exit_code(e: &etude_core::scan::ScanError) -> ExitCode {
-    if e.is_refusal() {
-        ExitCode::from(2)
-    } else {
-        ExitCode::from(3)
+    use etude_cli_support::reason::{Code, Subject};
+    use etude_core::scan::ScanError as E;
+    match e {
+        E::RefusedProjectRoot { .. } => refusal(Code::ProjectFolder, None),
+        // An incoming folder can be scanned safely once it has finished arriving.
+        E::RefusedInFlightRoot(_) => refusal(
+            Code::DownloadInFlight,
+            Some(Subject::wait("download", None)),
+        ),
+        E::RefusedRunningAsRoot
+        | E::RefusedSystemLocation(_)
+        | E::RefusedSyncRoot(_)
+        | E::TooManyEntries { .. } => {
+            refusal(Code::UnsafeInput, Some(Subject::wait("input", None)))
+        }
+        E::NotADirectory(_) => failure(Code::MissingInput, Some(Subject::wait("input", None))),
+        E::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            failure(Code::PermissionDenied, Some(Subject::wait("input", None)))
+        }
+        E::Io(_) => failure(Code::InternalError, None),
     }
 }
 
 /// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
 fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
+    use etude_cli_support::reason::{Code, Subject};
     use etude_core::apply::ApplyError::*;
     match e {
-        StalePlan(_)
-        | DestinationExists(_)
-        | DestinationCollision(_)
-        | DestinationIsSynced(_)
-        | DestinationDirectoryChanged(_)
-        | CannotCompareNames(_) => ExitCode::from(2),
-        Io(_) | Journal(_) | Injected(_) => ExitCode::from(3),
+        StalePlan(error)
+            if error
+                .to_string()
+                .contains("destination must stay inside the plan root") =>
+        {
+            refusal(
+                Code::DestinationOutsideRoot,
+                Some(Subject::wait("destination", None)),
+            )
+        }
+        StalePlan(_) | DestinationDirectoryChanged(_) => {
+            refusal(Code::PlanStale, Some(Subject::wait("plan", None)))
+        }
+        DestinationExists(_) | DestinationCollision(_) => refusal(
+            Code::DestinationExists,
+            Some(Subject::wait("destination", None)),
+        ),
+        DestinationIsSynced(_) | CannotCompareNames(_) => {
+            refusal(Code::UnsafeInput, Some(Subject::wait("input", None)))
+        }
+        Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            failure(Code::PermissionDenied, Some(Subject::wait("input", None)))
+        }
+        Io(_) | Journal(_) | Injected(_) => failure(
+            Code::OperationIncomplete,
+            Some(Subject::wait("journal", None)),
+        ),
     }
 }
 
@@ -1647,7 +1993,10 @@ fn run_apply(
 ) -> ExitCode {
     if let Err(error) = verify_existing_profile(&context.profile) {
         eprintln!("sweep: {error}");
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::ProfileMissing,
+            Some(etude_cli_support::reason::Subject::wait("profile", None)),
+        );
     }
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
     let result = if structured {
@@ -1673,6 +2022,15 @@ fn run_apply(
     };
     match result {
         Ok(r) => {
+            if let Some(path) = r.journal_path.as_deref()
+                && let Some(id) = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_prefix("sweep-"))
+                    .and_then(|name| name.strip_suffix(".journal"))
+            {
+                etude_cli_support::envelope::recovery_operation(id);
+            }
             etude_cli_support::envelope::effect("items_moved", r.moved);
             etude_cli_support::envelope::detail(etude_core::json::obj(&[
                 ("moved", etude_core::json::num(r.moved)),
@@ -1700,7 +2058,7 @@ fn run_apply(
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) {
                 etude_cli_support::envelope::status("refused");
                 eprintln!("sweep: {e}");
-                return ExitCode::from(2);
+                return apply_exit_code(&e);
             }
             etude_cli_support::envelope::status("incomplete");
             refuse_apply(&e);
@@ -1721,20 +2079,31 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     }
     if has(args, "--plan-digest") {
         eprintln!("sweep: --plan-digest requires --plan FILE");
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     let path = match apply_path(&args[1..]) {
         Ok(path) => path,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
         }
     };
     let scheme = match resolve_scheme(args, &path) {
         Ok(scheme) => scheme,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(
+                if msg.contains("profile") {
+                    etude_cli_support::reason::Code::ProfileMissing
+                } else {
+                    etude_cli_support::reason::Code::InvalidArguments
+                },
+                if msg.contains("profile") {
+                    Some(etude_cli_support::reason::Subject::wait("profile", None))
+                } else {
+                    None
+                },
+            );
         }
     };
 
@@ -1747,14 +2116,14 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             "sweep: refusing to apply without an explicit choice.\n\
              Pass --yes to accept every group, or --only NAME for one."
         );
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
 
     let depth = match parse_depth(args) {
         Ok(d) => d,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
         }
     };
     let cfg = ScanConfig {
@@ -1764,7 +2133,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
                 eprintln!("sweep: {msg}");
-                return ExitCode::from(2);
+                return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
         },
         ..Default::default()
@@ -1781,7 +2150,10 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             "sweep: routed moves with --no-journal are refused. A mapped move must stay\n\
              reversible; drop --no-journal."
         );
-        return ExitCode::from(2);
+        return refusal(
+            etude_cli_support::reason::Code::UnsafeInput,
+            Some(etude_cli_support::reason::Subject::wait("input", None)),
+        );
     }
     let mut p = if scheme.name == "existing" {
         plan::build_existing(&outcome, &scheme.maps)
@@ -1837,12 +2209,18 @@ fn cmd_apply(args: &[String]) -> ExitCode {
                     etude_core::apply::record_refused_plan(&p, &context, seal)
             {
                 eprintln!("sweep: cannot record refused attempt ({journal_error})");
-                return ExitCode::from(3);
+                return failure(
+                    etude_cli_support::reason::Code::OperationIncomplete,
+                    Some(etude_cli_support::reason::Subject::wait("journal", None)),
+                );
             }
             eprintln!(
                 "sweep: conflict: {error}; no moves from this attempt; existing journals remain recoverable; replan required"
             );
-            return ExitCode::from(2);
+            return refusal(
+                etude_cli_support::reason::Code::PlanStale,
+                Some(etude_cli_support::reason::Subject::wait("plan", None)),
+            );
         }
     };
     run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
@@ -1907,18 +2285,24 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         Ok(p) => p,
         Err(msg) => {
             eprintln!("sweep: {msg}");
-            return ExitCode::from(2);
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
         }
     };
     if let Some(path) = named {
         let Ok(target) = path.canonicalize() else {
             eprintln!("sweep: no folder at {}", path.display());
-            return ExitCode::from(3);
+            return failure(
+                etude_cli_support::reason::Code::MissingInput,
+                Some(etude_cli_support::reason::Subject::wait("input", None)),
+            );
         };
         return match sweep_journal_for_root(&sl, &target) {
             Err(e) => {
                 refuse("could not select an undo journal; no files were moved", &e);
-                ExitCode::from(3)
+                failure(
+                    etude_cli_support::reason::Code::JournalUnreadable,
+                    Some(etude_cli_support::reason::Subject::wait("journal", None)),
+                )
             }
             Ok(Some(mut j)) => finish_undo(&mut j, &sl),
             Ok(None) => {
@@ -1942,7 +2326,10 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         Ok(None) => {}
         Err(e) => {
             refuse("could not select an undo journal; no files were moved", &e);
-            return ExitCode::from(3);
+            return failure(
+                etude_cli_support::reason::Code::JournalUnreadable,
+                Some(etude_cli_support::reason::Subject::wait("journal", None)),
+            );
         }
     }
     let mut j = match etude_core::Journal::latest_sealed("sweep", &sl) {
@@ -1955,10 +2342,16 @@ fn cmd_undo(args: &[String]) -> ExitCode {
             // operation named.
             if matches!(e, etude_core::journal::JournalError::NotFound) {
                 eprintln!("sweep: {e}");
+                etude_cli_support::envelope::reason(
+                    etude_cli_support::reason::Reason::nothing_to_do(),
+                );
                 return ExitCode::from(1);
             }
             refuse("could not open the most recent journal", &e);
-            return ExitCode::from(3);
+            return failure(
+                etude_cli_support::reason::Code::JournalUnreadable,
+                Some(etude_cli_support::reason::Subject::wait("journal", None)),
+            );
         }
     };
     if journal_is_fully_undone(&j) {
@@ -1985,6 +2378,7 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     // "Restored N files" is a floor rather than the whole story. Recovering
     // quietly from damaged state would be its own version of the bug this
     // reporting exists to prevent.
+    etude_cli_support::envelope::recovery_operation(&j.id);
     let tail_was_torn = j.progress_tail_damaged;
     if tail_was_torn {
         println!(
@@ -2009,7 +2403,10 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
              The files are still at their destinations. Nothing is lost.",
             n = r.unrecorded_moves
         );
-        return ExitCode::from(3);
+        return failure(
+            etude_cli_support::reason::Code::OperationIncomplete,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        );
     }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
@@ -2077,6 +2474,9 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     let saved = j.save_sealed(sl);
     if let Some(err) = r.error {
         refuse_apply(&err);
+        // The journal remains the durable recovery handle even when undo
+        // stopped part-way. Keep the per-invocation id untouched.
+        let _ = apply_exit_code(&err);
         match saved {
             Ok(()) => {
                 eprintln!(
@@ -2087,11 +2487,17 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
                 "sweep: additionally, the journal could not be updated ({save_err}). It may not reflect the files just restored."
             ),
         }
-        return ExitCode::from(3);
+        return failure(
+            etude_cli_support::reason::Code::OperationIncomplete,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        );
     }
     if let Err(save_err) = saved {
         eprintln!("sweep: undo finished, but the journal could not be saved: {save_err}");
-        return ExitCode::from(3);
+        return failure(
+            etude_cli_support::reason::Code::JournalUnreadable,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        );
     }
     ExitCode::SUCCESS
 }
@@ -2169,7 +2575,7 @@ fn destroy_shared_key() -> ExitCode {
         eprintln!(
             "sweep: a supplied key is in use. Remove every retained copy yourself; forget cannot destroy it."
         );
-        return ExitCode::from(2);
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     if etude_keep::destroy_key() {
         println!("Destroyed the journal key in the keychain.");
@@ -2177,7 +2583,10 @@ fn destroy_shared_key() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         eprintln!("sweep: could not confirm the journal key was destroyed.");
-        ExitCode::from(3)
+        failure(
+            etude_cli_support::reason::Code::JournalKeyUnavailable,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        )
     }
 }
 
@@ -2186,7 +2595,7 @@ fn refuse_shared_key_destroy() -> ExitCode {
         "sweep: refusing to destroy the shared journal key while a stash\n\
          journal exists. Pass `sweep forget --yes` to destroy it anyway."
     );
-    ExitCode::from(2)
+    refusal(etude_cli_support::reason::Code::UserCancelled, None)
 }
 
 fn cmd_forget(args: &[String]) -> ExitCode {
@@ -2435,6 +2844,9 @@ mod tests {
     #[test]
     fn every_command_finds_the_path_on_either_side_of_its_flags() {
         for (cmd, flags) in COMMAND_FLAGS {
+            if *cmd == "status" {
+                continue; // --id is a lookup selector, not a path option.
+            }
             let Some((flag, takes_value)) = flags.iter().find(|(_, v)| *v) else {
                 continue; // no value-bearing flag: the ambiguity cannot arise
             };
