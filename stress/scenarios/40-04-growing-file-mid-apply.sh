@@ -2,8 +2,8 @@
 # Race: a file is still being appended to, by a process holding it open,
 # while sweep scans it, fingerprints it, and moves it.
 #
-# What must hold: the move (hard_link → unlink on the common same-device
-# path) operates on directory entries, never file content, so a concurrent
+# What must hold: the same-device move (atomic rename on macOS, or the
+# hard-link fallback) operates on directory entries, never file content, so a concurrent
 # writer's open file descriptor keeps writing to the same inode no matter
 # which name currently points at it or which directory it lives in. The file
 # must come out the other side with every byte the writer actually wrote
@@ -33,9 +33,61 @@ for i in range(n):
 PY
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+CONTROL="${1:-}"
+case "$CONTROL" in ''|--control-late|--control-ignored) ;; *) fail "unknown mid-apply control"; exit 0;; esac
+DUMP="$(dirname "$SWEEP")/journal-dump"
+if [ ! -x "$DUMP" ]; then
+  unproven "mid-apply injection" "dev-only journal watcher unavailable"
+  exit 0
+fi
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+W=$(workdir)
+PID=""
+D=""
+cleanup() {
+  if [ -n "${WRITER_PID:-}" ]; then
+    touch "${RELEASE:-$W/release-writer}"
+    wait "$WRITER_PID" 2>/dev/null || true
+  fi
+  if [ -n "$PID" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    kill -TERM "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
+  rm -rf "$W"
+  eval "$_stress_state_cleanup"
+}
+trap cleanup EXIT
+
+# Each control runs the complete witness with its own assertion channel.
+# Late apply must report an unproven injection; the unsafe-outcome control
+# must make the unchanged assertions reject its simulated faulty result.
+run_controls() {
+  local control result output
+  for control in late ignored; do
+    output="$W/control-$control.out"
+    env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+      -u STRESS_FAILURE_ARTIFACTS /bin/bash "${BASH_SOURCE[0]}" "--control-$control" \
+      >"$output" 2>&1 198<&- 199>&-
+    result=$?
+    if [ "$control" = late ]; then
+      if [ "$result" -eq 2 ] && ! grep -q "FAIL" "$output" && ! grep -q "injection proven" "$output" && grep -q 'unproven.*injection' "$output"; then
+        pass "late injection control is unproven, never a pass or a product failure"
+      else
+        fail "late injection control wanted unproven exit 2, got $result: $(cat "$output")"
+      fi
+    elif [ "$result" -eq 1 ] && grep -q 'confirmed stopped' "$output" && grep -q 'FAIL' "$output"; then
+      pass "paused unsafe-outcome control fails retained assertions after a proven injection"
+    else
+      fail "paused unsafe-outcome control did not reject the fault (exit $result): $(cat "$output")"
+    fi
+  done
+}
+
 D="$W/Desktop"
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export ETUDE_STATE_DIR="$W/state"
+mkdir -p "$ETUDE_STATE_DIR"
 build_filler "$D"
 
 TARGET="$D/batch_growing.csv"
@@ -43,25 +95,30 @@ TARGET="$D/batch_growing.csv"
 RESULT="$W/writer-result.txt"
 READY="$W/writer-ready"
 RELEASE="$W/release-writer"
+START="$W/start-writer"
+APPENDED="$W/writer-appended"
 
-# Appends a deterministic, verifiable byte stream to $TARGET for a fixed wall
-#-clock duration, independent of how long sweep takes. It is writing before
-# sweep starts, during the scan, during fingerprinting, and during (or
-# around) the move, whichever the OS scheduler lands it on.
-python3 - "$TARGET" "$RESULT" "$READY" "$RELEASE" <<'PY' &
+# Hold an acknowledged open descriptor without writing until the journal
+# watcher proves apply is stopped and this source remains pending. Then append
+# while stopped and keep writing across the resumed move; the deadline bounds
+# a broken witness rather than deciding when injection happened.
+python3 - "$TARGET" "$RESULT" "$READY" "$RELEASE" "$START" "$APPENDED" <<'PY' &
 import sys, time, hashlib
-path, result_path, ready_path, release_path = sys.argv[1:]
+path, result_path, ready_path, release_path, start_path, appended_path = sys.argv[1:]
 deadline = time.monotonic() + 30.0
 f = open(path, "ab", buffering=0)
 h = hashlib.sha256()
 total = 0
 i = 0
 open(ready_path, "w").write("open\n")
+while not __import__("os").path.exists(start_path) and not __import__("os").path.exists(release_path) and time.monotonic() < deadline:
+    time.sleep(0.003)
 while not __import__("os").path.exists(release_path) and time.monotonic() < deadline:
     chunk = (f"CHUNK-{i:08d}-".encode() * 64)[:1024]
     f.write(chunk)
     h.update(chunk)
     total += len(chunk)
+    open(appended_path, "w").write("appended\n")
     i += 1
     time.sleep(0.003)
 f.close()
@@ -74,8 +131,34 @@ WRITER_PID=$!
 # pass before the child even opens the file on a loaded runner.
 for _ in $(seq 1 200); do [ -f "$READY" ] && break; sleep 0.01; done
 [ -f "$READY" ] || { fail "growing file writer never acknowledged its open descriptor"; exit 0; }
-"$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err"
+"$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err" &
+PID=$!
+if [ "$CONTROL" = --control-late ]; then wait "$PID" 2>/dev/null || true; fi
+if ! WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$D" "$TARGET" "$PID" 2>"$W/watch.err"); then
+  kill -CONT "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null || true
+  PID=""
+  unproven "growing file injection" "no confirmed stopped apply with pending writer target: $(cat "$W/watch.err")"
+  exit 0
+fi
+read -r JOURNAL_MOVED JOURNAL_TOTAL PENDING_INDEX <<< "$WITNESS"
+STOPPED=$(ps -o state= -p "$PID" 2>/dev/null)
+if [[ "$STOPPED" != *T* ]] || [ ! -f "$TARGET" ] || [ -e "$D/Data/batch_growing.csv" ]; then
+  unproven "growing file injection" "target no longer pending while stopped"
+  exit 0
+fi
+touch "$START"
+for _ in $(seq 1 200); do [ -f "$APPENDED" ] && break; sleep 0.01; done
+STOPPED=$(ps -o state= -p "$PID" 2>/dev/null)
+if [ ! -f "$APPENDED" ] || ! kill -0 "$WRITER_PID" 2>/dev/null || [[ "$STOPPED" != *T* ]] || [ ! -s "$TARGET" ] || [ -e "$D/Data/batch_growing.csv" ]; then
+  unproven "growing file injection" "writer did not append while apply was stopped"
+  exit 0
+fi
+pass "growing file injection proven: writer appended to pending source while apply was confirmed stopped ($JOURNAL_MOVED/$JOURNAL_TOTAL journalled moves)"
+kill -CONT "$PID" || { fail "could not resume proven writer injection"; exit 0; }
+wait "$PID"
 APPLY_CODE=$?
+PID=""
 
 FOUND="$(find "$D" -name "batch_growing.csv" 2>/dev/null | head -1)"
 if [ "$APPLY_CODE" = 0 ] && [ "$FOUND" != "$TARGET" ] && kill -0 "$WRITER_PID" 2>/dev/null; then
@@ -85,6 +168,8 @@ else
 fi
 touch "$RELEASE"
 wait "$WRITER_PID"
+WRITER_PID=""
+if [ "$CONTROL" = --control-ignored ] && [ -n "$FOUND" ]; then : > "$FOUND"; fi
 
 if [ ! -f "$RESULT" ]; then
   unproven "growing file survives a concurrent move" "the writer never finished. Could not establish an expected byte count"
@@ -116,3 +201,6 @@ if [ "$FOUND" = "$TARGET" ]; then
 else
   pass "the growing file was moved to $FOUND while $((EXPECT_SIZE)) bytes were being written"
 fi
+
+[ -n "$CONTROL" ] || run_controls
+true

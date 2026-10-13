@@ -8,23 +8,10 @@
 # delete it. It must not write anything outside the root it was given.
 #
 # This scenario proves the property for the path every real sweep run takes:
-# source and destination on the same device, so move_one uses hard_link (with
-# an explicit is_file() guard against exactly this) and, when that's not
-# available, rename(2), neither of which dereferences a symlink source.
-#
-# A sibling condition exists. A *cross-device* move (source and destination
-# on different filesystems, e.g. an external volume mounted inside the
-# scanned folder) falls back to a different code path, `fs::copy`, which
-# Rust's stdlib documents as following symlinks. That was reproduced by hand
-# during authoring (a mounted ram disk as the source device, a source file
-# swapped for a symlink to an outside secret, timed into the same window this
-# scenario exercises): the destination ended up holding the outside file's
-# exact bytes, and `apply` reported ordinary success. It is not automated
-# here. Every attempt to mount and then cleanly detach a scratch volume on
-# this host left it wedged ("Resource busy") for minutes at a time even after
-# killing sweep and the mount's own helper process, which is not a
-# side effect a shared test suite should risk leaving behind. See the
-# session report for the exact repro commands.
+# source and destination on the same device. macOS uses an exclusive atomic
+# rename; filesystems without that operation use the hard-link fallback for
+# regular files and rename for a symlink. None dereferences the source link.
+# Cross-device copies use a separate path and are not assessed by this probe.
 #
 # Nothing here is real data. Every tree is generated and removed on exit.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
@@ -49,8 +36,6 @@ for i in range(n):
 PY
 }
 
-now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
-
 pick_target() {
   "$SWEEP" "$1" --json 2>/dev/null | python3 -c '
 import json, sys
@@ -64,7 +49,56 @@ print(g["name"])
 '
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+CONTROL="${1:-}"
+case "$CONTROL" in ''|--control-late|--control-ignored) ;; *) fail "unknown mid-apply control"; exit 0;; esac
+DUMP="$(dirname "$SWEEP")/journal-dump"
+if [ ! -x "$DUMP" ]; then
+  unproven "mid-apply injection" "dev-only journal watcher unavailable"
+  exit 0
+fi
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+W=$(workdir)
+PID=""
+D=""
+cleanup() {
+  if [ -n "${WRITER_PID:-}" ]; then
+    touch "${RELEASE:-$W/release-writer}"
+    wait "$WRITER_PID" 2>/dev/null || true
+  fi
+  if [ -n "$PID" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    kill -TERM "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
+  rm -rf "$W"
+  eval "$_stress_state_cleanup"
+}
+trap cleanup EXIT
+
+# Each control runs the complete witness with its own assertion channel.
+# Late apply must report an unproven injection; the unsafe-outcome control
+# must make the unchanged assertions reject its simulated faulty result.
+run_controls() {
+  local control result output
+  for control in late ignored; do
+    output="$W/control-$control.out"
+    env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+      -u STRESS_FAILURE_ARTIFACTS /bin/bash "${BASH_SOURCE[0]}" "--control-$control" \
+      >"$output" 2>&1 198<&- 199>&-
+    result=$?
+    if [ "$control" = late ]; then
+      if [ "$result" -eq 2 ] && ! grep -q "FAIL" "$output" && ! grep -q "injection proven" "$output" && grep -q 'unproven.*injection' "$output"; then
+        pass "late injection control is unproven, never a pass or a product failure"
+      else
+        fail "late injection control wanted unproven exit 2, got $result: $(cat "$output")"
+      fi
+    elif [ "$result" -eq 1 ] && grep -q 'confirmed stopped' "$output" && grep -q 'FAIL' "$output"; then
+      pass "paused unsafe-outcome control fails retained assertions after a proven injection"
+    else
+      fail "paused unsafe-outcome control did not reject the fault (exit $result): $(cat "$output")"
+    fi
+  done
+}
 
 OUTSIDE="$W/outside"
 mkdir -p "$OUTSIDE"
@@ -72,26 +106,16 @@ SENTINEL="SAME-DEVICE-OUTSIDE-SECRET-$$-$(python3 -c 'import random;print(random
 printf '%s' "$SENTINEL" > "$OUTSIDE/secret.txt"
 SOURCE_SENTINEL="SAME-DEVICE-INSIDE-SOURCE-$$-$(python3 -c 'import random;print(random.randint(100000,999999))')"
 
-CTRL="$W/control/Desktop"; build_tree "$CTRL"
-T0_START=$(now_ms)
-"$SWEEP" apply "$CTRL" --yes >/dev/null 2>&1
-T0_END=$(now_ms)
-T0=$((T0_END - T0_START))
-if [ "$T0" -lt 20 ]; then
-  unproven "symlink swap mid-apply (same device)" "baseline apply of $N files finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
-  exit 0
-fi
-
 INJECTED=0
 CODE=0
 TARGET=""
 GROUP=""
 D=""
-FRACTIONS=(70 45 25 12)
 
-for frac in "${FRACTIONS[@]}"; do
-  D="$W/attempt/Desktop"
-  rm -rf "$W/attempt"
+for trial in 1 2 3 4; do
+  D="$W/attempt-$trial/Desktop"
+  export ETUDE_STATE_DIR="$W/state-$trial"
+  mkdir -p "$ETUDE_STATE_DIR"
   build_tree "$D"
   PICK="$(pick_target "$D")"
   IDX="$(printf '%s\n' "$PICK" | sed -n '1p')"
@@ -105,44 +129,46 @@ for frac in "${FRACTIONS[@]}"; do
 
   "$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err" &
   PID=$!
-  DELAY_MS=$((T0 * frac / 100))
-  python3 -c "import time; time.sleep($DELAY_MS/1000)"
-  # A completed move leaves the old source path free again.  Replacing it at
-  # that point would prove nothing about the mover, and a normal destination
-  # file would be a safe (but misleading) result.  Only inject while this
-  # member is still waiting to be moved.
-  if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+  if [ "$CONTROL" = --control-late ]; then wait "$PID" 2>/dev/null || true; fi
+  if ! WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$D" "$TARGET" "$PID" 2>"$W/watch.err"); then
+    kill -CONT "$PID" 2>/dev/null || true
     wait "$PID" 2>/dev/null || true
+    PID=""
+    [ "$CONTROL" != --control-late ] || break
+    continue
+  fi
+  read -r JOURNAL_MOVED JOURNAL_TOTAL PENDING_INDEX <<< "$WITNESS"
+  STOPPED=$(ps -o state= -p "$PID" 2>/dev/null)
+  if [[ "$STOPPED" != *T* ]] || [ ! -f "$TARGET" ] || [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
     continue
   fi
   rm -f "$TARGET"
   if ln -s "$OUTSIDE/secret.txt" "$TARGET" && [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$OUTSIDE/secret.txt" ]; then
-    # Re-check after the replacement.  A regular destination containing the
-    # known original bytes proves the mover won before `ln`, leaving a new but
-    # irrelevant source link.  A destination containing outside bytes is an
-    # unsafe post-injection follow and must remain a witnessed failure.
-    if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
-      if [ "$(cat "$DEST")" = "$SOURCE_SENTINEL" ]; then
-        wait "$PID" 2>/dev/null || true
-        continue
-      fi
-    fi
     INJECTED=1
   else
+    kill -CONT "$PID" 2>/dev/null || true
     wait "$PID" 2>/dev/null || true
+    PID=""
     continue
   fi
+  pass "injection proven while apply was confirmed stopped ($JOURNAL_MOVED/$JOURNAL_TOTAL journalled moves; pending index $PENDING_INDEX)"
+  if [ "$CONTROL" = --control-ignored ]; then cat "$OUTSIDE/secret.txt" > "$D/simulated-unsafe-copy"; fi
+  kill -CONT "$PID" || { fail "could not resume proven injection"; exit 0; }
   wait "$PID"
   CODE=$?
+  PID=""
   break
 done
 
 if [ "$INJECTED" != "1" ]; then
-  unproven "symlink swap mid-apply (same device)" "could not replace the planned source with the external symlink across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms)"
+  unproven "mid-apply injection" "no confirmed stopped apply with pending target across four trials: $(cat "$W/watch.err")"
   exit 0
 fi
 
-pass "symlink swap mid-apply: replaced the planned source with a verified external link at ~${DELAY_MS}ms (group position $IDX)"
+pass "symlink swap mid-apply: replaced the planned source with a verified external link while confirmed stopped (group position $IDX)"
 
 # The witnessed swap decides whether this test ran. A regular destination with
 # the outside bytes is unsafe; a relocated link or a refusal that leaves the
@@ -171,3 +197,6 @@ if [ -e "$OUTSIDE/secret.txt" ]; then
 else
   fail "the outside file was deleted. sweep followed the link to remove it"
 fi
+
+[ -n "$CONTROL" ] || run_controls
+true

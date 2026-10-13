@@ -10,9 +10,9 @@
 #      always-reproducible form of the collision and pins down the exact
 #      behaviour.
 #   B. genuinely mid-run: a large first group (processed before the target
-#      group, by plan order) buys real wall-clock time, and the blocking file
-#      is planted while that first group is still being moved, before the
-#      second group's directory has been created.
+#      group, by plan order) provides journalled progress. The watcher stops
+#      apply and proves the second group's target is pending before the blocking
+#      file is planted, then apply resumes.
 #
 # What must hold, in both: sweep refuses cleanly (no crash, no data loss, no
 # writing into the file-that-should-have-been-a-directory), reports the
@@ -39,7 +39,57 @@ for _ in range(5):
 print(s)"
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+CONTROL="${1:-}"
+case "$CONTROL" in ''|--control-late|--control-ignored) ;; *) fail "unknown mid-apply control"; exit 0;; esac
+DUMP="$(dirname "$SWEEP")/journal-dump"
+if [ ! -x "$DUMP" ]; then
+  unproven "mid-apply injection" "dev-only journal watcher unavailable"
+  exit 0
+fi
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+W=$(workdir)
+PID=""
+D=""
+cleanup() {
+  if [ -n "${WRITER_PID:-}" ]; then
+    touch "${RELEASE:-$W/release-writer}"
+    wait "$WRITER_PID" 2>/dev/null || true
+  fi
+  if [ -n "$PID" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    kill -TERM "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
+  rm -rf "$W"
+  eval "$_stress_state_cleanup"
+}
+trap cleanup EXIT
+
+# Each control runs the complete witness with its own assertion channel.
+# Late apply must report an unproven injection; the unsafe-outcome control
+# must make the unchanged assertions reject its simulated faulty result.
+run_controls() {
+  local control result output
+  for control in late ignored; do
+    output="$W/control-$control.out"
+    env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+      -u STRESS_FAILURE_ARTIFACTS /bin/bash "${BASH_SOURCE[0]}" "--control-$control" \
+      >"$output" 2>&1 198<&- 199>&-
+    result=$?
+    if [ "$control" = late ]; then
+      if { [ "$result" -eq 2 ] || [ "$result" -eq 0 ]; } && ! grep -q "FAIL" "$output" && ! grep -q "injection proven" "$output" && grep -q 'unproven.*injection' "$output"; then
+        pass "late injection control is unproven, never a pass or a product failure"
+      else
+        fail "late injection control wanted an unproven B injection without product failure, got $result: $(cat "$output")"
+      fi
+    elif [ "$result" -eq 1 ] && grep -q 'confirmed stopped' "$output" && grep -q 'FAIL' "$output"; then
+      pass "paused unsafe-outcome control fails retained assertions after a proven injection"
+    else
+      fail "paused unsafe-outcome control did not reject the fault (exit $result): $(cat "$output")"
+    fi
+  done
+}
+
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 DA="$W/a/Desktop"; mkdir -p "$DA"
 for i in $(seq 1 8); do : > "$DA/widget_$(letters "$i").txt"; done
@@ -61,8 +111,6 @@ fi
 
 # --- Variant B: mid-run, a real first group buys the window ---------------
 
-now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
-
 build_two_groups() {  # $1 = Desktop dir
   mkdir -p "$1"
   python3 - "$1" <<'PY'
@@ -78,44 +126,54 @@ def letters(i, width=5):
 # the group that buys real wall-clock time before group 2 is even reached.
 for i in range(450):
     open(os.path.join(d, f"IMG_{i:04d}.jpg"), "w").close()
-# Group 2: a small Documents group, whose destination directory is the one
-# about to be blocked with a file. These were .txt files grouped by a shared
-# "widget" token; that rule is gone, and .txt is deliberately not in any type
-# family -- a generic container many apps use privately, which sweep leaves
-# alone. .txt is a Document, which is what these are.
+# Group 2: a small Documents group whose destination is blocked while apply
+# is confirmed stopped. Text files belong to the Documents type family.
 for i in range(8):
     open(os.path.join(d, f"widget_{letters(i)}.txt"), "w").close()
 PY
 }
 
-DB_CTRL="$W/b-control/Desktop"; build_two_groups "$DB_CTRL"
-T0_START=$(now_ms)
-"$SWEEP" apply "$DB_CTRL" --yes >/dev/null 2>&1
-T0_END=$(now_ms)
-T0=$((T0_END - T0_START))
-
-if [ "$T0" -lt 30 ]; then
-  unproven "[B] destination blocked mid-run by a same-named file" "baseline apply finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
-else
-  DB="$W/b/Desktop"; build_two_groups "$DB"
+INJECTED=0
+for trial in 1 2 3 4; do
+  DB="$W/b-$trial/Desktop"; build_two_groups "$DB"
+  D="$DB"
+  export ETUDE_STATE_DIR="$W/state-$trial"
+  mkdir -p "$ETUDE_STATE_DIR"
+  TARGET=$("$SWEEP" "$DB" --json 2>/dev/null | python3 -c 'import json,sys; g=next(g for g in json.load(sys.stdin)["details"]["groups"] if g["name"]=="Documents"); print(g["members"][-1])')
+  DEST="$DB/Documents/$(basename "$TARGET")"
   BEFORE_B=$(find "$DB" -type f | wc -l | tr -d ' ')
-
   "$SWEEP" apply "$DB" --yes >"$W/b.out" 2>"$W/b.err" &
   PID=$!
-  DELAY_MS=$((T0 * 50 / 100))
-  python3 -c "import time; time.sleep($DELAY_MS/1000)"
-  BLOCKER_B="RACE-BLOCKER-$$"
-  # Exclusive creation proves the intruder won the destination name without
-  # overwriting a directory or product result after it had already won.
-  if ! (set -C; printf '%s' "$BLOCKER_B" > "$DB/Documents") 2>/dev/null; then
+  if [ "$CONTROL" = --control-late ]; then wait "$PID" 2>/dev/null || true; fi
+  if ! WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$D" "$TARGET" "$PID" 2>"$W/watch.err"); then
+    kill -CONT "$PID" 2>/dev/null || true
     wait "$PID" 2>/dev/null || true
-    unproven "[B] destination blocked mid-run by a same-named file" "could not exclusively create the blocker before sweep created Documents (baseline ${T0}ms)"
-    exit 0
+    PID=""
+    [ "$CONTROL" != --control-late ] || break
+    continue
   fi
+  read -r JOURNAL_MOVED JOURNAL_TOTAL PENDING_INDEX <<< "$WITNESS"
+  STOPPED=$(ps -o state= -p "$PID" 2>/dev/null)
+  if [[ "$STOPPED" != *T* ]] || [ ! -f "$TARGET" ] || [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    continue
+  fi
+  BLOCKER_B="RACE-BLOCKER-$$"
+  if ! (set -C; printf '%s' "$BLOCKER_B" > "$DB/Documents") 2>/dev/null; then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    continue
+  fi
+  INJECTED=1
+  pass "[B] injection proven: exclusively created blocker while apply was confirmed stopped with pending Documents entry ($JOURNAL_MOVED/$JOURNAL_TOTAL journalled moves)"
+  if [ "$CONTROL" = --control-ignored ]; then rm "$DB/Documents"; fi
+  kill -CONT "$PID" || { fail "could not resume proven blocker injection"; exit 0; }
   wait "$PID"
   CODE_B=$?
-
-  pass "[B] exclusively created the blocker at ~${DELAY_MS}ms before Documents existed"
+  PID=""
   assert_eq 1 "$([ "$CODE_B" != "0" ] && echo 1 || echo 0)" "[B] apply refused rather than succeeding over the blocked destination (exit $CODE_B)"
   assert_eq "$BLOCKER_B" "$(cat "$DB/Documents" 2>/dev/null)" "[B] the mid-run blocking file's content is untouched"
 
@@ -124,4 +182,11 @@ else
   # +1 for the blocker file itself, which we planted and which is expected
   # to still be there. It is not something the tool lost.
   assert_eq "$((BEFORE_B + 1))" "$(find "$DB" -type f | wc -l | tr -d ' ')" "[B] no file was lost anywhere in the tree. The earlier group's real moves stand, nothing else vanished"
+  break
+done
+if [ "$INJECTED" != 1 ]; then
+  unproven "[B] destination injection" "no confirmed stopped apply with pending Documents target across four trials: $(cat "$W/watch.err")"
+  exit 0
 fi
+[ -n "$CONTROL" ] || run_controls
+true
