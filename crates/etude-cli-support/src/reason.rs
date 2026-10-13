@@ -204,7 +204,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["unpack:extract"],
+        operations: &["sweep:scan", "unpack:extract"],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {

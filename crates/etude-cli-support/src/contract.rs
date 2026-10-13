@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 2,
+                Tool::Sweep => SCHEMA_VERSION + 3,
                 Tool::Stash => 8,
                 Tool::Unpack => SCHEMA_VERSION + 1,
             }),

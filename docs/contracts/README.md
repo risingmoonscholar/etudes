@@ -106,7 +106,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v6/sweep.json`, `v7/stash.json` and `v5/unpack.json`);
+contract envelopes (`v7/sweep.json`, `v8/stash.json` and `v5/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -186,6 +186,11 @@ profile destination is named and refused so built-in grouping cannot silently
 route its files elsewhere. The plan reports files already directly inside a
 profile destination as in place; deeper files can still be promoted when the
 selected scan depth includes them.
+
+Sweep capability declaration version 7 adds `download_in_flight` to the refusal
+catalog for a scan whose root is still being downloaded. The result is retryable
+later and names the in-flight download as its subject. Earlier versioned
+declarations remain unchanged.
 
 Stash's capability version 3 and sweep's preceding version 3 declare explicit
 plan exports and replay. The result envelope remains version 2; the separate

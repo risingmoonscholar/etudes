@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 6,
+    "schema_version": 7,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -207,6 +207,15 @@
           "apply"
         ],
         "why": "The files are within the configured grace window and may be judged later."
+      },
+      {
+        "code": "download_in_flight",
+        "retry": "later",
+        "subject_kind": "download_in_flight",
+        "operations": [
+          "scan"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
       },
       {
         "code": "journal_unreadable",
