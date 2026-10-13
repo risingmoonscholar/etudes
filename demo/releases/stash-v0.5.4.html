@@ -23,7 +23,7 @@
       <div class="release-copy">
         <ul>
           <li>Journalled stashes return an opaque <code>details.stash_id</code>. Restore the chosen batch with <code>stash pop --id ID</code>; the envelope's <code>operation_id</code> identifies only the invocation.</li>
-          <li>Receipts expose no holding path. Selection still includes <code>holding_root: "&lt;redacted&gt;"</code>; use the stash id, not that field, for recovery.</li>
+          <li>A selection receipt shows no holding path: <code>holding_root</code> reads <code>"&lt;redacted&gt;"</code>. Use the stash id, not that field, for recovery.</li>
           <li><code>stash inspect --id ID</code> lists opaque item ids; <code>stash pop --id ID --item ITEM</code> restores one item and records progress for later restoration.</li>
           <li>Folder pop requires one live matching batch and authenticates all stash journals first. An unreadable older completed or live journal, even from another folder, blocks a newer folder restore with exit 3 and an unreadable-journal/cannot-restore diagnostic. Files and journal bytes remain unchanged. Exact <code>--id</code> restoration uses only the chosen journal and its original key.</li>
           <li>Keep different journal keys in separate <code>ETUDE_STATE_DIR</code> stores. Deadlines remain informational until you explicitly request pop.</li>
@@ -39,7 +39,7 @@
       <h2 id="demo-title">The demo</h2>
       <figure>
         <img src="../gifs/stash-custody.gif" alt="A light terminal demo stashes a synthetic folder, reports progress, then restores the visible items while leaving one hidden item in place." width="860" height="294">
-        <figcaption>Earlier 0.5.3 recording. A synthetic folder: stash, then pop it back. The hidden item stays in place. The terminal recording is shown in its original light theme.</figcaption>
+        <figcaption>A synthetic folder: stash, then pop it back. The hidden item stays in place. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 

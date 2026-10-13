@@ -23,8 +23,11 @@
       <div class="release-copy">
         <p>Route eligible files into existing folders with a reviewable profile.</p>
         <ul>
-          <li><code>--scheme existing</code> reads a versioned profile and uses only folders already present in the selected directory. Missing or ambiguous routes stay put, and safety refusals still win.</li>
+          <li><code>--scheme existing</code> reads a versioned profile and uses only folders already present in the selected directory. If a route's folder is missing, sweep refuses and names it; it does not send those files to a folder you did not name. Duplicate or malformed routes refuse before anything moves, and safety refusals still win.</li>
+          <li>A file already inside its route's folder is reported as in place and is not proposed again.</li>
           <li>Exported plans bind the reviewed filesystem observations. Changed observations or an existing-folder profile change require replanning before apply.</li>
+          <li>The scan says that applying reads the first and last 4 KiB of each file it moves, so undo can tell if a file changed. With <code>--no-journal</code> sweep reads no file bytes.</li>
+          <li>Undo leaves in place a folder that sweep did not create. Before each move, sweep checks that the destination folder is still the one it planned for and stops if it was replaced.</li>
           <li>Opt in to versioned progress records on stderr with <code>--progress-json</code>; <code>--json</code> stdout remains one result envelope. No speed improvement is claimed.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
@@ -38,7 +41,7 @@
       <h2 id="demo-title">The demo</h2>
       <figure>
         <img src="../gifs/sweep-progress.gif" alt="A light terminal demo applies sweep to a synthetic 9,999-item folder, shows progress, then undoes the changes while leaving personal records untouched." width="860" height="294">
-        <figcaption>Earlier 0.5.3 recording. A synthetic large folder: apply, bounded progress, then undo. The terminal recording is shown in its original light theme.</figcaption>
+        <figcaption>A synthetic large folder: apply, bounded progress, then undo. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 
