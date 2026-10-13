@@ -35,6 +35,15 @@ reviewers were pointed at the tools before anyone else could be.
   separate `ETUDE_STATE_DIR` directories.
 - **sweep and stash:** exported plans bind the reviewed filesystem observations;
   stale plans refuse and require replanning.
+- **unpack:** refuses to replace a destination folder created while extraction
+  is running, even when that folder is empty. On volumes without a no-replace
+  rename, it claims the destination before publication; the destination is
+  visible and empty for an instant. If another process adds files there,
+  publication refuses, preserves those files and reports the retained folder.
+- **sweep and stash:** every apply checks that destinations stay inside the plan's
+  root, including hand-built plans. Invalid folder names and destination folders
+  that resolve outside the root are refused. Explicit stash selections can still
+  gather files from several parent folders into holding folders inside the root.
 - **unpack:** preserves the source archive's quarantine attribute on the final
   tree and verifies exact readback before publication; preservation failure refuses.
 - **unpack:** refuses invalid arguments before it reads the archive or creates
