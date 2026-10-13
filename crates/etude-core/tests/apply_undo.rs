@@ -1900,3 +1900,67 @@ fn files_sharing_a_word_are_split_by_what_they_are() {
 
     cleanup(&root);
 }
+
+#[test]
+fn unbound_apply_refuses_destinations_outside_its_root_before_moving() {
+    let _guard = lock();
+    let base =
+        std::env::temp_dir().join(format!("etude_destination_bounds_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let root = base.join("root");
+    let outside = base.join("outside");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir(&outside).unwrap();
+    let source = root.join("file.txt");
+    fs::write(&source, b"original").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, root.join("alias")).unwrap();
+    let out = scan::scan(&root, &ScanConfig::default()).unwrap();
+    let mut names = vec![
+        "../escaped".to_string(),
+        "nested/../escaped".into(),
+        outside.to_string_lossy().into_owned(),
+        "".into(),
+        "nested//child".into(),
+        "nested/".into(),
+    ];
+    #[cfg(unix)]
+    names.push("alias/child".into());
+    for name in names {
+        let p = Plan::with_groups(
+            &out,
+            vec![plan::Group {
+                name: name.clone(),
+                signal: plan::Signal::Collected { count: 1 },
+                members: vec![source.clone()],
+                accepted: true,
+            }],
+        );
+        let result = apply::apply_with_structured_progress(&p, "test", None, None, |_| {});
+        let error = result.expect_err("unsafe destination must be refused");
+        assert!(
+            matches!(error, ApplyError::StalePlan(_)),
+            "wrong refusal for {name:?}: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("destination must stay inside the plan root")
+        );
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"original",
+            "source moved for {name:?}"
+        );
+        assert!(
+            !base.join("escaped").exists(),
+            "created escaping destination"
+        );
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "changed outside root"
+        );
+    }
+    fs::remove_dir_all(base).unwrap();
+}
