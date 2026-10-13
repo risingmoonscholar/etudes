@@ -262,6 +262,21 @@ fn apply_plan_with_structured_progress(
     };
     let result = (|| {
         validate()?;
+        // Every entrypoint, including unbound selection plans, shares this
+        // destination rule. Sources intentionally may come from other roots.
+        let resolved_root = fs::canonicalize(&plan.root).map_err(ApplyError::Io)?;
+        for group in plan.groups.iter().filter(|group| group.accepted) {
+            let destination = plan.root.join(&group.name);
+            if Path::new(&group.name).is_absolute()
+                || group
+                    .name
+                    .split('/')
+                    .any(|part| part.is_empty() || part == "..")
+            {
+                return Err(destination_outside_root());
+            }
+            ensure_destination_under_root(&destination, &resolved_root)?;
+        }
         let id = journal_id(plan);
         let mut j = Journal {
             id: id.clone(),
@@ -366,6 +381,14 @@ fn apply_plan_with_structured_progress(
             let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
             if let Some(parent) = to.parent() {
                 let observed_identity = plan.observed_directory_identity(parent);
+                // Keep the existing named refusal for an observed folder
+                // replaced since planning, before checking its resolution.
+                if observed_identity.is_some_and(|identity| !directory_matches(parent, identity)) {
+                    return Err(ApplyError::DestinationDirectoryChanged(
+                        parent.to_path_buf(),
+                    ));
+                }
+                ensure_destination_under_root(parent, &resolved_root)?;
                 let existed_at_scan =
                     existing_destinations.contains(parent) || observed_identity.is_some();
                 if !existed_at_scan && !created_directories.contains_key(parent) {
@@ -378,6 +401,9 @@ fn apply_plan_with_structured_progress(
                         parent.to_path_buf(),
                     ));
                 }
+            }
+            if let Some(parent) = to.parent() {
+                ensure_destination_under_root(parent, &resolved_root)?;
             }
             let method = move_one(&from, &to).map_err(ApplyError::Io)?;
             j.entries[i].method = method;
@@ -407,6 +433,40 @@ fn apply_plan_with_structured_progress(
     };
     progress(event);
     result
+}
+
+fn destination_outside_root() -> ApplyError {
+    ApplyError::StalePlan(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "destination must stay inside the plan root; choose a relative group without parent or empty components",
+    ))
+}
+
+// Resolve the closest existing ancestor before creating any missing folders.
+// canonicalize follows symlinks in intermediate components; starts_with compares
+// path components, so a sibling with the root's textual prefix is not accepted.
+fn ensure_destination_under_root(destination: &Path, root: &Path) -> Result<(), ApplyError> {
+    let mut ancestor = destination;
+    loop {
+        match fs::canonicalize(ancestor) {
+            Ok(resolved) => {
+                return if resolved.starts_with(root) {
+                    Ok(())
+                } else {
+                    Err(destination_outside_root())
+                };
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // A dangling symlink is an existing object, not a missing
+                // folder we can safely place beneath a validated ancestor.
+                if fs::symlink_metadata(ancestor).is_ok() {
+                    return Err(destination_outside_root());
+                }
+                ancestor = ancestor.parent().ok_or_else(destination_outside_root)?;
+            }
+            Err(error) => return Err(ApplyError::Io(error)),
+        }
+    }
 }
 
 fn create_destination_dirs(
