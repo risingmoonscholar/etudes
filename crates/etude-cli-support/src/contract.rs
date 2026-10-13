@@ -77,6 +77,10 @@ pub fn command(
 ) -> ExitCode {
     if args.len() > 2 || args.get(1).is_some_and(|arg| arg != "--json") {
         eprintln!("contract accepts only --json");
+        crate::envelope::reason(crate::reason::Reason::refusal(
+            crate::reason::Code::InvalidArguments,
+            None,
+        ));
         return ExitCode::from(2);
     }
     crate::envelope::print(declaration(tool, version, text_exts, text_max_bytes));
@@ -138,7 +142,7 @@ pub fn declaration(
             "schema_version",
             j::num(match tool {
                 Tool::Sweep => SCHEMA_VERSION + 2,
-                Tool::Stash => 7,
+                Tool::Stash => 8,
                 Tool::Unpack => SCHEMA_VERSION + 1,
             }),
         ),

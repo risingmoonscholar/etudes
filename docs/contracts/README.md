@@ -229,7 +229,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 7 in `v7/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 8 in `v8/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
@@ -250,3 +250,8 @@ older batch is completed or live, including one from another folder. Exit 3 name
 the unreadable journal and says it cannot restore; files and journal bytes remain
 unchanged. Exact `stash pop --id ID` loads only that selected journal with its
 original key. Keep different key histories in separate `ETUDE_STATE_DIR` stores.
+
+Stash declaration version 8 adds `not_due_yet` to the refusal catalog for an
+explicit `pop --if-due` whose journal deadline is still ahead. It is retryable
+later with the same request and identifies the journal as its subject. Earlier
+versioned declarations remain unchanged.

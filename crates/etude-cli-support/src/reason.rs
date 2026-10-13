@@ -513,6 +513,11 @@ mod tests {
             reason.json(),
             r#"{"code":"folder_busy","retry":"later","subject":{"kind":"other_operation","path":"/Desktop"}}"#
         );
+        let not_due = Reason::refusal(Code::NotDueYet, Some(Subject::wait("journal", None)));
+        assert_eq!(
+            not_due.json(),
+            r#"{"code":"not_due_yet","retry":"later","subject":{"kind":"journal"}}"#
+        );
     }
 
     #[test]

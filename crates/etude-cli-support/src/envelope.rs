@@ -197,8 +197,10 @@ pub fn finish(code: ExitCode) {
         };
         let claim = |name: &str, verdict: &str| j::obj(&[("claim", j::str(name)), ("status", j::str(verdict))]);
         let reason = resolved_reason(code, state.reason.clone())
-            .expect("refusal and error results must have a classified reason")
-            .json();
+            .ok()
+            .as_ref()
+            .map(crate::reason::Reason::json)
+            .unwrap_or_else(|| "null".into());
         std::println!("{}", j::obj(&[
             ("schema_version", j::num(SCHEMA_VERSION)),
             ("tool_version", j::str(&state.version)),
