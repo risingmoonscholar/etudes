@@ -22,7 +22,13 @@ require hdiutil "cross-volume scenario needs a real disk image" || exit 0
 
 IMG=""
 INNER=""
+LIVE_PID=""
 cleanup() {
+  if [ -n "$LIVE_PID" ] && kill -0 "$LIVE_PID" 2>/dev/null; then
+    kill -CONT "$LIVE_PID" 2>/dev/null || true
+    kill -9 "$LIVE_PID" 2>/dev/null || true
+    wait "$LIVE_PID" 2>/dev/null || true
+  fi
   detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
 }
@@ -119,55 +125,215 @@ else
   exit 0
 fi
 
-# Escalate only until this host actually exposes an incomplete destination.
-# A completed attempt is undone before the next size, so every repetition
-# starts from the same source path. This replaces a fixed 1.5 GiB allocation
-# that was often far larger than the copy window needed for the observation.
+# The same predicate is used by the real post-kill assertion and the negative
+# control below, so the control exercises the scenario's actual oracle.
+source_matches_snapshot() {
+  local path=$1 expected_size=$2 expected_hash=$3 actual_size actual_hash
+  [ -f "$path" ] || return 1
+  actual_size=$(stat -f "%z" "$path" 2>/dev/null) || return 1
+  [ "$actual_size" = "$expected_size" ] || return 1
+  actual_hash=$(shasum -a 256 "$path" 2>/dev/null | awk '{print $1}') || return 1
+  [ "$actual_hash" = "$expected_hash" ]
+}
+
+# Wait for a nonempty, short destination, then freeze the exact apply process.
+# Return 0 only after the OS reports a stopped state; callers still recheck
+# source and destination while it cannot make progress.
+pause_on_partial_copy() {
+  local pid=$1 source=$2 dest=$3 source_size=$4 partial_size state
+  PAUSE_CONFIRMED=0
+  PAUSE_STATE=""
+  for _ in $(seq 1 300); do
+    kill -0 "$pid" 2>/dev/null || break
+    if [ -f "$dest" ]; then
+      partial_size=$(stat -f "%z" "$dest" 2>/dev/null || echo 0)
+      if [ "$partial_size" -gt 0 ] && [ "$partial_size" -lt "$source_size" ]; then
+        if ! kill -STOP "$pid" 2>/dev/null; then break; fi
+        for _ in $(seq 1 100); do
+          state=$(ps -p "$pid" -o state= 2>/dev/null | tr -d '[:space:]')
+          case "$state" in T*) PAUSE_CONFIRMED=1; PAUSE_STATE=$state; break ;; esac
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.001
+        done
+        [ "$PAUSE_CONFIRMED" = 1 ] && return 0
+        kill -CONT "$pid" 2>/dev/null || true
+        break
+      fi
+    fi
+    sleep 0.001
+  done
+  return 1
+}
+
+# A completed move is a missed window, not a lost source. Resume/wait for it,
+# preserve the completed-probe undo assertion, report this attempt unproven,
+# and leave the fixture byte-identical for escalation.
+restore_missed_copy() {
+  local pid=$1 state_dir=$2 expected_size=$3 expected_hash=$4 apply_log=$5 payload_mib=$6 miss_reason=$7 dest_size state wait_status
+  state=$(ps -p "$pid" -o state= 2>/dev/null | tr -d '[:space:]')
+  case "$state" in T*) kill -CONT "$pid" 2>/dev/null || true ;; esac
+  wait_status=0
+  wait "$pid" 2>/dev/null || wait_status=$?
+  LIVE_PID=""
+  dest_size=0
+  [ -f "$DEST_PARTIAL" ] && dest_size=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
+  if [ "$wait_status" != 0 ]; then
+    fail "cross-volume: apply exited $wait_status before a confirmed partial-copy kill; output: $(tail -n 12 "$apply_log" 2>/dev/null | tr '\n' ' ')"
+    return 1
+  fi
+  if ! source_matches_snapshot "$INTERRUPT" "$expected_size" "$expected_hash" && [ "$dest_size" = "$expected_size" ]; then
+    ETUDE_STATE_DIR="$state_dir" assert_exit 0 "cross-volume: completed ${payload_mib}MiB probe undoes before escalation" -- "$SWEEP" undo
+    if source_matches_snapshot "$INTERRUPT" "$expected_size" "$expected_hash"; then
+      rm -rf "$OUTER/Documents"
+      unproven "cross-volume: SIGKILL during the ${payload_mib}MiB copy was not witnessed" "$miss_reason"
+      return 0
+    fi
+  fi
+  fail "cross-volume: apply exited 0 without a completed move after the pause window (source size=$(stat -f '%z' "$INTERRUPT" 2>/dev/null || echo MISSING), destination size=$dest_size); output: $(tail -n 12 "$apply_log" 2>/dev/null | tr '\n' ' ')"
+  return 1
+}
+
+# Escalate only when the copy completes before a confirmed stop. The first
+# stopped attempt is also a negative control: move the source path while the
+# copy is frozen, kill it, and prove the same integrity predicate rejects it.
 KILLED=0
+CONTROL_PASSED=0
 PAYLOAD_MIB=0
+MISS_REASON="copies through 32MiB, 96MiB, and 256MiB completed before a stopped partial copy could be witnessed"
 for mib in 32 96 256; do
   rm -f "$INTERRUPT" "$DEST_PARTIAL"
   dd if=/dev/urandom of="$INTERRUPT" bs=1m count="$mib" >/dev/null 2>&1
   SRC_SIZE_BEFORE=$(stat -f "%z" "$INTERRUPT")
   SRC_HASH_BEFORE=$(shasum -a 256 "$INTERRUPT" | awk '{print $1}')
 
-  "$SWEEP" apply "$OUTER" --yes --depth 2 >/tmp/etudes-exdev-kill.log 2>&1 &
-  PID=$!
-  # Poll only for the independent witness: a destination that is nonempty but
-  # still shorter than its known source. Never infer that from the exit code.
-  for _ in $(seq 1 300); do
-    kill -0 "$PID" 2>/dev/null || break
-    if [ -f "$DEST_PARTIAL" ]; then
-      partial_size=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
-      if [ "$partial_size" -gt 0 ] && [ "$partial_size" -lt "$SRC_SIZE_BEFORE" ]; then
-        kill -9 "$PID" 2>/dev/null
-        KILLED=1
-        PAYLOAD_MIB=$mib
-        break
+  if [ "$CONTROL_PASSED" = 0 ]; then
+    CONTROL_STATE="$W/control-state-$mib"
+    mkdir -p "$CONTROL_STATE"
+    ETUDE_STATE_DIR="$CONTROL_STATE" "$SWEEP" apply "$OUTER" --yes --depth 2 >"$W/control-apply.log" 2>&1 &
+    PID=$!; LIVE_PID=$PID
+    if pause_on_partial_copy "$PID" "$INTERRUPT" "$DEST_PARTIAL" "$SRC_SIZE_BEFORE"; then
+      CONTROL_DEST_SIZE=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
+      if ! source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
+        if [ "$CONTROL_DEST_SIZE" -gt 0 ] && [ "$CONTROL_DEST_SIZE" -lt "$SRC_SIZE_BEFORE" ]; then
+          kill -9 "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; LIVE_PID=""
+          fail "REAL DEFECT: source changed or disappeared while a confirmed-stopped cross-volume copy still had a partial destination"
+          exit 0
+        fi
+        MISS_REASON="the control copy finished before source and destination could be rechecked while stopped"
+        restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" "$mib" "$MISS_REASON" || exit 0
+        continue
       fi
+      if [ "$CONTROL_DEST_SIZE" -le 0 ] || [ "$CONTROL_DEST_SIZE" -ge "$SRC_SIZE_BEFORE" ]; then
+        MISS_REASON="the control copy completed before the stopped-state size recheck"
+        restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" "$mib" "$MISS_REASON" || exit 0
+        continue
+      fi
+      CONTROL_RESCUE="$INNER/interrupt-control-rescue.txt"
+      if ! mv "$INTERRUPT" "$CONTROL_RESCUE"; then
+        kill -CONT "$PID" 2>/dev/null || true
+        wait "$PID" 2>/dev/null || true; LIVE_PID=""
+        fail "cross-volume: negative control could not remove the source path while the copy was stopped"
+        exit 0
+      fi
+      if ! kill -9 "$PID" 2>/dev/null; then
+        fail "cross-volume: SIGKILL could not be delivered to confirmed-stopped negative-control process pid=$PID state=$PAUSE_STATE"
+        kill -CONT "$PID" 2>/dev/null || true
+        wait "$PID" 2>/dev/null || true; LIVE_PID=""
+        mv "$CONTROL_RESCUE" "$INTERRUPT" || true
+        exit 0
+      fi
+      CONTROL_WAIT=0
+      wait "$PID" 2>/dev/null || CONTROL_WAIT=$?
+      LIVE_PID=""
+      if [ "$CONTROL_WAIT" != 137 ]; then
+        fail "cross-volume: negative-control process did not exit from SIGKILL (pid=$PID wait=$CONTROL_WAIT)"
+        mv "$CONTROL_RESCUE" "$INTERRUPT" || true
+        exit 0
+      fi
+      if source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
+        fail "cross-volume: negative control failed because the source-integrity predicate accepted a removed source"
+      else
+        pass "cross-volume: negative control rejects removed source after stopped-copy SIGKILL pid=$PID state=$PAUSE_STATE destination=$CONTROL_DEST_SIZE/$SRC_SIZE_BEFORE bytes wait=$CONTROL_WAIT"
+        CONTROL_PASSED=1
+      fi
+      mv "$CONTROL_RESCUE" "$INTERRUPT" || { fail "cross-volume: negative control could not restore its saved source"; exit 0; }
+      # The interrupted control may have moved earlier members of the same
+      # group before reaching the large source. Replay its own journal, then
+      # clear only this scenario's generated destination tree before the real
+      # positive probe starts.
+      ETUDE_STATE_DIR="$CONTROL_STATE" assert_exit 0 "cross-volume: negative-control cleanup restores earlier group members" -- "$SWEEP" undo
+      if ! source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
+        fail "cross-volume: negative-control cleanup did not restore the original byte-identical source"
+        exit 0
+      fi
+      rm -rf "$OUTER/Documents"
+    else
+      MISS_REASON="control copy completed before the partial destination could be frozen"
+      restore_missed_copy "$PID" "$CONTROL_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/control-apply.log" "$mib" "$MISS_REASON" || exit 0
+      continue
     fi
-    sleep 0.01
-  done
-  wait "$PID" 2>/dev/null
-  [ "$KILLED" = 1 ] && break
+  fi
 
-  # The copy finished before the bounded observation window. Restore it and
-  # try the next measured size; failure to restore is a scenario failure.
-  if [ ! -f "$INTERRUPT" ] && [ -f "$DEST_PARTIAL" ]; then
-    assert_exit 0 "cross-volume: completed ${mib}MiB probe undoes before escalation" -- "$SWEEP" undo
-  else
-    fail "cross-volume: ${mib}MiB probe ended without either a source or a completed destination"
+  POSITIVE_STATE="$W/positive-state-$mib"
+  mkdir -p "$POSITIVE_STATE"
+  POSITIVE_PLAN=$(ETUDE_STATE_DIR="$POSITIVE_STATE" "$SWEEP" "$OUTER" --depth 2 --json 2>&1)
+  if ! python3 -c '
+import json, sys
+d=json.loads(sys.stdin.read())
+members=[m for g in d.get("details", {}).get("groups", []) for m in g.get("members", [])]
+sys.exit(0 if any(str(m).endswith("interrupt_zzzbig.txt") for m in members) else 1)
+' <<<"$POSITIVE_PLAN"; then
+    fail "cross-volume: positive interruption probe no longer selects the expected source after the control: $POSITIVE_PLAN"
     exit 0
   fi
+  ETUDE_STATE_DIR="$POSITIVE_STATE" "$SWEEP" apply "$OUTER" --yes --depth 2 >"$W/positive-apply.log" 2>&1 &
+  PID=$!; LIVE_PID=$PID
+  if pause_on_partial_copy "$PID" "$INTERRUPT" "$DEST_PARTIAL" "$SRC_SIZE_BEFORE"; then
+    STOPPED_DEST_SIZE=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
+    if ! source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
+      if [ "$STOPPED_DEST_SIZE" -gt 0 ] && [ "$STOPPED_DEST_SIZE" -lt "$SRC_SIZE_BEFORE" ]; then
+        kill -9 "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; LIVE_PID=""
+        fail "REAL DEFECT: source changed or disappeared while a confirmed-stopped cross-volume copy still had a partial destination"
+        exit 0
+      fi
+      MISS_REASON="the copy completed before source and destination could be rechecked while stopped"
+      restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" "$mib" "$MISS_REASON" || exit 0
+      continue
+    fi
+    if [ "$STOPPED_DEST_SIZE" -gt 0 ] && [ "$STOPPED_DEST_SIZE" -lt "$SRC_SIZE_BEFORE" ]; then
+      if ! kill -9 "$PID" 2>/dev/null; then
+        fail "cross-volume: SIGKILL could not be delivered to confirmed-stopped copy pid=$PID state=$PAUSE_STATE"
+        kill -CONT "$PID" 2>/dev/null || true
+        wait "$PID" 2>/dev/null || true; LIVE_PID=""
+        exit 0
+      fi
+      KILL_WAIT=0
+      wait "$PID" 2>/dev/null || KILL_WAIT=$?
+      LIVE_PID=""
+      if [ "$KILL_WAIT" != 137 ]; then
+        fail "cross-volume: confirmed-stopped copy did not exit from SIGKILL (pid=$PID wait=$KILL_WAIT)"
+        exit 0
+      fi
+      KILLED=1
+      PAYLOAD_MIB=$mib
+      pass "cross-volume: SIGKILL delivered to confirmed-stopped copy pid=$PID state=$PAUSE_STATE destination=$STOPPED_DEST_SIZE/$SRC_SIZE_BEFORE bytes wait=$KILL_WAIT"
+      break
+    fi
+    MISS_REASON="the destination completed before the stopped-state size recheck"
+    restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" "$mib" "$MISS_REASON" || exit 0
+    continue
+  fi
+  MISS_REASON="copy completed before a partial destination could be frozen"
+  restore_missed_copy "$PID" "$POSITIVE_STATE" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE" "$W/positive-apply.log" "$mib" "$MISS_REASON" || exit 0
 done
 
 if [ "$KILLED" = 0 ]; then
   unproven "cross-volume: a real SIGKILL mid-copy leaves the source intact" \
-    "copies through 32MiB, 96MiB, and 256MiB completed before an incomplete destination could be witnessed on this host"
+    "$MISS_REASON"
 else
   SRC_SIZE_AFTER=$(stat -f "%z" "$INTERRUPT" 2>/dev/null || echo "MISSING")
   SRC_HASH_AFTER=$(shasum -a 256 "$INTERRUPT" 2>/dev/null | awk '{print $1}')
-  if [ "$SRC_SIZE_AFTER" = "$SRC_SIZE_BEFORE" ] && [ "$SRC_HASH_AFTER" = "$SRC_HASH_BEFORE" ]; then
+  if source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
     pass "cross-volume: source is byte-identical after a witnessed SIGKILL during a ${PAYLOAD_MIB}MiB copy"
   else
     fail "REAL DEFECT: a SIGKILL mid cross-device-copy left the source file altered or gone \
@@ -177,6 +343,8 @@ did not protect the source"
 
   # A retry must not silently clobber or silently "succeed" over the partial
   # artifact the kill left behind at the destination.
+  DEST_SIZE_BEFORE_RETRY=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo MISSING)
+  DEST_HASH_BEFORE_RETRY=$(shasum -a 256 "$DEST_PARTIAL" 2>/dev/null | awk '{print $1}')
   RETRY_OUT=$("$SWEEP" apply "$OUTER" --yes --depth 2 2>&1)
   RETRY_CODE=$?
   if [ "$RETRY_CODE" = 0 ]; then
@@ -184,6 +352,10 @@ did not protect the source"
   else
     pass "cross-volume: retrying apply after an interrupted copy refused rather than silently overwriting/succeeding (exit $RETRY_CODE)"
   fi
+  DEST_SIZE_AFTER_RETRY=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo MISSING)
+  DEST_HASH_AFTER_RETRY=$(shasum -a 256 "$DEST_PARTIAL" 2>/dev/null | awk '{print $1}')
+  assert_eq "$DEST_SIZE_BEFORE_RETRY" "$DEST_SIZE_AFTER_RETRY" "cross-volume: refused retry leaves the partial destination size unchanged"
+  assert_eq "$DEST_HASH_BEFORE_RETRY" "$DEST_HASH_AFTER_RETRY" "cross-volume: refused retry leaves the partial destination byte-identical"
   SRC_HASH_FINAL=$(shasum -a 256 "$INTERRUPT" 2>/dev/null | awk '{print $1}')
   assert_eq "$SRC_HASH_BEFORE" "$SRC_HASH_FINAL" "cross-volume: source is still byte-identical after the refused retry"
 fi
