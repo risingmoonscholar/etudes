@@ -749,12 +749,13 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(count) => count,
         Err(error) => return audit_refusal(&staging, &error),
     };
-    if let Err(error) = std::fs::rename(&staging, &dest) {
+    if let Err(error) = publish_staging(&staging, &dest) {
         eprintln!(
-            "unpack: could not publish the extracted tree ({error}). {}",
+            "unpack: REFUSED. Could not publish the extracted tree ({error}). {} Choose another destination with --into DIR.",
             cleanup_destination(&staging).message()
         );
-        return ExitCode::from(3);
+        etude_cli_support::envelope::status("refused");
+        return ExitCode::from(2);
     }
 
     etude_cli_support::envelope::effect("entries_published", entries.len() - junk);
@@ -1291,6 +1292,71 @@ fn extract(
     run_bounded(cmd, dest, budget)
 }
 
+fn publish_staging(staging: &Path, dest: &Path) -> Result<(), String> {
+    publish_staging_with(staging, dest, rename_no_replace, || {})
+}
+
+fn publish_staging_with(
+    staging: &Path,
+    dest: &Path,
+    exclusive: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    after_claim: impl FnOnce(),
+) -> Result<(), String> {
+    match exclusive(staging, dest) {
+        Ok(()) => return Ok(()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::Unsupported
+                || (cfg!(target_os = "macos") && error.raw_os_error() == Some(45)) => {}
+        Err(error) => {
+            return Err(format!(
+                "{error}; destination {} was not replaced",
+                etude_core::redact::path(dest)
+            ));
+        }
+    }
+    // exFAT cannot perform an exclusive rename. mkdir is its atomic claim:
+    // an existing folder, even an empty one, must never be replaced.
+    std::fs::create_dir(dest).map_err(|error| {
+        format!(
+            "could not claim destination ({error}); destination {} was not replaced",
+            etude_core::redact::path(dest)
+        )
+    })?;
+    after_claim();
+    // If someone added a file after the claim, rename refuses the nonempty
+    // folder. Never clean this folder up: its contents belong to that writer.
+    std::fs::rename(staging, dest).map_err(|error| format!(
+        "{error}; the claimed destination remains at {} and any files added there were left intact",
+        etude_core::redact::path(dest)
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn rename_no_replace(staging: &Path, dest: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let from = std::ffi::CString::new(staging.as_os_str().as_bytes())?;
+    let to = std::ffi::CString::new(dest.as_os_str().as_bytes())?;
+    unsafe extern "C" {
+        fn renamex_np(
+            from: *const std::ffi::c_char,
+            to: *const std::ffi::c_char,
+            flags: u32,
+        ) -> i32;
+    }
+    // SAFETY: both pointers are live NUL-terminated paths. RENAME_EXCL (4)
+    // tells macOS to refuse every existing destination atomically.
+    if unsafe { renamex_np(from.as_ptr(), to.as_ptr(), 4) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn rename_no_replace(_staging: &Path, _dest: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
 /// Reserve a private sibling of `dest` for an in-progress extraction.
 ///
 /// The directory is created, rather than merely named, before the extractor
@@ -1756,6 +1822,112 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn publication_never_replaces_a_late_empty_folder() {
+        assert_late_folder_preserved(false);
+    }
+
+    #[test]
+    fn publication_never_replaces_a_late_nonempty_folder() {
+        assert_late_folder_preserved(true);
+    }
+
+    fn assert_late_folder_preserved(nonempty: bool) {
+        use std::os::unix::fs::MetadataExt;
+        let fixture = AuditFixture::new();
+        let dest = fixture.0.join("out");
+        let staging = staging_destination(&dest).unwrap();
+        std::fs::write(staging.join("archive-file"), b"archive").unwrap();
+        std::fs::create_dir(&dest).unwrap();
+        if nonempty {
+            std::fs::write(dest.join("their-file"), b"untouched").unwrap();
+        }
+        let inode = dest.metadata().unwrap().ino();
+        assert!(publish_staging(&staging, &dest).is_err());
+        assert_eq!(dest.metadata().unwrap().ino(), inode);
+        assert!(!dest.join("archive-file").exists());
+        assert!(staging.join("archive-file").exists());
+        if nonempty {
+            assert_eq!(
+                std::fs::read(dest.join("their-file")).unwrap(),
+                b"untouched"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn enotsup_exclusive_rename_claims_and_publishes() {
+        let fixture = AuditFixture::new();
+        let dest = fixture.0.join("out");
+        let staging = staging_destination(&dest).unwrap();
+        std::fs::write(staging.join("archive-file"), b"archive").unwrap();
+        publish_staging_with(
+            &staging,
+            &dest,
+            |_, _| Err(std::io::Error::from_raw_os_error(45)),
+            || assert!(dest.is_dir()),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(dest.join("archive-file")).unwrap(),
+            b"archive"
+        );
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn unsupported_exclusive_rename_refuses_existing_folders() {
+        for nonempty in [false, true] {
+            let fixture = AuditFixture::new();
+            let dest = fixture.0.join("out");
+            let staging = staging_destination(&dest).unwrap();
+            std::fs::create_dir(&dest).unwrap();
+            if nonempty {
+                std::fs::write(dest.join("their-file"), b"untouched").unwrap();
+            }
+            let error = publish_staging_with(
+                &staging,
+                &dest,
+                |_, _| Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
+                || panic!("existing destination must not be claimed"),
+            )
+            .unwrap_err();
+            assert!(error.contains("was not replaced"));
+            assert!(dest.is_dir());
+            assert!(staging.is_dir());
+            if nonempty {
+                assert_eq!(
+                    std::fs::read(dest.join("their-file")).unwrap(),
+                    b"untouched"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_exclusive_rename_preserves_files_added_after_claim() {
+        let fixture = AuditFixture::new();
+        let dest = fixture.0.join("out");
+        let staging = staging_destination(&dest).unwrap();
+        std::fs::write(staging.join("archive-file"), b"archive").unwrap();
+        let error = publish_staging_with(
+            &staging,
+            &dest,
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
+            || std::fs::write(dest.join("their-file"), b"untouched").unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.contains("claimed destination remains"));
+        assert!(error.contains(&etude_core::redact::path(&dest)));
+        assert_eq!(
+            std::fs::read(dest.join("their-file")).unwrap(),
+            b"untouched"
+        );
+        assert!(!dest.join("archive-file").exists());
+        assert!(staging.join("archive-file").exists());
     }
 
     #[test]
