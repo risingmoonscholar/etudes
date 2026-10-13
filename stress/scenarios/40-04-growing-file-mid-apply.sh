@@ -92,6 +92,9 @@ build_filler "$D"
 
 TARGET="$D/batch_growing.csv"
 : > "$TARGET"
+# Match the canonical source paths stored in the accepted apply journal, even
+# when TMPDIR reaches the fixture through the macOS /var alias.
+TARGET=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TARGET")
 RESULT="$W/writer-result.txt"
 READY="$W/writer-ready"
 RELEASE="$W/release-writer"
