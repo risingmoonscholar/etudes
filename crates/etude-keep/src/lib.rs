@@ -77,6 +77,25 @@ pub fn key() -> Result<[u8; 32], KeepError> {
     key_from(std::env::var("ETUDE_JOURNAL_KEY"), keychain_key)
 }
 
+/// Read a supplied or existing key without creating a keychain item.
+///
+/// Read-only journal lookups must use this path rather than `key()`: an
+/// absent key is reported as `Ok(None)` and leaves the keychain untouched.
+pub fn key_if_present() -> Result<Option<[u8; 32]>, KeepError> {
+    key_if_present_from(std::env::var("ETUDE_JOURNAL_KEY"), read_key)
+}
+
+fn key_if_present_from(
+    supplied: Result<String, std::env::VarError>,
+    existing_key: impl FnOnce() -> Result<Option<[u8; 32]>, KeepError>,
+) -> Result<Option<[u8; 32]>, KeepError> {
+    match supplied {
+        Ok(value) => supplied_key(&value).map(Some),
+        Err(std::env::VarError::NotUnicode(_)) => Err(KeepError::SuppliedKey),
+        Err(std::env::VarError::NotPresent) => existing_key(),
+    }
+}
+
 fn key_from(
     supplied: Result<String, std::env::VarError>,
     keychain: impl FnOnce() -> Result<[u8; 32], KeepError>,
@@ -409,5 +428,18 @@ mod supplied_key_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn read_only_lookup_never_calls_a_key_creator() {
+        let absent = key_if_present_from(Err(std::env::VarError::NotPresent), || Ok(None))
+            .expect("read-only lookup succeeds when no key exists");
+        assert_eq!(absent, None);
+
+        let key = key_if_present_from(Ok("12".repeat(32)), || {
+            panic!("a supplied key must not consult or create a keychain item")
+        })
+        .expect("valid supplied key");
+        assert_eq!(key, Some([0x12; 32]));
     }
 }

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 pub const FIELDS: &[&str] = &[
     "schema_version",
     "tool_version",
@@ -26,6 +26,7 @@ struct ResultState {
     version: String,
     operation: String,
     operation_id: String,
+    recovery_operation: Option<String>,
     payloads: Vec<String>,
     status: Option<&'static str>,
     scope: String,
@@ -88,6 +89,7 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
                     .unwrap_or_default()
                     .as_nanos()
             ),
+            recovery_operation: None,
             payloads: Vec::new(),
             status: None,
             scope,
@@ -151,6 +153,15 @@ pub fn operation_id() -> String {
     RESULT.with(|state| state.borrow().operation_id.clone())
 }
 
+/// Attach the journal's durable identifier without changing the per-run id.
+pub fn recovery_operation(id: &str) {
+    assert!(
+        !id.is_empty(),
+        "durable recovery operation id cannot be empty"
+    );
+    RESULT.with(|state| state.borrow_mut().recovery_operation = Some(id.to_owned()));
+}
+
 fn resolved_reason(
     code: ExitCode,
     reason: Option<crate::reason::Reason>,
@@ -203,7 +214,7 @@ pub fn finish(code: ExitCode) {
                 ("unproven", j::arr([j::str("effects outside reported operation accounting; zero counters do not prove no effects")])),
             ])),
             ("verification", j::arr([claim("command_completed", if code == ExitCode::SUCCESS || code == ExitCode::from(1) { "pass" } else { "fail" }), claim("complete_read_coverage", "unproven"), claim("subprocess_network_absence", "unproven")])),
-            ("recovery", j::obj(&[("mode", j::str(recovery)), ("conditions", j::arr(if state.journal_enabled && matches!(state.operation.as_str(), "apply" | "stash" | "review" | "undo" | "pop" | "apply_exported_plan") { vec![j::str("readable_journal_and_same_key"), j::str("unchanged_items_and_vacant_original_paths"), j::str("journal_not_expired_and_progress_writable")] } else { vec![] })), ("verification", j::str("unproven; consult operation details and filesystem before retrying"))])),
+            ("recovery", j::obj(&[("mode", j::str(recovery)), ("conditions", j::arr(if state.journal_enabled && matches!(state.operation.as_str(), "apply" | "stash" | "review" | "undo" | "pop" | "apply_exported_plan") { vec![j::str("readable_journal_and_same_key"), j::str("unchanged_items_and_vacant_original_paths"), j::str("journal_not_expired_and_progress_writable")] } else { vec![] })), ("verification", j::str("unproven; consult operation details and filesystem before retrying")), ("operation", j::str(state.recovery_operation.as_deref().unwrap_or("")))])),
             ("disclosure", j::obj(&[("receipt_contains", j::str("read categories and outcomes only; no contents, keys or environment values")), ("zero_counters", j::str("not evidence of no access")), ("details", j::str("may contain operation paths; treat as sensitive"))])),
             ("details", details),
             ("reason", reason),
@@ -215,7 +226,7 @@ pub fn finish(code: ExitCode) {
 mod tests {
     #[test]
     fn schema_fields_require_a_version_bump() {
-        assert_eq!(super::SCHEMA_VERSION, 3);
+        assert_eq!(super::SCHEMA_VERSION, 4);
         assert_eq!(
             super::FIELDS,
             &[
@@ -233,6 +244,20 @@ mod tests {
                 "reason"
             ]
         );
+    }
+
+    #[test]
+    fn recovery_carries_a_durable_operation_id_separately() {
+        super::begin("sweep", "0.5.4", &["apply".into(), "--json".into()]);
+        super::recovery_operation("sweep-journal-123");
+        super::RESULT.with(|state| {
+            let state = state.borrow();
+            assert_ne!(state.operation_id, "sweep-journal-123");
+            assert_eq!(
+                state.recovery_operation.as_deref(),
+                Some("sweep-journal-123")
+            );
+        });
     }
 
     #[test]

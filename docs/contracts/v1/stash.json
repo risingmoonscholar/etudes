@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "tool_version": "<manifest-version>",
   "operation_id": "<per-invocation>",
   "status": "done",
@@ -52,7 +52,8 @@
   "recovery": {
     "mode": "no_operation_undo_needed",
     "conditions": [],
-    "verification": "unproven; consult operation details and filesystem before retrying"
+    "verification": "unproven; consult operation details and filesystem before retrying",
+    "operation": ""
   },
   "disclosure": {
     "receipt_contains": "read categories and outcomes only; no contents, keys or environment values",
@@ -60,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 6,
+    "schema_version": 7,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -70,6 +71,7 @@
       {
         "code": "invalid_arguments",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "stash",
           "pop",
@@ -84,6 +86,7 @@
       {
         "code": "unknown_option",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "stash",
           "pop",
@@ -98,6 +101,7 @@
       {
         "code": "missing_input",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "stash",
           "pop",
@@ -110,8 +114,24 @@
         "why": "The requested input is absent or no longer available; choose an existing input."
       },
       {
+        "code": "internal_error",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "stash",
+          "pop",
+          "status",
+          "inspect",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The tool stopped on an internal failure; inspect its result and local state before choosing another action."
+      },
+      {
         "code": "project_folder",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "stash"
         ],
@@ -120,6 +140,7 @@
       {
         "code": "destination_exists",
         "retry": "after_change",
+        "subject_kind": "destination",
         "operations": [
           "stash",
           "pop"
@@ -129,6 +150,7 @@
       {
         "code": "destination_outside_root",
         "retry": "after_change",
+        "subject_kind": "destination",
         "operations": [
           "stash"
         ],
@@ -137,6 +159,7 @@
       {
         "code": "plan_stale",
         "retry": "after_change",
+        "subject_kind": "plan",
         "operations": [
           "stash"
         ],
@@ -145,6 +168,7 @@
       {
         "code": "folder_busy",
         "retry": "later",
+        "subject_kind": "other_operation",
         "operations": [
           "stash",
           "pop"
@@ -154,6 +178,7 @@
       {
         "code": "journal_unreadable",
         "retry": "later",
+        "subject_kind": "journal",
         "operations": [
           "stash",
           "pop",
@@ -164,6 +189,7 @@
       {
         "code": "journal_key_unavailable",
         "retry": "later",
+        "subject_kind": "journal",
         "operations": [
           "stash",
           "pop",
@@ -174,6 +200,7 @@
       {
         "code": "unknown_operation",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "status"
         ],
@@ -182,6 +209,7 @@
       {
         "code": "unsafe_input",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "stash"
         ],
@@ -190,6 +218,7 @@
       {
         "code": "permission_denied",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "stash",
           "pop",
@@ -204,6 +233,7 @@
       {
         "code": "empty_selection",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "stash"
         ],
@@ -212,6 +242,7 @@
       {
         "code": "operation_incomplete",
         "retry": "after_change",
+        "subject_kind": "journal",
         "operations": [
           "stash",
           "pop"
@@ -221,6 +252,7 @@
       {
         "code": "user_cancelled",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "select"
         ],
@@ -482,6 +514,24 @@
       "status": "one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure",
       "due": "deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop",
       "no_journal": "explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required"
+    },
+    "status_lookup": {
+      "support": "read_only",
+      "query": "status --id OPERATION",
+      "states": [
+        "completed",
+        "interrupted",
+        "reversed",
+        "partly_reversed"
+      ],
+      "counts": [
+        "planned",
+        "moved",
+        "reversed"
+      ],
+      "recovery_id": "durable_stash_id;_same_id_as_stash_id",
+      "side_effects": "none;_uses_existing_key_without_creating_one;_no_migration_pruning_or_file_content_reads",
+      "disclosure": "no_file_names"
     }
   },
   "reason": {

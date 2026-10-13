@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use etude_core::json as j;
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Copy)]
 pub enum Tool {
@@ -138,7 +138,7 @@ pub fn declaration(
             "schema_version",
             j::num(match tool {
                 Tool::Sweep => SCHEMA_VERSION + 2,
-                Tool::Stash => 6,
+                Tool::Stash => 7,
                 Tool::Unpack => SCHEMA_VERSION + 1,
             }),
         ),
@@ -462,6 +462,15 @@ pub fn declaration(
             ("ordering", j::str("each_done_record_is_durable_before_callback_and_next_move")),
             ("disclosure", j::str("counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values")),
         ])));
+        fields.push(("status_lookup", j::obj(&[
+            ("support", j::str("read_only")),
+            ("queries", strings(&["status --id OPERATION", "status PATH"])),
+            ("states", strings(&["completed", "interrupted", "reversed", "partly_reversed"])),
+            ("counts", strings(&["planned", "moved", "reversed"])),
+            ("recovery_id", j::str("durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation")),
+            ("side_effects", j::str("none;_no_key_creation_migration_pruning_or_file_content_reads")),
+            ("disclosure", j::str("path_query_returns_newest_first_without_file_names")),
+        ])));
     }
     if matches!(tool, Tool::Stash) {
         fields.push(("explicit_selection", j::obj(&[
@@ -493,6 +502,15 @@ pub fn declaration(
             ("status", j::str("one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure")),
             ("due", j::str("deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop")),
             ("no_journal", j::str("explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required")),
+        ])));
+        fields.push(("status_lookup", j::obj(&[
+            ("support", j::str("read_only")),
+            ("query", j::str("status --id OPERATION")),
+            ("states", strings(&["completed", "interrupted", "reversed", "partly_reversed"])),
+            ("counts", strings(&["planned", "moved", "reversed"])),
+            ("recovery_id", j::str("durable_stash_id;_same_id_as_stash_id")),
+            ("side_effects", j::str("none;_uses_existing_key_without_creating_one;_no_migration_pruning_or_file_content_reads")),
+            ("disclosure", j::str("no_file_names")),
         ])));
     }
     if matches!(tool, Tool::Unpack) {

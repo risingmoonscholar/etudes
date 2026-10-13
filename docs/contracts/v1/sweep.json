@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "tool_version": "<manifest-version>",
   "operation_id": "<per-invocation>",
   "status": "done",
@@ -52,7 +52,8 @@
   "recovery": {
     "mode": "no_operation_undo_needed",
     "conditions": [],
-    "verification": "unproven; consult operation details and filesystem before retrying"
+    "verification": "unproven; consult operation details and filesystem before retrying",
+    "operation": ""
   },
   "disclosure": {
     "receipt_contains": "read categories and outcomes only; no contents, keys or environment values",
@@ -60,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 5,
+    "schema_version": 6,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -70,6 +71,7 @@
       {
         "code": "invalid_arguments",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "scan",
           "apply",
@@ -87,6 +89,7 @@
       {
         "code": "unknown_option",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "scan",
           "apply",
@@ -104,6 +107,7 @@
       {
         "code": "missing_input",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "scan",
           "apply",
@@ -119,8 +123,27 @@
         "why": "The requested input is absent or no longer available; choose an existing input."
       },
       {
+        "code": "internal_error",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "scan",
+          "apply",
+          "undo",
+          "forget",
+          "verify",
+          "lesson",
+          "review",
+          "export_plan",
+          "apply_exported_plan",
+          "status"
+        ],
+        "why": "The tool stopped on an internal failure; inspect its result and local state before choosing another action."
+      },
+      {
         "code": "project_folder",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "scan",
           "apply"
@@ -130,6 +153,7 @@
       {
         "code": "destination_exists",
         "retry": "after_change",
+        "subject_kind": "destination",
         "operations": [
           "apply",
           "undo"
@@ -139,6 +163,7 @@
       {
         "code": "destination_outside_root",
         "retry": "after_change",
+        "subject_kind": "destination",
         "operations": [
           "apply"
         ],
@@ -147,6 +172,7 @@
       {
         "code": "plan_stale",
         "retry": "after_change",
+        "subject_kind": "plan",
         "operations": [
           "apply"
         ],
@@ -155,6 +181,7 @@
       {
         "code": "profile_missing",
         "retry": "after_change",
+        "subject_kind": "profile",
         "operations": [
           "scan",
           "apply"
@@ -164,6 +191,7 @@
       {
         "code": "folder_busy",
         "retry": "later",
+        "subject_kind": "other_operation",
         "operations": [
           "apply",
           "undo"
@@ -173,6 +201,7 @@
       {
         "code": "recent_files",
         "retry": "later",
+        "subject_kind": "recent_files",
         "operations": [
           "scan",
           "apply"
@@ -182,6 +211,7 @@
       {
         "code": "journal_unreadable",
         "retry": "later",
+        "subject_kind": "journal",
         "operations": [
           "apply",
           "undo",
@@ -192,6 +222,7 @@
       {
         "code": "journal_key_unavailable",
         "retry": "later",
+        "subject_kind": "journal",
         "operations": [
           "apply",
           "undo",
@@ -202,6 +233,7 @@
       {
         "code": "unknown_operation",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "status"
         ],
@@ -210,6 +242,7 @@
       {
         "code": "unsafe_input",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "scan",
           "apply"
@@ -219,6 +252,7 @@
       {
         "code": "permission_denied",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "scan",
           "apply",
@@ -236,6 +270,7 @@
       {
         "code": "empty_selection",
         "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "apply"
         ],
@@ -244,6 +279,7 @@
       {
         "code": "operation_incomplete",
         "retry": "after_change",
+        "subject_kind": "journal",
         "operations": [
           "apply",
           "undo"
@@ -253,6 +289,7 @@
       {
         "code": "user_cancelled",
         "retry": "never",
+        "subject_kind": null,
         "operations": [
           "forget",
           "review"
@@ -569,6 +606,27 @@
       "journalled": "successful_durable_done_records;_zero_without_a_journal",
       "ordering": "each_done_record_is_durable_before_callback_and_next_move",
       "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
+    "status_lookup": {
+      "support": "read_only",
+      "queries": [
+        "status --id OPERATION",
+        "status PATH"
+      ],
+      "states": [
+        "completed",
+        "interrupted",
+        "reversed",
+        "partly_reversed"
+      ],
+      "counts": [
+        "planned",
+        "moved",
+        "reversed"
+      ],
+      "recovery_id": "durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation",
+      "side_effects": "none;_no_key_creation_migration_pruning_or_file_content_reads",
+      "disclosure": "path_query_returns_newest_first_without_file_names"
     }
   },
   "reason": {
