@@ -164,6 +164,9 @@ APPLY_CODE=$?
 PID=""
 
 FOUND="$(find "$D" -name "batch_growing.csv" 2>/dev/null | head -1)"
+if [ -n "$FOUND" ]; then
+  FOUND=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$FOUND")
+fi
 if [ "$APPLY_CODE" = 0 ] && [ "$FOUND" != "$TARGET" ] && kill -0 "$WRITER_PID" 2>/dev/null; then
   pass "the growing file moved while its acknowledged writer was still running"
 else
