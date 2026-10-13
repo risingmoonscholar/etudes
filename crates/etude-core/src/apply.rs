@@ -41,6 +41,17 @@ pub enum ApplyError {
     StalePlan(io::Error),
 }
 
+/// An apply failure and the durable journal, if one had already been saved.
+///
+/// `durable_journal_id` is present only after the corresponding sealed journal
+/// was successfully written. It is absent for failures before that write, for
+/// failed journal writes, and when no journal was requested.
+#[derive(Debug)]
+pub struct ApplyFailure {
+    pub error: ApplyError,
+    pub durable_journal_id: Option<String>,
+}
+
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -152,7 +163,18 @@ pub fn apply(
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
 ) -> Result<ApplyReport, ApplyError> {
-    apply_with_progress(plan, context, sealer, fail_at, |_| {})
+    apply_with_outcome(plan, context, sealer, fail_at).map_err(|failure| failure.error)
+}
+
+/// `apply` with access to a journal id when a failure happens after the
+/// durable journal was written.
+pub fn apply_with_outcome(
+    plan: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+) -> Result<ApplyReport, ApplyFailure> {
+    apply_with_progress_outcome(plan, context, sealer, fail_at, |_| {})
 }
 
 /// Execute the accepted groups and report each completed move to the caller.
@@ -162,9 +184,21 @@ pub fn apply_with_progress(
     context: &BindingContext,
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
-    mut progress: impl FnMut(Progress),
+    progress: impl FnMut(Progress),
 ) -> Result<ApplyReport, ApplyError> {
-    apply_bound_with_structured_progress(bound, context, sealer, fail_at, |event| {
+    apply_with_progress_outcome(bound, context, sealer, fail_at, progress)
+        .map_err(|failure| failure.error)
+}
+
+/// `apply_with_progress` with access to a durable journal id on failure.
+pub fn apply_with_progress_outcome(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    mut progress: impl FnMut(Progress),
+) -> Result<ApplyReport, ApplyFailure> {
+    apply_bound_with_structured_progress_outcome(bound, context, sealer, fail_at, |event| {
         if event.phase == ProgressPhase::Advancing {
             progress(Progress {
                 completed: event.completed,
@@ -184,18 +218,33 @@ pub fn apply_bound_with_structured_progress(
     fail_at: FailAt,
     progress: impl FnMut(StructuredProgress),
 ) -> Result<ApplyReport, ApplyError> {
+    apply_bound_with_structured_progress_outcome(bound, context, sealer, fail_at, progress)
+        .map_err(|failure| failure.error)
+}
+
+/// Execute a bound plan with structured progress and expose any journal id
+/// that became durable before an error. Live-plan conflicts retain the
+/// existing empty sealed journal behavior.
+pub fn apply_bound_with_structured_progress_outcome(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    progress: impl FnMut(StructuredProgress),
+) -> Result<ApplyReport, ApplyFailure> {
     apply_plan_with_structured_progress(
         &bound.plan,
         &context.tool,
         sealer,
         fail_at,
         progress,
-        || {
+        |durable_journal_id| {
             if let Err(error) = bound.validate(context) {
                 if bound.is_live() {
                     if let Some(sl) = sealer {
+                        let id = journal_id(&bound.plan);
                         let journal = Journal {
-                            id: journal_id(&bound.plan),
+                            id: id.clone(),
                             tool: context.tool.clone(),
                             root: bound.root.clone(),
                             entries: Vec::new(),
@@ -204,6 +253,7 @@ pub fn apply_bound_with_structured_progress(
                             progress_tail_damaged: false,
                         };
                         journal.save_sealed(sl).map_err(ApplyError::Journal)?;
+                        *durable_journal_id = Some(id);
                     }
                     return Err(ApplyError::StalePlan(io::Error::other(format!(
                         "conflict: {error}; no moves from this attempt, existing journals remain recoverable"
@@ -222,8 +272,19 @@ pub fn record_refused_plan(
     context: &BindingContext,
     sealer: &dyn Sealer,
 ) -> Result<(), ApplyError> {
+    record_refused_plan_with_id(plan, context, sealer).map(|_| ())
+}
+
+/// Like `record_refused_plan`, returning the id of its successfully saved
+/// empty journal so callers can identify the refusal's recovery record.
+pub fn record_refused_plan_with_id(
+    plan: &Plan,
+    context: &BindingContext,
+    sealer: &dyn Sealer,
+) -> Result<String, ApplyError> {
+    let id = journal_id(plan);
     Journal {
-        id: journal_id(plan),
+        id: id.clone(),
         tool: context.tool.clone(),
         root: plan.root.clone(),
         entries: Vec::new(),
@@ -232,7 +293,8 @@ pub fn record_refused_plan(
         progress_tail_damaged: false,
     }
     .save_sealed(sealer)
-    .map_err(ApplyError::Journal)
+    .map_err(ApplyError::Journal)?;
+    Ok(id)
 }
 
 /// Report successful moves separately from durable journal acknowledgements.
@@ -243,7 +305,20 @@ pub fn apply_with_structured_progress(
     fail_at: FailAt,
     progress: impl FnMut(StructuredProgress),
 ) -> Result<ApplyReport, ApplyError> {
-    apply_plan_with_structured_progress(plan, tool, sealer, fail_at, progress, || Ok(()))
+    apply_with_structured_progress_outcome(plan, tool, sealer, fail_at, progress)
+        .map_err(|failure| failure.error)
+}
+
+/// `apply_with_structured_progress` with access to the durable journal id on
+/// failure.
+pub fn apply_with_structured_progress_outcome(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    progress: impl FnMut(StructuredProgress),
+) -> Result<ApplyReport, ApplyFailure> {
+    apply_plan_with_structured_progress(plan, tool, sealer, fail_at, progress, |_| Ok(()))
 }
 
 fn apply_plan_with_structured_progress(
@@ -252,16 +327,17 @@ fn apply_plan_with_structured_progress(
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
     mut progress: impl FnMut(StructuredProgress),
-    validate: impl FnOnce() -> Result<(), ApplyError>,
-) -> Result<ApplyReport, ApplyError> {
+    validate: impl FnOnce(&mut Option<String>) -> Result<(), ApplyError>,
+) -> Result<ApplyReport, ApplyFailure> {
     let mut event = StructuredProgress {
         planned: 0,
         completed: 0,
         journalled: 0,
         phase: ProgressPhase::Planning,
     };
+    let mut durable_journal_id = None;
     let result = (|| {
-        validate()?;
+        validate(&mut durable_journal_id)?;
         // Every entrypoint, including unbound selection plans, shares this
         // destination rule. Sources intentionally may come from other roots.
         let resolved_root = fs::canonicalize(&plan.root).map_err(ApplyError::Io)?;
@@ -370,6 +446,7 @@ fn apply_plan_with_structured_progress(
         // Journal first. Nothing has moved yet.
         if let Some(sl) = sealer {
             j.save_sealed(sl).map_err(ApplyError::Journal)?;
+            durable_journal_id = Some(id.clone());
         }
 
         let mut moved = 0usize;
@@ -432,7 +509,10 @@ fn apply_plan_with_structured_progress(
         ProgressPhase::Error
     };
     progress(event);
-    result
+    result.map_err(|error| ApplyFailure {
+        error,
+        durable_journal_id,
+    })
 }
 
 fn destination_outside_root() -> ApplyError {

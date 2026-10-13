@@ -744,6 +744,92 @@ fn a_failure_mid_apply_leaves_a_journal_describing_exactly_what_happened() {
 }
 
 #[test]
+fn outcome_reports_the_durable_journal_id_after_apply_failure() {
+    let _g = lock();
+    let (root, _fx, p) = setup("outcome_failure");
+    let failure = apply::apply_with_outcome(&p, &context(), Some(&TestSeal), Some(0))
+        .expect_err("injected failure should propagate");
+    assert!(matches!(failure.error, ApplyError::Injected(0)));
+    let id = failure
+        .durable_journal_id
+        .expect("saved journal id should accompany the failure");
+    let journal = Journal::latest_sealed("test", &TestSeal).expect("saved journal exists");
+    assert_eq!(journal.id, id);
+    assert!(journal.entries.iter().all(|entry| !entry.is_moved()));
+    cleanup(&root);
+}
+
+#[test]
+fn outcome_has_no_durable_journal_id_when_journaling_is_disabled() {
+    let _g = lock();
+    let (root, _fx, p) = setup("outcome_no_journal");
+    let failure = apply::apply_with_outcome(&p, &context(), None, Some(0))
+        .expect_err("injected failure should propagate");
+    assert!(matches!(failure.error, ApplyError::Injected(0)));
+    assert_eq!(failure.durable_journal_id, None);
+    cleanup(&root);
+}
+
+#[test]
+fn live_stale_outcome_reports_the_saved_empty_journal_id() {
+    let _g = lock();
+    let root = std::env::temp_dir().join(format!(
+        "sweep_au_live_stale_outcome_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    let state = std::env::temp_dir().join(format!(
+        "sweep_state_live_stale_outcome_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&state);
+    fs::create_dir_all(&root).expect("create root");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    for index in 0..4 {
+        fs::write(
+            root.join(format!("Screenshot 2026-01-01 at 10.0{index}.png")),
+            b"synthetic payload",
+        )
+        .expect("write fixture source");
+    }
+    let out = scan::scan_for_live_apply(
+        &root,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .expect("live scan");
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, context()).expect("bind live plan");
+    let source = bound.groups[0].members[0].clone();
+    fs::write(root.join("Cargo.toml"), b"synthetic marker")
+        .expect("invalidate live snapshot with a new marker");
+
+    let failure = apply::apply_bound_with_structured_progress_outcome(
+        &bound,
+        &context(),
+        Some(&TestSeal),
+        None,
+        |_| {},
+    )
+    .expect_err("stale live plan must refuse");
+    assert!(matches!(failure.error, ApplyError::StalePlan(_)));
+    let id = failure
+        .durable_journal_id
+        .expect("saved stale-plan journal id should accompany refusal");
+    let journal = Journal::latest_sealed("test", &TestSeal).expect("empty journal exists");
+    assert_eq!(journal.id, id);
+    assert!(journal.entries.is_empty());
+    assert!(source.exists(), "stale apply moved a source");
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[test]
 fn undo_after_a_partial_apply_restores_only_what_moved() {
     let _g = lock();
     let (root, _fx, p) = setup("partialundo");

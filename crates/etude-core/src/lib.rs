@@ -17,7 +17,7 @@ pub mod plan;
 pub mod redact;
 pub mod scan;
 
-pub use apply::{ApplyReport, UndoReport};
+pub use apply::{ApplyFailure, ApplyReport, UndoReport};
 pub use journal::Journal;
 pub use plan::{Group, Plan, Signal};
 pub use scan::{Entry, ScanConfig, ScanError, ScanOutcome};
