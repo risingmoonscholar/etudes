@@ -25,7 +25,9 @@
         <ul>
           <li>Captures quarantine from the same source descriptor used for the private archive copy; a changed attribute during copying refuses.</li>
           <li>Applies the captured attribute to final files and directories, including the destination root, and verifies exact readback before publication. An unmarked archive adds no mark.</li>
-          <li>Publishes only after staging, tree audit and quarantine preservation pass. Preservation failure refuses and reports cleanup state; AppleDouble companions are retained where needed for attributes.</li>
+          <li>Publishes only after staging, the tree audit and quarantine preservation pass. Preservation failure refuses and reports cleanup state; AppleDouble companions are retained where needed for attributes.</li>
+          <li>Unpack refuses invalid arguments, such as a mistyped flag, a missing value or a bad <code>--max-size</code>, with exit 2, before it reads the archive or creates anything.</li>
+          <li>On SIGTERM, unpack stops its extractor, removes its staging folder and exits 2.</li>
           <li>The extraction budget remains a monitored soft limit, not a hard write-time cap.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
@@ -39,7 +41,7 @@
       <h2 id="demo-title">The demo</h2>
       <figure>
         <img src="../gifs/unpack-safety.gif" alt="A light terminal demo extracts a synthetic ZIP archive and refuses a second ZIP archive containing a symlink." width="860" height="294">
-        <figcaption>Earlier 0.5.3 recording. A normal synthetic archive extracts and its two output paths pass the tree audit; a ZIP archive containing a symlink is refused before extraction. The terminal recording is shown in its original light theme.</figcaption>
+        <figcaption>A normal synthetic archive extracts and its two output paths pass the tree audit; a ZIP archive containing a symlink is refused before extraction. The terminal recording is shown in its original light theme.</figcaption>
       </figure>
     </section>
 

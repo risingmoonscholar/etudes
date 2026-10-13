@@ -37,6 +37,31 @@ reviewers were pointed at the tools before anyone else could be.
   stale plans refuse and require replanning.
 - **unpack:** preserves the source archive's quarantine attribute on the final
   tree and verifies exact readback before publication; preservation failure refuses.
+- **unpack:** refuses invalid arguments before it reads the archive or creates
+  anything: unknown options, an option missing its value, a `--into` or
+  `--max-size` value that looks like another option, a `--max-size` that is not
+  a number or overflows, and extra positional arguments. It names the bad input
+  and exits 2.
+- **unpack:** on SIGTERM during extraction it stops and reaps the system
+  extractor, removes its private staging directory, reports that it was stopped
+  and exits 2. SIGKILL cannot be caught and is unchanged.
+- **sweep and stash:** before each apply move, the destination folder must still
+  be the real directory recorded at planning (or created by this apply). Before
+  each undo move-back, the original source folder is checked against the
+  identity recorded in the journal. A replaced folder stops the operation before
+  any further file moves, with a named refusal. The check does not stop a swap
+  in the instant between the check and the move, and does not defend against
+  hostile code running as the same user.
+- **sweep:** apply refuses a destination folder that appeared after the plan was
+  made, instead of adopting it. Undo removes only empty destination folders that
+  the apply created and that are still the same folder; a folder that existed
+  before is kept.
+- **sweep and stash:** with `--no-journal`, apply no longer reads the first and
+  last 4 KiB of each file, since there is no undo to use it. A move across
+  volumes still reads the whole file to copy and verify it.
+- **sweep:** the scan output now says that applying reads the first and last
+  4 KiB of each file it moves, so undo can tell whether a file changed. The
+  README states when sweep reads file bytes.
 - **Breaking for JSON consumers:** result envelopes use `schema_version: 2`.
   Agents that parse JSON must check the schema version and read operation
   fields under `details`; fields that were previously at the top level moved

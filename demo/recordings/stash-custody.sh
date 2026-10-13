@@ -12,7 +12,8 @@ import os, sys
 root, count = sys.argv[1], int(sys.argv[2])
 old = 1767225600
 for n in range(1, count + 1):
-    path = os.path.join(root, f"Screenshot 2026-07-{(n % 28) + 1:02d} at 9.{n % 60:02d}.11 AM.png")
+    # The index keeps every name distinct; day and minute alone repeat after 420 files.
+    path = os.path.join(root, f"Screenshot 2026-07-{(n % 28) + 1:02d} at 9.{n % 60:02d}.11 AM ({n}).png")
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"SYNTHETIC DEMO ITEM {n}\n")
     os.utime(path, (old, old))
