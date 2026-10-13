@@ -97,6 +97,7 @@ run_controls() {
   done
 }
 
+SENTINEL="INTRUDER-CONTENT-DO-NOT-TOUCH-$$"
 INJECTED=0
 CODE=0
 TARGET=""
