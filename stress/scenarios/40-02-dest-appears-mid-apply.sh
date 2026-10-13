@@ -32,8 +32,6 @@ for i in range(n):
 PY
 }
 
-now_ms() { python3 -c 'import time; print(int(time.time()*1000))'; }
-
 # idx, source path, and the group's destination directory name.
 pick_target() {
   "$SWEEP" "$1" --json 2>/dev/null | python3 -c '
@@ -48,17 +46,56 @@ print(g["name"])
 '
 }
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
-
-CTRL="$W/control/Desktop"; build_tree "$CTRL"
-T0_START=$(now_ms)
-"$SWEEP" apply "$CTRL" --yes >/dev/null 2>&1
-T0_END=$(now_ms)
-T0=$((T0_END - T0_START))
-if [ "$T0" -lt 20 ]; then
-  unproven "destination appears mid-apply" "baseline apply of $N files finished in ${T0}ms on this host. Too fast for a background process to land inside the window"
+CONTROL="${1:-}"
+case "$CONTROL" in ''|--control-late|--control-ignored) ;; *) fail "unknown mid-apply control"; exit 0;; esac
+DUMP="$(dirname "$SWEEP")/journal-dump"
+if [ ! -x "$DUMP" ]; then
+  unproven "mid-apply injection" "dev-only journal watcher unavailable"
   exit 0
 fi
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+W=$(workdir)
+PID=""
+D=""
+cleanup() {
+  if [ -n "${WRITER_PID:-}" ]; then
+    touch "${RELEASE:-$W/release-writer}"
+    wait "$WRITER_PID" 2>/dev/null || true
+  fi
+  if [ -n "$PID" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    kill -TERM "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+  fi
+  rm -rf "$W"
+  eval "$_stress_state_cleanup"
+}
+trap cleanup EXIT
+
+# Each control runs the complete witness with its own assertion channel.
+# Late apply must report an unproven injection; the unsafe-outcome control
+# must make the unchanged assertions reject its simulated faulty result.
+run_controls() {
+  local control result output
+  for control in late ignored; do
+    output="$W/control-$control.out"
+    env -u STRESS_WRAP_DEPTH -u STRESS_WRAPPER_PID -u STRESS_RESULT_FD \
+      -u STRESS_FAILURE_ARTIFACTS /bin/bash "${BASH_SOURCE[0]}" "--control-$control" \
+      >"$output" 2>&1 198<&- 199>&-
+    result=$?
+    if [ "$control" = late ]; then
+      if [ "$result" -eq 2 ] && ! grep -q "FAIL" "$output" && ! grep -q "injection proven" "$output" && grep -q 'unproven.*injection' "$output"; then
+        pass "late injection control is unproven, never a pass or a product failure"
+      else
+        fail "late injection control wanted unproven exit 2, got $result: $(cat "$output")"
+      fi
+    elif [ "$result" -eq 1 ] && grep -q 'confirmed stopped' "$output" && grep -q 'FAIL' "$output"; then
+      pass "paused unsafe-outcome control fails retained assertions after a proven injection"
+    else
+      fail "paused unsafe-outcome control did not reject the fault (exit $result): $(cat "$output")"
+    fi
+  done
+}
 
 SENTINEL="INTRUDER-CONTENT-DO-NOT-TOUCH-$$"
 INJECTED=0
@@ -68,11 +105,11 @@ BLOCKER=""
 IDX=0
 BEFORE=0
 D=""
-FRACTIONS=(70 45 25 12)
 
-for frac in "${FRACTIONS[@]}"; do
-  D="$W/attempt/Desktop"
-  rm -rf "$W/attempt"
+for trial in 1 2 3 4; do
+  D="$W/attempt-$trial/Desktop"
+  export ETUDE_STATE_DIR="$W/state-$trial"
+  mkdir -p "$ETUDE_STATE_DIR"
   build_tree "$D"
   PICK="$(pick_target "$D")"
   IDX="$(printf '%s\n' "$PICK" | sed -n '1p')"
@@ -80,12 +117,27 @@ for frac in "${FRACTIONS[@]}"; do
   GROUPNAME="$(printf '%s\n' "$PICK" | sed -n '3p')"
   NAME="$(basename "$TARGET")"
   BLOCKER="$D/$GROUPNAME/$NAME"
+  DEST="$BLOCKER"
   BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
 
   "$SWEEP" apply "$D" --yes >"$W/apply.out" 2>"$W/apply.err" &
   PID=$!
-  DELAY_MS=$((T0 * frac / 100))
-  python3 -c "import time; time.sleep($DELAY_MS/1000)"
+  if [ "$CONTROL" = --control-late ]; then wait "$PID" 2>/dev/null || true; fi
+  if ! WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$D" "$TARGET" "$PID" 2>"$W/watch.err"); then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    [ "$CONTROL" != --control-late ] || break
+    continue
+  fi
+  read -r JOURNAL_MOVED JOURNAL_TOTAL PENDING_INDEX <<< "$WITNESS"
+  STOPPED=$(ps -o state= -p "$PID" 2>/dev/null)
+  if [[ "$STOPPED" != *T* ]] || [ ! -f "$TARGET" ] || [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    kill -CONT "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || true
+    PID=""
+    continue
+  fi
   mkdir -p "$D/$GROUPNAME"
   # noclobber makes injection itself safe. Plain `>` could overwrite sweep's
   # output after it won the race, then manufacture the very corruption this
@@ -93,20 +145,26 @@ for frac in "${FRACTIONS[@]}"; do
   if (set -C; printf '%s' "$SENTINEL" > "$BLOCKER") 2>/dev/null; then
     INJECTED=1
   else
+    kill -CONT "$PID" 2>/dev/null || true
     wait "$PID" 2>/dev/null || true
+    PID=""
     continue
   fi
+  pass "injection proven while apply was confirmed stopped ($JOURNAL_MOVED/$JOURNAL_TOTAL journalled moves; pending index $PENDING_INDEX)"
+  if [ "$CONTROL" = --control-ignored ]; then rm "$BLOCKER"; fi
+  kill -CONT "$PID" || { fail "could not resume proven injection"; exit 0; }
   wait "$PID"
   CODE=$?
+  PID=""
   break
 done
 
 if [ "$INJECTED" != "1" ]; then
-  unproven "destination appears mid-apply" "could not exclusively create the intruder before sweep had already created that destination across ${#FRACTIONS[@]} timed attempts (baseline ${T0}ms)"
+  unproven "mid-apply injection" "no confirmed stopped apply with pending target across four trials: $(cat "$W/watch.err")"
   exit 0
 fi
 
-pass "destination appears mid-apply: exclusively created the intruder at ~${DELAY_MS}ms, before the target destination existed (group position $IDX)"
+pass "destination appears mid-apply: exclusively created the intruder while confirmed stopped, before the target destination existed (group position $IDX)"
 
 # From this point onward, the injection is the witness. Product outcomes are
 # assertions, never a condition for deciding whether the race happened.
@@ -153,3 +211,6 @@ for i in range($N):
 # source file is expected to be exactly where it started (checked above);
 # it must not count as lost by this sweep.
 assert_eq 0 "$LOST" "no original file went missing anywhere in the tree"
+
+[ -n "$CONTROL" ] || run_controls
+true

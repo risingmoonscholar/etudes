@@ -107,14 +107,16 @@ the link itself was still delivered.
   containment *during* extraction — libarchive's secure-extraction flags, or
   a sandboxed extractor — which is a different tool than the one that parses
   nothing.
-- **The destination, if its parent is writable by others.** unpack checks
-  that the destination does not exist, then creates it. Between those two
-  steps, anyone who can write the PARENT directory can create the destination
-  as a symlink, and the extractor then writes through it to wherever that link
-  points. Unpacking into a directory only you can write — your home, not
-  `/tmp` or a shared share — closes it; unpacking into a world-writable parent
-  is not defended, and no test exercises that path. Closing it properly needs
-  the directory created and then verified by handle rather than by name.
+- **Publication on volumes without a no-replace rename.** unpack extracts
+  into private staging, audits it, and publishes with `renamex_np(RENAME_EXCL)`
+  on macOS. An existing destination, including an empty folder created after
+  preflight, is refused. When the volume returns ENOTSUP (for example exFAT),
+  unpack first claims the destination with `mkdir`, then renames staging onto
+  that folder. The destination is visible and empty for an instant. If another
+  process adds files in that interval, publication refuses and leaves those
+  files and the claimed folder intact, reporting what remains. A hostile
+  process able to remove or replace the claimed folder in that interval is
+  outside this protection; publication is not bound to an open folder handle.
 
 - **A hostile process running as you.** unpack copies the archive into a
   freshly created 0700 directory and runs every listing and the extraction
