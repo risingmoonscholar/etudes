@@ -1,0 +1,204 @@
+{
+  "checked_at": "2026-10-13T08:34:27.263173+00:00",
+  "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+  "candidate": "0.5.4",
+  "machine": {
+    "os": "macOS",
+    "product_version": "26.4",
+    "build_version": "25E246",
+    "arch": "arm64"
+  },
+  "revision_scope": "The revision identifies the committed code, release documentation and regenerated demo assets actually tested. This JSON is added in an evidence-only follow-up commit, so it does not claim its own containing commit SHA. Every required command is repeated on the resulting immutable pull-request head; those final-head results and SHA are recorded in the pull-request description and an external run manifest.",
+  "commands": {
+    "candidate_install": {
+      "command": "python3 scripts/check-release.py --candidate",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:21:28.256306+00:00",
+      "completed_at": "2026-10-13T08:21:29.472849+00:00",
+      "result": "PASS",
+      "log_sha256": "2e71386d82bdd17c5baecc9bdd192b42b1e877d9c9325fbe6db05a81c95ae655",
+      "stdout": [
+        "mode=candidate checkout=b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+        "installing sweep 0.5.4",
+        "PASS sweep: install, version, synthetic operation and recovery/refusal",
+        "installing stash 0.5.4",
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.4",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ]
+    },
+    "release_gate_unit_tests": {
+      "command": "python3 -m unittest discover -s scripts -p test_check_release.py -v",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:21:29.473248+00:00",
+      "completed_at": "2026-10-13T08:21:29.554900+00:00",
+      "result": "PASS",
+      "log_sha256": "b86b03540eabedb7cc5addda8c4eb770f0b5bc100394f9bf4d0a063fe9591615",
+      "tests_run": 5
+    },
+    "format": {
+      "command": "cargo fmt --all --check",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:21:29.555100+00:00",
+      "completed_at": "2026-10-13T08:21:29.700850+00:00",
+      "result": "PASS",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clippy": {
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:21:29.701141+00:00",
+      "completed_at": "2026-10-13T08:21:30.898145+00:00",
+      "result": "PASS",
+      "log_sha256": "8f6fd455f677ae41b97385ff16b37c02d5e424e1c231dbba406993dac3d6422b"
+    },
+    "workspace_tests": {
+      "command": "cargo test --all",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:21:30.898380+00:00",
+      "completed_at": "2026-10-13T08:22:53.763322+00:00",
+      "result": "PASS",
+      "log_sha256": "1831ec23f475f4a62a7ce3eaa8f6cc2818f56f6e502a33b813d2f0f8e4b92a3e",
+      "tests_passed": 422
+    },
+    "claims": {
+      "command": "bash scripts/sync-claims.sh && bash scripts/check-claims.sh",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:22:53.763566+00:00",
+      "completed_at": "2026-10-13T08:26:23.587266+00:00",
+      "result": "PASS",
+      "log_sha256": "0963badb28237bac2023c7cf8fdfee01548d475b9d552f3d1f47a98f462c3320"
+    },
+    "transcripts": {
+      "command": "bash scripts/check-transcripts-reproduce.sh",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:26:23.587525+00:00",
+      "completed_at": "2026-10-13T08:26:25.701876+00:00",
+      "result": "PASS",
+      "log_sha256": "2414438ffac39ed4e139e3af7caa7b34f174c741399d2345f9f02668fb5ef113"
+    },
+    "no_network": {
+      "command": "bash scripts/no-network-test.sh",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:26:25.702087+00:00",
+      "completed_at": "2026-10-13T08:27:36.186979+00:00",
+      "result": "PASS",
+      "log_sha256": "b538a84cf24f5094ce13aca08bebe746d4114016d35c8eacccb661e7a5e6f428"
+    },
+    "tool_contracts": {
+      "command": "python3 scripts/check-tool-contracts.py </dev/null",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:27:36.187249+00:00",
+      "completed_at": "2026-10-13T08:27:38.575132+00:00",
+      "result": "PASS",
+      "log_sha256": "9237e87c18d4d177f5321cd9c7301960d466666398081b3c4a3514d2a72483aa"
+    },
+    "full_stress": {
+      "command": "bash scripts/stress-ratchet.sh </dev/null",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "started_at": "2026-10-13T08:27:38.575395+00:00",
+      "completed_at": "2026-10-13T08:32:57.931411+00:00",
+      "result": "PASS",
+      "log_sha256": "092a040f7272231222f9a30c7eccc18cffb580fd709bab02115dc1826b54f7b4",
+      "bundle": "stress/results/20261013T082738Z-53784/summary.json",
+      "reported_revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "runner": {
+        "arch": "arm64",
+        "os": "Darwin"
+      },
+      "passed": 835,
+      "failed": 0,
+      "unproven": 5,
+      "not_run": [],
+      "unproven_scenarios": [
+        {
+          "id": "30-journal-supplied-key",
+          "assertions": 1
+        },
+        {
+          "id": "40-06-permission-change-mid-apply",
+          "assertions": 1
+        },
+        {
+          "id": "70-content-blindness-traps",
+          "assertions": 3
+        }
+      ]
+    },
+    "release_pages_unit_tests": {
+      "command": "python3 -m unittest discover -s scripts -p test_check_pages_release.py -v",
+      "revision": "b2a5a4f353da24ba77ff7aa50712d37242946dc8",
+      "exit_code": 0,
+      "tests_run": 22,
+      "result": "PASS",
+      "log_sha256": "b012b7c1a392f692a0f31139319bd943794015d33ca1017ad8e0376279b40278"
+    }
+  },
+  "recording_capture": {
+    "command": "bash scripts/capture-release-gifs.sh </dev/null",
+    "exit_code": 0,
+    "fixtures": "fresh temporary folders, throwaway ETUDE_STATE_DIR and ETUDE_JOURNAL_KEY",
+    "assets": [
+      {
+        "name": "sweep-progress",
+        "cast": "demo/recordings/sweep-progress.cast",
+        "gif": "demo/gifs/sweep-progress.gif",
+        "recorded_exit_code": 0,
+        "cast_read_in_full": true,
+        "visual_qa": "PASS: real accepted/refused or apply/recovery frames inspected",
+        "cast_sha256": "7f6f9f1610ca8d870034962eb3a8c30dde2c86e5ba0c4e4e7c342f440adc3a0c",
+        "gif_sha256": "2c32ea001ee99e8729a808fb0337fd0397d7b60e62e4fb72e9d18a35c28db94c"
+      },
+      {
+        "name": "stash-custody",
+        "cast": "demo/recordings/stash-custody.cast",
+        "gif": "demo/gifs/stash-custody.gif",
+        "recorded_exit_code": 0,
+        "cast_read_in_full": true,
+        "visual_qa": "PASS: real accepted/refused or apply/recovery frames inspected",
+        "cast_sha256": "f07cbb5bab52350b0ffd7af1660683100568ee37fce065462bb610b4629b9f07",
+        "gif_sha256": "59e66bfb1e802013f939eb37868c72fd4342dd1d64a498f949a02e6fb9841516"
+      },
+      {
+        "name": "unpack-safety",
+        "cast": "demo/recordings/unpack-safety.cast",
+        "gif": "demo/gifs/unpack-safety.gif",
+        "recorded_exit_code": 0,
+        "cast_read_in_full": true,
+        "visual_qa": "PASS: real accepted/refused or apply/recovery frames inspected",
+        "cast_sha256": "dc771054708cea1f2c2caa07dae28ba3d2f98d7170e528f8b073b27f0b28f4a6",
+        "gif_sha256": "bd36de7f1740ea75993a0c8ee526e3c1f41ed725ef3eaf08f897566539e5d193"
+      }
+    ]
+  },
+  "unresolved_findings": [
+    {
+      "source": "https://github.com/risingmoonscholar/etudes/actions/runs/38362924584",
+      "scenario": "30-kill-mid-undo",
+      "observation": "At the 85% undo interruption target, undo did not reach a witnessed partial state before exiting or the 10s deadline; journal-dump reported that undo did not reach a stoppable partial state.",
+      "status": "unresolved observer finding; whether completion was too fast or another cause intervened is not established",
+      "repair": "No repair to this scenario or its watch-undo behavior was made. Later green runs are observations, not a fix."
+    }
+  ],
+  "not_assessed": [
+    "The five stress assertions listed as unproven are not counted as passes.",
+    "Independent review of the release candidate was not assessed.",
+    "Installation of published 0.5.4 tags was not assessed; no such tag was created.",
+    "Tagging, releases and Pages publication were not performed.",
+    "The root cause or a repair of the earlier 30-kill-mid-undo observer deadline finding was not established."
+  ],
+  "scope": "Local candidate installation, committed documentation/assets, release-gate unit tests, required host checks and full stress on disposable fixtures only.",
+  "independent_review": "not assessed",
+  "publication": "not performed"
+}
