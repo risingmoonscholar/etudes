@@ -106,7 +106,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v6/sweep.json`, `v7/stash.json` and `v5/unpack.json`);
+contract envelopes (`v7/sweep.json`, `v8/stash.json` and `v5/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -187,6 +187,11 @@ route its files elsewhere. The plan reports files already directly inside a
 profile destination as in place; deeper files can still be promoted when the
 selected scan depth includes them.
 
+Sweep capability declaration version 7 adds `download_in_flight` to the refusal
+catalog for a scan whose root is still being downloaded. The result is retryable
+later and names the in-flight download as its subject. Earlier versioned
+declarations remain unchanged.
+
 Stash's capability version 3 and sweep's preceding version 3 declare explicit
 plan exports and replay. The result envelope remains version 2; the separate
 bounded plan artifact is version 1. Existing versioned pins remain immutable. A plan holds metadata
@@ -229,7 +234,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 7 in `v7/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 8 in `v8/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
@@ -250,3 +255,8 @@ older batch is completed or live, including one from another folder. Exit 3 name
 the unreadable journal and says it cannot restore; files and journal bytes remain
 unchanged. Exact `stash pop --id ID` loads only that selected journal with its
 original key. Keep different key histories in separate `ETUDE_STATE_DIR` stores.
+
+Stash declaration version 8 adds `not_due_yet` to the refusal catalog for an
+explicit `pop --if-due` whose journal deadline is still ahead. It is retryable
+later with the same request and identifies the journal as its subject. Earlier
+versioned declarations remain unchanged.

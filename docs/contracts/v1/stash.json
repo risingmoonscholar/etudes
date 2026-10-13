@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 7,
+    "schema_version": 8,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -176,13 +176,24 @@
         "why": "Another operation currently holds the folder; the same request may work after it releases the folder."
       },
       {
+        "code": "not_due_yet",
+        "retry": "later",
+        "subject_kind": "journal",
+        "operations": [
+          "pop"
+        ],
+        "why": "The journal entry is not due yet; the same request may succeed later without changing the caller's request."
+      },
+      {
         "code": "journal_unreadable",
         "retry": "later",
         "subject_kind": "journal",
         "operations": [
           "stash",
           "pop",
-          "status"
+          "status",
+          "inspect",
+          "select"
         ],
         "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
       },
@@ -193,7 +204,9 @@
         "operations": [
           "stash",
           "pop",
-          "status"
+          "status",
+          "inspect",
+          "select"
         ],
         "why": "The required journal key is unavailable and may become available later."
       },
@@ -211,7 +224,8 @@
         "retry": "after_change",
         "subject_kind": "input",
         "operations": [
-          "stash"
+          "stash",
+          "select"
         ],
         "why": "The input violates a safety rule; change the input before retrying."
       },

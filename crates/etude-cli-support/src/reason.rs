@@ -39,6 +39,7 @@ pub enum Code {
     FolderBusy,
     RecentFiles,
     DownloadInFlight,
+    NotDueYet,
     JournalUnreadable,
     JournalKeyUnavailable,
     UnknownOperation,
@@ -65,6 +66,7 @@ impl Code {
         Self::FolderBusy,
         Self::RecentFiles,
         Self::DownloadInFlight,
+        Self::NotDueYet,
         Self::JournalUnreadable,
         Self::JournalKeyUnavailable,
         Self::UnknownOperation,
@@ -202,8 +204,16 @@ pub const CODES: &[CodeSpec] = &[
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["unpack:extract"],
+        operations: &["sweep:scan", "unpack:extract"],
         explanation: "The input appears to still be downloading and may be checked later.",
+    },
+    CodeSpec {
+        code: Code::NotDueYet,
+        name: "not_due_yet",
+        retry: RetryClass::Later,
+        subject_kind: Some("journal"),
+        operations: &["stash:pop"],
+        explanation: "The journal entry is not due yet; the same request may succeed later without changing the caller's request.",
     },
     CodeSpec {
         code: Code::JournalUnreadable,
@@ -216,7 +226,9 @@ pub const CODES: &[CodeSpec] = &[
             "sweep:status",
             "stash:stash",
             "stash:pop",
+            "stash:inspect",
             "stash:status",
+            "stash:select",
         ],
         explanation: "The journal cannot be read now; the same read-only request may work after the journal becomes readable.",
     },
@@ -231,7 +243,9 @@ pub const CODES: &[CodeSpec] = &[
             "sweep:status",
             "stash:stash",
             "stash:pop",
+            "stash:inspect",
             "stash:status",
+            "stash:select",
         ],
         explanation: "The required journal key is unavailable and may become available later.",
     },
@@ -248,7 +262,13 @@ pub const CODES: &[CodeSpec] = &[
         name: "unsafe_input",
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
-        operations: &["sweep:scan", "sweep:apply", "stash:stash", "unpack:extract"],
+        operations: &[
+            "sweep:scan",
+            "sweep:apply",
+            "stash:stash",
+            "stash:select",
+            "unpack:extract",
+        ],
         explanation: "The input violates a safety rule; change the input before retrying.",
     },
     CodeSpec {
@@ -410,6 +430,7 @@ impl Reason {
             Code::FolderBusy => "folder_busy",
             Code::RecentFiles => "recent_files",
             Code::DownloadInFlight => "download_in_flight",
+            Code::NotDueYet => "not_due_yet",
             Code::JournalUnreadable => "journal_unreadable",
             Code::JournalKeyUnavailable => "journal_key_unavailable",
             Code::UnknownOperation => "unknown_operation",
@@ -501,6 +522,11 @@ mod tests {
         assert_eq!(
             reason.json(),
             r#"{"code":"folder_busy","retry":"later","subject":{"kind":"other_operation","path":"/Desktop"}}"#
+        );
+        let not_due = Reason::refusal(Code::NotDueYet, Some(Subject::wait("journal", None)));
+        assert_eq!(
+            not_due.json(),
+            r#"{"code":"not_due_yet","retry":"later","subject":{"kind":"journal"}}"#
         );
     }
 

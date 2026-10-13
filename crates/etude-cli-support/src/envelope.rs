@@ -43,7 +43,9 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
         Some("contract") => "contract",
         Some("help" | "--help" | "-h") => "help",
         Some("version" | "--version" | "-V") => "version",
-        Some("apply" | "undo" | "forget" | "verify" | "lesson" | "review") if tool == "sweep" => {
+        Some("apply" | "undo" | "forget" | "verify" | "lesson" | "review" | "status")
+            if tool == "sweep" =>
+        {
             first.unwrap()
         }
         Some("pop" | "status") if tool == "stash" => first.unwrap(),
@@ -224,6 +226,16 @@ pub fn finish(code: ExitCode) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sweep_status_has_status_scope() {
+        super::begin("sweep", "0.5.4", &["status".into(), "--json".into()]);
+        super::RESULT.with(|state| {
+            let state = state.borrow();
+            assert_eq!(state.operation, "status");
+            assert!(state.scope.contains("status"));
+        });
+    }
+
     #[test]
     fn schema_fields_require_a_version_bump() {
         assert_eq!(super::SCHEMA_VERSION, 4);
