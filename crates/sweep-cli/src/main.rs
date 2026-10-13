@@ -1904,7 +1904,7 @@ fn scan_exit_code(e: &etude_core::scan::ScanError) -> ExitCode {
         // An incoming folder can be scanned safely once it has finished arriving.
         E::RefusedInFlightRoot(_) => refusal(
             Code::DownloadInFlight,
-            Some(Subject::wait("download", None)),
+            Some(Subject::wait("download_in_flight", None)),
         ),
         E::RefusedRunningAsRoot
         | E::RefusedSystemLocation(_)

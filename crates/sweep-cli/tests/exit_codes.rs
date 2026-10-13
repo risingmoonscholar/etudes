@@ -82,6 +82,41 @@ fn a_nonexistent_path_exits_3_not_2() {
 }
 
 #[test]
+fn in_flight_download_roots_keep_the_refusal_exit_code() {
+    let root = TestDir(unique_temp("download-root"));
+    std::fs::create_dir_all(&root.0).unwrap();
+    let state = TestDir(unique_temp("download-root-state"));
+    std::fs::create_dir_all(&state.0).unwrap();
+
+    for suffix in [".part", ".download", ".crdownload"] {
+        let download = root.0.join(format!("movie.mp4{suffix}"));
+        std::fs::create_dir_all(&download).unwrap();
+        std::fs::write(download.join("partial.mp4"), b"still arriving").unwrap();
+
+        let out = sweep_bin()
+            .env("ETUDE_STATE_DIR", &state.0)
+            .arg(&download)
+            .args(["--since", "0", "--json"])
+            .output()
+            .unwrap();
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{suffix} scan root must remain a refusal, got: {output}"
+        );
+        assert!(
+            output.contains("download_in_flight") && output.contains("download still in progress"),
+            "{suffix} scan root must report the download refusal, got: {output}"
+        );
+    }
+}
+
+#[test]
 fn a_destination_collision_on_apply_exits_2_not_3() {
     let root = unique_temp("collision");
     let _ = std::fs::remove_dir_all(&root);
