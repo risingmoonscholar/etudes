@@ -188,7 +188,15 @@
       "scenario": "30-kill-mid-undo",
       "observation": "At the 85% undo interruption target, undo did not reach a witnessed partial state before exiting or the 10s deadline; journal-dump reported that undo did not reach a stoppable partial state.",
       "status": "unresolved observer finding; whether completion was too fast or another cause intervened is not established",
-      "repair": "No repair to this scenario or its watch-undo behavior was made. Later green runs are observations, not a fix."
+      "repair": "No repair to this scenario or its watch-undo behavior was made. Later green runs are observations, not a fix.",
+      "diagnosis_notes": [
+        {
+          "date": "2026-10-14",
+          "observation": "Pre-stop journal counts can be stale. In a controlled diagnostic scheduling interleaving, watch-undo reported 425/500 after undo had exited 0; ps reported a zombie and a diagnostic reload showed 500/500 with no damaged tail. A separate late-kill reproduction differed only by the empty operation-created Screenshots directory (0755); the next undo exited 1 and retained it.",
+          "repair": "Local dev-only watcher now confirms OS stop and reloads before accepting reversed and still-moved entries. Scenario uses bounded attempts, unproven misses, a larger late fixture, and finished-undo and missing-file controls. Product directory cleanup is unchanged.",
+          "owner_pending": "Supervisor must push, open the pull request, run CI proof and assess the separate empty-directory product finding. No pull request was opened by this session."
+        }
+      ]
     }
   ],
   "not_assessed": [
