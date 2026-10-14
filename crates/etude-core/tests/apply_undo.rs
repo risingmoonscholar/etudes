@@ -1914,6 +1914,7 @@ fn a_journal_missing_several_records_restores_nothing() {
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("still loads");
     let before: Vec<PathBuf> = j.entries.iter().map(|e| e.to.clone()).collect();
 
+    assert_eq!(apply::next_undo_journal(std::slice::from_ref(&j)), Some(0));
     let report = apply::undo(&mut j, &TestSeal);
 
     assert!(
@@ -2049,4 +2050,152 @@ fn unbound_apply_refuses_destinations_outside_its_root_before_moving() {
         );
     }
     fs::remove_dir_all(base).unwrap();
+}
+
+/// Build the stopped A / completed B ending without processes or timing.
+fn contended_journals(tag: &str, count: usize) -> (PathBuf, Vec<Journal>) {
+    let root = std::env::temp_dir().join(format!("sweep_contention_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("group")).unwrap();
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", root.join("state")) };
+    let mut a = Journal {
+        id: "a".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        validated_directories: vec![directory_guard(&root)],
+        ..Journal::default()
+    };
+    for i in 0..count {
+        let from = root.join(format!("file-{i}"));
+        let to = root.join("group").join(format!("file-{i}"));
+        fs::write(&from, format!("original bytes {i}\n")).unwrap();
+        let (size, mtime_secs, inode, edge_hash) = etude_core::journal::fingerprint(&from).unwrap();
+        a.entries.push(Entry {
+            from: from.clone(),
+            to: to.clone(),
+            method: Method::Rename,
+            size,
+            mtime_secs,
+            inode,
+            edge_hash,
+            state: etude_core::journal::EntryState::Planned,
+        });
+        fs::rename(from, to).unwrap();
+    }
+    a.entries[0].state = etude_core::journal::EntryState::Moved;
+    let mut b = Journal {
+        id: "b".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries: a.entries[1..].to_vec(),
+        validated_directories: vec![directory_guard(&root)],
+        ..Journal::default()
+    };
+    for entry in &mut b.entries {
+        entry.state = etude_core::journal::EntryState::Moved;
+    }
+    b.save_sealed(&TestSeal).unwrap();
+    a.save_sealed(&TestSeal).unwrap();
+    // Explicit order stands for recency, independent of timestamp resolution.
+    (root, vec![a, b])
+}
+
+#[test]
+fn newest_stopped_apply_does_not_block_the_journal_that_finished_its_files() {
+    let _g = lock();
+    let (root, mut journals) = contended_journals("recovery", 5);
+    assert_eq!(apply::unrecorded_moves(&journals[0]), 4);
+    for _ in 0..2 {
+        let index = apply::next_undo_journal(&journals).unwrap();
+        let report = apply::undo(&mut journals[index], &TestSeal);
+        assert_eq!(
+            report.unrecorded_moves, 0,
+            "contention was mistaken for lost records"
+        );
+        assert!(report.error.is_none(), "{:?}", report.error);
+        assert!(report.skipped_changed.is_empty());
+        journals[index] = Journal::load_sealed("test", &journals[index].id, &TestSeal).unwrap();
+    }
+    assert!(apply::next_undo_journal(&journals).is_none());
+    for i in 0..5 {
+        assert_eq!(
+            fs::read(root.join(format!("file-{i}"))).unwrap(),
+            format!("original bytes {i}\n").as_bytes()
+        );
+    }
+    assert_eq!(fs::read_dir(root.join("group")).unwrap().count(), 0);
+    cleanup(&root);
+}
+
+#[test]
+fn a_single_contended_destination_is_restored_by_its_recorded_owner() {
+    let _g = lock();
+    for copied in [false, true] {
+        let (root, mut journals) = contended_journals(if copied { "copy" } else { "single" }, 2);
+        if copied {
+            // Model the inode change from copy-unlink without needing a second
+            // mounted volume. The original observation remains in both journals.
+            let entry = &mut journals[1].entries[0];
+            let metadata = fs::metadata(&entry.to).unwrap();
+            let temporary = root.join("copied");
+            fs::copy(&entry.to, &temporary).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&temporary)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+                .unwrap();
+            fs::remove_file(&entry.to).unwrap();
+            fs::rename(temporary, &entry.to).unwrap();
+            entry.method = Method::CopyUnlink;
+            assert_ne!(
+                etude_core::journal::fingerprint(&entry.to).unwrap().2,
+                entry.inode
+            );
+            journals[1].save_sealed(&TestSeal).unwrap();
+        }
+        assert_eq!(apply::next_undo_journal(&journals), Some(1));
+        let report = apply::undo(&mut journals[1], &TestSeal);
+        assert_eq!(report.restored, 1);
+        assert_eq!(apply::next_undo_journal(&journals), Some(0));
+        assert_eq!(apply::undo(&mut journals[0], &TestSeal).restored, 1);
+        for i in 0..2 {
+            assert_eq!(
+                fs::read(root.join(format!("file-{i}"))).unwrap(),
+                format!("original bytes {i}\n").as_bytes()
+            );
+        }
+        cleanup(&root);
+    }
+}
+
+#[test]
+fn unjournalled_moves_and_unproven_owners_still_refuse() {
+    let _g = lock();
+    let (root, mut journals) = contended_journals("unproven", 5);
+    let before = fs::read(journals[0].path()).unwrap();
+    // The files exist, but the process that moved them left no journal.
+    assert_eq!(apply::next_undo_journal(&journals[..1]), Some(0));
+    assert_eq!(apply::undo(&mut journals[0], &TestSeal).unrecorded_moves, 4);
+    // A journal that merely planned the same paths proves no completed move.
+    for entry in &mut journals[1].entries {
+        entry.state = etude_core::journal::EntryState::Planned;
+    }
+    assert_eq!(apply::next_undo_journal(&journals), Some(0));
+    // A Moved record with the wrong fingerprint is also not an owner.
+    for entry in &mut journals[1].entries {
+        entry.state = etude_core::journal::EntryState::Moved;
+        entry.edge_hash ^= 1;
+    }
+    assert_eq!(apply::next_undo_journal(&journals), Some(0));
+    assert_eq!(apply::undo(&mut journals[0], &TestSeal).unrecorded_moves, 4);
+    assert_eq!(fs::read(journals[0].path()).unwrap(), before);
+    for i in 0..5 {
+        assert!(!root.join(format!("file-{i}")).exists());
+        assert_eq!(
+            fs::read(root.join("group").join(format!("file-{i}"))).unwrap(),
+            format!("original bytes {i}\n").as_bytes()
+        );
+    }
+    cleanup(&root);
 }

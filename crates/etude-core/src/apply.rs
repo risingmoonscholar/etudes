@@ -1084,6 +1084,70 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
         .count()
 }
 
+/// Whether a journal still needs undo, including unrecorded crash recovery.
+pub fn has_undo_work(j: &Journal) -> bool {
+    j.progress_tail_damaged || j.entries.iter().any(Entry::is_moved) || unrecorded_moves(j) > 0
+}
+
+/// Select from newest-first journals, restoring a recorded owner before a
+/// contending plan that would otherwise mistake its files for lost records.
+/// This only changes order: undo's missing-record and fingerprint checks still
+/// run unchanged. Every apparent unrecorded move must have a matching live
+/// Moved record before we bypass the newest journal. Partial evidence, stale
+/// records, different paths, and dependency cycles preserve the original order.
+pub fn next_undo_journal(journals: &[Journal]) -> Option<usize> {
+    let first = journals.iter().position(has_undo_work)?;
+    let mut current = first;
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let j = &journals[current];
+        let mut owners = Vec::new();
+        for planned in j.entries.iter().filter(|e| {
+            e.state == EntryState::Planned
+                && e.to.symlink_metadata().is_ok()
+                && e.from.symlink_metadata().is_err()
+        }) {
+            let owner = journals.iter().enumerate().find_map(|(index, other)| {
+                if index == current || other.tool != j.tool || other.root != j.root {
+                    return None;
+                }
+                other
+                    .entries
+                    .iter()
+                    .any(|recorded| {
+                        recorded.is_moved()
+                            && recorded.from == planned.from
+                            && recorded.to == planned.to
+                            && recorded.size == planned.size
+                            && recorded.mtime_secs == planned.mtime_secs
+                            && recorded.edge_hash == planned.edge_hash
+                            && recorded.inode == planned.inode
+                            && fingerprint(&recorded.to).is_ok_and(|(size, mtime, inode, hash)| {
+                                size == recorded.size
+                                    && mtime == recorded.mtime_secs
+                                    && hash == recorded.edge_hash
+                                    && (recorded.method != Method::Rename
+                                        || inode == recorded.inode)
+                            })
+                    })
+                    .then_some(index)
+            });
+            let Some(owner) = owner else {
+                // A real missing record remains a refusal in the selected
+                // journal. Do not silently route around damage.
+                return Some(current);
+            };
+            owners.push(owner);
+        }
+        let Some(owner) = owners.into_iter().min() else {
+            return Some(current);
+        };
+        current = owner;
+    }
+    // Conflicting histories are not sufficient evidence to reorder.
+    Some(first)
+}
+
 pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
     undo_with_progress(j, sealer, |_| {})
 }

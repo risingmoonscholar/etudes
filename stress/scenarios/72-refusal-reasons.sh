@@ -226,30 +226,9 @@ assert_eq 0 "$(find "$ETUDE_STATE_DIR" -mindepth 1 | wc -l | tr -d ' ')" "unknow
 
 # --- 3. two applies on one folder at once ---------------------------------
 #
-# KNOWN DEFECT, not fixed here: after the stopped-part-way ending, `sweep undo`
-# can refuse to recover the folder, and no sequence of undo commands gets past
-# it. Nothing is lost; the files stay in the folder apply made.
-#
-# Minimal reproduction (every step uses a throwaway folder, state directory
-# and key, with stdin closed):
-#   1. Make a folder D of 300 files that sweep groups together.
-#   2. Start `sweep apply D --yes` (call it A) in the background.
-#   3. `journal-dump --watch-apply STATE D <a file three quarters through the
-#      plan> PID_A` stops A after it has journalled at least one move.
-#   4. Run a second `sweep apply D --yes` (B) to completion. It moves the rest.
-#   5. `kill -CONT PID_A`. A finds its remaining files gone and exits 3 with
-#      `operation_incomplete`. Its journal holds a few Moved entries and many
-#      Planned ones whose destinations now hold the files B moved.
-#   6. Make A's journal the most recently modified one. That happens on its
-#      own in roughly one run in four here; `touch STATE/sweep-<A id>.journal`
-#      forces it.
-#   7. `sweep undo D` exits 3: "This journal is missing more than one record".
-#      Undo chose A's journal because it is newest, and `unrecorded_moves()`
-#      counted B's files as A's lost records. `sweep undo D` again, and
-#      `sweep undo` with no folder, refuse the same way: there is no command
-#      that undoes B's journal first.
-# Expected once fixed: undo restores D exactly, as it does when B's journal
-# happens to be the newest.
+# The stopped apply can be newest while its Planned destinations contain
+# files moved by the winner. Undo must select the recorded owner first, then
+# reverse the stopped apply, recovering every original path and byte.
 # check_contention LABEL EXPECT DIR BEFORE FILES STATUS1 JSON1 STATUS2 JSON2
 # EXPECT is refused, part_way or either. Whichever ending the loser reached,
 # its consequences are asserted; an ending that is neither fails.
@@ -325,6 +304,11 @@ check_contention() {
   # Undo until nothing is left to reverse: each apply that moved files has
   # its own journal for this folder.
   local runs=0 undo_code=0
+  if [ "$outcome" = part_way ]; then
+    # Force the formerly blocking order in both the controlled run and race.
+    touch "$ETUDE_STATE_DIR/sweep-$operation.journal"
+    pass "$label: stopped apply is newest; exercising the old defect order"
+  fi
   snapshot_tree "$d" "$W/before-undo-$label.json"
   while [ "$runs" -lt 4 ]; do
     "$SWEEP" undo "$d" >"$W/undo-$label.out" 2>&1; undo_code=$?
@@ -335,13 +319,6 @@ check_contention() {
   if [ "$undo_code" = 1 ]; then
     pass "$label: undo ends with nothing left to reverse after $runs restoring run(s)"
     assert_snapshot_eq "$before" "$W/after-undo-$label.json" "$label: undo recovers every original path and byte"
-  elif [ "$outcome" = part_way ] && [ "$undo_code" = 3 ] && [ "$runs" = 0 ] \
-      && grep -q 'missing more than one record' "$W/undo-$label.out"; then
-    # The known defect described at the top of this part. The refusal is
-    # safe, and it is not a recovery: unproven by name, never a pass.
-    assert_snapshot_eq "$W/before-undo-$label.json" "$W/after-undo-$label.json" "$label: the refused undo (exit 3) changed no path or byte"
-    unproven "KNOWN DEFECT: $label: sweep undo refused to recover the folder after two applies on it" \
-      "undo chose the stopped apply's journal and read the other apply's moves as its own missing records"
   else
     fail "$label: undo stopped with exit $undo_code after $runs restoring run(s): $(tr '\n' ' ' < "$W/undo-$label.out" | cut -c1-600)"
     assert_snapshot_eq "$before" "$W/after-undo-$label.json" "$label: undo recovers every original path and byte"

@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 456 tests
+cargo test --all                # 459 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -369,12 +369,14 @@ in one of two ways, and timing decides which:
   then collided. `recovery.operation` is an id that `sweep status --id` reports
   as `interrupted`. Run `sweep undo` on the folder before planning again.
 
-Known gaps: a folder that holds only recent files reports `nothing_to_do`, with
-no code that says "try again later". After two applies on one folder, when one
-of them stopped part-way, `sweep undo` can refuse with exit 3 instead of putting
-the files back. Running it again refuses again, and no undo command reaches the
-other apply first. Nothing is lost: the files stay in the folder apply made, and
-can be moved back by hand.
+After the part-way ending, run `sweep undo` on the folder until it says there
+is nothing left to undo. It reverses the apply that recorded the remaining
+moves first, then the stopped apply, restoring every original path and byte.
+This works even when the stopped apply's journal is the newest. Journals that
+actually lost several move records are still refused without touching files.
+
+Known gap: a folder that holds only recent files reports `nothing_to_do`, with
+no code that says "try again later".
 
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:
