@@ -1742,6 +1742,7 @@ fn status_id_payload(journal: &etude_core::Journal) -> String {
     use etude_core::json as j;
     let summary = journal.summary();
     let state = match summary.state {
+        etude_core::journal::JournalState::Refused => "refused",
         etude_core::journal::JournalState::Completed => "completed",
         etude_core::journal::JournalState::Interrupted => "interrupted",
         etude_core::journal::JournalState::Reversed => "reversed",
@@ -1816,6 +1817,7 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
             } else {
                 let summary = journal.summary();
                 let state = match summary.state {
+                    etude_core::journal::JournalState::Refused => "refused",
                     etude_core::journal::JournalState::Completed => "completed",
                     etude_core::journal::JournalState::Interrupted => "interrupted",
                     etude_core::journal::JournalState::Reversed => "reversed",
@@ -2006,7 +2008,8 @@ mod tests {
             ..Default::default()
         };
         let payload = status_id_payload(&journal);
-        assert!(payload.contains("\"state\":\"completed\""));
+        // A record with no entries moved nothing: `refused`, not `completed`.
+        assert!(payload.contains("\"state\":\"refused\""));
         assert!(payload.contains("\"planned\":0"));
         assert!(payload.contains("\"moved\":0"));
         assert!(payload.contains("\"reversed\":0"));

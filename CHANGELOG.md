@@ -101,21 +101,30 @@ reviewers were pointed at the tools before anyone else could be.
 - **sweep:** `sweep status` reports an apply that was cut short and then undone
   as `reversed`. `partly_reversed` means some files are still moved. An apply
   that stops part-way names its journal in `recovery.operation`.
+- **sweep and stash:** status has a fifth state, `refused`: a record with no
+  entries, left by an apply that was turned away before it moved anything. It
+  was reported as `completed`. Its counts are all zero and it offers no undo
+  command.
 - **stash:** `stash pop --id` and `stash inspect --id` with an unknown id return
   `unknown_operation`, as `stash status --id` does. Exit codes are unchanged.
 - **Contracts:** each tool's `refusal_codes` lists only codes that tool can
   return. `folder_busy`, `recent_files`, `empty_selection` and `user_cancelled`
   are removed, and `download_in_flight` is removed from unpack. The capability
-  declarations are now version 8 (sweep), 9 (stash) and 6 (unpack).
+  declarations are now version 9 (sweep), 10 (stash) and 6 (unpack).
 - **Known gaps in `reason`:** the contract check proves 13 of sweep's 16 listed
   codes, 11 of stash's 15 and 9 of unpack's 10, and names the rest as unproven:
   `internal_error`, `journal_key_unavailable`, `destination_outside_root` and,
   for stash, `destination_exists`. A folder that holds only recent files
   reports `nothing_to_do`; a "try again later" code for it is a possible later
-  addition. Two `sweep apply` runs on one folder at once are not held apart:
-  the one that loses stops part-way with `operation_incomplete`, and `sweep
-  undo` restores the folder. `unpack` reports a `.part` or `.download` name as
-  `unsupported_format`.
+  addition. Two `sweep apply` runs on one folder at once are not held apart,
+  and the one that loses ends in one of two ways. Either it is refused before
+  it moves anything (exit 2, `plan_stale`; plan again), or it stops part-way
+  (exit 3, `operation_incomplete`, with a `recovery.operation` id that status
+  reports as `interrupted`; run `sweep undo`, then plan again). After the
+  part-way ending, `sweep undo` can refuse with exit 3 instead of putting the
+  files back; running it again refuses again, and no undo command reaches the
+  other apply first. Nothing is lost: the files stay in the folder apply made.
+  `unpack` reports a `.part` or `.download` name as `unsupported_format`.
 
 ### 0.5.3 published — sweep, stash and unpack
 

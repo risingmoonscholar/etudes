@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 455 tests
+cargo test --all                # 456 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -347,8 +347,9 @@ stash status --id ID --json     # one stash operation, by its id
 ```
 
 The id is `recovery.operation` in the result of the command that moved the
-files. The answer gives a state (`completed`, `interrupted`, `reversed` or
-`partly_reversed`) and counts of planned, moved and reversed items. It never
+files. The answer gives a state (`refused`, `completed`, `interrupted`,
+`reversed` or `partly_reversed`) and counts of planned, moved and reversed
+items. `refused` is an apply that was turned away before it moved anything. It never
 lists file names. An id that no journal holds gives exit 1 with the code
 `unknown_operation`. `reversed` means nothing is still moved; `partly_reversed`
 means some files are back and some are not.
@@ -358,10 +359,22 @@ A result's `status` and `reason` always agree: when the status is `incomplete`,
 pop that had to leave a file behind exits 0 as before, with status `incomplete`
 and the code `operation_incomplete`.
 
+Two applies on one folder at once are not held apart. One wins. The other ends
+in one of two ways, and timing decides which:
+
+- **Refused before it moved anything** (exit 2, `plan_stale`): the folder
+  changed under its plan. Nothing of its own needs undoing, and `sweep status`
+  reports its record as `refused`. Scan and apply again.
+- **Stopped part-way** (exit 3, `operation_incomplete`): it had started and
+  then collided. `recovery.operation` is an id that `sweep status --id` reports
+  as `interrupted`. Run `sweep undo` on the folder before planning again.
+
 Known gaps: a folder that holds only recent files reports `nothing_to_do`, with
-no code that says "try again later". Two applies on one folder at once are not
-held apart: one wins, and the other stops part-way with `operation_incomplete`
-and an id you can pass to `sweep status --id`; `sweep undo` restores the folder.
+no code that says "try again later". After two applies on one folder, when one
+of them stopped part-way, `sweep undo` can refuse with exit 3 instead of putting
+the files back. Running it again refuses again, and no undo command reaches the
+other apply first. Nothing is lost: the files stay in the folder apply made, and
+can be moved back by hand.
 
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:

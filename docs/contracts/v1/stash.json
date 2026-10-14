@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 9,
+    "schema_version": 10,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -507,6 +507,7 @@
       "support": "read_only",
       "query": "status --id OPERATION",
       "states": [
+        "refused",
         "completed",
         "interrupted",
         "reversed",

@@ -145,6 +145,8 @@ pub struct Journal {
 /// Path-free, read-only counts for an operation status lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalState {
+    /// No entries: the apply was refused before it moved anything.
+    Refused,
     Completed,
     Interrupted,
     Reversed,
@@ -182,7 +184,13 @@ impl Journal {
         // Entries that were planned and never moved have nothing to put
         // back. Once nothing is still moved and something was reversed, the
         // operation is reversed; "partly" means some entries are still moved.
-        let state = if reversed > 0 && moved == 0 {
+        // The only records written with no entries are for an apply refused
+        // before it moved anything (see `apply::record_refused_plan_with_id`
+        // and the stale live-plan path). An apply with nothing to move
+        // returns before it writes a journal at all.
+        let state = if self.entries.is_empty() {
+            JournalState::Refused
+        } else if reversed > 0 && moved == 0 {
             JournalState::Reversed
         } else if reversed > 0 {
             JournalState::PartlyReversed
@@ -1213,6 +1221,24 @@ mod tests {
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A record with no entries is written only when an apply is refused
+    /// before it moves anything. Nothing was planned into it and nothing
+    /// moved, so calling it `Completed` would tell a caller the work was done.
+    #[test]
+    fn a_record_with_no_entries_is_refused_not_completed() {
+        let summary = Journal {
+            id: "durable-id".into(),
+            tool: "sweep".into(),
+            ..Journal::default()
+        }
+        .summary();
+        assert_eq!(summary.state, JournalState::Refused);
+        assert_eq!(
+            (summary.planned, summary.moved, summary.reversed),
+            (0, 0, 0)
+        );
+    }
 
     /// An apply cut short leaves entries that were planned and never moved.
     /// Undoing it reverses everything that did move, so nothing is left to

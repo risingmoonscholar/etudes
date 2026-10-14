@@ -121,6 +121,15 @@ is removed from unpack, which reports a `.part` or `.download` name as
 `stash inspect --id`. `v8/sweep.json`, `v9/stash.json` and `v6/unpack.json` pin
 these declarations; earlier pins are unchanged.
 
+**Declaration versions 9 (sweep) and 10 (stash)** add a fifth status state.
+`status_lookup.states` is now `refused`, `completed`, `interrupted`, `reversed`
+and `partly_reversed`. `refused` is a journal record with no entries. Such a
+record is written only when an apply is turned away before it moves anything,
+because the folder changed under its plan; an apply with nothing to move writes
+no journal. Its counts are all zero and it has no recovery command. It was
+previously reported as `completed`. `v9/sweep.json` and `v10/stash.json` pin
+these declarations and `v1/` mirrors them; unpack stays at version 6.
+
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
 conditional path (including keychain, EXDEV, review and crash recovery). Those
@@ -136,7 +145,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v8/sweep.json`, `v9/stash.json` and `v6/unpack.json`);
+contract envelopes (`v9/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -233,7 +242,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 9 and its surrounding result envelope is version 4.
+declaration is version 10 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -264,7 +273,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 9 in `v9/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 10 in `v10/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,

@@ -292,6 +292,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
     etude_cli_support::envelope::status("done");
     for (summary, root) in summaries {
         let state = match summary.state {
+            etude_core::journal::JournalState::Refused => "refused",
             etude_core::journal::JournalState::Completed => "completed",
             etude_core::journal::JournalState::Interrupted => "interrupted",
             etude_core::journal::JournalState::Reversed => "reversed",
