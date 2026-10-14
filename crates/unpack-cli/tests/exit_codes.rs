@@ -186,3 +186,45 @@ fn a_real_flag_without_an_archive_says_what_is_missing() {
         );
     }
 }
+
+/// An archive path that runs through a regular file names nothing. The OS
+/// calls it "not a directory" rather than "not found", and unpack used to
+/// report it as `internal_error`, which tells a caller the request can never
+/// work.
+#[test]
+fn an_archive_path_through_a_file_is_missing_input_not_an_internal_error() {
+    let root = std::env::temp_dir().join(format!(
+        "unpack-exit-through-file-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    let _root = TestDir(root.clone());
+    std::fs::write(root.join("plain.txt"), b"x").unwrap();
+
+    let out = unpack_bin()
+        .arg(root.join("plain.txt/inside.zip"))
+        .arg("--json")
+        .env("ETUDE_STATE_DIR", root.join("state"))
+        .env("ETUDE_JOURNAL_KEY", "ab".repeat(32))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "exit code is unchanged: {stdout}"
+    );
+    assert!(
+        stdout.contains(
+            r#""reason":{"code":"missing_input","retry":"after_change","subject":{"kind":"input""#
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("internal_error"), "{stdout}");
+}

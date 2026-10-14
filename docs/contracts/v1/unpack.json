@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 5,
+    "schema_version": 6,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -134,15 +134,6 @@
           "extract"
         ],
         "why": "The destination is occupied; choose or make a vacant destination before retrying."
-      },
-      {
-        "code": "download_in_flight",
-        "retry": "later",
-        "subject_kind": "download_in_flight",
-        "operations": [
-          "extract"
-        ],
-        "why": "The input appears to still be downloading and may be checked later."
       },
       {
         "code": "unsafe_input",

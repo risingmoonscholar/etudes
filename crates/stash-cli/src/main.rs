@@ -233,14 +233,13 @@ const COMMAND_FLAGS: &[(&str, &[&str])] = &[
 fn refusal_reason(code: etude_cli_support::reason::Code) {
     use etude_cli_support::reason::{Code, Reason, Subject};
     let subject = match code {
-        Code::MissingInput | Code::UnsafeInput | Code::PermissionDenied | Code::EmptySelection => {
+        Code::MissingInput | Code::UnsafeInput | Code::PermissionDenied => {
             Some(Subject::wait("input", None))
         }
         Code::DestinationExists | Code::DestinationOutsideRoot => {
             Some(Subject::wait("destination", None))
         }
         Code::PlanStale => Some(Subject::wait("plan", None)),
-        Code::FolderBusy => Some(Subject::wait("other_operation", None)),
         Code::JournalUnreadable | Code::JournalKeyUnavailable | Code::OperationIncomplete => {
             Some(Subject::wait("journal", None))
         }
@@ -274,7 +273,14 @@ fn scan_reason(error: &scan::ScanError) -> etude_cli_support::reason::Code {
         scan::ScanError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             Code::PermissionDenied
         }
-        scan::ScanError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        // "Not a directory" is a path that runs through a regular file: it
+        // names nothing, exactly as a missing folder does.
+        scan::ScanError::Io(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
             Code::MissingInput
         }
         scan::ScanError::Io(_) => Code::InternalError,
@@ -1030,11 +1036,18 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     let Some(sl) = sealer() else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
+    // An id no journal holds is the same answer `status --id` gives. A folder
+    // with nothing stashed is a different question and keeps its own reason.
+    let by_id = matches!(&selector, batches::Selector::Id(_));
     let mut j = match batches::select(selector, &sl) {
         Ok(Some(journal)) => journal,
         Ok(None) => {
             eprintln!("stash: no stash found for this id or folder; nothing is stashed here");
-            refusal_reason(etude_cli_support::reason::Code::MissingInput);
+            refusal_reason(if by_id {
+                etude_cli_support::reason::Code::UnknownOperation
+            } else {
+                etude_cli_support::reason::Code::MissingInput
+            });
             etude_cli_support::envelope::status("nothing_to_do");
             return ExitCode::from(1);
         }
@@ -1199,6 +1212,10 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if r.skipped_changed.is_empty() {
         selection::remove_empty_root(&j);
+    } else {
+        // Items were left in holding. The exit status stays 0, as before,
+        // but the reason must not read `done` beside `incomplete`.
+        refusal_reason(etude_cli_support::reason::Code::OperationIncomplete);
     }
     ExitCode::SUCCESS
 }
@@ -1370,7 +1387,7 @@ fn cmd_inspect(args: &[String]) -> ExitCode {
         Ok(Some(journal)) => journal,
         Ok(None) => {
             eprintln!("stash: no operation found for that id");
-            refusal_reason(etude_cli_support::reason::Code::MissingInput);
+            refusal_reason(etude_cli_support::reason::Code::UnknownOperation);
             etude_cli_support::envelope::status("nothing_to_do");
             return ExitCode::from(1);
         }

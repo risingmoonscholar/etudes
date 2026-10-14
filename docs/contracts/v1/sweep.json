@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 7,
+    "schema_version": 8,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -189,26 +189,6 @@
         "why": "The selected profile is unavailable; restore or select a valid profile."
       },
       {
-        "code": "folder_busy",
-        "retry": "later",
-        "subject_kind": "other_operation",
-        "operations": [
-          "apply",
-          "undo"
-        ],
-        "why": "Another operation currently holds the folder; the same request may work after it releases the folder."
-      },
-      {
-        "code": "recent_files",
-        "retry": "later",
-        "subject_kind": "recent_files",
-        "operations": [
-          "scan",
-          "apply"
-        ],
-        "why": "The files are within the configured grace window and may be judged later."
-      },
-      {
         "code": "download_in_flight",
         "retry": "later",
         "subject_kind": "download_in_flight",
@@ -277,15 +257,6 @@
         "why": "The request lacks required access; change the relevant permissions before retrying."
       },
       {
-        "code": "empty_selection",
-        "retry": "after_change",
-        "subject_kind": "input",
-        "operations": [
-          "apply"
-        ],
-        "why": "The selection contains no applicable entries; change the selection."
-      },
-      {
         "code": "operation_incomplete",
         "retry": "after_change",
         "subject_kind": "journal",
@@ -294,16 +265,6 @@
           "undo"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
-      },
-      {
-        "code": "user_cancelled",
-        "retry": "never",
-        "subject_kind": null,
-        "operations": [
-          "forget",
-          "review"
-        ],
-        "why": "The user declined or cancelled this request."
       }
     ],
     "contract_query": {

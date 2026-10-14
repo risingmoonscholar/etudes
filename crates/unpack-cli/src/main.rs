@@ -474,7 +474,14 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
             return failure(ReasonCode::UnsafeInput, input_subject(archive));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        // "Not a directory" is a path that runs through a regular file: it
+        // names nothing, exactly as a missing archive does.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
             eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
             return failure(ReasonCode::MissingInput, input_subject(archive));
         }

@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 8,
+    "schema_version": 9,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -166,16 +166,6 @@
         "why": "The observed plan is stale; create a fresh plan before applying."
       },
       {
-        "code": "folder_busy",
-        "retry": "later",
-        "subject_kind": "other_operation",
-        "operations": [
-          "stash",
-          "pop"
-        ],
-        "why": "Another operation currently holds the folder; the same request may work after it releases the folder."
-      },
-      {
         "code": "not_due_yet",
         "retry": "later",
         "subject_kind": "journal",
@@ -215,7 +205,9 @@
         "retry": "never",
         "subject_kind": null,
         "operations": [
-          "status"
+          "pop",
+          "status",
+          "inspect"
         ],
         "why": "No journal contains the requested durable operation id."
       },
@@ -245,15 +237,6 @@
         "why": "The request lacks required access; change the relevant permissions before retrying."
       },
       {
-        "code": "empty_selection",
-        "retry": "after_change",
-        "subject_kind": "input",
-        "operations": [
-          "stash"
-        ],
-        "why": "The selection contains no applicable entries; change the selection."
-      },
-      {
         "code": "operation_incomplete",
         "retry": "after_change",
         "subject_kind": "journal",
@@ -262,15 +245,6 @@
           "pop"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
-      },
-      {
-        "code": "user_cancelled",
-        "retry": "never",
-        "subject_kind": null,
-        "operations": [
-          "select"
-        ],
-        "why": "The user declined or cancelled this request."
       }
     ],
     "contract_query": {

@@ -36,8 +36,6 @@ pub enum Code {
     DestinationOutsideRoot,
     PlanStale,
     ProfileMissing,
-    FolderBusy,
-    RecentFiles,
     DownloadInFlight,
     NotDueYet,
     JournalUnreadable,
@@ -45,9 +43,7 @@ pub enum Code {
     UnknownOperation,
     UnsafeInput,
     PermissionDenied,
-    EmptySelection,
     OperationIncomplete,
-    UserCancelled,
 }
 
 impl Code {
@@ -63,8 +59,6 @@ impl Code {
         Self::DestinationOutsideRoot,
         Self::PlanStale,
         Self::ProfileMissing,
-        Self::FolderBusy,
-        Self::RecentFiles,
         Self::DownloadInFlight,
         Self::NotDueYet,
         Self::JournalUnreadable,
@@ -72,9 +66,7 @@ impl Code {
         Self::UnknownOperation,
         Self::UnsafeInput,
         Self::PermissionDenied,
-        Self::EmptySelection,
         Self::OperationIncomplete,
-        Self::UserCancelled,
     ];
 }
 
@@ -184,27 +176,11 @@ pub const CODES: &[CodeSpec] = &[
         explanation: "The selected profile is unavailable; restore or select a valid profile.",
     },
     CodeSpec {
-        code: Code::FolderBusy,
-        name: "folder_busy",
-        retry: RetryClass::Later,
-        subject_kind: Some("other_operation"),
-        operations: &["sweep:apply", "sweep:undo", "stash:stash", "stash:pop"],
-        explanation: "Another operation currently holds the folder; the same request may work after it releases the folder.",
-    },
-    CodeSpec {
-        code: Code::RecentFiles,
-        name: "recent_files",
-        retry: RetryClass::Later,
-        subject_kind: Some("recent_files"),
-        operations: &["sweep:scan", "sweep:apply"],
-        explanation: "The files are within the configured grace window and may be judged later.",
-    },
-    CodeSpec {
         code: Code::DownloadInFlight,
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["sweep:scan", "unpack:extract"],
+        operations: &["sweep:scan"],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {
@@ -254,7 +230,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "unknown_operation",
         retry: RetryClass::Never,
         subject_kind: None,
-        operations: &["sweep:status", "stash:status"],
+        operations: &["sweep:status", "stash:status", "stash:pop", "stash:inspect"],
         explanation: "No journal contains the requested durable operation id.",
     },
     CodeSpec {
@@ -280,14 +256,6 @@ pub const CODES: &[CodeSpec] = &[
         explanation: "The request lacks required access; change the relevant permissions before retrying.",
     },
     CodeSpec {
-        code: Code::EmptySelection,
-        name: "empty_selection",
-        retry: RetryClass::AfterChange,
-        subject_kind: Some("input"),
-        operations: &["sweep:apply", "stash:stash"],
-        explanation: "The selection contains no applicable entries; change the selection.",
-    },
-    CodeSpec {
         code: Code::OperationIncomplete,
         name: "operation_incomplete",
         retry: RetryClass::AfterChange,
@@ -300,14 +268,6 @@ pub const CODES: &[CodeSpec] = &[
             "unpack:extract",
         ],
         explanation: "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing.",
-    },
-    CodeSpec {
-        code: Code::UserCancelled,
-        name: "user_cancelled",
-        retry: RetryClass::Never,
-        subject_kind: None,
-        operations: &["sweep:review", "sweep:forget", "stash:select"],
-        explanation: "The user declined or cancelled this request.",
     },
 ];
 
@@ -427,8 +387,6 @@ impl Reason {
             Code::DestinationOutsideRoot => "destination_outside_root",
             Code::PlanStale => "plan_stale",
             Code::ProfileMissing => "profile_missing",
-            Code::FolderBusy => "folder_busy",
-            Code::RecentFiles => "recent_files",
             Code::DownloadInFlight => "download_in_flight",
             Code::NotDueYet => "not_due_yet",
             Code::JournalUnreadable => "journal_unreadable",
@@ -436,9 +394,7 @@ impl Reason {
             Code::UnknownOperation => "unknown_operation",
             Code::UnsafeInput => "unsafe_input",
             Code::PermissionDenied => "permission_denied",
-            Code::EmptySelection => "empty_selection",
             Code::OperationIncomplete => "operation_incomplete",
-            Code::UserCancelled => "user_cancelled",
         }
     }
 }
@@ -516,12 +472,12 @@ mod tests {
         assert_eq!(RetryClass::AfterChange.as_str(), "after_change");
         assert_eq!(RetryClass::Later.as_str(), "later");
         let reason = Reason::refusal(
-            Code::FolderBusy,
-            Some(Subject::path("other_operation", "/Desktop")),
+            Code::DownloadInFlight,
+            Some(Subject::path("download_in_flight", "/Desktop")),
         );
         assert_eq!(
             reason.json(),
-            r#"{"code":"folder_busy","retry":"later","subject":{"kind":"other_operation","path":"/Desktop"}}"#
+            r#"{"code":"download_in_flight","retry":"later","subject":{"kind":"download_in_flight","path":"/Desktop"}}"#
         );
         let not_due = Reason::refusal(Code::NotDueYet, Some(Subject::wait("journal", None)));
         assert_eq!(
@@ -552,12 +508,42 @@ mod tests {
             assert!(CODES.iter().any(|spec| spec.code == *code));
         }
         let sweep = codes_json("sweep");
-        assert!(sweep.contains("\"code\":\"folder_busy\""));
+        assert!(sweep.contains("\"code\":\"download_in_flight\""));
         assert!(sweep.contains("\"retry\":\"later\""));
-        assert!(sweep.contains("\"subject_kind\":\"other_operation\""));
+        assert!(sweep.contains("\"subject_kind\":\"download_in_flight\""));
         assert!(sweep.contains("\"subject_kind\":null"));
         assert!(!sweep.contains("\"all\""));
-        assert!(!codes_json("unpack").contains("\"code\":\"folder_busy\""));
+        assert!(!codes_json("unpack").contains("\"code\":\"download_in_flight\""));
+    }
+
+    /// A contract must not promise a code no code path in that tool produces.
+    /// These were listed and never returned; a caller cannot plan around them.
+    #[test]
+    fn a_tool_lists_no_code_it_cannot_return() {
+        for tool in ["sweep", "stash", "unpack"] {
+            let listed = codes_json(tool);
+            for never_returned in [
+                "folder_busy",
+                "recent_files",
+                "empty_selection",
+                "user_cancelled",
+            ] {
+                assert!(
+                    !listed.contains(&format!("\"code\":\"{never_returned}\"")),
+                    "{tool} lists {never_returned}"
+                );
+            }
+        }
+        assert!(!codes_json("stash").contains("\"code\":\"download_in_flight\""));
+        // An unknown id is the same answer from every stash command that takes one.
+        let stash = codes_json("stash");
+        let unknown = stash
+            .split("{\"code\":")
+            .find(|row| row.starts_with("\"unknown_operation\""))
+            .expect("stash lists unknown_operation");
+        for operation in ["pop", "status", "inspect"] {
+            assert!(unknown.contains(&format!("\"{operation}\"")), "{unknown}");
+        }
     }
 
     #[test]
@@ -581,6 +567,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "refusal subject presence disagrees")]
     fn retryable_reason_cannot_be_built_without_its_subject() {
-        let _ = Reason::refusal(Code::FolderBusy, None);
+        let _ = Reason::refusal(Code::DownloadInFlight, None);
     }
 }

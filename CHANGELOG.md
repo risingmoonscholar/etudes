@@ -71,11 +71,51 @@ reviewers were pointed at the tools before anyone else could be.
 - **sweep:** the scan output now says that applying reads the first and last
   4 KiB of each file it moves, so undo can tell whether a file changed. The
   README states when sweep reads file bytes.
-- **Breaking for JSON consumers:** result envelopes use `schema_version: 2`.
+- **Breaking for JSON consumers:** result envelopes use `schema_version: 4`.
   Agents that parse JSON must check the schema version and read operation
   fields under `details`; fields that were previously at the top level moved
   there. The envelope also reports scope, observations, effects, verification,
-  recovery and disclosure. Capability-contract schema versions are separate.
+  recovery, disclosure and reason. Capability-contract schema versions are
+  separate.
+- **sweep, stash and unpack:** every `--json` result has a top-level `reason`
+  with a stable `code` and a `retry` class: `not_needed`, `never`,
+  `after_change` or `later`. For `after_change` and `later`, `reason.subject.kind`
+  names what has to change or what to wait for. Each tool lists its codes under
+  `refusal_codes` in `TOOL contract --json`. Exit codes are unchanged.
+- **sweep and stash:** `sweep status --id ID --json`, `sweep status PATH --json`
+  and `stash status --id ID --json` look up a recorded operation without moving
+  anything. They report its state and its planned, moved and reversed counts,
+  and no file names. An unknown id is exit 1 with the code `unknown_operation`.
+  Results of commands that move files carry the id as `recovery.operation`.
+- **sweep, stash and unpack:** a path that does not exist is reported as
+  `missing_input` with retry class `after_change`. `sweep` reported a missing
+  folder as `internal_error`, and all three tools reported a path that runs
+  through a regular file as `internal_error`; both said `never`. Exit codes are
+  unchanged.
+- **sweep and stash:** a result's `status` and `reason` now agree. `sweep undo`
+  and `stash pop` that leave a file behind because its original path is
+  occupied still exit 0 with status `incomplete`, and now carry the code
+  `operation_incomplete` instead of `done`. A `sweep` scan that could not read
+  part of the folder carries `permission_denied` instead of `done` or
+  `nothing_to_do`.
+- **sweep:** `sweep status` reports an apply that was cut short and then undone
+  as `reversed`. `partly_reversed` means some files are still moved. An apply
+  that stops part-way names its journal in `recovery.operation`.
+- **stash:** `stash pop --id` and `stash inspect --id` with an unknown id return
+  `unknown_operation`, as `stash status --id` does. Exit codes are unchanged.
+- **Contracts:** each tool's `refusal_codes` lists only codes that tool can
+  return. `folder_busy`, `recent_files`, `empty_selection` and `user_cancelled`
+  are removed, and `download_in_flight` is removed from unpack. The capability
+  declarations are now version 8 (sweep), 9 (stash) and 6 (unpack).
+- **Known gaps in `reason`:** the contract check proves 13 of sweep's 16 listed
+  codes, 11 of stash's 15 and 9 of unpack's 10, and names the rest as unproven:
+  `internal_error`, `journal_key_unavailable`, `destination_outside_root` and,
+  for stash, `destination_exists`. A folder that holds only recent files
+  reports `nothing_to_do`; a "try again later" code for it is a possible later
+  addition. Two `sweep apply` runs on one folder at once are not held apart:
+  the one that loses stops part-way with `operation_incomplete`, and `sweep
+  undo` restores the folder. `unpack` reports a `.part` or `.download` name as
+  `unsupported_format`.
 
 ### 0.5.3 published — sweep, stash and unpack
 
