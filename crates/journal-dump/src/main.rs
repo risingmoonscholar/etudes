@@ -103,8 +103,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// Observe the journal's durable per-entry undo records, then stop the undo
-/// process while it is still in the witnessed partial state. This is a
+/// Observe undo progress, confirm the process is stopped, then reload the
+/// journal to witness a durable partial state. This is a
 /// stress-only diagnostic: it emits counts and never prints journal paths.
 fn watch_undo(args: &[String]) -> ExitCode {
     if args.len() != 4 {
@@ -150,48 +150,101 @@ fn watch_undo(args: &[String]) -> ExitCode {
     };
     let sealer = KeychainSeal { key };
     let started = Instant::now();
-    let timeout = Duration::from_secs(10);
-    loop {
-        let journal = match etude_core::Journal::load_sealed(tool, id, &sealer) {
-            Ok(journal) => journal,
-            // Undo may be appending a frame while the diagnostic opens it.
-            // A truncated in-flight frame is transient; retry until its
-            // fsync completes or the bounded observation window expires.
-            Err(_) => {
-                if started.elapsed() >= timeout {
-                    eprintln!("journal-dump: undo journal could not be read consistently");
-                    return ExitCode::from(1);
-                }
-                std::thread::sleep(Duration::from_millis(1));
-                continue;
-            }
+    // The larger late fixture can take over ten seconds on a loaded host.
+    // Bound observation without confusing slow progress with a tool failure.
+    let deadline = started + Duration::from_secs(30);
+    let mut first_progress = false;
+    while Instant::now() < deadline {
+        let Some(state) = process_state(pid) else {
+            eprintln!(
+                "journal-dump: elapsed_us={} undo exited; interruption unproven",
+                started.elapsed().as_micros()
+            );
+            return ExitCode::from(1);
         };
-        let reversed = journal
+        if state.contains('Z') {
+            eprintln!(
+                "journal-dump: elapsed_us={} undo exited (zombie); interruption unproven",
+                started.elapsed().as_micros()
+            );
+            return ExitCode::from(1);
+        }
+        let reload_started = Instant::now();
+        let observed = etude_core::Journal::load_sealed_exact(tool, id, &sealer);
+        eprintln!(
+            "journal-dump: elapsed_us={} reload_us={}",
+            started.elapsed().as_micros(),
+            reload_started.elapsed().as_micros()
+        );
+        let Ok(observed) = observed else {
+            std::thread::sleep(Duration::from_millis(1));
+            continue;
+        };
+        let reversed = observed
             .entries
             .iter()
             .filter(|entry| entry.state == etude_core::journal::EntryState::Reversed)
             .count();
-        let total = journal.entries.len();
-        if reversed >= target && reversed < total {
-            // SIGSTOP preserves the precise journal/filesystem state long
-            // enough for the caller to deliver its SIGKILL and test recovery.
-            #[cfg(unix)]
-            // SAFETY: pid is validated as positive; the caller supplies the
-            // undo process it just started in this stress scenario.
-            let stopped = unsafe { kill(pid, sigstop()) == 0 };
-            #[cfg(not(unix))]
-            let stopped = false;
-            if stopped {
-                println!("{reversed} {total}");
+        if reversed > 0 && !first_progress {
+            eprintln!(
+                "journal-dump: elapsed_us={} first_progress={reversed}/{}",
+                started.elapsed().as_micros(),
+                observed.entries.len()
+            );
+            first_progress = true;
+        }
+        if reversed == observed.entries.len() {
+            eprintln!("journal-dump: undo already fully reversed; interruption unproven");
+            return ExitCode::from(1);
+        }
+        if reversed >= target && reversed > 0 {
+            let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
+                continue;
+            };
+            let reload_started = Instant::now();
+            let paused = etude_core::Journal::load_sealed_exact(tool, id, &sealer);
+            eprintln!(
+                "journal-dump: elapsed_us={} stopped_reload_us={} pre_stop_count={reversed}",
+                started.elapsed().as_micros(),
+                reload_started.elapsed().as_micros()
+            );
+            let Ok(paused) = paused else {
+                // Drop resumes a child stopped inside a journal write.
+                continue;
+            };
+            if paused.progress_tail_damaged {
+                continue;
+            }
+            let reversed = paused
+                .entries
+                .iter()
+                .filter(|entry| entry.state == etude_core::journal::EntryState::Reversed)
+                .count();
+            let moved = paused
+                .entries
+                .iter()
+                .filter(|entry| entry.is_moved())
+                .count();
+            if reversed >= target && reversed > 0 && moved > 0 {
+                eprintln!(
+                    "journal-dump: elapsed_us={} confirmed_stopped_count={reversed}/{}",
+                    started.elapsed().as_micros(),
+                    paused.entries.len()
+                );
+                stopped.resume_on_drop = false;
+                println!("{reversed} {}", paused.entries.len());
                 return ExitCode::SUCCESS;
             }
-        }
-        if started.elapsed() >= timeout {
-            eprintln!("journal-dump: undo did not reach a stoppable partial state");
+            eprintln!("journal-dump: no real partial undo while stopped; interruption unproven");
             return ExitCode::from(1);
         }
         std::thread::sleep(Duration::from_millis(1));
     }
+    eprintln!(
+        "journal-dump: elapsed_us={} no stopped partial undo before deadline; interruption unproven",
+        started.elapsed().as_micros()
+    );
+    ExitCode::from(1)
 }
 
 /// Read only the supplied trial directory and root. Successful observation
@@ -255,7 +308,7 @@ fn watch_apply(args: &[String]) -> ExitCode {
                 }
                 // Signal only after real journal progress. A successful
                 // signal delivery alone does not prove the OS stopped it.
-                let Some(mut stopped) = StoppedApply::stop(pid, deadline) else {
+                let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
                     continue;
                 };
                 let Ok(paused) = etude_core::Journal::load_sealed_exact("sweep", id, &sealer)
@@ -309,12 +362,12 @@ fn process_state(pid: i32) -> Option<String> {
     (output.status.success() && !state.is_empty()).then_some(state)
 }
 
-struct StoppedApply {
+struct StoppedProcess {
     pid: i32,
     resume_on_drop: bool,
 }
 
-impl StoppedApply {
+impl StoppedProcess {
     fn stop(pid: i32, deadline: Instant) -> Option<Self> {
         if !signal_process(pid, sigstop()) {
             return None;
@@ -337,7 +390,7 @@ impl StoppedApply {
     }
 }
 
-impl Drop for StoppedApply {
+impl Drop for StoppedProcess {
     fn drop(&mut self) {
         if self.resume_on_drop {
             signal_process(self.pid, sigcont());
