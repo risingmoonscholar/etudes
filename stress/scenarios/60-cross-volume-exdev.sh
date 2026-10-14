@@ -23,11 +23,16 @@ require hdiutil "cross-volume scenario needs a real disk image" || exit 0
 IMG=""
 INNER=""
 LIVE_PID=""
+WATCHER_PID=""
 cleanup() {
   if [ -n "$LIVE_PID" ] && kill -0 "$LIVE_PID" 2>/dev/null; then
     kill -CONT "$LIVE_PID" 2>/dev/null || true
     kill -9 "$LIVE_PID" 2>/dev/null || true
     wait "$LIVE_PID" 2>/dev/null || true
+  fi
+  if [ -n "$WATCHER_PID" ]; then
+    kill "$WATCHER_PID" 2>/dev/null || true
+    wait "$WATCHER_PID" 2>/dev/null || true
   fi
   detach_registered_mounts
   [ -n "${W:-}" ] && rm -rf "$W"
@@ -136,33 +141,40 @@ source_matches_snapshot() {
   [ "$actual_hash" = "$expected_hash" ]
 }
 
-# Wait for a nonempty, short destination, then freeze the exact apply process.
-# Return 0 only after the OS reports a stopped state; callers still recheck
-# source and destination while it cannot make progress.
-pause_on_partial_copy() {
-  local pid=$1 source=$2 dest=$3 source_size=$4 partial_size state
-  PAUSE_CONFIRMED=0
-  PAUSE_STATE=""
-  for _ in $(seq 1 300); do
-    kill -0 "$pid" 2>/dev/null || break
-    if [ -f "$dest" ]; then
-      partial_size=$(stat -f "%z" "$dest" 2>/dev/null || echo 0)
-      if [ "$partial_size" -gt 0 ] && [ "$partial_size" -lt "$source_size" ]; then
-        if ! kill -STOP "$pid" 2>/dev/null; then break; fi
-        for _ in $(seq 1 100); do
-          state=$(ps -p "$pid" -o state= 2>/dev/null | tr -d '[:space:]')
-          case "$state" in T*) PAUSE_CONFIRMED=1; PAUSE_STATE=$state; break ;; esac
-          kill -0 "$pid" 2>/dev/null || break
-          sleep 0.001
-        done
-        [ "$PAUSE_CONFIRMED" = 1 ] && return 0
-        kill -CONT "$pid" 2>/dev/null || true
-        break
-      fi
-    fi
+# Preload the watcher before apply starts: even Python startup can outlast a
+# small cached copy. Only stat(2) and a 100us sleep separate size observations;
+# SIGSTOP is sent directly, before launching ps to confirm the stopped state.
+start_copy_probe() {
+  local state_dir=$1 apply_log=$2
+  rm -f "$W/copy-pid" "$W/watcher-ready" "$W/watcher-result"
+  mkfifo "$W/copy-pid" || return 1
+  python3 "$(dirname "${BASH_SOURCE[0]}")/../copy-window.py" \
+    "$W/copy-pid" "$W/watcher-ready" "$DEST_PARTIAL" "$SRC_SIZE_BEFORE" \
+    >"$W/watcher-result" &
+  WATCHER_PID=$!
+  for _ in $(seq 1 1000); do
+    [ -f "$W/watcher-ready" ] && break
+    kill -0 "$WATCHER_PID" 2>/dev/null || return 1
     sleep 0.001
   done
-  return 1
+  [ -f "$W/watcher-ready" ] || return 1
+  ETUDE_STATE_DIR="$state_dir" "$SWEEP" apply "$OUTER" --yes --depth 2 >"$apply_log" 2>&1 &
+  PID=$!; LIVE_PID=$PID
+  printf '%s\n' "$PID" > "$W/copy-pid"
+}
+
+pause_on_partial_copy() {
+  PAUSE_CONFIRMED=0
+  PAUSE_STATE=""
+  if ! wait "$WATCHER_PID"; then
+    WATCHER_PID=""
+    fail "cross-volume: copy watcher failed; no interruption verdict is available"
+    return 1
+  fi
+  WATCHER_PID=""
+  read -r PAUSE_CONFIRMED PAUSE_STATE < "$W/watcher-result"
+  tail -n +2 "$W/watcher-result"
+  [ "$PAUSE_CONFIRMED" = 1 ]
 }
 
 # A completed move is a missed window, not a lost source. Resume/wait for it,
@@ -199,8 +211,9 @@ restore_missed_copy() {
 KILLED=0
 CONTROL_PASSED=0
 PAYLOAD_MIB=0
-MISS_REASON="copies through 32MiB, 96MiB, and 256MiB completed before a stopped partial copy could be witnessed"
-for mib in 32 96 256; do
+MISS_REASON="copies through 32MiB, 96MiB, 256MiB, and 512MiB completed before a stopped partial copy could be witnessed"
+# One payload at a time, at most 512MiB on the 768MiB source image.
+for mib in 32 96 256 512; do
   rm -f "$INTERRUPT" "$DEST_PARTIAL"
   dd if=/dev/urandom of="$INTERRUPT" bs=1m count="$mib" >/dev/null 2>&1
   SRC_SIZE_BEFORE=$(stat -f "%z" "$INTERRUPT")
@@ -209,9 +222,8 @@ for mib in 32 96 256; do
   if [ "$CONTROL_PASSED" = 0 ]; then
     CONTROL_STATE="$W/control-state-$mib"
     mkdir -p "$CONTROL_STATE"
-    ETUDE_STATE_DIR="$CONTROL_STATE" "$SWEEP" apply "$OUTER" --yes --depth 2 >"$W/control-apply.log" 2>&1 &
-    PID=$!; LIVE_PID=$PID
-    if pause_on_partial_copy "$PID" "$INTERRUPT" "$DEST_PARTIAL" "$SRC_SIZE_BEFORE"; then
+    start_copy_probe "$CONTROL_STATE" "$W/control-apply.log" || { fail "cross-volume: watcher could not start"; exit 0; }
+    if pause_on_partial_copy; then
       CONTROL_DEST_SIZE=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
       if ! source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
         if [ "$CONTROL_DEST_SIZE" -gt 0 ] && [ "$CONTROL_DEST_SIZE" -lt "$SRC_SIZE_BEFORE" ]; then
@@ -286,9 +298,8 @@ sys.exit(0 if any(str(m).endswith("interrupt_zzzbig.txt") for m in members) else
     fail "cross-volume: positive interruption probe no longer selects the expected source after the control: $POSITIVE_PLAN"
     exit 0
   fi
-  ETUDE_STATE_DIR="$POSITIVE_STATE" "$SWEEP" apply "$OUTER" --yes --depth 2 >"$W/positive-apply.log" 2>&1 &
-  PID=$!; LIVE_PID=$PID
-  if pause_on_partial_copy "$PID" "$INTERRUPT" "$DEST_PARTIAL" "$SRC_SIZE_BEFORE"; then
+  start_copy_probe "$POSITIVE_STATE" "$W/positive-apply.log" || { fail "cross-volume: watcher could not start"; exit 0; }
+  if pause_on_partial_copy; then
     STOPPED_DEST_SIZE=$(stat -f "%z" "$DEST_PARTIAL" 2>/dev/null || echo 0)
     if ! source_matches_snapshot "$INTERRUPT" "$SRC_SIZE_BEFORE" "$SRC_HASH_BEFORE"; then
       if [ "$STOPPED_DEST_SIZE" -gt 0 ] && [ "$STOPPED_DEST_SIZE" -lt "$SRC_SIZE_BEFORE" ]; then
