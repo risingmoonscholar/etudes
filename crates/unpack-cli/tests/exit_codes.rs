@@ -28,12 +28,25 @@ fn a_missing_archive_exits_3_not_2() {
     let _root = TestDir(root.clone());
 
     let missing = root.join("does-not-exist.tar");
-    let out = unpack_bin().arg(&missing).output().unwrap();
+    let out = unpack_bin()
+        .arg(&missing)
+        .arg("--json")
+        .env("ETUDE_STATE_DIR", root.join("state"))
+        .env("ETUDE_JOURNAL_KEY", "throwaway-unpack-test-key")
+        .output()
+        .unwrap();
     assert_eq!(
         out.status.code(),
         Some(3),
         "missing archive must be error 3, not refusal 2: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    let result = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        result.contains(
+            r#""reason":{"code":"missing_input","retry":"after_change","subject":{"kind":"input""#
+        ),
+        "missing input result was not classified: {result}"
     );
 }
 
@@ -53,12 +66,23 @@ fn an_unrecognised_archive_type_exits_3_not_2() {
 
     let bogus = root.join("notes.rar");
     std::fs::write(&bogus, b"not an archive").unwrap();
-    let out = unpack_bin().arg(&bogus).output().unwrap();
+    let out = unpack_bin()
+        .arg(&bogus)
+        .arg("--json")
+        .env("ETUDE_STATE_DIR", root.join("state"))
+        .env("ETUDE_JOURNAL_KEY", "throwaway-unpack-test-key")
+        .output()
+        .unwrap();
     assert_eq!(
         out.status.code(),
         Some(3),
         "unrecognised type must be error 3, not refusal 2: {}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    let result = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        result.contains(r#""reason":{"code":"unsupported_format","retry":"never"}"#),
+        "unsupported archive format was not classified: {result}"
     );
 }
 
@@ -71,8 +95,23 @@ fn an_unrecognised_archive_type_exits_3_not_2() {
 /// documentation claim rather than by the harness.
 #[test]
 fn a_leading_typod_flag_is_refused_not_treated_as_an_archive() {
+    let root = std::env::temp_dir().join(format!(
+        "unpack-reason-unknown-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let _root = TestDir(root.clone());
     for typo in ["--frobnicate", "-x", "--lst"] {
-        let out = unpack_bin().arg(typo).output().expect("run");
+        let out = unpack_bin()
+            .args([typo, "--json"])
+            .env("ETUDE_STATE_DIR", root.join("state"))
+            .env("ETUDE_JOURNAL_KEY", "throwaway-unpack-test-key")
+            .output()
+            .expect("run");
         assert_eq!(
             out.status.code(),
             Some(2),
@@ -83,7 +122,25 @@ fn a_leading_typod_flag_is_refused_not_treated_as_an_archive() {
             !stderr.contains("not a file"),
             "{typo} was taken as an archive name: {stderr}"
         );
+        let result = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            result.contains(r#""reason":{"code":"unknown_option","retry":"never"}"#),
+            "unknown option result was not classified: {result}"
+        );
     }
+
+    let out = unpack_bin()
+        .args(["contract", "--bogus"])
+        .env("ETUDE_STATE_DIR", root.join("state"))
+        .env("ETUDE_JOURNAL_KEY", "throwaway-unpack-test-key")
+        .output()
+        .expect("run invalid contract request");
+    assert_eq!(out.status.code(), Some(2));
+    let result = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        result.contains(r#""reason":{"code":"invalid_arguments","retry":"never"}"#),
+        "invalid contract arguments were not classified: {result}"
+    );
 }
 
 /// And a real flag with no archive is a different mistake from a typo, so it
@@ -91,8 +148,23 @@ fn a_leading_typod_flag_is_refused_not_treated_as_an_archive() {
 /// its own small lie.
 #[test]
 fn a_real_flag_without_an_archive_says_what_is_missing() {
+    let root = std::env::temp_dir().join(format!(
+        "unpack-reason-invalid-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let _root = TestDir(root.clone());
     for flag in ["--list", "--json", "--into"] {
-        let out = unpack_bin().arg(flag).output().expect("run");
+        let out = unpack_bin()
+            .args([flag, "--json"])
+            .env("ETUDE_STATE_DIR", root.join("state"))
+            .env("ETUDE_JOURNAL_KEY", "throwaway-unpack-test-key")
+            .output()
+            .expect("run");
         assert_eq!(
             out.status.code(),
             Some(2),
@@ -106,6 +178,11 @@ fn a_real_flag_without_an_archive_says_what_is_missing() {
         assert!(
             stderr.contains("needs one"),
             "{flag} should say an archive is missing: {stderr}"
+        );
+        let result = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            result.contains(r#""reason":{"code":"invalid_arguments","retry":"never"}"#),
+            "missing archive argument was not classified: {result}"
         );
     }
 }
