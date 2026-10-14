@@ -92,6 +92,162 @@ fn a_nonexistent_path_exits_3_not_2() {
 }
 
 #[test]
+fn status_by_id_is_path_free_and_reports_the_durable_recovery_state() {
+    let root = unique_temp("status-id");
+    let state = unique_temp("status-id-state");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    let _root = TestDir(root.clone());
+    let _state = TestDir(state.clone());
+    let secret_name = "status-private-filename-7fd1.txt";
+    std::fs::write(root.join(secret_name), b"payload").unwrap();
+    let key = "11".repeat(32);
+
+    let stash = stash_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", &key)
+        .arg(&root)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_eq!(
+        stash.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&stash.stderr)
+    );
+    let id = std::fs::read_dir(&state)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("stash-") && name.ends_with(".journal"))
+        })
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .trim_start_matches("stash-")
+        .trim_end_matches(".journal")
+        .to_owned();
+    let stash_output = String::from_utf8_lossy(&stash.stdout);
+    assert!(stash_output.contains("\"operation_id\":"));
+    assert!(stash_output.contains(&format!("\"operation\":\"{id}\"")));
+    assert!(stash_output.contains(&format!("\"stash_id\":\"{id}\"")));
+
+    let status = stash_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", &key)
+        .args(["status", "--id", &id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        status.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_output = String::from_utf8_lossy(&status.stdout);
+    assert!(status_output.contains(&format!("\"operation_id\":\"{id}\"")));
+    assert!(status_output.contains("\"tool\":\"stash\""));
+    assert!(status_output.contains("\"state\":\"completed\""));
+    assert!(status_output.contains("\"planned\":0"));
+    assert!(status_output.contains("\"moved\":1"));
+    assert!(status_output.contains("\"reversed\":0"));
+    assert!(status_output.contains(&format!("stash pop --id {id}")));
+    assert!(!status_output.contains(secret_name));
+
+    let pop = stash_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", &key)
+        .args(["pop", "--id", &id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        pop.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&pop.stderr)
+    );
+    let reversed = stash_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", &key)
+        .args(["status", "--id", &id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(reversed.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&reversed.stdout).contains("\"state\":\"reversed\""));
+
+    // An existing but unreadable journal is a failure, distinct from an
+    // unknown id. Keep the same disposable key so this exercises journal
+    // decoding rather than keychain availability.
+    std::fs::write(
+        state.join(format!("stash-{id}.journal")),
+        b"not a sealed journal",
+    )
+    .unwrap();
+    let unreadable = stash_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", &key)
+        .args(["status", "--id", &id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(unreadable.status.code(), Some(3));
+    let stdout = String::from_utf8_lossy(&unreadable.stdout);
+    assert!(
+        stdout.contains("\"code\":\"journal_unreadable\""),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn unknown_status_id_has_a_typed_unknown_operation_reason() {
+    let state = unique_temp("unknown-status-state");
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let _state = TestDir(state.clone());
+    let output = stash_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .args(["status", "--id", "missing-operation", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"code\":\"unknown_operation\""),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\"retry\":\"never\""), "{stdout}");
+}
+
+#[test]
+fn status_by_id_does_not_migrate_legacy_state() {
+    let home = unique_temp("status-read-only-home");
+    let _ = std::fs::remove_dir_all(&home);
+    let legacy = home.join(".local/state/etudes");
+    let current = home.join("Library/Application Support/etudes");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("sentinel"), b"keep").unwrap();
+    let _home = TestDir(home.clone());
+
+    let output = stash_bin()
+        .env_remove("ETUDE_STATE_DIR")
+        .env_remove("ETUDE_JOURNAL_KEY")
+        .env("HOME", &home)
+        .args(["status", "--id", "missing-operation", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(legacy.join("sentinel").exists());
+    assert!(!current.exists(), "read-only status must not migrate state");
+}
+
+#[test]
 fn an_exhausted_pop_exits_1_not_0() {
     let root = unique_temp("pop");
     let _ = std::fs::remove_dir_all(&root);

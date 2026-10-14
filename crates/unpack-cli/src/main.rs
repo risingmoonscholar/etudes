@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use etude_cli_support::contract::{ARCHIVE_SUFFIXES, ArchiveFormat as Format};
+use etude_cli_support::reason::{Code as ReasonCode, Reason, Subject};
 use safety::Unsafe;
 
 // `unpack` deliberately targets the macOS system extractors.  Do not replace
@@ -306,11 +307,37 @@ macro_rules! println {
     ($($arg:tt)*) => { etude_cli_support::envelope::print(format!($($arg)*)) };
 }
 
+fn refusal(code: ReasonCode, subject: Option<Subject>) -> ExitCode {
+    etude_cli_support::envelope::reason(Reason::refusal(code, subject));
+    ExitCode::from(2)
+}
+
+fn failure(code: ReasonCode, subject: Option<Subject>) -> ExitCode {
+    etude_cli_support::envelope::reason(Reason::refusal(code, subject));
+    ExitCode::from(3)
+}
+
+fn input_subject(path: &Path) -> Option<Subject> {
+    Some(Subject::path("input", &etude_core::redact::path(path)))
+}
+
+fn destination_subject(path: &Path) -> Option<Subject> {
+    Some(Subject::path(
+        "destination",
+        &etude_core::redact::path(path),
+    ))
+}
+
+fn unknown_option(input: &str) -> bool {
+    input.starts_with('-') && !input.contains(char::is_whitespace)
+}
+
 fn main() -> ExitCode {
     install_sigterm_handler();
     let args: Vec<String> = std::env::args().skip(1).collect();
     etude_cli_support::envelope::begin("unpack", env!("CARGO_PKG_VERSION"), &args);
-    let code = std::panic::catch_unwind(run_main).unwrap_or(ExitCode::from(3));
+    let code = std::panic::catch_unwind(run_main)
+        .unwrap_or_else(|_| failure(ReasonCode::InternalError, None));
     etude_cli_support::envelope::finish(code);
     code
 }
@@ -318,17 +345,31 @@ fn main() -> ExitCode {
 fn run_main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "contract") {
-        return etude_cli_support::contract::command(
+        let code = etude_cli_support::contract::command(
             etude_cli_support::contract::Tool::Unpack,
             env!("CARGO_PKG_VERSION"),
             &args,
             &[],
             None,
         );
+        if code != ExitCode::SUCCESS {
+            etude_cli_support::envelope::reason(Reason::refusal(
+                ReasonCode::InvalidArguments,
+                None,
+            ));
+        }
+        return code;
     }
     if let Err(input) = validate_args(&args) {
         eprintln!("unpack: refused invalid input {input}");
-        return ExitCode::from(2);
+        return refusal(
+            if unknown_option(&input) {
+                ReasonCode::UnknownOption
+            } else {
+                ReasonCode::InvalidArguments
+            },
+            None,
+        );
     }
     match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
@@ -361,7 +402,14 @@ fn run_main() -> ExitCode {
                      Handles: --list, --json, --into DIR. Run `unpack help`."
                 );
             }
-            ExitCode::from(2)
+            refusal(
+                if KNOWN.contains(&p) {
+                    ReasonCode::InvalidArguments
+                } else {
+                    ReasonCode::UnknownOption
+                },
+                None,
+            )
         }
         Some(p) => run(&PathBuf::from(expand_tilde(p)), &args),
     }
@@ -420,11 +468,24 @@ fn validate_args(args: &[String]) -> Result<(), String> {
 }
 
 fn run(archive: &Path, args: &[String]) -> ExitCode {
-    if !etude_core::scan::observe_read("archive_metadata", std::fs::metadata(archive))
-        .is_ok_and(|metadata| metadata.is_file())
-    {
-        eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
-        return ExitCode::from(3);
+    match etude_core::scan::observe_read("archive_metadata", std::fs::metadata(archive)) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            return failure(ReasonCode::UnsafeInput, input_subject(archive));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            return failure(ReasonCode::MissingInput, input_subject(archive));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            return failure(ReasonCode::PermissionDenied, input_subject(archive));
+        }
+        Err(_) => {
+            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            return failure(ReasonCode::InternalError, None);
+        }
     }
     let Some(fmt) = detect(archive) else {
         eprintln!(
@@ -435,7 +496,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 .map(|ext| format!(".{}", ext.to_string_lossy()))
                 .unwrap_or_else(|| "(no suffix)".into())
         );
-        return ExitCode::from(3);
+        return failure(ReasonCode::UnsupportedFormat, None);
     };
 
     if fmt == Format::Dmg {
@@ -464,7 +525,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
              means the decision is yours rather than one this tool made\n\
              quietly on your behalf."
         );
-        return ExitCode::from(2);
+        return refusal(ReasonCode::UnsupportedFormat, None);
     }
 
     // Copy the input once, before either listing. From this point onward no
@@ -477,11 +538,16 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             eprintln!(
                 "unpack: REFUSED. Archive quarantine changed while copying. Nothing was extracted."
             );
-            return ExitCode::from(2);
+            return refusal(ReasonCode::UnsafeInput, input_subject(archive));
         }
         Err(e) => {
             eprintln!("unpack: could not secure the archive for checking ({e})");
-            return ExitCode::from(3);
+            return match e {
+                ArchiveAnchorError::Io(message) if message == "the archive path is a symlink" => {
+                    failure(ReasonCode::UnsafeInput, input_subject(archive))
+                }
+                _ => failure(ReasonCode::InternalError, None),
+            };
         }
     };
 
@@ -490,7 +556,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(e) => e,
         Err(e) => {
             eprintln!("unpack: could not read the archive ({e})");
-            return ExitCode::from(3);
+            return failure(ReasonCode::UnsafeInput, input_subject(archive));
         }
     };
     if entries.is_empty() {
@@ -503,7 +569,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             entries.len(),
             safety::MAX_ENTRIES
         );
-        return ExitCode::from(2);
+        return refusal(ReasonCode::UnsafeInput, input_subject(archive));
     }
 
     // --- 2. judge, before anything is written ------------------------------
@@ -520,7 +586,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                      listing has no corresponding member row. Refusing rather than extract\n\
                      an entry whose type was never checked."
                 );
-                return ExitCode::from(2);
+                return refusal(ReasonCode::UnsafeInput, input_subject(archive));
             }
             members
         }
@@ -537,7 +603,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                  `unpack {} --list` shows the names it does report.",
                 archive.display()
             );
-            return ExitCode::from(2);
+            return refusal(ReasonCode::UnsafeInput, input_subject(archive));
         }
     };
     for m in &members {
@@ -609,7 +675,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 ("extracted", j::num(0)),
             ])
         );
-        return ExitCode::from(2);
+        return refusal(ReasonCode::UnsafeInput, input_subject(archive));
     }
 
     if !blocked.is_empty() {
@@ -629,7 +695,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             "\nNothing was extracted. Inspect it with: unpack {} --list",
             archive.display()
         );
-        return ExitCode::from(2);
+        return refusal(ReasonCode::UnsafeInput, input_subject(archive));
     }
 
     after_preflight_for_test();
@@ -645,7 +711,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             "unpack: {} already exists. Pass --into DIR to choose another.",
             etude_core::redact::path(&dest)
         );
-        return ExitCode::from(2);
+        return refusal(ReasonCode::DestinationExists, destination_subject(&dest));
     }
 
     // --- 4. extract --------------------------------------------------------
@@ -660,7 +726,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(None) => safety::budget(free),
         Err(input) => {
             eprintln!("unpack: refused invalid input {input}");
-            return ExitCode::from(2);
+            return refusal(ReasonCode::InvalidArguments, None);
         }
     };
     match free {
@@ -670,7 +736,10 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                  to work. Nothing was written.",
                 human(f)
             );
-            return ExitCode::from(2);
+            return refusal(
+                ReasonCode::InsufficientSpace,
+                Some(Subject::wait("destination", None)),
+            );
         }
         _ => {}
     }
@@ -683,7 +752,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(path) => path,
         Err(e) => {
             eprintln!("unpack: cannot prepare the target ({e})");
-            return ExitCode::from(3);
+            return failure(ReasonCode::InternalError, None);
         }
     };
     match extract(pinned.path(), fmt, &staging, budget) {
@@ -692,10 +761,13 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             if e == "stopped after SIGTERM" {
                 etude_cli_support::envelope::status("refused");
                 eprintln!("unpack: stopped after SIGTERM. {}", cleanup.message());
-                return ExitCode::from(2);
+                return refusal(
+                    ReasonCode::OperationIncomplete,
+                    Some(Subject::wait("journal", None)),
+                );
             }
             eprintln!("unpack: extraction failed ({e}). {}", cleanup.message());
-            return ExitCode::from(3);
+            return failure(ReasonCode::InternalError, None);
         }
         Ok(Err(breach)) => {
             // Remove what landed before the soft limit was observed. A partial extraction
@@ -717,7 +789,10 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 cleanup.message(),
                 (n / (1024 * 1024 * 1024)) + 2
             );
-            return ExitCode::from(2);
+            return refusal(
+                ReasonCode::InsufficientSpace,
+                Some(Subject::wait("destination", None)),
+            );
         }
         Ok(Ok(())) => {}
     }
@@ -742,7 +817,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 "unpack: REFUSED. Could not preserve archive quarantine ({error}). {}",
                 cleanup_destination(&staging).message()
             );
-            return ExitCode::from(2);
+            return refusal(ReasonCode::InternalError, None);
         }
     };
     etude_cli_support::envelope::effect("quarantine_paths_verified", quarantined);
@@ -757,7 +832,19 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             cleanup_destination(&staging).message()
         );
         etude_cli_support::envelope::status("refused");
-        return ExitCode::from(2);
+        let destination_exists = dest.exists();
+        return refusal(
+            if destination_exists {
+                ReasonCode::DestinationExists
+            } else {
+                ReasonCode::InternalError
+            },
+            if destination_exists {
+                destination_subject(&dest)
+            } else {
+                None
+            },
+        );
     }
 
     etude_cli_support::envelope::effect("entries_published", entries.len() - junk);
@@ -1221,7 +1308,7 @@ fn audit_refusal(staging: &Path, error: &str) -> ExitCode {
         "unpack: staging audit failed ({error}); destination was not published. {}",
         cleanup_destination(staging).message()
     );
-    ExitCode::from(2)
+    refusal(ReasonCode::UnsafeInput, Some(Subject::wait("input", None)))
 }
 
 /// Final measured total on a monitored soft-limit refusal.

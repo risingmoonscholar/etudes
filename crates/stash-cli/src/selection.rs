@@ -16,18 +16,18 @@ pub struct Options {
 #[derive(Debug)]
 pub enum Error {
     Refused(&'static str),
-    Io(&'static str),
+    Io(&'static str, etude_cli_support::reason::Code),
 }
 impl Error {
     pub fn message(&self) -> &'static str {
         match self {
-            Self::Refused(m) | Self::Io(m) => m,
+            Self::Refused(m) | Self::Io(m, _) => m,
         }
     }
     pub fn code(&self) -> u8 {
         match self {
             Self::Refused(_) => 2,
-            Self::Io(_) => 3,
+            Self::Io(_, _) => 3,
         }
     }
 }
@@ -108,7 +108,7 @@ pub fn parse(args: &[String]) -> Result<Options, Error> {
                     "selection_list_open",
                     std::fs::File::open(super::expand_tilde(&from0)),
                 )
-                .map_err(|_| Error::Io("could not open selection list"))?,
+                .map_err(|error| Error::Io("could not open selection list", io_reason(&error)))?,
             )
         };
         let mut bytes = Vec::new();
@@ -116,7 +116,7 @@ pub fn parse(args: &[String]) -> Result<Options, Error> {
             "selection_list_bytes",
             reader.take(MAX_INPUT_BYTES + 1).read_to_end(&mut bytes),
         )
-        .map_err(|_| Error::Io("could not read selection list"))?;
+        .map_err(|error| Error::Io("could not read selection list", io_reason(&error)))?;
         if bytes.len() as u64 > MAX_INPUT_BYTES {
             return Err(Error::Refused("selection list exceeds 32 MiB"));
         }
@@ -161,7 +161,14 @@ pub fn prepare(options: &Options) -> Result<Prepared, Error> {
             if error.is_refusal() {
                 Error::Refused("selected location is refused")
             } else {
-                Error::Io("could not inspect a selected object")
+                let reason = match &error {
+                    scan::ScanError::Io(error) => io_reason(error),
+                    scan::ScanError::NotADirectory(_) => {
+                        etude_cli_support::reason::Code::MissingInput
+                    }
+                    _ => etude_cli_support::reason::Code::InternalError,
+                };
+                Error::Io("could not inspect a selected object", reason)
             }
         })?;
         if metadata.file_type().is_symlink() {
@@ -245,7 +252,7 @@ pub fn reserve(parent: &Path) -> Result<PathBuf, Error> {
             "os_random_bytes",
             std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut random)),
         )
-        .map_err(|_| Error::Io("could not name private holding storage"))?;
+        .map_err(|error| Error::Io("could not name private holding storage", io_reason(&error)))?;
         let name = random
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -260,10 +267,27 @@ pub fn reserve(parent: &Path) -> Result<PathBuf, Error> {
         match builder.create(&root) {
             Ok(()) => return Ok(root),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return Err(Error::Io("could not create private holding storage")),
+            Err(error) => {
+                return Err(Error::Io(
+                    "could not create private holding storage",
+                    io_reason(&error),
+                ));
+            }
         }
     }
-    Err(Error::Io("could not reserve holding storage"))
+    Err(Error::Io(
+        "could not reserve holding storage",
+        etude_cli_support::reason::Code::InternalError,
+    ))
+}
+
+fn io_reason(error: &std::io::Error) -> etude_cli_support::reason::Code {
+    use etude_cli_support::reason::Code;
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => Code::PermissionDenied,
+        std::io::ErrorKind::NotFound => Code::MissingInput,
+        _ => Code::InternalError,
+    }
 }
 
 pub fn plan(prepared: &Prepared, root: PathBuf, holding: &str) -> Plan {
