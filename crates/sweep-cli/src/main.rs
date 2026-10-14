@@ -292,6 +292,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
     etude_cli_support::envelope::status("done");
     for (summary, root) in summaries {
         let state = match summary.state {
+            etude_core::journal::JournalState::Refused => "refused",
             etude_core::journal::JournalState::Completed => "completed",
             etude_core::journal::JournalState::Interrupted => "interrupted",
             etude_core::journal::JournalState::Reversed => "reversed",
@@ -1330,7 +1331,13 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         json
     };
     if plan.skipped_unreadable > 0 {
+        // The plan below is real but partial. Its reason must say so: a
+        // caller reading only `reason` would otherwise see `done`.
         etude_cli_support::envelope::status("incomplete");
+        set_reason(
+            etude_cli_support::reason::Code::PermissionDenied,
+            Some(etude_cli_support::reason::Subject::wait("input", None)),
+        );
     }
     if plan.groups.is_empty() && has(args, "--json") {
         println!("{}", plan_json());
@@ -1916,6 +1923,17 @@ fn scan_exit_code(e: &etude_core::scan::ScanError) -> ExitCode {
         E::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             failure(Code::PermissionDenied, Some(Subject::wait("input", None)))
         }
+        // A folder that is not there, or a path that runs through a regular
+        // file, is the same condition `NotADirectory` reports: the named input
+        // does not exist. The caller can fix that by naming one that does.
+        E::Io(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            failure(Code::MissingInput, Some(Subject::wait("input", None)))
+        }
         E::Io(_) => failure(Code::InternalError, None),
     }
 }
@@ -2005,7 +2023,7 @@ fn run_apply(
             &etude_cli_support::envelope::operation_id(),
             operation,
         );
-        let result = etude_core::apply::apply_bound_with_structured_progress(
+        let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
             p,
             context,
             sealer,
@@ -2016,7 +2034,7 @@ fn run_apply(
         result
     } else {
         let mut progress = etude_cli_support::ProgressReporter::stderr("sweep apply", p.moves());
-        etude_core::apply::apply_with_progress(p, context, sealer, None, |event| {
+        etude_core::apply::apply_with_progress_outcome(p, context, sealer, None, |event| {
             progress.update(event.completed, event.total)
         })
     };
@@ -2054,7 +2072,13 @@ fn run_apply(
             println!("\nNothing left this machine.");
             ExitCode::SUCCESS
         }
-        Err(e) => {
+        Err(failure) => {
+            // A journal that became durable before the failure is the handle
+            // for `status --id` and `undo`; name it in the result.
+            if let Some(id) = failure.durable_journal_id.as_deref() {
+                etude_cli_support::envelope::recovery_operation(id);
+            }
+            let e = failure.error;
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) {
                 etude_cli_support::envelope::status("refused");
                 eprintln!("sweep: {e}");
@@ -2499,6 +2523,14 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
             Some(etude_cli_support::reason::Subject::wait("journal", None)),
         );
     }
+    if !r.skipped_changed.is_empty() {
+        // Files were left where apply put them. The exit status stays 0, as
+        // before, but the reason must not read `done` beside `incomplete`.
+        set_reason(
+            etude_cli_support::reason::Code::OperationIncomplete,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        );
+    }
     ExitCode::SUCCESS
 }
 
@@ -2595,7 +2627,9 @@ fn refuse_shared_key_destroy() -> ExitCode {
         "sweep: refusing to destroy the shared journal key while a stash\n\
          journal exists. Pass `sweep forget --yes` to destroy it anyway."
     );
-    refusal(etude_cli_support::reason::Code::UserCancelled, None)
+    // `forget` takes no --json, so this reason is never printed. It is the
+    // same refusal `apply` gives without --yes: an explicit choice is missing.
+    refusal(etude_cli_support::reason::Code::InvalidArguments, None)
 }
 
 fn cmd_forget(args: &[String]) -> ExitCode {

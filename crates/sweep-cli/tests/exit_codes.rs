@@ -683,3 +683,214 @@ fn a_refusal_names_the_operation_not_only_the_reason() {
         "and must still carry the OS's own reason, got: {stderr}"
     );
 }
+
+/// Run `sweep PATH --json` against a throwaway state directory and key, with
+/// stdin closed, and return the exit code and the JSON result.
+fn scan_json(path: &std::path::Path, state: &std::path::Path) -> (Option<i32>, String) {
+    let out = sweep_bin()
+        .env("ETUDE_STATE_DIR", state)
+        .env("ETUDE_JOURNAL_KEY", "ab".repeat(32))
+        .stdin(std::process::Stdio::null())
+        .arg(path)
+        .arg("--json")
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+const MISSING_INPUT: &str =
+    r#""reason":{"code":"missing_input","retry":"after_change","subject":{"kind":"input"}}"#;
+
+/// A folder that is not there is something the caller can fix by naming a
+/// folder that is. It used to be reported as `internal_error` with retry
+/// class `never`, which tells a caller the request can never work.
+#[test]
+fn a_missing_folder_is_missing_input_not_an_internal_error() {
+    let root = unique_temp("missing-reason");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    let _root = TestDir(root.clone());
+
+    let (code, stdout) = scan_json(&root.join("does-not-exist"), &root.join("state"));
+    assert_eq!(code, Some(3), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(MISSING_INPUT), "{stdout}");
+    assert!(!stdout.contains("internal_error"), "{stdout}");
+}
+
+/// A path that runs through a regular file names nothing either. The OS
+/// reports it as "not a directory" rather than "not found"; the caller's
+/// remedy is the same.
+#[test]
+fn a_folder_path_through_a_file_is_missing_input_not_an_internal_error() {
+    let root = unique_temp("through-file-reason");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    let _root = TestDir(root.clone());
+    std::fs::write(root.join("plain.txt"), b"x").unwrap();
+
+    let (code, stdout) = scan_json(&root.join("plain.txt/inside"), &root.join("state"));
+    assert_eq!(code, Some(3), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(MISSING_INPUT), "{stdout}");
+    assert!(!stdout.contains("internal_error"), "{stdout}");
+}
+
+fn sweep_json(state: &std::path::Path, args: &[&std::ffi::OsStr]) -> (Option<i32>, String) {
+    let out = sweep_bin()
+        .env("ETUDE_STATE_DIR", state)
+        .env("ETUDE_JOURNAL_KEY", "ab".repeat(32))
+        .env("SWEEP_GRACE_SECS", "0")
+        .stdin(std::process::Stdio::null())
+        .args(args)
+        .arg("--json")
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+const SUCCESS_REASONS: [&str; 2] = [
+    r#""reason":{"code":"done""#,
+    r#""reason":{"code":"nothing_to_do""#,
+];
+
+/// An undo that leaves a file behind is not finished. It used to report
+/// status `incomplete` beside reason `done`, so a caller reading only the
+/// reason believed everything was back.
+#[test]
+fn an_undo_that_leaves_a_file_behind_does_not_say_done() {
+    use std::ffi::OsStr;
+    let root = unique_temp("undo-occupied");
+    let tree = root.join("tree");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let _root = TestDir(root.clone());
+    let names: Vec<String> = (1..=3)
+        .map(|day| format!("Screenshot 2025-01-0{day} at 1.00.00 PM.png"))
+        .collect();
+    for name in &names {
+        std::fs::write(tree.join(name), b"synthetic payload").unwrap();
+    }
+    let state = root.join("state");
+    let (code, stdout) = sweep_json(
+        &state,
+        &[OsStr::new("apply"), tree.as_os_str(), OsStr::new("--yes")],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    std::fs::write(tree.join(&names[0]), b"occupied restore path").unwrap();
+
+    let (code, stdout) = sweep_json(&state, &[OsStr::new("undo"), tree.as_os_str()]);
+    assert_eq!(code, Some(0), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
+    assert!(
+        stdout.contains(
+            r#""reason":{"code":"operation_incomplete","retry":"after_change","subject":{"kind":"journal"}}"#
+        ),
+        "{stdout}"
+    );
+    assert_eq!(
+        std::fs::read(tree.join(&names[0])).unwrap(),
+        b"occupied restore path",
+        "the occupying file is untouched"
+    );
+}
+
+/// A scan that could not read part of the folder is incomplete, and its
+/// reason must not claim success either.
+#[test]
+#[cfg(unix)]
+fn a_scan_that_could_not_read_everything_does_not_say_done() {
+    use std::os::unix::fs::PermissionsExt;
+    let uid = Command::new("id").arg("-u").output().unwrap();
+    if String::from_utf8_lossy(&uid.stdout).trim() == "0" {
+        return; // mode bits do not deny the superuser
+    }
+    let root = unique_temp("scan-unreadable");
+    let tree = root.join("tree");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let _root = TestDir(root.clone());
+    std::fs::write(tree.join("note.txt"), b"synthetic payload").unwrap();
+    std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (code, stdout) = sweep_json(&root.join("state"), &[tree.as_os_str()]);
+    std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert_eq!(code, Some(1), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
+    for success in SUCCESS_REASONS {
+        assert!(!stdout.contains(success), "{stdout}");
+    }
+    assert!(
+        stdout.contains(
+            r#""reason":{"code":"permission_denied","retry":"after_change","subject":{"kind":"input"}}"#
+        ),
+        "{stdout}"
+    );
+}
+
+/// An apply that stops part-way has already written its journal. Its result
+/// must name that journal, or a caller has nothing to pass to `status --id`.
+#[test]
+#[cfg(unix)]
+fn an_apply_that_stops_part_way_names_its_recovery_operation() {
+    use std::ffi::OsStr;
+    use std::os::unix::fs::PermissionsExt;
+    let uid = Command::new("id").arg("-u").output().unwrap();
+    if String::from_utf8_lossy(&uid.stdout).trim() == "0" {
+        return; // mode bits do not deny the superuser
+    }
+    let root = unique_temp("apply-part-way");
+    let tree = root.join("tree");
+    let state = root.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    // The destination folder exists and refuses new entries, so the first
+    // move fails after the journal is durable.
+    std::fs::create_dir_all(tree.join("Screenshots")).unwrap();
+    let _root = TestDir(root.clone());
+    for day in 1..=3 {
+        std::fs::write(
+            tree.join(format!("Screenshot 2025-01-0{day} at 1.00.00 PM.png")),
+            b"synthetic payload",
+        )
+        .unwrap();
+    }
+    std::fs::set_permissions(
+        tree.join("Screenshots"),
+        std::fs::Permissions::from_mode(0o500),
+    )
+    .unwrap();
+    let (code, stdout) = sweep_json(
+        &state,
+        &[OsStr::new("apply"), tree.as_os_str(), OsStr::new("--yes")],
+    );
+    std::fs::set_permissions(
+        tree.join("Screenshots"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    assert_eq!(code, Some(3), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
+
+    let journal = std::fs::read_dir(&state)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("sweep-") && name.ends_with(".journal"))
+        .expect("the stopped apply left its journal");
+    let id = journal
+        .strip_prefix("sweep-")
+        .and_then(|name| name.strip_suffix(".journal"))
+        .unwrap();
+    assert!(
+        stdout.contains(&format!(r#""operation":"{id}""#)),
+        "recovery.operation must be the journal id {id}: {stdout}"
+    );
+    let (code, stdout) = sweep_json(
+        &state,
+        &[OsStr::new("status"), OsStr::new("--id"), OsStr::new(id)],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    assert!(stdout.contains(r#""state":"interrupted""#), "{stdout}");
+}

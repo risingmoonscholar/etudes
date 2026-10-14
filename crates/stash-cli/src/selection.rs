@@ -285,7 +285,9 @@ fn io_reason(error: &std::io::Error) -> etude_cli_support::reason::Code {
     use etude_cli_support::reason::Code;
     match error.kind() {
         std::io::ErrorKind::PermissionDenied => Code::PermissionDenied,
-        std::io::ErrorKind::NotFound => Code::MissingInput,
+        // "Not a directory" is a path that runs through a regular file: it
+        // names nothing, exactly as a missing object does.
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => Code::MissingInput,
         _ => Code::InternalError,
     }
 }

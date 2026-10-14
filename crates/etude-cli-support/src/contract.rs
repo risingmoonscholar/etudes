@@ -141,9 +141,9 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 3,
-                Tool::Stash => 8,
-                Tool::Unpack => SCHEMA_VERSION + 1,
+                Tool::Sweep => SCHEMA_VERSION + 5,
+                Tool::Stash => 10,
+                Tool::Unpack => SCHEMA_VERSION + 2,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -469,7 +469,7 @@ pub fn declaration(
         fields.push(("status_lookup", j::obj(&[
             ("support", j::str("read_only")),
             ("queries", strings(&["status --id OPERATION", "status PATH"])),
-            ("states", strings(&["completed", "interrupted", "reversed", "partly_reversed"])),
+            ("states", strings(&["refused", "completed", "interrupted", "reversed", "partly_reversed"])),
             ("counts", strings(&["planned", "moved", "reversed"])),
             ("recovery_id", j::str("durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation")),
             ("side_effects", j::str("none;_no_key_creation_migration_pruning_or_file_content_reads")),
@@ -510,7 +510,7 @@ pub fn declaration(
         fields.push(("status_lookup", j::obj(&[
             ("support", j::str("read_only")),
             ("query", j::str("status --id OPERATION")),
-            ("states", strings(&["completed", "interrupted", "reversed", "partly_reversed"])),
+            ("states", strings(&["refused", "completed", "interrupted", "reversed", "partly_reversed"])),
             ("counts", strings(&["planned", "moved", "reversed"])),
             ("recovery_id", j::str("durable_stash_id;_same_id_as_stash_id")),
             ("side_effects", j::str("none;_uses_existing_key_without_creating_one;_no_migration_pruning_or_file_content_reads")),

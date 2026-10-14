@@ -43,6 +43,7 @@
   {"id":"60-state-dir-unwritable","tier":"fast","capability":"permissions","contract":"An unwritable journal state directory prevents an unjournaled apply.","disposition":"keep"},
   {"id":"60-undo-progress-lost-on-volume-hazard","tier":"platform","capability":"hdiutil-apfs","contract":"A partial undo persists progress and resumes after a volume hazard.","disposition":"keep"},
   {"id":"70-content-blindness-traps","tier":"fast","capability":"fifo","contract":"Name-only planning avoids content reads and hostile archive members refuse safely.","disposition":"keep"},
+  {"id":"72-refusal-reasons","tier":"fast","capability":"signals","contract":"A killed apply reads back as interrupted with true counts, an unknown operation id is named as such, a contended apply says whether to wait, and status names no file.","disposition":"keep"},
   {"id":"80-finder-unpack","tier":"fast","capability":"zip","contract":"Ordinary archive listing and extraction preserve exact paths and bytes.","disposition":"keep"},
   {"id":"80-interrupted-extraction","tier":"load","capability":"signals","contract":"Killed unpack never publishes a partial target and retry extracts the exact archive.","disposition":"keep"},
   {"id":"81-unpack-quarantine","tier":"platform","capability":"hdiutil-exfat","contract":"Captured archive quarantine is preserved and exactly read back before publication, including AppleDouble storage.","disposition":"keep"},

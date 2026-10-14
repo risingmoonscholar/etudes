@@ -145,6 +145,8 @@ pub struct Journal {
 /// Path-free, read-only counts for an operation status lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalState {
+    /// No entries: the apply was refused before it moved anything.
+    Refused,
     Completed,
     Interrupted,
     Reversed,
@@ -179,7 +181,16 @@ impl Journal {
             .iter()
             .filter(|entry| entry.state == EntryState::Reversed)
             .count();
-        let state = if reversed == self.entries.len() && reversed > 0 {
+        // Entries that were planned and never moved have nothing to put
+        // back. Once nothing is still moved and something was reversed, the
+        // operation is reversed; "partly" means some entries are still moved.
+        // The only records written with no entries are for an apply refused
+        // before it moved anything (see `apply::record_refused_plan_with_id`
+        // and the stale live-plan path). An apply with nothing to move
+        // returns before it writes a journal at all.
+        let state = if self.entries.is_empty() {
+            JournalState::Refused
+        } else if reversed > 0 && moved == 0 {
             JournalState::Reversed
         } else if reversed > 0 {
             JournalState::PartlyReversed
@@ -1210,6 +1221,66 @@ mod tests {
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A record with no entries is written only when an apply is refused
+    /// before it moves anything. Nothing was planned into it and nothing
+    /// moved, so calling it `Completed` would tell a caller the work was done.
+    #[test]
+    fn a_record_with_no_entries_is_refused_not_completed() {
+        let summary = Journal {
+            id: "durable-id".into(),
+            tool: "sweep".into(),
+            ..Journal::default()
+        }
+        .summary();
+        assert_eq!(summary.state, JournalState::Refused);
+        assert_eq!(
+            (summary.planned, summary.moved, summary.reversed),
+            (0, 0, 0)
+        );
+    }
+
+    /// An apply cut short leaves entries that were planned and never moved.
+    /// Undoing it reverses everything that did move, so nothing is left to
+    /// put back: that is `Reversed`. "Partly" is only for entries still moved.
+    #[test]
+    fn undoing_an_interrupted_apply_is_reversed_not_partly_reversed() {
+        let entry = |state| Entry {
+            from: PathBuf::from("/private/source/name"),
+            to: PathBuf::from("/private/destination/name"),
+            method: Method::Rename,
+            size: 1,
+            mtime_secs: 1,
+            inode: 1,
+            edge_hash: 1,
+            state,
+        };
+        let summarize = |states: &[EntryState]| {
+            Journal {
+                id: "durable-id".into(),
+                tool: "sweep".into(),
+                entries: states.iter().copied().map(entry).collect(),
+                ..Journal::default()
+            }
+            .summary()
+        };
+
+        let undone = summarize(&[
+            EntryState::Reversed,
+            EntryState::Planned,
+            EntryState::Planned,
+        ]);
+        assert_eq!(undone.state, JournalState::Reversed);
+        assert_eq!((undone.planned, undone.moved, undone.reversed), (2, 0, 1));
+
+        let still_moved =
+            summarize(&[EntryState::Reversed, EntryState::Moved, EntryState::Planned]);
+        assert_eq!(still_moved.state, JournalState::PartlyReversed);
+        assert_eq!(
+            (still_moved.planned, still_moved.moved, still_moved.reversed),
+            (1, 1, 1)
+        );
+    }
 
     #[test]
     fn journal_summary_reports_path_free_states_and_exact_entry_counts() {

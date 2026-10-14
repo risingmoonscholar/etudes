@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 442 tests
+cargo test --all                # 456 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -257,11 +257,12 @@ Each carries `schema_version`, `tool_version`, `operation_id` and `status`.
 Binary probes in the test suite compare declarations with exercised filesystem
 behaviour and pin each contract's schema; deliberate schema and behaviour mutants
 must fail those probes. The declaration is not a receipt or proof of no access.
-**Breaking in 0.5.4 for JSON consumers:** every JSON result uses schema version 2,
+**Breaking in 0.5.4 for JSON consumers:** every JSON result uses schema version 4,
 including errors and refusals. Check the outer `schema_version` before parsing.
 Operation fields move under `details` (for example, `details.groups`,
 `details.moved`, and `details.paths_audited`). The shared envelope adds `scope`,
-`observations`, `effects`, named `verification` claims, `recovery` and `disclosure`.
+`observations`, `effects`, named `verification` claims, `recovery`, `disclosure`
+and `reason`.
 Status is `done`, `nothing_to_do`, `refused`, `incomplete` or `error`.
 Read receipts separate attempted, observed, verified and failed operations,
 and name unproven coverage. They contain categories and counts, never payloads,
@@ -308,6 +309,73 @@ can overshoot further. There is no guaranteed maximum overshoot.
 do · `2` refused · `3` error. "Refused" is distinct from "error" on purpose.
 An agent must be able to tell a safety stop from a crash.
 
+### Whether to try again: `reason`
+
+Every `--json` result has a top-level `reason`. It holds a stable `code` and a
+`retry` class, so a caller can decide what to do next without reading the
+message text:
+
+```json
+"reason": {"code": "missing_input", "retry": "after_change", "subject": {"kind": "input"}}
+```
+
+- `not_needed`: the command finished; the code is `done` or `nothing_to_do`.
+- `never`: the same request cannot work, so do not send it again.
+- `after_change`: it can work once you change something, and `subject.kind`
+  says what: the input, the destination, the plan, the profile or the journal.
+- `later`: the same request may work if you wait, and `subject.kind` says what
+  you are waiting for.
+
+Exit codes keep their meaning. `reason` adds the part an exit code cannot
+carry.
+
+The full list is in each tool's contract: `sweep contract --json`, `stash
+contract --json` and `unpack contract --json` list every code under
+`details.refusal_codes`, with its retry class, its subject kind, the operations
+it applies to and one line on why. `scripts/check-tool-contracts.py` makes each
+tool return the codes it lists and compares the answer with the contract. It
+prints which codes it proved and names the ones it could not reach. A contract
+lists only codes the tool has a code path for; the few the check cannot reach
+need a missing login keychain, an internal fault or a race it cannot stage.
+
+To ask about an operation after the fact, without moving anything:
+
+```sh
+sweep status --id ID --json     # one sweep operation, by its id
+sweep status PATH --json        # the operations recorded for a folder
+stash status --id ID --json     # one stash operation, by its id
+```
+
+The id is `recovery.operation` in the result of the command that moved the
+files. The answer gives a state (`refused`, `completed`, `interrupted`,
+`reversed` or `partly_reversed`) and counts of planned, moved and reversed
+items. `refused` is an apply that was turned away before it moved anything. It never
+lists file names. An id that no journal holds gives exit 1 with the code
+`unknown_operation`. `reversed` means nothing is still moved; `partly_reversed`
+means some files are back and some are not.
+
+A result's `status` and `reason` always agree: when the status is `incomplete`,
+`refused` or `error`, the reason is never `done` or `nothing_to_do`. An undo or
+pop that had to leave a file behind exits 0 as before, with status `incomplete`
+and the code `operation_incomplete`.
+
+Two applies on one folder at once are not held apart. One wins. The other ends
+in one of two ways, and timing decides which:
+
+- **Refused before it moved anything** (exit 2, `plan_stale`): the folder
+  changed under its plan. Nothing of its own needs undoing, and `sweep status`
+  reports its record as `refused`. Scan and apply again.
+- **Stopped part-way** (exit 3, `operation_incomplete`): it had started and
+  then collided. `recovery.operation` is an id that `sweep status --id` reports
+  as `interrupted`. Run `sweep undo` on the folder before planning again.
+
+Known gaps: a folder that holds only recent files reports `nothing_to_do`, with
+no code that says "try again later". After two applies on one folder, when one
+of them stopped part-way, `sweep undo` can refuse with exit 3 instead of putting
+the files back. Running it again refuses again, and no undo command reaches the
+other apply first. Nothing is lost: the files stay in the folder apply made, and
+can be moved back by hand.
+
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:
 
@@ -340,13 +408,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 48 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 49 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 48 scenarios
+bash stress/run.sh        # 49 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but

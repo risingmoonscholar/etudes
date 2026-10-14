@@ -423,3 +423,125 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
          restore was partial"
     );
 }
+
+const MISSING_INPUT: &str =
+    r#""reason":{"code":"missing_input","retry":"after_change","subject":{"kind":"input"}}"#;
+
+fn json_result(root: &std::path::Path, args: &[&std::ffi::OsStr]) -> (Option<i32>, String) {
+    let out = stash_bin()
+        .env("ETUDE_STATE_DIR", root.join("state"))
+        .env("ETUDE_JOURNAL_KEY", "ab".repeat(32))
+        .stdin(std::process::Stdio::null())
+        .args(args)
+        .arg("--json")
+        .output()
+        .unwrap();
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
+}
+
+/// A folder path that runs through a regular file names nothing. The OS calls
+/// it "not a directory" rather than "not found", and stash used to report it
+/// as `internal_error`, which tells a caller the request can never work.
+#[test]
+fn a_folder_path_through_a_file_is_missing_input_not_an_internal_error() {
+    let root = unique_temp("through-file-reason");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    let _root = TestDir(root.clone());
+    std::fs::write(root.join("plain.txt"), b"x").unwrap();
+
+    let target = root.join("plain.txt/inside");
+    let (code, stdout) = json_result(&root, &[target.as_os_str()]);
+    assert_eq!(code, Some(3), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(MISSING_INPUT), "{stdout}");
+    assert!(!stdout.contains("internal_error"), "{stdout}");
+}
+
+/// The same path given to an explicit selection gets the same reason.
+#[test]
+fn a_selected_path_through_a_file_is_missing_input_not_an_internal_error() {
+    let root = unique_temp("select-through-file-reason");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    let _root = TestDir(root.clone());
+    std::fs::write(root.join("plain.txt"), b"x").unwrap();
+
+    let target = root.join("plain.txt/inside/item");
+    let (code, stdout) = json_result(&root, &[std::ffi::OsStr::new("select"), target.as_os_str()]);
+    assert_eq!(code, Some(3), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(MISSING_INPUT), "{stdout}");
+    assert!(!stdout.contains("internal_error"), "{stdout}");
+    assert!(root.join("plain.txt").is_file(), "nothing was moved");
+}
+
+/// A pop that leaves an item in holding is not finished. It used to report
+/// status `incomplete` beside reason `done`, so a caller reading only the
+/// reason believed everything was back.
+#[test]
+fn a_pop_that_leaves_an_item_behind_does_not_say_done() {
+    use std::ffi::OsStr;
+    let root = unique_temp("pop-occupied");
+    let tree = root.join("tree");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let _root = TestDir(root.clone());
+    for name in ["one.txt", "two.txt", "three.txt"] {
+        std::fs::write(tree.join(name), b"synthetic payload").unwrap();
+    }
+    let (code, stdout) = json_result(&root, &[tree.as_os_str()]);
+    assert_eq!(code, Some(0), "{stdout}");
+    std::fs::write(tree.join("one.txt"), b"occupied restore path").unwrap();
+
+    let (code, stdout) = json_result(&root, &[OsStr::new("pop"), tree.as_os_str()]);
+    assert_eq!(code, Some(0), "exit code is unchanged: {stdout}");
+    assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
+    assert!(
+        stdout.contains(
+            r#""reason":{"code":"operation_incomplete","retry":"after_change","subject":{"kind":"journal"}}"#
+        ),
+        "{stdout}"
+    );
+    assert_eq!(
+        std::fs::read(tree.join("one.txt")).unwrap(),
+        b"occupied restore path",
+        "the occupying file is untouched"
+    );
+}
+
+const UNKNOWN_OPERATION: &str = r#""reason":{"code":"unknown_operation","retry":"never"}"#;
+
+/// The same unknown id gets the same reason from every command that takes one.
+#[test]
+fn an_unknown_operation_id_is_unknown_operation_for_pop_inspect_and_status() {
+    use std::ffi::OsStr;
+    let root = unique_temp("unknown-id");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    let _root = TestDir(root.clone());
+    for command in ["pop", "inspect", "status"] {
+        let (code, stdout) = json_result(
+            &root,
+            &[
+                OsStr::new(command),
+                OsStr::new("--id"),
+                OsStr::new("operation-that-does-not-exist"),
+            ],
+        );
+        assert_eq!(code, Some(1), "{command}: exit code is unchanged: {stdout}");
+        assert!(stdout.contains(UNKNOWN_OPERATION), "{command}: {stdout}");
+    }
+}
+
+/// A folder with nothing stashed is not an unknown id: that stays as it was.
+#[test]
+fn a_folder_with_nothing_stashed_is_still_missing_input() {
+    use std::ffi::OsStr;
+    let root = unique_temp("nothing-stashed");
+    let tree = root.join("tree");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let _root = TestDir(root.clone());
+    let (code, stdout) = json_result(&root, &[OsStr::new("pop"), tree.as_os_str()]);
+    assert_eq!(code, Some(1), "{stdout}");
+    assert!(stdout.contains(MISSING_INPUT), "{stdout}");
+}

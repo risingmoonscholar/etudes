@@ -14,10 +14,12 @@ import json
 import os
 from pathlib import Path
 import secrets
+import signal
 import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 
 
@@ -243,6 +245,42 @@ class Probe:
             require(row["attempted"] == row["observed"] + row["failed"], "receipt outcomes do not partition attempts")
             require(0 <= row["verified"] <= row["observed"], "verification exceeds observed reads")
         require("not evidence" in value["disclosure"]["zero_counters"], "zero counter overclaims")
+        self.reason(value, shape.get("reason"))
+
+    def reason(self, value, rule):
+        """Every result says whether to retry. A tool that leaves a refusal
+        unclassified prints `"reason": null`; that must never pass."""
+        reason = value["reason"]
+        require(reason is not None,
+                f"a {value['status']} result has no reason (reason is null); "
+                "a caller cannot tell whether to retry")
+        if rule is None:
+            return
+        require(type(reason) is dict, "invalid reason object")
+        require(set(rule["required"]) <= set(reason) <= set(rule["required"] + rule["optional"]),
+                "reason fields changed without a schema_version bump")
+        require(type(reason["code"]) is str and reason["code"], "invalid reason code")
+        require(reason["retry"] in rule["retry_values"], "invalid reason retry class")
+        if reason["retry"] in rule["subject_required_for"]:
+            require(type(reason.get("subject")) is dict and
+                    type(reason["subject"].get("kind")) is str and reason["subject"]["kind"],
+                    f"reason {reason['code']} has retry class {reason['retry']} but names no subject kind")
+        if value["status"] in ("refused", "error"):
+            require(reason["retry"] != "not_needed",
+                    f"a {value['status']} result claims no retry is needed")
+        # Status and reason must tell one story. A caller that reads only the
+        # reason must never see success beside a result that did not finish.
+        status, code = value["status"], reason["code"]
+        if status == "done":
+            require(code == "done", f"a done result carries reason {code}")
+        elif status == "nothing_to_do":
+            require(code in ("nothing_to_do", *LOOKUP_FOUND_NOTHING),
+                    f"a nothing_to_do result carries reason {code}")
+        else:
+            require(code not in ("done", "nothing_to_do"),
+                    f"a result with status {status} carries the success reason {code}")
+        require((reason["retry"] == "not_needed") == (code in ("done", "nothing_to_do")),
+                f"reason {code} has retry class {reason['retry']}")
 
     def result_probes(self):
         for command in ("help", "--version"):
@@ -451,6 +489,377 @@ class Probe:
             require(snapshot(self.directory) == before, "unsupported format had filesystem effects")
 
 
+# A lookup that found nothing exits 1 with status nothing_to_do, and names
+# what was not found. These are the only refusal codes that status may carry.
+LOOKUP_FOUND_NOTHING = ("unknown_operation", "missing_input")
+
+
+class Unreached(Exception):
+    """A probe could not set up the condition it needs. Reported as unproven."""
+
+
+def screenshots(tree, count=3):
+    """Three same-kind names: the smallest tree sweep will group and move."""
+    tree.mkdir()
+    for number in range(1, count + 1):
+        (tree / f"Screenshot 2025-01-0{number} at 1.00.00 PM.png").write_bytes(b"synthetic payload")
+    return tree
+
+
+def project(tree):
+    screenshots(tree)
+    (tree / "Cargo.toml").write_bytes(b"[package]\n")
+    return tree
+
+
+def zip_archive(path, members):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as writer:
+        for name, payload in members:
+            entry = zipfile.ZipInfo(name)
+            entry.create_system = 3
+            entry.external_attr = (stat.S_IFREG | 0o600) << 16
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            writer.writestr(entry, payload)
+    return path
+
+
+def needs_denied_permissions():
+    if os.geteuid() == 0:
+        raise Unreached("mode bits do not deny the superuser")
+
+
+def garbage_journal(probe):
+    """Bytes the throwaway key cannot open, under a well-formed journal name."""
+    (probe.state / f"{probe.tool}-unreadable.journal").write_bytes(b"synthetic bytes, not a sealed journal")
+    return probe.run("status", "--id", "unreadable", "--json", codes=(3,))
+
+
+def restore_into_read_only_folder(probe):
+    """A journalled move, then a restore the folder's mode refuses. The restore
+    stops part-way; afterwards the same command finishes it."""
+    needs_denied_permissions()
+    tree = screenshots(probe.directory / "tree")
+    before = snapshot(tree)
+    move = ("apply", tree, "--yes", "--since", "0") if probe.tool == "sweep" else (tree,)
+    back = "undo" if probe.tool == "sweep" else "pop"
+    probe.run(*move, "--json")
+    tree.chmod(0o500)
+    try:
+        result = probe.run(back, tree, "--json", codes=(3,))
+    finally:
+        tree.chmod(0o700)
+    probe.run(back, tree, "--json")
+    require(snapshot(tree) == before, "an interrupted restore did not resume to the original tree")
+    return result
+
+
+def restore_onto_occupied_path(probe):
+    """A journalled move, then a restore whose original path is now occupied.
+    The occupying file is kept, the held file stays held, the command still
+    exits 0, and the result must say the restore is not finished."""
+    tree = screenshots(probe.directory / "tree")
+    before = snapshot(tree)
+    name = "Screenshot 2025-01-01 at 1.00.00 PM.png"
+    move = ("apply", tree, "--yes", "--since", "0") if probe.tool == "sweep" else (tree,)
+    back = "undo" if probe.tool == "sweep" else "pop"
+    probe.run(*move, "--json")
+    (tree / name).write_bytes(b"occupied restore path")
+    result = probe.run(back, tree, "--json")
+    require(json.loads(result.stdout)["status"] == "incomplete",
+            "a restore that left a file behind is not reported as incomplete")
+    require((tree / name).read_bytes() == b"occupied restore path", "a restore overwrote a file")
+    require(sum(path.name == name for path in tree.rglob("*")) == 2,
+            "a blocked restore lost the held payload")
+    (tree / name).unlink()
+    probe.run(back, tree, "--json")
+    require(snapshot(tree) == before, "a blocked restore did not resume to the original tree")
+    return result
+
+
+def sweep_unreadable_scan(probe):
+    """A folder the scan cannot read yields a partial plan, not a finished one."""
+    needs_denied_permissions()
+    tree = screenshots(probe.directory / "tree")
+    tree.chmod(0)
+    try:
+        result = probe.run(tree, "--json", codes=(1,))
+    finally:
+        tree.chmod(0o700)
+    require(json.loads(result.stdout)["status"] == "incomplete",
+            "a scan that could not read its folder is not reported as incomplete")
+    return result
+
+
+def stale_plan(probe):
+    """Export a plan, change the tree, replay the plan with its own digest."""
+    tree = screenshots(probe.directory / "tree")
+    plan = probe.directory / "plan.json"
+    scan = (tree, "--since", "0") if probe.tool == "sweep" else (tree,)
+    exported = json.loads(probe.run(*scan, "--export-plan", plan, "--json").stdout)
+    digest = exported["details"]["binding"]["plan_digest"]
+    (tree / "arrived after the plan.txt").write_bytes(b"synthetic late arrival")
+    before = snapshot(tree)
+    replay = ("apply", "--plan", plan, "--plan-digest", digest, "--yes") if probe.tool == "sweep" \
+        else ("--plan", plan, "--plan-digest", digest)
+    result = probe.run(*replay, "--json", codes=(2,))
+    require(snapshot(tree) == before, "a stale plan still moved files")
+    return result
+
+
+def sweep_destination_exists(probe):
+    tree = probe.directory / "tree"
+    for folder in ("a", "b"):
+        (tree / folder).mkdir(parents=True)
+        (tree / folder / "Screenshot 2026-07-01 at 9.00.00 AM.png").write_bytes(folder.encode())
+    for day in (2, 3):
+        (tree / f"Screenshot 2026-07-0{day} at 9.00.00 AM.png").write_bytes(b"synthetic payload")
+    return probe.run("apply", tree, "--since", "0", "--depth", "2", "--yes", "--json", codes=(2,))
+
+
+def sweep_profile_missing(probe):
+    (probe.state / "sweep-existing-profile.toml").write_text(
+        'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Folder That Is Absent"\n')
+    tree = screenshots(probe.directory / "tree")
+    return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
+
+
+def sweep_download_in_flight(probe):
+    return probe.run(screenshots(probe.directory / "film.mp4.download"), "--json", codes=(2,))
+
+
+def sweep_unsafe_input(probe):
+    tree = probe.directory / "tree"
+    tree.mkdir()
+    for name in ("one.xyz", "two.xyz"):
+        (tree / name).write_bytes(b"synthetic payload")
+    before = snapshot(tree)
+    result = probe.run("apply", tree, "--map", "xyz=Routed", "--no-journal", "--yes",
+                       "--since", "0", "--json", codes=(2,))
+    require(snapshot(tree) == before, "a refused mapped apply still moved files")
+    return result
+
+
+def sweep_permission_denied(probe):
+    needs_denied_permissions()
+    locked = probe.directory / "read-only"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        return probe.run(screenshots(probe.directory / "tree"), "--since", "0",
+                         "--export-plan", locked / "plan.json", "--json", codes=(2,))
+    finally:
+        locked.chmod(0o700)
+
+
+def stash_not_due_yet(probe):
+    tree = screenshots(probe.directory / "tree")
+    probe.run(tree, "--for", "1d", "--json")
+    held = snapshot(tree)
+    result = probe.run("pop", tree, "--if-due", "--json", codes=(2,))
+    require(snapshot(tree) == held, "an early pop moved files")
+    probe.run("pop", tree, "--json")
+    return result
+
+
+def stash_unsafe_input(probe):
+    tree = screenshots(probe.directory / "tree")
+    (tree / "link").symlink_to(tree / "Screenshot 2025-01-01 at 1.00.00 PM.png")
+    return probe.run("select", tree / "link", "--json", codes=(2,))
+
+
+def unpack_archive(probe):
+    return zip_archive(probe.directory / "payload.zip", [("payload", os.urandom(200_000))])
+
+
+def unpack_unsupported_format(probe):
+    archive = probe.directory / "image.dmg"
+    archive.write_bytes(b"not a supported format")
+    return probe.run(archive, "--json", codes=(2,))
+
+
+def unpack_insufficient_space(probe):
+    result = probe.run(unpack_archive(probe), "--max-size", "10", "--json", codes=(2,))
+    require(not (probe.directory / "payload").exists(), "a refused extraction published a destination")
+    return result
+
+
+def unpack_destination_exists(probe):
+    archive = unpack_archive(probe)
+    (probe.directory / "payload").mkdir()
+    return probe.run(archive, "--json", codes=(2,))
+
+
+def unpack_unsafe_input(probe):
+    archive = zip_archive(probe.directory / "escape.zip", [("../escape", b"synthetic payload")])
+    result = probe.run(archive, "--json", codes=(2,))
+    require(not (probe.directory.parent / "escape").exists(), "an unsafe member was extracted")
+    return result
+
+
+def unpack_permission_denied(probe):
+    needs_denied_permissions()
+    locked = probe.directory / "locked"
+    locked.mkdir()
+    archive = zip_archive(locked / "payload.zip", [("payload", b"synthetic payload")])
+    locked.chmod(0)
+    try:
+        return probe.run(archive, "--json", codes=(3,))
+    finally:
+        locked.chmod(0o700)
+
+
+def unpack_operation_incomplete(probe):
+    """Stop a real extraction with SIGTERM once its private staging tree exists.
+    An extraction that finishes first is a missed window, not a failure."""
+    archive = zip_archive(probe.directory / "large.zip",
+                          [(f"member-{number}", bytes(64 * 1024 * 1024)) for number in range(4)])
+    process = subprocess.Popen(
+        [probe.binary, str(archive), "--json"], cwd=probe.directory, env=probe.environment,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    deadline = time.monotonic() + 30
+    try:
+        while process.poll() is None and time.monotonic() < deadline:
+            if any(probe.directory.glob(".large.unpack-*.partial")):
+                process.send_signal(signal.SIGTERM)
+                break
+            time.sleep(0.002)
+        stdout, stderr = process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+    require(probe.environment["ETUDE_JOURNAL_KEY"].encode() not in stdout + stderr,
+            "a supplied key was disclosed")
+    if process.returncode == 0:
+        raise Unreached("the extraction finished before the signal arrived")
+    require(process.returncode == 2, f"unpack: stopped extraction exited {process.returncode}, expected 2")
+    probe.envelope(json.loads(stdout))
+    require(not (probe.directory / "large").exists() and
+            not any(probe.directory.glob(".large.unpack-*.partial")),
+            "a stopped extraction left a destination or staging tree behind")
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+
+# Real invocations for each refusal code, each on its own throwaway fixture. A
+# probe returns the tool's result; the caller compares its reason with the
+# contract. A code with several probes is proven only if none disagrees. Nothing here reads a tool's source or trusts a self-description.
+CODE_PROBES = {
+    "sweep": {
+        "invalid_arguments": lambda p: p.run("apply", screenshots(p.directory / "tree"), "--json", codes=(2,)),
+        "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
+        "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
+        "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
+        "destination_exists": sweep_destination_exists,
+        "plan_stale": stale_plan,
+        "profile_missing": sweep_profile_missing,
+        "download_in_flight": sweep_download_in_flight,
+        "journal_unreadable": garbage_journal,
+        "unknown_operation": lambda p: p.run("status", "--id", "absent", "--json", codes=(1,)),
+        "unsafe_input": sweep_unsafe_input,
+        "permission_denied": (sweep_permission_denied, sweep_unreadable_scan),
+        "operation_incomplete": (restore_into_read_only_folder, restore_onto_occupied_path),
+    },
+    "stash": {
+        "invalid_arguments": lambda p: p.run(screenshots(p.directory / "tree"), "--for", "soon", "--json", codes=(2,)),
+        "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
+        "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
+        "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
+        "plan_stale": stale_plan,
+        "not_due_yet": stash_not_due_yet,
+        "journal_unreadable": garbage_journal,
+        "unknown_operation": tuple(
+            (lambda p, command=command: p.run(command, "--id", "absent", "--json", codes=(1,)))
+            for command in ("status", "pop", "inspect")),
+        "unsafe_input": stash_unsafe_input,
+        # A machine-wide path listing answers only to a terminal; stdin is closed.
+        "permission_denied": lambda p: p.run("status", "--all", "--paths", "--json", codes=(2,)),
+        "operation_incomplete": (restore_into_read_only_folder, restore_onto_occupied_path),
+    },
+    "unpack": {
+        "invalid_arguments": lambda p: p.run("--list", "--json", codes=(2,)),
+        "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
+        "missing_input": lambda p: p.run(p.directory / "absent.zip", "--json", codes=(3,)),
+        "unsupported_format": unpack_unsupported_format,
+        "insufficient_space": unpack_insufficient_space,
+        "destination_exists": unpack_destination_exists,
+        "unsafe_input": unpack_unsafe_input,
+        "permission_denied": unpack_permission_denied,
+        "operation_incomplete": unpack_operation_incomplete,
+    },
+}
+
+# Listed codes this witness cannot make a tool return, and why. Each needs an
+# environment these probes do not have; the tool has a code path for it. They
+# are reported by name on every run. An entry here is a gap, never a pass.
+NO_PROBE = {
+    "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
+    "journal_key_unavailable": "needs the login keychain; every probe supplies a throwaway key",
+    "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
+    "destination_exists": "needs a destination to appear inside {tool}'s private holding folder mid-move",
+}
+
+
+def refusal_codes(tool, binary, listed, directory):
+    """Make the tool return each code its contract lists, and compare.
+
+    Proven: a real invocation returned that code with the contract's retry
+    class and, where the class needs one, the contract's subject kind.
+    Unproven: no probe reached it. Mismatched: a probe ran and the tool
+    answered with something other than what its contract promises.
+    """
+    names = [row["code"] for row in listed]
+    require(len(set(names)) == len(names), "contract lists a refusal code twice")
+    require(set(CODE_PROBES[tool]) <= set(names),
+            f"{tool}: a probe exists for a code the contract no longer lists: "
+            f"{sorted(set(CODE_PROBES[tool]) - set(names))}")
+    proven, unproven, mismatched = [], [], []
+    for row in listed:
+        code = row["code"]
+        attempt = CODE_PROBES[tool].get(code)
+        if attempt is None:
+            why = NO_PROBE.get(code, "no probe is written for it").format(tool=tool)
+            unproven.append(f"{code} ({why})")
+            continue
+        attempts = attempt if isinstance(attempt, tuple) else (attempt,)
+        reached, missed, wrong = 0, [], []
+        for number, one in enumerate(attempts):
+            fixture = directory / f"{code}-{number}"
+            fixture.mkdir()
+            try:
+                result = one(Probe(tool, binary, fixture))
+                observed = json.loads(result.stdout)["reason"]
+            except Unreached as unreached:
+                missed.append(str(unreached))
+                continue
+            except AssertionError as failure:
+                wrong.append(f"{code}: {failure}")
+                continue
+            expected = {"code": code, "retry": row["retry"]}
+            actual = {"code": observed["code"], "retry": observed["retry"]}
+            if row["retry"] in ("after_change", "later"):
+                expected["subject.kind"] = row["subject_kind"]
+                actual["subject.kind"] = observed.get("subject", {}).get("kind")
+            if actual == expected:
+                reached += 1
+            else:
+                wrong.append(f"{code}: contract promises {expected}, the tool returned {actual}")
+        if wrong:
+            mismatched.extend(wrong)
+        elif reached:
+            proven.append(code)
+        else:
+            unproven.append(f"{code} ({'; '.join(missed)})")
+    print(f"refusal codes {tool}: {len(proven)} proven, {len(unproven)} unproven, "
+          f"{len(mismatched)} mismatched, of {len(listed)} listed")
+    print(f"  proven: {', '.join(proven) or 'none'}")
+    for line in unproven:
+        print(f"  unproven: {line}")
+    for line in mismatched:
+        print(f"  mismatched: {line}")
+    require(not mismatched,
+            f"{tool}: refusal codes disagree with the contract: " + "; ".join(mismatched))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tool", choices=("sweep", "stash", "unpack"))
@@ -476,6 +885,9 @@ def main():
             probe.unpack()
         else:
             probe.custody()
+    with tempfile.TemporaryDirectory(prefix="etudes-contract-codes-") as directory:
+        refusal_codes(arguments.tool, arguments.bin, probe.contract["refusal_codes"],
+                      Path(directory).resolve())
     print(f"ok {arguments.tool}: contract pin, scope, formats, overwrite, custody and state probes")
     print("unproven: absence of file reads, subprocess networking, and unexercised paths; "
           "no zero counter is access evidence")

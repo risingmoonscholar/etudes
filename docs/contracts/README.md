@@ -91,6 +91,45 @@ symbols. Negative controls remove a field without a version bump and inject
 an out-of-scope mutation while advertising the unchanged valid contract; both
 must fail the witness for the expected reason.
 
+The same script makes each tool return the refusal codes its contract lists.
+For every code under `refusal_codes` it runs a real invocation on a throwaway
+fixture and compares the result's `reason` with the contract: the code, the
+retry class and, for `after_change` and `later`, the subject kind. It prints a
+summary per tool. `proven` means the tool returned what the contract promises.
+`unproven` names a listed code no probe reached, with the reason; it is a gap,
+not a pass. `mismatched` means the tool answered with something else, and fails
+the check. A refused or error result whose `reason` is `null` also fails: a
+tool that leaves a refusal unclassified still exits with its usual status and
+prints `"reason": null`, so this check is what catches it.
+
+Every `--json` result the script sees must also tell one story in `status` and
+`reason`. A `done` status carries the code `done`. A `nothing_to_do` status
+carries `nothing_to_do`, or `unknown_operation` or `missing_input` when a
+lookup found nothing. Any other status carries a code other than those two
+success codes, so a result that is `incomplete`, `refused` or `error` can never
+read as finished to a caller that looks only at `reason`.
+`scripts/check-refusal-code-mutation.sh` plants three faults in sweep's source,
+a wrong code, a missing reason and an incomplete undo that says `done`, and
+requires the check to reject each.
+
+**Declaration versions 8 (sweep), 9 (stash) and 6 (unpack)** list only codes
+the tool has a code path for. `folder_busy`, `recent_files`, `empty_selection`
+and `user_cancelled` are removed from every list: no tool returned them, or
+returned them only from a command that takes no `--json`. `download_in_flight`
+is removed from unpack, which reports a `.part` or `.download` name as
+`unsupported_format`. `unknown_operation` now also covers `stash pop --id` and
+`stash inspect --id`. `v8/sweep.json`, `v9/stash.json` and `v6/unpack.json` pin
+these declarations; earlier pins are unchanged.
+
+**Declaration versions 9 (sweep) and 10 (stash)** add a fifth status state.
+`status_lookup.states` is now `refused`, `completed`, `interrupted`, `reversed`
+and `partly_reversed`. `refused` is a journal record with no entries. Such a
+record is written only when an apply is turned away before it moves anything,
+because the folder changed under its plan; an apply with nothing to move writes
+no journal. Its counts are all zero and it has no recovery command. It was
+previously reported as `completed`. `v9/sweep.json` and `v10/stash.json` pin
+these declarations and `v1/` mirrors them; unpack stays at version 6.
+
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
 conditional path (including keychain, EXDEV, review and crash recovery). Those
@@ -106,7 +145,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v7/sweep.json`, `v8/stash.json` and `v5/unpack.json`);
+contract envelopes (`v9/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -168,7 +207,7 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 ## Unpack quarantine declaration version 3
 
 Unpack's capability declaration under `details.schema_version` is version 3;
-its surrounding result envelope is version 4. `v5/unpack.json` pins the
+its surrounding result envelope is version 4. `v6/unpack.json` pins the
 current declaration and `v1/unpack.json` mirrors that current fixture. Earlier
 unpack pins stay unchanged. Sweep and stash use their own declaration
 versions, while the shared result envelope uses version 4.
@@ -203,7 +242,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 7 and its surrounding result envelope is version 4.
+declaration is version 10 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -234,7 +273,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 8 in `v8/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 10 in `v10/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
