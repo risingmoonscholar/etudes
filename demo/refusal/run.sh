@@ -1,25 +1,17 @@
 #!/usr/bin/env bash
 # The refusal demo, as evidence. No claim here is printed without being checked.
 #
-# Codex set the standard and then failed the first version of this script
-# against it. Its findings, all acted on below: only two of the six numbers
-# were asserted and the rest merely printed; the Python gates used `assert`,
-# which vanishes under python3 -O; the fixture digest, the binary provenance
-# and the licence were printed but never verified; the header claimed the
-# default depth does nothing without ever running it; the refusal was matched
-# with an unanchored grep whose "." was a wildcard; and the closing line said
-# "every fact the demo states was just measured" when four of them had not
-# been. That line was the same defect this repo keeps finding: a summary
-# claiming more than the thing under it did.
+# Every measurement here is asserted, not only printed: the fixture commit, the
+# fixture's licence, each binary's commit and reported version, the group counts,
+# the apply exit codes and the refusal text are each checked before the demo
+# says anything about them.
 #
-# The largest change is what the demo demonstrates. The first version inferred
-# damage: it showed v0.4.0 PROPOSING to move files the project references, and
-# left the reader to assume that would break it. Codex was right that this
-# proves less than it sounds. So this applies the plan to a throwaway copy and
-# counts load targets that are no longer at their res:// path afterwards.
+# The demo shows damage rather than inferring it. It applies the plan to a
+# throwaway copy and counts load targets that are no longer at their res:// path
+# afterwards. Showing v0.4.0 only PROPOSING to move referenced files would leave
+# the reader to assume that breaks the project, which proves less than it sounds.
 #
-# Two facts that came out of doing so, both stated because they qualify the
-# claim:
+# Two facts qualify the claim, so both are stated:
 #
 #   * v0.4.0 CANNOT apply the whole plan to this fixture. It refuses with a
 #     destination collision -- two files that would land on the same name.
