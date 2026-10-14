@@ -1987,18 +1987,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 /// When the tail is damaged the answer is no, so undo runs and its
 /// successor-entry recovery checks the filesystem instead of the journal.
 fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
-    if j.progress_tail_damaged {
-        return false;
-    }
-    // Ask the disk, not just the entries. A journal cut back to its base frame
-    // has every entry reading Planned and no torn tail to notice, so the check
-    // above passes and the entries agree there is nothing to reverse -- while
-    // every file is still at its destination. Answering "already restored"
-    // there is not a partial job, it is untrue.
-    if etude_core::apply::unrecorded_moves(j) > 0 {
-        return false;
-    }
-    !j.entries.iter().any(|e| e.is_moved())
+    !etude_core::apply::has_undo_work(j)
 }
 
 /// Shared tail of `apply` and `review`.
@@ -2266,13 +2255,26 @@ fn sweep_journal_matching(
         Err(etude_core::journal::JournalError::NotFound) => return Ok(None),
         Err(e) => return Err(e),
     };
+    let mut journals = Vec::new();
     for id in ids {
-        // An unreadable newer journal may describe the same files. Never
-        // skip it and restore an older operation under a different key.
+        // An unreadable journal may account for these same destinations.
+        // Never use a different history to bypass a journal we cannot read.
         let j = id.load("sweep", sl)?;
-        if matches(&j) && !journal_is_fully_undone(&j) {
-            return Ok(Some(j));
+        if matches(&j) {
+            if journals.is_empty() && !journal_is_fully_undone(&j) {
+                // Ordinary undo needs no older context. Contention is visible
+                // as planned destinations occupied while their origins are gone.
+                if etude_core::apply::unrecorded_moves(&j) == 0 {
+                    return Ok(Some(j));
+                }
+                journals.push(j);
+            } else if !journals.is_empty() {
+                journals.push(j);
+            }
         }
+    }
+    if let Some(index) = etude_core::apply::next_undo_journal(&journals) {
+        return Ok(Some(journals.remove(index)));
     }
     Ok(None)
 }

@@ -121,9 +121,11 @@ reviewers were pointed at the tools before anyone else could be.
   it moves anything (exit 2, `plan_stale`; plan again), or it stops part-way
   (exit 3, `operation_incomplete`, with a `recovery.operation` id that status
   reports as `interrupted`; run `sweep undo`, then plan again). After the
-  part-way ending, `sweep undo` can refuse with exit 3 instead of putting the
-  files back; running it again refuses again, and no undo command reaches the
-  other apply first. Nothing is lost: the files stay in the folder apply made.
+  part-way ending, repeat `sweep undo` on the folder until nothing is left to
+  undo. It restores the apply that recorded the remaining moves first, then
+  the stopped apply, even if the stopped apply's journal is newest. Every
+  original path and byte comes back. A journal that really lost several move
+  records is still refused without touching files.
   `unpack` reports a `.part` or `.download` name as `unsupported_format`.
 
 ### 0.5.3 published — sweep, stash and unpack
