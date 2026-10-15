@@ -995,7 +995,7 @@ fn build_with_policy(
         .map(|(path, _)| path.clone())
         .collect();
 
-    Plan {
+    let mut plan = Plan {
         observations: scan.snapshot.clone(),
         root: scan.root.clone(),
         groups,
@@ -1011,7 +1011,17 @@ fn build_with_policy(
         skipped_unreadable: scan.skipped_unreadable,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
-    }
+    };
+    // Only regular files can be placed by a proposal. A package or folder
+    // that no group claimed stays in the left-alone list but is not eligible.
+    let regular: Vec<PathBuf> = plan
+        .unclaimed
+        .iter()
+        .filter(|path| plan.observed_file_size(path).is_some())
+        .cloned()
+        .collect();
+    plan.unclaimed = regular;
+    plan
 }
 
 /// Human date range for a set of entries, from mtime only.

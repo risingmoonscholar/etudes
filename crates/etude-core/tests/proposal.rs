@@ -51,6 +51,14 @@ impl Fixture {
         std::fs::create_dir(root.join("proj")).unwrap();
         std::fs::write(root.join("proj/Cargo.toml"), b"[package]\n").unwrap();
         std::fs::write(root.join("proj/inner.pdf"), b"synthetic inner").unwrap();
+        // A package nobody claimed is left alone and is never eligible. Plans
+        // over a tree like this must still bind and apply.
+        std::fs::create_dir_all(root.join("Northwind Deck.app/Contents")).unwrap();
+        std::fs::write(
+            root.join("Northwind Deck.app/Contents/Info.plist"),
+            b"synthetic package",
+        )
+        .unwrap();
         // Folders a proposal may name.
         std::fs::create_dir(root.join("Reading")).unwrap();
         std::fs::create_dir(root.join("Taxes-2025")).unwrap();
@@ -66,6 +74,11 @@ impl Fixture {
                     .unwrap();
             }
         }
+        // The package folder is old too, or it would count as too recent.
+        std::fs::File::open(root.join("Northwind Deck.app"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         std::fs::write(root.join("fresh.dat"), b"synthetic fresh").unwrap();
         Self {
             root: root.canonicalize().unwrap(),
@@ -184,6 +197,8 @@ fn eligible_items_are_the_moves_and_the_unclaimed_and_nothing_else() {
         "big.zip.part",
         "inner.pdf",
         "Cargo.toml",
+        "Northwind Deck.app",
+        "Info.plist",
         "link.txt",
         ".hidden.txt",
     ] {
