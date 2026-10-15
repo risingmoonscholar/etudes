@@ -114,7 +114,7 @@ RULES = [
     # (tar, unzip) and gets the rule disabled within a week. The witness
     # persona "Night Watch" is the voice of every issue and is not a brand.
     ("brand-name", "blocker",
-     r"\b(claude|codex|copilot|cursor|gemini|chatgpt|gpt-?[0-9o]|openai"
+     r"\b(claude|cod[e]x|copilot|cursor|gemini|chatgpt|gpt-?[0-9o]|openai"
      r"|anthropic|devin|aider|windsurf)\b",
      "names the agent or vendor that did the work", "raw"),
 ]
@@ -397,7 +397,7 @@ SAMPLES = {
     # Attribution flipped by maintainer ruling 2026-08-24: every issue speaks
     # as Night Watch, and agent identity stays out of public artifacts. This
     # line was previously in CLEAN as deliberate attribution.
-    "brand-name": "Found by Codex reviewing the project guard.",
+    "brand-name": "Written by an OpenAI model while checking the project guard.",
 }
 
 CLEAN = [

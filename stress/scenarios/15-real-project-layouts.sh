@@ -488,7 +488,7 @@ fi
 # --no-journal: this arm is about WHAT apply moves, not about the journal,
 # and a host whose keychain refuses the key would otherwise fail apply
 # before it moved anything -- which made the two "stayed in place"
-# assertions below pass vacuously on Codex's sandbox. Exit is asserted so a
+# assertions below pass vacuously on a sandboxed host. Exit is asserted so a
 # failed apply can never again masquerade as restraint.
 CODE=0; APPLY_LD=$("$SWEEP" apply "$LD" --yes --no-journal 2>&1) || CODE=$?
 assert_eq 0 "$CODE" "apply on the loose-document folder succeeds"

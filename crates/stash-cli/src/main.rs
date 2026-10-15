@@ -1450,7 +1450,7 @@ fn cmd_inspect(args: &[String]) -> ExitCode {
 
 /// The --paths disclosure gate, before ANY other work. Split out and called
 /// first so it is the deterministic refusal for a non-interactive --paths
-/// call -- Codex found it running after sealer(), so a caller with no
+/// call. It once ran after sealer(), so a caller with no
 /// keychain got "could not store the key" instead of the disclosure reason,
 /// and the contract (refuse, and say it is because --paths discloses
 /// machine-wide paths) was violated by ordering. Takes an explicit tty so a
@@ -1848,8 +1848,8 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
 /// A user who stashes one folder and asks for status in another should not get
 /// a flat denial of something that just happened.
 /// What the clock says about a pop, decided purely so every branch is testable
-/// without a keychain, a stash, or the passage of time. Codex asked for the
-/// due-pop path to be proven; making it deterministic meant not baking the
+/// without a keychain, a stash, or the passage of time. The
+/// due-pop path needs a proof; making it deterministic means not baking the
 /// decision into a real overdue stash (whose journal paths a test cannot
 /// backdate) but extracting the arithmetic, exactly as `paths_gate` did for
 /// the disclosure gate.
@@ -2422,7 +2422,7 @@ mod tests {
 
     /// The disclosure gate answers on the tty alone, before any keychain.
     ///
-    /// Codex found it running after sealer(), so a caller with no key got the
+    /// It once ran after sealer(), so a caller with no key got the
     /// wrong refusal. This drives both branches with an explicit tty and needs
     /// no keychain -- the regression the ordering bug demanded.
     #[test]

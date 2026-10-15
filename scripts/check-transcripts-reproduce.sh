@@ -8,8 +8,8 @@
 # consistency, which two equally stale copies also have.
 #
 # So the guarantee was "captured once, with stated provenance" while reading as
-# "reproduces from this code". Found by Codex while arguing about whether a
-# demo GIF is checkable: it is not, and neither was this.
+# "reproduces from this code". A demo GIF is not checkable, and neither was
+# this.
 #
 # What this does NOT check is the `commit` field. That records the HEAD the
 # capture ran against, and it necessarily lags by at least the commit that

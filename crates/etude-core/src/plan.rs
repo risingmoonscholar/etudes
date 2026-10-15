@@ -377,7 +377,7 @@ impl Plan {
                     ("by_category", by_category),
                     ("too_recent", j::num(self.too_recent())),
                     ("unknown_extensions", {
-                        // Counts only, per codex's review: paths for the
+                        // Counts only: paths for the
                         // unknowns already appear under no_clear_group_paths,
                         // and an agent deciding whether .bpy deserves a
                         // folder needs the shape, not another copy of the
