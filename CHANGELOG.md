@@ -12,6 +12,13 @@ reviewers were pointed at the tools before anyone else could be.
 
 ### 0.5.4 candidate — sweep, stash and unpack
 
+- **sweep:** `sweep undo` finishes after being killed at the last step. If it
+  was killed after the last file went back, the empty folder that `sweep apply`
+  created stayed, and a second `sweep undo` said there was nothing to undo.
+  The second run now removes that folder and finishes. Only a folder the
+  journal records apply created is removed, and only when it is still the same
+  folder and empty; a folder with anything in it, or one that was replaced, is
+  left alone. No file is deleted or overwritten.
 - **sweep:** `--scheme existing` routes eligible files using a versioned,
   reviewable profile to folders already present in the selected directory.
   A missing destination is named and refused instead of falling through to a

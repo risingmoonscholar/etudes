@@ -143,6 +143,14 @@ for percent in $PERCENTAGES; do
   assert_exit 0 "undo interruption $percent%: a second undo resumes successfully" -- "$SWEEP" undo
   snapshot_tree "$D" "$AFTER"
   assert_snapshot_eq "$BEFORE" "$AFTER" "undo interruption $percent%: resume restored every original path and byte"
+  # The snapshot above lists directories, so it already differs when the folder
+  # apply created is left behind. Say that outright: a killed undo must not
+  # leave the holding folder once the second undo has finished.
+  if [ ! -e "$D/Screenshots" ] && [ ! -L "$D/Screenshots" ]; then
+    pass "undo interruption $percent%: the folder apply created is gone after the second undo"
+  else
+    fail "undo interruption $percent%: the folder apply created is still present after the second undo"
+  fi
 
   COMPLETE="$W/complete-$percent.json"
   TERMINAL="$W/terminal-$percent.json"

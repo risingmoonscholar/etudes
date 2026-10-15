@@ -20,7 +20,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::journal::{Entry, EntryState, Journal, Method, Sealer, ValidatedDirectory, fingerprint};
+use crate::journal::{
+    CreatedDirectory, Entry, EntryState, Journal, Method, Sealer, ValidatedDirectory, fingerprint,
+};
 use crate::plan::{BindingContext, BoundPlan, Plan};
 
 #[derive(Debug)]
@@ -1085,8 +1087,46 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
 }
 
 /// Whether a journal still needs undo, including unrecorded crash recovery.
+///
+/// A folder apply created counts as work while undo could still remove it:
+/// recorded as created, still the same directory, and empty now. An undo
+/// killed after its last file restore leaves exactly that state, and without
+/// this a second undo said "nothing to undo" and never finished. A folder
+/// that holds something, was replaced, or was never recorded as created is
+/// not work: undo leaves it, so counting it would make undo unfinishable.
 pub fn has_undo_work(j: &Journal) -> bool {
-    j.progress_tail_damaged || j.entries.iter().any(Entry::is_moved) || unrecorded_moves(j) > 0
+    j.progress_tail_damaged
+        || j.entries.iter().any(Entry::is_moved)
+        || unrecorded_moves(j) > 0
+        || j.created_directories
+            .iter()
+            .any(|directory| created_directory_is_removable(j, directory))
+}
+
+/// Whether undo may remove this folder: the journal records that apply
+/// created it, it is still the same real directory (not a link or a
+/// replacement), and nothing is in it. The journal's root is never removed.
+fn created_directory_is_removable(j: &Journal, directory: &CreatedDirectory) -> bool {
+    if directory.path == j.root {
+        return false;
+    }
+    let Ok(metadata) = fs::symlink_metadata(&directory.path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    let same_directory = {
+        use std::os::unix::fs::MetadataExt;
+        metadata.is_dir() && metadata.dev() == directory.device && metadata.ino() == directory.inode
+    };
+    #[cfg(not(unix))]
+    // Without a stable directory identity, retaining the folder is safer
+    // than claiming it still identifies as the operation-created object.
+    let same_directory = {
+        let _ = metadata;
+        false
+    };
+    same_directory
+        && fs::read_dir(&directory.path).is_ok_and(|mut entries| entries.next().is_none())
 }
 
 /// Select from newest-first journals, restoring a recorded owner before a
@@ -1425,24 +1465,7 @@ fn undo_selected_with_progress(
     let mut dirs = j.created_directories.clone();
     dirs.sort_by_key(|directory| std::cmp::Reverse(directory.path.components().count()));
     for directory in dirs {
-        if directory.path == j.root {
-            continue;
-        }
-        let Ok(metadata) = fs::symlink_metadata(&directory.path) else {
-            continue;
-        };
-        #[cfg(unix)]
-        let same_directory = {
-            use std::os::unix::fs::MetadataExt;
-            metadata.is_dir()
-                && metadata.dev() == directory.device
-                && metadata.ino() == directory.inode
-        };
-        #[cfg(not(unix))]
-        // Without a stable directory identity, retaining the folder is safer
-        // than claiming it still identifies as the operation-created object.
-        let same_directory = false;
-        if same_directory {
+        if created_directory_is_removable(j, &directory) {
             let _ = fs::remove_dir(&directory.path);
         }
     }
