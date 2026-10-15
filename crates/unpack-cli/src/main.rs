@@ -600,7 +600,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Err(_) => {
             // The verbose listing failed where the plain one worked. That is
             // a parse disagreement between two reads of the same archive, and
-            // codex's rule applies: never treat agreement as proof, and never
+            // The rule is: never treat agreement as proof, and never
             // treat a failed check as a pass. Refuse rather than extract with
             // one of the two judgements missing.
             eprintln!(
