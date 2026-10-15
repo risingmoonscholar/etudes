@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 464 tests
+cargo test --all                # 507 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -240,6 +240,31 @@ contract. Changed observations refuse with a replan requirement before probes,
 journals or moves. Direct apply still creates a fresh proposal in that invocation.
 See [plan binding and its metadata limits](docs/plan-binding.md).
 
+**Place individual files.** `sweep propose` reads your folder choice for each
+file you name in an exported plan and writes a new plan. It moves nothing. The
+export lists the files sweep is willing to move in `details.items`, each with an
+`id`, `name`, `size` and the `group` it would join (`null` when no group claims
+it). A file that looks personal, changed too recently, is still downloading,
+sits in a project folder or package, is a link or is hidden is never listed, so
+a proposal cannot name it.
+
+```sh
+sweep ~/Desktop --since 0 --export-plan ~/desktop.plan --json
+# proposal.json
+# {"schema_version":1,"plan_digest":"SHA","rest":"leave","decisions":[
+#   {"item":"i-000004","folder":"Reading","mode":"require_existing"},
+#   {"item":"i-000005","skip":true}]}
+sweep propose --plan ~/desktop.plan --plan-digest SHA --proposal proposal.json \
+  --export-plan ~/desktop-proposed.plan --json
+sweep apply --plan ~/desktop-proposed.plan --plan-digest SHA2 --yes --json
+```
+
+The folder must already exist directly under the plan's root and is one plain
+name. A file keeps its name. Files the proposal does not name stay where they
+are, and `rest` must say `"leave"`. One bad decision refuses the whole proposal
+and writes no plan. A proposal is at most 1 MiB and 5,000 decisions. The plan it
+writes applies, and undoes, like any other. `sweep propose` reads no file contents.
+
 ## For agents as well as people
 
 These are built to be driven by both. The agent-facing surface is deliberate,
@@ -320,7 +345,8 @@ message text:
 ```
 
 - `not_needed`: the command finished; the code is `done` or `nothing_to_do`.
-- `never`: the same request cannot work, so do not send it again.
+- `never`: the same request cannot work, so do not send it again. The codes
+  `unknown_item` and `item_assigned_twice` also carry `subject.kind: "item"`.
 - `after_change`: it can work once you change something, and `subject.kind`
   says what: the input, the destination, the plan, the profile or the journal.
 - `later`: the same request may work if you wait, and `subject.kind` says what

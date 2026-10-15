@@ -89,6 +89,12 @@ pub enum Signal {
     Collected {
         count: usize,
     },
+    /// Files placed by a per-file proposal (`sweep propose`): the caller
+    /// chose each file's folder, sweep checked every choice against its own
+    /// scan. One group per destination folder, which already exists.
+    Proposed {
+        count: usize,
+    },
 }
 
 impl Signal {
@@ -114,6 +120,7 @@ impl Signal {
                 format!(".{}", e.join(", ."))
             }
             Signal::Collected { count } => format!("{count} items"),
+            Signal::Proposed { count } => format!("{count} items placed by a proposal"),
         }
     }
 }
@@ -136,6 +143,11 @@ pub struct Plan {
     pub groups: Vec<Group>,
     /// Files sweep declined to act on, with the reason.
     pub untouched: Vec<(PathBuf, Untouched)>,
+    /// The files left alone only because no group claimed them, by real
+    /// path. `untouched` is committed to hashes when a plan is exported, so
+    /// this list is what lets a later `sweep propose` name them. It is part
+    /// of the plan digest.
+    pub unclaimed: Vec<PathBuf>,
     pub scanned: usize,
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
@@ -184,12 +196,26 @@ impl Plan {
             .map(|entry| (entry.identity.device, entry.identity.inode))
     }
 
+    /// Size captured for a regular file in the scan snapshot. `None` for a
+    /// path the snapshot did not observe as a regular file.
+    pub(crate) fn observed_file_size(&self, path: &std::path::Path) -> Option<u64> {
+        let snapshot = self.observations.as_ref()?;
+        let relative = path.strip_prefix(&snapshot.root).ok()?;
+        let committed = crate::scan::TreeSnapshot::path_commitment(relative);
+        snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.path == committed && entry.identity.kind == 1)
+            .map(|entry| entry.identity.size)
+    }
+
     pub fn display_only(root: PathBuf, groups: Vec<Group>) -> Self {
         Self {
             observations: None,
             root,
             groups,
             untouched: Vec::new(),
+            unclaimed: Vec::new(),
             scanned: 0,
             skipped_hidden: 0,
             skipped_symlink: 0,
@@ -218,6 +244,7 @@ impl Plan {
             root: scan.root.clone(),
             groups,
             untouched: scan.project_holds.clone(),
+            unclaimed: Vec::new(),
             scanned: scan.entries.len(),
             skipped_hidden: scan.skipped_hidden,
             skipped_symlink: scan.skipped_symlink,
@@ -962,12 +989,18 @@ fn build_with_policy(
     }
 
     untouched.sort_by(|a, b| a.0.cmp(&b.0));
+    let unclaimed = untouched
+        .iter()
+        .filter(|(_, reason)| *reason == Untouched::NoClearGroup)
+        .map(|(path, _)| path.clone())
+        .collect();
 
-    Plan {
+    let mut plan = Plan {
         observations: scan.snapshot.clone(),
         root: scan.root.clone(),
         groups,
         untouched,
+        unclaimed,
         scanned: scan.entries.len(),
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
@@ -978,7 +1011,17 @@ fn build_with_policy(
         skipped_unreadable: scan.skipped_unreadable,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
-    }
+    };
+    // Only regular files can be placed by a proposal. A package or folder
+    // that no group claimed stays in the left-alone list but is not eligible.
+    let regular: Vec<PathBuf> = plan
+        .unclaimed
+        .iter()
+        .filter(|path| plan.observed_file_size(path).is_some())
+        .cloned()
+        .collect();
+    plan.unclaimed = regular;
+    plan
 }
 
 /// Human date range for a set of entries, from mtime only.
@@ -1501,6 +1544,30 @@ impl BoundPlan {
                         "plan source was not uniquely observed; replan required",
                     ));
                 }
+            }
+        }
+        // Files left alone for want of a group: each must be an observed
+        // regular file under the root, recorded as unclaimed in the plan's
+        // own left-alone list, and not also a planned move.
+        let left_alone: std::collections::HashSet<PathBuf> = self
+            .plan
+            .untouched
+            .iter()
+            .filter(|(_, reason)| *reason == Untouched::NoClearGroup)
+            .map(|(path, _)| crate::scan::TreeSnapshot::path_commitment(path))
+            .collect();
+        for path in &self.plan.unclaimed {
+            let relative = path.strip_prefix(&self.snapshot.root).map_err(|_| {
+                std::io::Error::other("plan source is outside the observed root; replan required")
+            })?;
+            if !observed.contains(&crate::scan::TreeSnapshot::path_commitment(relative))
+                || self.plan.observed_file_size(path).is_none()
+                || !left_alone.contains(&crate::scan::TreeSnapshot::path_commitment(path))
+                || !sources.insert(path)
+            {
+                return Err(std::io::Error::other(
+                    "plan source was not uniquely observed; replan required",
+                ));
             }
         }
         Ok(())

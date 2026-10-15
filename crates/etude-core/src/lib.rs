@@ -14,6 +14,7 @@ pub mod classify;
 pub mod journal;
 pub mod json;
 pub mod plan;
+pub mod proposal;
 pub mod redact;
 pub mod scan;
 

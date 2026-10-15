@@ -28,6 +28,7 @@ Scope domains resolve as follows:
 | `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
 | `project_marker_names` | Names of project markers; no parsing of marker contents |
+| `explicit_proposal_file_bytes` | The proposal file named by `sweep propose --proposal`, at most 1 MiB; its decisions are checked against the plan and never read file contents |
 | `sweep_existing_profile_bytes` | The versioned plain-data routing profile in the configured etudes state directory; read to plan and verify before applying an existing-folder plan |
 | `consented_text_prefixes` | Prefix bytes of allowlisted files, after separate terminal consent; only increases refusal |
 | `journal_fingerprint_bytes` | First and last 4 KiB of regular files used by custody and restoration fingerprints; directories and links stay opaque |
@@ -130,6 +131,14 @@ no journal. Its counts are all zero and it has no recovery command. It was
 previously reported as `completed`. `v9/sweep.json` and `v10/stash.json` pin
 these declarations and `v1/` mirrors them; unpack stays at version 6.
 
+**Declaration version 10 (sweep)** adds the `propose` operation and two refusal
+codes, `unknown_item` and `item_assigned_twice`, both retry `never` with subject
+kind `item`. `propose` reads the exported plan and the proposal file, checks
+destination folders by metadata, and writes one new plan file; it moves nothing.
+`destination_outside_root`, `destination_exists`, `plan_stale` and
+`profile_missing` also apply to it. `v10/sweep.json` pins this declaration and
+`v1/` mirrors it; stash stays at version 10 and unpack at version 6.
+
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
 conditional path (including keychain, EXDEV, review and crash recovery). Those
@@ -145,7 +154,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v9/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
+contract envelopes (`v10/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -161,8 +170,11 @@ Each `TOOL contract --json` capability declaration lists every refusal under
 for that class and a `subject_kind` (null when the code has no subject).
 `never` means the same request cannot work; `after_change`
 requires a changed request or folder; `later` means the same request may work
-after waiting. Only the last two include a `subject`, which names the relevant
+after waiting. The last two always include a `subject`, which names the relevant
 input, plan, profile, journal or contention without disclosing extra file names.
+A `never` code has none, except `unknown_item` and `item_assigned_twice`, whose
+subject kind is `item`. The result schema marks `subject` optional, so no
+result version changes.
 
 **Result envelope version 3:** version 3 is version 2 plus the top-level
 `reason` field. A reason has a stable code and retry class; refusals that need

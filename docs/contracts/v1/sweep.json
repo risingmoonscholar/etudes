@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 9,
+    "schema_version": 10,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -82,7 +82,8 @@
           "review",
           "export_plan",
           "apply_exported_plan",
-          "status"
+          "status",
+          "propose"
         ],
         "why": "The arguments do not form a supported request."
       },
@@ -100,7 +101,8 @@
           "review",
           "export_plan",
           "apply_exported_plan",
-          "status"
+          "status",
+          "propose"
         ],
         "why": "An option is not recognized by this command."
       },
@@ -118,7 +120,8 @@
           "review",
           "export_plan",
           "apply_exported_plan",
-          "status"
+          "status",
+          "propose"
         ],
         "why": "The requested input is absent or no longer available; choose an existing input."
       },
@@ -136,7 +139,8 @@
           "review",
           "export_plan",
           "apply_exported_plan",
-          "status"
+          "status",
+          "propose"
         ],
         "why": "The tool stopped on an internal failure; inspect its result and local state before choosing another action."
       },
@@ -156,7 +160,8 @@
         "subject_kind": "destination",
         "operations": [
           "apply",
-          "undo"
+          "undo",
+          "propose"
         ],
         "why": "The destination is occupied; choose or make a vacant destination before retrying."
       },
@@ -165,7 +170,8 @@
         "retry": "after_change",
         "subject_kind": "destination",
         "operations": [
-          "apply"
+          "apply",
+          "propose"
         ],
         "why": "The destination is outside the selected plan root; change the destination or plan."
       },
@@ -174,7 +180,8 @@
         "retry": "after_change",
         "subject_kind": "plan",
         "operations": [
-          "apply"
+          "apply",
+          "propose"
         ],
         "why": "The observed plan is stale; create a fresh plan before applying."
       },
@@ -184,7 +191,8 @@
         "subject_kind": "profile",
         "operations": [
           "scan",
-          "apply"
+          "apply",
+          "propose"
         ],
         "why": "The selected profile is unavailable; restore or select a valid profile."
       },
@@ -252,7 +260,8 @@
           "review",
           "export_plan",
           "apply_exported_plan",
-          "status"
+          "status",
+          "propose"
         ],
         "why": "The request lacks required access; change the relevant permissions before retrying."
       },
@@ -265,6 +274,24 @@
           "undo"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "unknown_item",
+        "retry": "never",
+        "subject_kind": "item",
+        "operations": [
+          "propose"
+        ],
+        "why": "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan."
+      },
+      {
+        "code": "item_assigned_twice",
+        "retry": "never",
+        "subject_kind": "item",
+        "operations": [
+          "propose"
+        ],
+        "why": "The proposal names one item more than once; the same proposal cannot work."
       }
     ],
     "contract_query": {
@@ -298,6 +325,20 @@
             "ancestor_metadata",
             "project_marker_names",
             "consented_text_prefixes",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": [
+            "explicit_plan_file"
+          ]
+        },
+        {
+          "operation": "propose",
+          "reads": [
+            "explicit_plan_file_bytes",
+            "explicit_proposal_file_bytes",
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
             "sweep_existing_profile_bytes"
           ],
           "writes": [

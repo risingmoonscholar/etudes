@@ -19,6 +19,19 @@ reviewers were pointed at the tools before anyone else could be.
   journal records apply created is removed, and only when it is still the same
   folder and empty; a folder with anything in it, or one that was replaced, is
   left alone. No file is deleted or overwritten.
+- **sweep:** `sweep propose --plan FILE --plan-digest SHA --proposal FILE
+  --export-plan OUT --json` places individual files. A plan export now lists the
+  files it is willing to move in `details.items` (`id`, `name`, `size`, `group`).
+  A proposal names an item and an existing folder under the plan root, or skips
+  it; sweep checks each decision against the plan's own scan and writes a new
+  bound plan, which `sweep apply --plan` applies and `sweep undo` reverses.
+  Propose moves nothing and reads no file contents. Personal-looking, recent,
+  in-flight, project, package, link and hidden files are not listed and cannot be
+  named. One bad decision refuses the whole proposal. Limits: 1 MiB, 5,000
+  decisions. The sweep contract is version 10: it adds the `propose` operation
+  and the refusal codes `unknown_item` and `item_assigned_twice` (retry `never`,
+  subject `item`). The plan file now also records the real paths of files no
+  group claimed, and covers them in the plan digest.
 - **sweep:** `--scheme existing` routes eligible files using a versioned,
   reviewable profile to folders already present in the selected directory.
   A missing destination is named and refused instead of falling through to a

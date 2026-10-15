@@ -1,0 +1,648 @@
+{
+  "schema_version": 4,
+  "tool_version": "<manifest-version>",
+  "operation_id": "<per-invocation>",
+  "status": "done",
+  "scope": {
+    "tool": "sweep",
+    "operation": "contract",
+    "domains": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "startup": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "evidence": "conditional declared domains; observations report actual instrumented reads"
+  },
+  "observations": {
+    "categories": [],
+    "scope": "instrumented operations on the command thread",
+    "unproven": [
+      "subprocess reads",
+      "environment access",
+      "operations outside instrumentation",
+      "absence of access when a counter is zero or missing"
+    ]
+  },
+  "effects": {
+    "outcome": "done",
+    "counters": [],
+    "unproven": [
+      "effects outside reported operation accounting; zero counters do not prove no effects"
+    ]
+  },
+  "verification": [
+    {
+      "claim": "command_completed",
+      "status": "pass"
+    },
+    {
+      "claim": "complete_read_coverage",
+      "status": "unproven"
+    },
+    {
+      "claim": "subprocess_network_absence",
+      "status": "unproven"
+    }
+  ],
+  "recovery": {
+    "mode": "no_operation_undo_needed",
+    "conditions": [],
+    "verification": "unproven; consult operation details and filesystem before retrying",
+    "operation": ""
+  },
+  "disclosure": {
+    "receipt_contains": "read categories and outcomes only; no contents, keys or environment values",
+    "zero_counters": "not evidence of no access",
+    "details": "may contain operation paths; treat as sensitive"
+  },
+  "details": {
+    "schema_version": 10,
+    "tool_version": "<manifest-version>",
+    "operation_id": "<per-invocation>",
+    "status": "done",
+    "tool": "sweep",
+    "kind": "capability_contract",
+    "refusal_codes": [
+      {
+        "code": "invalid_arguments",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "scan",
+          "apply",
+          "undo",
+          "forget",
+          "verify",
+          "lesson",
+          "review",
+          "export_plan",
+          "apply_exported_plan",
+          "status",
+          "propose"
+        ],
+        "why": "The arguments do not form a supported request."
+      },
+      {
+        "code": "unknown_option",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "scan",
+          "apply",
+          "undo",
+          "forget",
+          "verify",
+          "lesson",
+          "review",
+          "export_plan",
+          "apply_exported_plan",
+          "status",
+          "propose"
+        ],
+        "why": "An option is not recognized by this command."
+      },
+      {
+        "code": "missing_input",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "scan",
+          "apply",
+          "undo",
+          "forget",
+          "verify",
+          "lesson",
+          "review",
+          "export_plan",
+          "apply_exported_plan",
+          "status",
+          "propose"
+        ],
+        "why": "The requested input is absent or no longer available; choose an existing input."
+      },
+      {
+        "code": "internal_error",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "scan",
+          "apply",
+          "undo",
+          "forget",
+          "verify",
+          "lesson",
+          "review",
+          "export_plan",
+          "apply_exported_plan",
+          "status",
+          "propose"
+        ],
+        "why": "The tool stopped on an internal failure; inspect its result and local state before choosing another action."
+      },
+      {
+        "code": "project_folder",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "scan",
+          "apply"
+        ],
+        "why": "The folder is a project and this request is refused for that folder."
+      },
+      {
+        "code": "destination_exists",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "apply",
+          "undo",
+          "propose"
+        ],
+        "why": "The destination is occupied; choose or make a vacant destination before retrying."
+      },
+      {
+        "code": "destination_outside_root",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "apply",
+          "propose"
+        ],
+        "why": "The destination is outside the selected plan root; change the destination or plan."
+      },
+      {
+        "code": "plan_stale",
+        "retry": "after_change",
+        "subject_kind": "plan",
+        "operations": [
+          "apply",
+          "propose"
+        ],
+        "why": "The observed plan is stale; create a fresh plan before applying."
+      },
+      {
+        "code": "profile_missing",
+        "retry": "after_change",
+        "subject_kind": "profile",
+        "operations": [
+          "scan",
+          "apply",
+          "propose"
+        ],
+        "why": "The selected profile is unavailable; restore or select a valid profile."
+      },
+      {
+        "code": "download_in_flight",
+        "retry": "later",
+        "subject_kind": "download_in_flight",
+        "operations": [
+          "scan"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
+        "code": "journal_unreadable",
+        "retry": "later",
+        "subject_kind": "journal",
+        "operations": [
+          "apply",
+          "undo",
+          "status"
+        ],
+        "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
+      },
+      {
+        "code": "journal_key_unavailable",
+        "retry": "later",
+        "subject_kind": "journal",
+        "operations": [
+          "apply",
+          "undo",
+          "status"
+        ],
+        "why": "The required journal key is unavailable and may become available later."
+      },
+      {
+        "code": "unknown_operation",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "status"
+        ],
+        "why": "No journal contains the requested durable operation id."
+      },
+      {
+        "code": "unsafe_input",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "scan",
+          "apply"
+        ],
+        "why": "The input violates a safety rule; change the input before retrying."
+      },
+      {
+        "code": "permission_denied",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "scan",
+          "apply",
+          "undo",
+          "forget",
+          "verify",
+          "lesson",
+          "review",
+          "export_plan",
+          "apply_exported_plan",
+          "status",
+          "propose"
+        ],
+        "why": "The request lacks required access; change the relevant permissions before retrying."
+      },
+      {
+        "code": "operation_incomplete",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "apply",
+          "undo"
+        ],
+        "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "unknown_item",
+        "retry": "never",
+        "subject_kind": "item",
+        "operations": [
+          "propose"
+        ],
+        "why": "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan."
+      },
+      {
+        "code": "item_assigned_twice",
+        "retry": "never",
+        "subject_kind": "item",
+        "operations": [
+          "propose"
+        ],
+        "why": "The proposal names one item more than once; the same proposal cannot work."
+      }
+    ],
+    "contract_query": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "observation_scope": {
+      "default_user_content": "metadata_only",
+      "content_exceptions": [
+        "explicit_tty_consent_text_prefix",
+        "cross_device_copy",
+        "journal_fingerprint_prefixes"
+      ],
+      "symlinks": "refuse_or_skip",
+      "environment": [
+        "HOME",
+        "TMPDIR",
+        "ETUDE_STATE_DIR",
+        "ETUDE_JOURNAL_KEY",
+        "SWEEP_GRACE_SECS"
+      ],
+      "subprocess_environment": "inherited"
+    },
+    "mutation_scope": {
+      "operations": [
+        {
+          "operation": "export_plan",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "consented_text_prefixes",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": [
+            "explicit_plan_file"
+          ]
+        },
+        {
+          "operation": "propose",
+          "reads": [
+            "explicit_plan_file_bytes",
+            "explicit_proposal_file_bytes",
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": [
+            "explicit_plan_file"
+          ]
+        },
+        {
+          "operation": "apply_exported_plan",
+          "reads": [
+            "explicit_plan_file_bytes",
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "journal_key",
+            "journal_fingerprint_bytes",
+            "cross_device_source_bytes",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": [
+            "selected_tree_entries",
+            "journal_store",
+            "keychain_if_no_supplied_key"
+          ]
+        },
+        {
+          "operation": "scan",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": []
+        },
+        {
+          "operation": "scan_with_inspect_content",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "consented_text_prefixes",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": []
+        },
+        {
+          "operation": "apply",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "journal_key",
+            "cross_device_source_bytes",
+            "journal_fingerprint_bytes",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": [
+            "selected_tree_entries",
+            "journal_store",
+            "keychain_if_no_supplied_key"
+          ]
+        },
+        {
+          "operation": "review",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "terminal_input",
+            "journal_key",
+            "cross_device_source_bytes",
+            "journal_fingerprint_bytes",
+            "sweep_existing_profile_bytes"
+          ],
+          "writes": [
+            "selected_tree_entries",
+            "journal_store",
+            "keychain_if_no_supplied_key"
+          ]
+        },
+        {
+          "operation": "undo",
+          "reads": [
+            "journal_store",
+            "journal_key",
+            "journal_recorded_paths_metadata",
+            "cross_device_source_bytes",
+            "journal_fingerprint_bytes"
+          ],
+          "writes": [
+            "journal_recorded_entries",
+            "journal_store",
+            "empty_group_directories",
+            "keychain_if_no_supplied_key"
+          ]
+        },
+        {
+          "operation": "forget",
+          "reads": [
+            "journal_store_metadata",
+            "terminal_input"
+          ],
+          "writes": [
+            "sweep_journals",
+            "shared_keychain_key_if_authorized"
+          ]
+        },
+        {
+          "operation": "verify",
+          "reads": [
+            "journal_store_metadata",
+            "ancestor_metadata"
+          ],
+          "writes": []
+        },
+        {
+          "operation": "lesson",
+          "reads": [],
+          "writes": []
+        }
+      ],
+      "startup": {
+        "operation": "startup_except_contract",
+        "reads": [
+          "journal_store_metadata",
+          "legacy_state_metadata"
+        ],
+        "writes": [
+          "legacy_state_migration",
+          "expired_journals_all_tools"
+        ]
+      }
+    },
+    "network": {
+      "policy": "none",
+      "runtime_enforcement": "none",
+      "subprocesses": [
+        "/usr/bin/security"
+      ],
+      "subprocess_network_verified": false
+    },
+    "overwrite": {
+      "user_destinations": "refused",
+      "owned_state": "journal_updates_replace"
+    },
+    "deletion": {
+      "source_entries": "relocation_and_size_checked_copy_unlink",
+      "user_payloads": "never",
+      "owned_artifacts": [
+        "expired_journals_all_tools",
+        "sweep_journals_on_forget",
+        "authorized_shared_key",
+        "empty_group_directories",
+        "case_probe_files"
+      ]
+    },
+    "reversibility": {
+      "mode": "conditional_journal_restore",
+      "conditions": [
+        "readable_journal",
+        "same_key",
+        "unchanged_items",
+        "vacant_original_paths",
+        "journal_not_expired",
+        "journal_progress_writable"
+      ],
+      "disabled_by": [
+        "--no-journal",
+        "journal_or_key_loss"
+      ]
+    },
+    "persistent_state": {
+      "journal_store": "ETUDE_STATE_DIR_or_HOME/Library/Application Support/etudes",
+      "journal_namespace": "sweep",
+      "journal_ttl_days": 30,
+      "key": "supplied_environment_or_shared_login_keychain",
+      "result_artifacts": [
+        "group_directories"
+      ]
+    },
+    "formats": {
+      "filesystem_handling": "visible_regular_files_by_metadata_any_extension",
+      "content_inspection": {
+        "supported": [
+          ".txt",
+          ".md",
+          ".csv",
+          ".log",
+          ".json",
+          ".xml",
+          ".rtf",
+          ".eml",
+          ".vcf",
+          ".ini",
+          ".conf",
+          ".yml",
+          ".yaml",
+          ".tex",
+          ".tsv"
+        ],
+        "unsupported": [
+          ".pdf",
+          ".doc",
+          ".docx",
+          ".xls",
+          ".xlsx",
+          ".ppt",
+          ".pptx",
+          ".zip",
+          ".tar",
+          ".gz",
+          ".jpg",
+          ".png"
+        ],
+        "unlisted": "unsupported",
+        "matching": "case_insensitive_suffix"
+      },
+      "archive_extraction": {
+        "supported": [],
+        "unsupported": [
+          "all"
+        ],
+        "unlisted": "unsupported",
+        "matching": "case_insensitive_suffix"
+      }
+    },
+    "limits": {
+      "platform": "macos",
+      "inspection_max_bytes": 1048576,
+      "extraction_budget": "not_applicable"
+    },
+    "evidence": {
+      "kind": "declaration_not_receipt",
+      "access_verified": false,
+      "witness": "scripts/check-tool-contracts.py"
+    },
+    "plan_binding": {
+      "artifact_schema_version": 1,
+      "digest": "sha256_metadata_configuration_and_choices",
+      "identity": [
+        "root_device_and_inode",
+        "selected_file_device_inode_size_mode_nanosecond_mtime_ctime",
+        "observed_directory_names_and_project_markers"
+      ],
+      "profile": "sweep-metadata-v1",
+      "observation_contract": "stable_capability_declaration_digest_excluding_operation_id",
+      "stale": "refused_before_case_probe_journal_and_moves_replan_required",
+      "export": "explicit_mode_0600_file_outside_selected_tree",
+      "sensitivity": "selected_paths_and_metadata_held_names_are_commitments_no_payload_bytes",
+      "limit_bytes": 67108864,
+      "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
+      "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
+    },
+    "structured_progress": {
+      "flag": "--progress-json",
+      "stream": "stderr_ndjson_alongside_diagnostics",
+      "schema_version": 1,
+      "operations": [
+        "apply",
+        "review"
+      ],
+      "fields": [
+        "schema_version",
+        "event",
+        "tool_version",
+        "operation_id",
+        "operation",
+        "phase",
+        "planned",
+        "completed",
+        "journalled"
+      ],
+      "maximum_events": 12,
+      "planned": "entries_after_full_preflight_validation",
+      "completed": "successful_moves_including_a_move_whose_done_record_failed",
+      "journalled": "successful_durable_done_records;_zero_without_a_journal",
+      "ordering": "each_done_record_is_durable_before_callback_and_next_move",
+      "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
+    "status_lookup": {
+      "support": "read_only",
+      "queries": [
+        "status --id OPERATION",
+        "status PATH"
+      ],
+      "states": [
+        "refused",
+        "completed",
+        "interrupted",
+        "reversed",
+        "partly_reversed"
+      ],
+      "counts": [
+        "planned",
+        "moved",
+        "reversed"
+      ],
+      "recovery_id": "durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation",
+      "side_effects": "none;_no_key_creation_migration_pruning_or_file_content_reads",
+      "disclosure": "path_query_returns_newest_first_without_file_names"
+    }
+  },
+  "reason": {
+    "code": "done",
+    "retry": "not_needed"
+  }
+}
