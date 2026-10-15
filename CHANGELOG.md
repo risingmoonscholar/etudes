@@ -32,6 +32,15 @@ reviewers were pointed at the tools before anyone else could be.
   and the refusal codes `unknown_item` and `item_assigned_twice` (retry `never`,
   subject `item`). The plan file now also records the real paths of files no
   group claimed, and covers them in the plan digest.
+- **Verification:** a stress scenario applies a `sweep propose` plan and kills the
+  apply part-way, after the tool is stopped and the stop is confirmed. `sweep
+  status` reports the interrupted apply, and `sweep undo` restores every original
+  path and byte. Skipped files, unnamed files, a personal-looking file, a hidden
+  file and a symlink stay in place throughout. Two controls show it can fail.
+- **Verification:** `scripts/check-proposal-mutation.sh` plants four faults in a
+  throwaway copy of the tree and requires a check to catch each: a changed
+  refusal code, a removed duplicate-item check, a removed digest check, and a
+  widened eligible list.
 - **sweep:** `--scheme existing` routes eligible files using a versioned,
   reviewable profile to folders already present in the selected directory.
   A missing destination is named and refused instead of falling through to a

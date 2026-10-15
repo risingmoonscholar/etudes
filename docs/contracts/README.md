@@ -112,6 +112,9 @@ read as finished to a caller that looks only at `reason`.
 `scripts/check-refusal-code-mutation.sh` plants three faults in sweep's source,
 a wrong code, a missing reason and an incomplete undo that says `done`, and
 requires the check to reject each.
+`scripts/check-proposal-mutation.sh` does the same for `sweep propose` on a
+throwaway copy of the tree: a changed refusal code, a removed duplicate-item
+check, a removed digest check and a widened eligible list must each be caught.
 
 **Declaration versions 8 (sweep), 9 (stash) and 6 (unpack)** list only codes
 the tool has a code path for. `folder_busy`, `recent_files`, `empty_selection`
