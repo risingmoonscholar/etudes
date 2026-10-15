@@ -31,6 +31,9 @@ USAGE
     sweep review PATH            walk each group, rename or skip, then apply
     sweep apply PATH --yes       move every proposed group
     sweep apply PATH --only NAME move one group
+    sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT
+                                 check per-file decisions against an exported
+                                 plan and write a new plan; moves nothing
     sweep undo [PATH]            reverse the most recent apply, or that folder's
     sweep status --id ID --json  report one encrypted journal without names
     sweep status PATH --json     report that folder's journals, newest first
@@ -50,6 +53,7 @@ FLAGS
     --json          machine-readable results on stdout (for agents)
     --export-plan F save a private bound plan outside the selected tree
     apply --plan F --plan-digest SHA --yes applies that exact observed plan
+    --proposal P    propose: a JSON file of per-file folder decisions
     --progress-json bounded versioned progress on stderr for apply or review
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
@@ -172,6 +176,7 @@ fn run_main() -> ExitCode {
         Some("verify") => verify(),
         Some("lesson") => cmd_lesson(&args),
         Some("apply") => cmd_apply(&args),
+        Some("propose") => cmd_propose(&args),
         Some("undo") => cmd_undo(&args),
         Some("status") => cmd_status(&args),
         Some("forget") => cmd_forget(&args),
@@ -694,6 +699,16 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--scheme", true),
         ],
     ),
+    (
+        "propose",
+        &[
+            ("--plan", true),
+            ("--plan-digest", true),
+            ("--proposal", true),
+            ("--export-plan", true),
+            ("--json", false),
+        ],
+    ),
     ("forget", &[("--yes", false)]),
     ("undo", &[("--json", false)]),
     ("status", &[("--json", false), ("--id", true)]),
@@ -1168,12 +1183,15 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         return ExitCode::from(1);
     }
     if has(args, "--no-journal")
-        && bound
-            .groups
-            .iter()
-            .any(|group| group.accepted && matches!(group.signal, plan::Signal::Mapped { .. }))
+        && bound.groups.iter().any(|group| {
+            group.accepted
+                && matches!(
+                    group.signal,
+                    plan::Signal::Mapped { .. } | plan::Signal::Proposed { .. }
+                )
+        })
     {
-        eprintln!("sweep: mapped plans require a journal");
+        eprintln!("sweep: mapped and proposed plans require a journal");
         return refusal(
             etude_cli_support::reason::Code::UnsafeInput,
             Some(etude_cli_support::reason::Subject::wait("input", None)),
@@ -1301,6 +1319,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     };
 
     let mut export_binding = None;
+    let mut export_items = None;
     if let Some(file) = value(args, "--export-plan") {
         let context = current_binding_context(&planning_profile(args, stats.is_some(), &scheme));
         let bound = match bound_or_refuse(plan.clone(), context) {
@@ -1321,12 +1340,21 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             );
         }
         export_binding = Some(bound.binding_json());
+        // The files a later `sweep propose` may name, in the plan's own
+        // order, bound to this plan's digest.
+        export_items = Some(etude_core::proposal::items_json(
+            &etude_core::proposal::eligible_items(&bound),
+        ));
     }
     let plan_json = || {
         let mut json = plan.to_json();
         if let Some(binding) = &export_binding {
             json.pop();
             json.push_str(&format!(",\"binding\":{binding}}}"));
+        }
+        if let Some(items) = &export_items {
+            json.pop();
+            json.push_str(&format!(",\"items\":{items}}}"));
         }
         json
     };
@@ -2239,6 +2267,154 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
 }
 
+/// `sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT`
+///
+/// Checks per-file decisions against an exported plan and writes a new bound
+/// plan. Moves nothing. The library enforces every rule; this only reads the
+/// files, maps a refusal to its code and prints.
+fn cmd_propose(args: &[String]) -> ExitCode {
+    use etude_cli_support::reason::{Code, Subject};
+    use etude_core::proposal::Refusal;
+    let (Some(file), Some(digest), Some(proposal), Some(out)) = (
+        value(args, "--plan"),
+        value(args, "--plan-digest"),
+        value(args, "--proposal"),
+        value(args, "--export-plan"),
+    ) else {
+        eprintln!("sweep: propose needs --plan, --plan-digest, --proposal and --export-plan");
+        return refusal(Code::InvalidArguments, None);
+    };
+    if path_arg("propose", &args[1..]).is_ok_and(|path| path.is_some()) {
+        eprintln!("sweep: an exported plan fixes its original root; do not supply a path");
+        return refusal(Code::InvalidArguments, None);
+    }
+    let bound = match plan::BoundPlan::load(Path::new(&file), &digest) {
+        Ok(plan) => plan,
+        Err(error) => {
+            eprintln!("sweep: {error}; replan required");
+            return match error.kind() {
+                std::io::ErrorKind::NotFound => {
+                    failure(Code::MissingInput, Some(Subject::wait("input", None)))
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    refusal(Code::PermissionDenied, Some(Subject::wait("input", None)))
+                }
+                _ => refusal(Code::PlanStale, Some(Subject::wait("plan", None))),
+            };
+        }
+    };
+    if binding_field(&bound.context().profile, "scheme") == Some("existing")
+        && let Err(error) = verify_existing_profile(&bound.context().profile)
+    {
+        eprintln!("sweep: {error}");
+        return refusal(Code::ProfileMissing, Some(Subject::wait("profile", None)));
+    }
+    if !bound.context().profile.starts_with("sweep-metadata-v1;") {
+        eprintln!("sweep: plan scheme changed; replan required");
+        return refusal(Code::PlanStale, Some(Subject::wait("plan", None)));
+    }
+    let context = current_binding_context(&bound.context().profile);
+    if let Err(error) = bound.validate(&context) {
+        eprintln!("sweep: {error}");
+        return refusal(Code::PlanStale, Some(Subject::wait("plan", None)));
+    }
+    let bytes = match read_proposal(Path::new(&proposal)) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("sweep: cannot read the proposal ({error})");
+            return match error.kind() {
+                std::io::ErrorKind::NotFound => {
+                    failure(Code::MissingInput, Some(Subject::wait("input", None)))
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    refusal(Code::PermissionDenied, Some(Subject::wait("input", None)))
+                }
+                _ => refusal(Code::InvalidArguments, None),
+            };
+        }
+    };
+    let proposed = match etude_core::proposal::propose(&bound, &bytes) {
+        Ok(proposed) => proposed,
+        Err(why) => {
+            eprintln!("sweep: proposal refused: {why}. Nothing was written.");
+            etude_cli_support::envelope::status("refused");
+            let (code, subject) = match why {
+                Refusal::InvalidArguments(_) => (Code::InvalidArguments, None),
+                Refusal::PlanStale(_) => (Code::PlanStale, Some(Subject::wait("plan", None))),
+                Refusal::UnknownItem(_) => (Code::UnknownItem, Some(Subject::wait("item", None))),
+                Refusal::ItemAssignedTwice(_) => {
+                    (Code::ItemAssignedTwice, Some(Subject::wait("item", None)))
+                }
+                Refusal::DestinationOutsideRoot(_) => (
+                    Code::DestinationOutsideRoot,
+                    Some(Subject::wait("destination", None)),
+                ),
+                Refusal::ProfileMissing(_) => {
+                    (Code::ProfileMissing, Some(Subject::wait("profile", None)))
+                }
+                Refusal::DestinationExists(_) => (
+                    Code::DestinationExists,
+                    Some(Subject::wait("destination", None)),
+                ),
+            };
+            return refusal(code, subject);
+        }
+    };
+    if proposed.moves == 0 {
+        eprintln!("sweep: the proposal moves nothing; no plan was written.");
+        return ExitCode::from(1);
+    }
+    if let Err(error) = proposed.plan.export(Path::new(&out)) {
+        eprintln!("sweep: cannot export plan ({error})");
+        return refusal(Code::PermissionDenied, Some(Subject::wait("input", None)));
+    }
+    etude_cli_support::envelope::effect("items_proposed", proposed.moves);
+    etude_cli_support::envelope::detail(etude_core::json::obj(&[
+        ("kind", etude_core::json::str("proposal")),
+        ("moves", etude_core::json::num(proposed.moves)),
+        ("skipped", etude_core::json::num(proposed.skipped)),
+        ("binding", proposed.plan.binding_json()),
+    ]));
+    println!(
+        "Proposal accepted: {} files to move, {} skipped. Nothing has been moved.",
+        proposed.moves, proposed.skipped
+    );
+    println!("Plan written to {out}. Digest: {}", proposed.plan.digest());
+    println!("Apply with: sweep apply --plan {out} --plan-digest DIGEST --yes");
+    ExitCode::SUCCESS
+}
+
+/// Read a proposal file, at most `MAX_PROPOSAL_BYTES`, regular files only.
+fn read_proposal(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NOFOLLOW | O_NONBLOCK on macOS: never follow a link, never block
+        // on a pipe.
+        #[cfg(target_os = "macos")]
+        options.custom_flags(0x100 | 0x4);
+        #[cfg(target_os = "linux")]
+        options.custom_flags(0x20000 | 0x800);
+    }
+    let file = scan::observe_read("proposal_file_open", options.open(path))?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the proposal must be a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    scan::observe_read(
+        "proposal_file_bytes",
+        file.take(etude_core::proposal::MAX_PROPOSAL_BYTES + 1)
+            .read_to_end(&mut bytes),
+    )?;
+    Ok(bytes)
+}
+
 /// The newest sweep journal that still has entries to reverse.
 fn newest_undoable(
     sl: &dyn etude_core::journal::Sealer,
@@ -2891,7 +3067,7 @@ mod tests {
                 "--depth" => "2",
                 "--since" => "1d",
                 "--only" => "Documents",
-                "--plan" | "--export-plan" => "approved.plan",
+                "--plan" | "--export-plan" | "--proposal" => "approved.plan",
                 "--plan-digest" => {
                     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 }

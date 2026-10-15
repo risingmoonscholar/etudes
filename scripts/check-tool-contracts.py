@@ -606,6 +606,63 @@ def stale_plan(probe):
     return result
 
 
+def sweep_propose(probe, decisions, setup=None, **overrides):
+    """Export a plan, hand `sweep propose` a bad proposal, require a clean refusal.
+
+    The proposal is built from the export's own digest, so the one fault each
+    probe plants is the only thing wrong with it. A refusal must move nothing
+    and must write no plan."""
+    tree = screenshots(probe.directory / "tree")
+    (tree / "Reading").mkdir()
+    if setup:
+        setup(tree)
+    plan = probe.directory / "plan.json"
+    exported = json.loads(probe.run(tree, "--since", "0", "--export-plan", plan, "--json").stdout)
+    proposal = {"schema_version": 1, "rest": "leave", "decisions": decisions,
+                "plan_digest": exported["details"]["binding"]["plan_digest"]}
+    proposal.update(overrides)
+    proposal_file = probe.directory / "proposal.json"
+    proposal_file.write_text(json.dumps(proposal))
+    out = probe.directory / "out.plan"
+    before = snapshot(tree)
+    result = probe.run("propose", "--plan", plan, "--plan-digest",
+                       exported["details"]["binding"]["plan_digest"],
+                       "--proposal", proposal_file, "--export-plan", out, "--json", codes=(2,))
+    require(snapshot(tree) == before, "a refused proposal moved or changed files")
+    require(not out.exists(), "a refused proposal still wrote a plan")
+    return result
+
+
+def sweep_unknown_item(probe):
+    return sweep_propose(probe, [{"item": "i-999999", "folder": "Reading", "mode": "require_existing"}])
+
+
+def sweep_item_assigned_twice(probe):
+    return sweep_propose(probe, [
+        {"item": "i-000000", "folder": "Reading", "mode": "require_existing"},
+        {"item": "i-000000", "skip": True}])
+
+
+def sweep_propose_outside_root(probe):
+    return sweep_propose(probe, [{"item": "i-000000", "folder": "..", "mode": "require_existing"}])
+
+
+def sweep_propose_folder_absent(probe):
+    return sweep_propose(probe, [{"item": "i-000000", "folder": "Absent", "mode": "require_existing"}])
+
+
+def sweep_propose_name_taken(probe):
+    return sweep_propose(
+        probe, [{"item": "i-000000", "folder": "Reading", "mode": "require_existing"}],
+        setup=lambda tree: (tree / "Reading" / "Screenshot 2025-01-01 at 1.00.00 PM.png").write_bytes(b"x"))
+
+
+def sweep_propose_other_plan(probe):
+    return sweep_propose(
+        probe, [{"item": "i-000000", "folder": "Reading", "mode": "require_existing"}],
+        plan_digest="0" * 64)
+
+
 def sweep_destination_exists(probe):
     tree = probe.directory / "tree"
     for folder in ("a", "b"):
@@ -749,12 +806,15 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
         "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
-        "destination_exists": sweep_destination_exists,
-        "plan_stale": stale_plan,
-        "profile_missing": sweep_profile_missing,
+        "destination_exists": (sweep_destination_exists, sweep_propose_name_taken),
+        "destination_outside_root": sweep_propose_outside_root,
+        "plan_stale": (stale_plan, sweep_propose_other_plan),
+        "profile_missing": (sweep_profile_missing, sweep_propose_folder_absent),
         "download_in_flight": sweep_download_in_flight,
         "journal_unreadable": garbage_journal,
         "unknown_operation": lambda p: p.run("status", "--id", "absent", "--json", codes=(1,)),
+        "unknown_item": sweep_unknown_item,
+        "item_assigned_twice": sweep_item_assigned_twice,
         "unsafe_input": sweep_unsafe_input,
         "permission_denied": (sweep_permission_denied, sweep_unreadable_scan),
         "operation_incomplete": (restore_into_read_only_folder, restore_onto_occupied_path),
@@ -836,7 +896,7 @@ def refusal_codes(tool, binary, listed, directory):
                 continue
             expected = {"code": code, "retry": row["retry"]}
             actual = {"code": observed["code"], "retry": observed["retry"]}
-            if row["retry"] in ("after_change", "later"):
+            if row["subject_kind"] is not None:
                 expected["subject.kind"] = row["subject_kind"]
                 actual["subject.kind"] = observed.get("subject", {}).get("kind")
             if actual == expected:

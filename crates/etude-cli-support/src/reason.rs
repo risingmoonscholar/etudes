@@ -44,6 +44,8 @@ pub enum Code {
     UnsafeInput,
     PermissionDenied,
     OperationIncomplete,
+    UnknownItem,
+    ItemAssignedTwice,
 }
 
 impl Code {
@@ -67,6 +69,8 @@ impl Code {
         Self::UnsafeInput,
         Self::PermissionDenied,
         Self::OperationIncomplete,
+        Self::UnknownItem,
+        Self::ItemAssignedTwice,
     ];
 }
 
@@ -144,6 +148,7 @@ pub const CODES: &[CodeSpec] = &[
         subject_kind: Some("destination"),
         operations: &[
             "sweep:apply",
+            "sweep:propose",
             "sweep:undo",
             "stash:stash",
             "stash:pop",
@@ -156,7 +161,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "destination_outside_root",
         retry: RetryClass::AfterChange,
         subject_kind: Some("destination"),
-        operations: &["sweep:apply", "stash:stash"],
+        operations: &["sweep:apply", "sweep:propose", "stash:stash"],
         explanation: "The destination is outside the selected plan root; change the destination or plan.",
     },
     CodeSpec {
@@ -164,7 +169,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "plan_stale",
         retry: RetryClass::AfterChange,
         subject_kind: Some("plan"),
-        operations: &["sweep:apply", "stash:stash"],
+        operations: &["sweep:apply", "sweep:propose", "stash:stash"],
         explanation: "The observed plan is stale; create a fresh plan before applying.",
     },
     CodeSpec {
@@ -172,7 +177,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "profile_missing",
         retry: RetryClass::AfterChange,
         subject_kind: Some("profile"),
-        operations: &["sweep:scan", "sweep:apply"],
+        operations: &["sweep:scan", "sweep:apply", "sweep:propose"],
         explanation: "The selected profile is unavailable; restore or select a valid profile.",
     },
     CodeSpec {
@@ -268,6 +273,22 @@ pub const CODES: &[CodeSpec] = &[
             "unpack:extract",
         ],
         explanation: "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing.",
+    },
+    CodeSpec {
+        code: Code::UnknownItem,
+        name: "unknown_item",
+        retry: RetryClass::Never,
+        subject_kind: Some("item"),
+        operations: &["sweep:propose"],
+        explanation: "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan.",
+    },
+    CodeSpec {
+        code: Code::ItemAssignedTwice,
+        name: "item_assigned_twice",
+        retry: RetryClass::Never,
+        subject_kind: Some("item"),
+        operations: &["sweep:propose"],
+        explanation: "The proposal names one item more than once; the same proposal cannot work.",
     },
 ];
 
@@ -395,6 +416,8 @@ impl Reason {
             Code::UnsafeInput => "unsafe_input",
             Code::PermissionDenied => "permission_denied",
             Code::OperationIncomplete => "operation_incomplete",
+            Code::UnknownItem => "unknown_item",
+            Code::ItemAssignedTwice => "item_assigned_twice",
         }
     }
 }
@@ -412,6 +435,7 @@ pub fn codes_json(tool: &str) -> String {
             "export_plan",
             "apply_exported_plan",
             "status",
+            "propose",
         ],
         "stash" => &[
             "stash",
@@ -496,12 +520,17 @@ mod tests {
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
             );
             assert!(!spec.operations.is_empty());
-            assert_eq!(
-                spec.retry != RetryClass::Never,
-                spec.subject_kind.is_some(),
-                "{}",
-                spec.name
-            );
+            // A retryable code always names a subject. The two item codes are
+            // the only `never` codes that also name one: the item to fix.
+            if spec.retry != RetryClass::Never {
+                assert!(spec.subject_kind.is_some(), "{}", spec.name);
+            } else if spec.subject_kind.is_some() {
+                assert!(
+                    ["unknown_item", "item_assigned_twice"].contains(&spec.name),
+                    "{}",
+                    spec.name
+                );
+            }
             assert!(Code::REFUSAL_CODES.contains(&spec.code));
         }
         for code in Code::REFUSAL_CODES {

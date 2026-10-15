@@ -228,6 +228,10 @@ pub(super) fn encode(
                 w.byte(5);
                 w.count(*count)?;
             }
+            Signal::Proposed { count } => {
+                w.byte(6);
+                w.count(*count)?;
+            }
         }
         total = total.checked_add(group.members.len()).ok_or_else(invalid)?;
         if total > MAX_ROWS {
@@ -289,6 +293,16 @@ pub(super) fn encode(
     w.identity(&snapshot.root_identity);
     w.entries(&snapshot.ancestors)?;
     w.entries(&snapshot.entries)?;
+    // Optional trailing section: the real paths of files left alone only for
+    // want of a group. Absent when there are none, so a plan without them
+    // keeps its earlier encoding byte for byte.
+    if !plan.unclaimed.is_empty() {
+        w.byte(1);
+        w.count(plan.unclaimed.len())?;
+        for path in &plan.unclaimed {
+            w.path(path)?;
+        }
+    }
     if w.0.len() > MAX_BYTES {
         return Err(invalid());
     }
@@ -334,6 +348,7 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
                 created: r.boolean()?,
             },
             5 => Signal::Collected { count: r.count()? },
+            6 => Signal::Proposed { count: r.count()? },
             _ => return Err(invalid()),
         };
         let count = r.count()?;
@@ -380,6 +395,7 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         root,
         groups,
         untouched,
+        unclaimed: Vec::new(),
         scanned: r.usize()?,
         skipped_hidden: r.usize()?,
         skipped_symlink: r.usize()?,
@@ -406,7 +422,19 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         entries: r.entries()?,
     };
     if r.at != data.len() {
-        return Err(invalid());
+        if r.byte()? != 1 {
+            return Err(invalid());
+        }
+        let count = r.count()?;
+        if count == 0 {
+            return Err(invalid());
+        }
+        for _ in 0..count {
+            plan.unclaimed.push(r.path()?);
+        }
+        if r.at != data.len() {
+            return Err(invalid());
+        }
     }
     plan.observations = Some(snapshot.clone());
     Ok((plan, snapshot, context))
@@ -544,6 +572,7 @@ mod tests {
                 })
                 .collect(),
             observations: None,
+            unclaimed: Vec::new(),
             scanned: 17,
             skipped_hidden: 1,
             skipped_symlink: 2,
@@ -655,6 +684,35 @@ mod tests {
             committed,
             TreeSnapshot::path_commitment(Path::new("/synthetic/private-name2"))
         );
+    }
+
+    #[test]
+    fn unclaimed_paths_round_trip_and_a_plan_without_them_is_unchanged() {
+        let (mut plan, snapshot, context) = fixture();
+        let without = encode(&plan, &snapshot, &context).unwrap();
+        plan.unclaimed = vec![
+            PathBuf::from("/synthetic/root/a.xyz"),
+            PathBuf::from("/synthetic/root/b.xyz"),
+        ];
+        let with = encode(&plan, &snapshot, &context).unwrap();
+        // The optional section only appends: the earlier encoding is a prefix.
+        assert!(with.starts_with(&without));
+        let (decoded, decoded_snapshot, decoded_context) = decode(&with).unwrap();
+        assert_eq!(decoded.unclaimed, plan.unclaimed);
+        assert_eq!(
+            encode(&decoded, &decoded_snapshot, &decoded_context).unwrap(),
+            with
+        );
+        // A cut inside the section, an empty section and extra bytes all refuse.
+        for length in without.len() + 1..with.len() {
+            assert!(decode(&with[..length]).is_err(), "{length}");
+        }
+        let mut empty = without.clone();
+        empty.extend_from_slice(&[1, 0]);
+        assert!(decode(&empty).is_err());
+        let mut extra = with;
+        extra.push(0);
+        assert!(decode(&extra).is_err());
     }
 
     #[test]

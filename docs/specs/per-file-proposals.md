@@ -51,16 +51,16 @@ The proposal file is JSON, bounded to 1 MiB and 5,000 decisions:
 | Rule | Refusal code | Retry |
 |---|---|---|
 | The proposal cites the digest of the plan it was built from | `plan_stale` | `after_change` |
-| Every item id exists in the plan's eligible list | `unknown_item` (new) | `never` |
-| An item is named at most once, even if both decisions agree | `item_assigned_twice` (new) | `never` |
-| A folder is one plain name: no separator, no `..`, not absolute, not empty | `destination_outside_root` | `never` |
+| Every item id exists in the plan's eligible list | `unknown_item` (new, subject `item`) | `never` |
+| An item is named at most once, even if both decisions agree | `item_assigned_twice` (new, subject `item`) | `never` |
+| A folder is one plain name: no separator, no `..`, not absolute, not empty | `destination_outside_root` | `after_change` |
 | `require_existing` needs the folder to exist now, and binds its identity | `profile_missing` | `after_change` |
 | Version 1 has only `require_existing`; a name alone never creates a folder. A non-folder holding the name refuses | `destination_exists` | `after_change` |
 | A file keeps its name. A collision at the destination refuses | `destination_exists` | `after_change` |
 | `rest` must be present and equal `"leave"`. Missing or any other value refuses | `invalid_arguments` | `never` |
 | Size and count limits hold; the file is valid JSON of the stated version | `invalid_arguments` | `never` |
 
-Two codes are new and would be added to each tool's contract, with probes, like every other code. Refusals are all-or-nothing: one bad decision refuses the whole proposal and writes no plan.
+Two codes are new and are listed in sweep's contract, with probes, like every other code. They are the only `never` codes that name a subject (kind `item`). Refusals are all-or-nothing: one bad decision refuses the whole proposal and writes no plan.
 
 ## What this adds up to, and what it does not do
 
@@ -86,6 +86,9 @@ Each rule above gets a test that fails when the rule is broken. In addition:
 - The only mode is `require_existing`. There is no `create_if_absent` and no `rest: "keep_plan"`. The field `rest` is required and must equal `"leave"`.
 - The item list includes the file name.
 - A `skip: true` decision names an item that stays in place.
+- A folder that was not part of the plan's observation, or was replaced since, is refused `plan_stale`. The folder's device and inode are checked again by `sweep apply`.
+- A proposal that moves nothing writes no plan and exits 1.
+- A plan from `propose` applies only with a journal, as mapped plans do.
 
 ## Sources
 

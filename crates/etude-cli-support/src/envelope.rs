@@ -43,11 +43,9 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
         Some("contract") => "contract",
         Some("help" | "--help" | "-h") => "help",
         Some("version" | "--version" | "-V") => "version",
-        Some("apply" | "undo" | "forget" | "verify" | "lesson" | "review" | "status")
-            if tool == "sweep" =>
-        {
-            first.unwrap()
-        }
+        Some(
+            "apply" | "undo" | "forget" | "verify" | "lesson" | "review" | "status" | "propose",
+        ) if tool == "sweep" => first.unwrap(),
         Some("pop" | "status") if tool == "stash" => first.unwrap(),
         _ if tool == "unpack" && args.iter().any(|arg| arg == "--list") => "list",
         _ => match tool {
@@ -64,7 +62,9 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
     } else {
         operation
     };
-    let operation = if tool != "unpack" && args.iter().any(|arg| arg == "--export-plan") {
+    let operation = if operation == "propose" {
+        operation
+    } else if tool != "unpack" && args.iter().any(|arg| arg == "--export-plan") {
         "export_plan".to_string()
     } else if tool != "unpack" && args.iter().any(|arg| arg == "--plan") {
         "apply_exported_plan".to_string()

@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 5,
+                Tool::Sweep => SCHEMA_VERSION + 6,
                 Tool::Stash => 10,
                 Tool::Unpack => SCHEMA_VERSION + 2,
             }),
@@ -551,6 +551,18 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "ancestor_metadata",
                     "project_marker_names",
                     "consented_text_prefixes",
+                    "sweep_existing_profile_bytes",
+                ],
+                &["explicit_plan_file"],
+            ),
+            scope(
+                "propose",
+                &[
+                    "explicit_plan_file_bytes",
+                    "explicit_proposal_file_bytes",
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
                     "sweep_existing_profile_bytes",
                 ],
                 &["explicit_plan_file"],
