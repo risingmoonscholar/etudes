@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 459 tests
+cargo test --all                # 464 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -374,6 +374,13 @@ is nothing left to undo. It reverses the apply that recorded the remaining
 moves first, then the stopped apply, restoring every original path and byte.
 This works even when the stopped apply's journal is the newest. Journals that
 actually lost several move records are still refused without touching files.
+
+If `sweep undo` is killed after it has put the last file back, the folder that
+`sweep apply` created can be left behind, empty. Run `sweep undo` again: it
+removes that folder and finishes. It removes only a folder the journal says
+apply created, and only if the folder is still the same one and has nothing
+in it. A folder with anything inside it, or one that was replaced, is left
+alone. Undo never deletes or overwrites a file.
 
 Known gap: a folder that holds only recent files reports `nothing_to_do`, with
 no code that says "try again later".

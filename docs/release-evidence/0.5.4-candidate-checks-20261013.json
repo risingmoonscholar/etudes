@@ -194,7 +194,8 @@
           "date": "2026-10-14",
           "observation": "Pre-stop journal counts can be stale. In a controlled diagnostic scheduling interleaving, watch-undo reported 425/500 after undo had exited 0; ps reported a zombie and a diagnostic reload showed 500/500 with no damaged tail. A separate late-kill reproduction differed only by the empty operation-created Screenshots directory (0755); the next undo exited 1 and retained it.",
           "repair": "Local dev-only watcher now confirms OS stop and reloads before accepting reversed and still-moved entries. Scenario uses bounded attempts, unproven misses, a larger late fixture, and finished-undo and missing-file controls. Product directory cleanup is unchanged.",
-          "status": "a further finding is open: an undo killed after its last restore leaves the empty folder the apply created, and a second undo reports nothing to do"
+          "status": "a further finding is open: an undo killed after its last restore leaves the empty folder the apply created, and a second undo reports nothing to do",
+          "update_2026-10-15": "fixed in branch fix/undo-removes-created-folder: a journal whose files are all reversed still counts as undo work while a folder it recorded creating is present, unchanged and empty, so a second undo removes it and finishes."
         }
       ]
     }

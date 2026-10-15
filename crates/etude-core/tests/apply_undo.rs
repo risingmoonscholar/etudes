@@ -268,6 +268,145 @@ fn undo_removes_only_the_empty_destination_directory_it_created() {
     let _ = fs::remove_dir_all(state);
 }
 
+/// Journal state of an undo killed after its last file restore: the file is
+/// home and recorded as reversed, and the folder apply created is still there.
+/// Built directly, with no timing, from a real apply.
+fn journal_with_every_file_reversed(tag: &str) -> (PathBuf, PathBuf, PathBuf, Journal) {
+    let root = std::env::temp_dir().join(format!("sweep_au_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create root");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let state = std::env::temp_dir().join(format!("sweep_state_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&state);
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    let p = proposal_from_scan(
+        &out,
+        vec![plan::Group {
+            name: "NewFolder".into(),
+            signal: plan::Signal::Collected { count: 1 },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    let report = apply::apply(&p, &context(), Some(&TestSeal), None).expect("apply");
+    let journal = Journal::load_sealed("test", &report.journal_id, &TestSeal).expect("journal");
+    assert!(root.join("NewFolder").is_dir(), "apply made no folder");
+    assert_eq!(
+        journal.created_directories.len(),
+        1,
+        "apply did not record the folder it created"
+    );
+    for (i, e) in journal.entries.iter().enumerate() {
+        fs::rename(&e.to, &e.from).expect("put file home");
+        journal
+            .record_undone(i, &TestSeal)
+            .expect("record reversal");
+    }
+    let journal = Journal::load_sealed("test", &journal.id, &TestSeal).expect("reload journal");
+    assert!(
+        journal
+            .entries
+            .iter()
+            .all(|e| e.state == etude_core::journal::EntryState::Reversed),
+        "fixture must have every file entry reversed"
+    );
+    (root.clone(), root.join("NewFolder"), state, journal)
+}
+
+#[cfg(unix)]
+#[test]
+fn second_undo_removes_the_created_folder_when_every_file_is_already_back() {
+    let _g = lock();
+    let (root, folder, state, mut journal) = journal_with_every_file_reversed("second_undo");
+    assert!(
+        apply::has_undo_work(&journal),
+        "undo reports nothing to do while the folder it must remove is still there"
+    );
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none(), "undo error: {:?}", report.error);
+    assert!(!folder.exists(), "second undo left the created folder");
+    assert_eq!(fs::read(root.join("file.qoi")).unwrap(), b"fixture");
+    assert!(
+        !apply::has_undo_work(&journal),
+        "undo still has work after the folder is gone"
+    );
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn second_undo_leaves_a_created_folder_that_is_not_empty() {
+    let _g = lock();
+    let (root, folder, state, mut journal) = journal_with_every_file_reversed("not_empty");
+    fs::write(folder.join("user-file"), b"theirs").expect("user adds a file");
+    assert!(
+        !apply::has_undo_work(&journal),
+        "a folder that cannot be removed must not count as undo work"
+    );
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none(), "undo error: {:?}", report.error);
+    assert_eq!(fs::read(folder.join("user-file")).unwrap(), b"theirs");
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn second_undo_leaves_a_folder_the_journal_does_not_record_as_created() {
+    let _g = lock();
+    let (root, folder, state, mut journal) = journal_with_every_file_reversed("not_recorded");
+    journal.created_directories.clear();
+    assert!(!apply::has_undo_work(&journal));
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none(), "undo error: {:?}", report.error);
+    assert!(folder.is_dir(), "undo removed a folder it did not create");
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn second_undo_leaves_a_created_folder_that_was_swapped_for_another() {
+    let _g = lock();
+    let (root, folder, state, mut journal) = journal_with_every_file_reversed("swapped");
+    let reserved = root.join("reserved replacement");
+    fs::create_dir(&reserved).expect("reserve a distinct directory");
+    fs::remove_dir(&folder).expect("remove original");
+    fs::rename(&reserved, &folder).expect("install replacement");
+    assert!(!apply::has_undo_work(&journal));
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none(), "undo error: {:?}", report.error);
+    assert!(folder.is_dir(), "undo removed a replacement folder");
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
+#[cfg(unix)]
+#[test]
+fn second_undo_leaves_a_created_folder_that_was_swapped_for_a_link() {
+    let _g = lock();
+    let (root, folder, state, mut journal) = journal_with_every_file_reversed("linked");
+    let elsewhere = root.join("elsewhere");
+    fs::create_dir(&elsewhere).expect("create link target");
+    fs::remove_dir(&folder).expect("remove original");
+    std::os::unix::fs::symlink(&elsewhere, &folder).expect("install link");
+    assert!(!apply::has_undo_work(&journal));
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none(), "undo error: {:?}", report.error);
+    assert!(
+        fs::symlink_metadata(&folder)
+            .expect("link still there")
+            .file_type()
+            .is_symlink()
+    );
+    assert!(elsewhere.is_dir());
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
+}
+
 #[cfg(unix)]
 #[test]
 fn undo_does_not_remove_a_replacement_for_its_created_directory() {
