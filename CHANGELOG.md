@@ -37,6 +37,10 @@ reviewers were pointed at the tools before anyone else could be.
   status` reports the interrupted apply, and `sweep undo` restores every original
   path and byte. Skipped files, unnamed files, a personal-looking file, a hidden
   file and a symlink stay in place throughout. Two controls show it can fail.
+- **Verification:** `scripts/check-proposal-mutation.sh` plants four faults in a
+  throwaway copy of the tree and requires a check to catch each: a changed
+  refusal code, a removed duplicate-item check, a removed digest check, and a
+  widened eligible list.
 - **sweep:** `--scheme existing` routes eligible files using a versioned,
   reviewable profile to folders already present in the selected directory.
   A missing destination is named and refused instead of falling through to a
