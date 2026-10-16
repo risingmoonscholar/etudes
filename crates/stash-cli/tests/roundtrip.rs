@@ -60,6 +60,7 @@ fn stash_plan(root: &Path) -> (BoundPlan, usize) {
         depth: 1,
         allow_sync: true,
         whole_units: true,
+        include_tagged: true,
         ..Default::default()
     };
     let out = scan::scan(root, &cfg).expect("scan");
