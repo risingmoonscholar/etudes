@@ -31,6 +31,9 @@ pub enum Method {
     Rename,
     /// copy → verify → unlink across devices. Reversed the same way.
     CopyUnlink,
+    /// Finder tags added in place. Nothing moved: `from` and `to` are the same
+    /// path, and the entry's [`TagChange`] says what to put back.
+    Tag,
 }
 
 impl Method {
@@ -38,15 +41,42 @@ impl Method {
         match self {
             Method::Rename => "rename",
             Method::CopyUnlink => "copy",
+            Method::Tag => "tag",
         }
     }
     fn parse(s: &str) -> Option<Self> {
         match s {
             "rename" => Some(Method::Rename),
             "copy" => Some(Method::CopyUnlink),
+            "tag" => Some(Method::Tag),
             _ => None,
         }
     }
+}
+
+/// What a tag-adding apply did to one file's tag attribute, as raw bytes.
+///
+/// `previous` is the attribute exactly as found (`None` when the file had
+/// none) and is what undo puts back. `written` is the attribute exactly as
+/// apply wrote it; undo acts only while the file still holds those bytes, so a
+/// tag someone else changed in between is never overwritten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagChange {
+    pub previous: Option<Vec<u8>>,
+    pub written: Vec<u8>,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.is_ascii() {
+        return None;
+    }
+    (0..text.len() / 2)
+        .map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).ok())
+        .collect()
 }
 
 /// One recorded move, with the facts undo needs to verify before reversing.
@@ -65,6 +95,8 @@ pub struct Entry {
     /// Where this entry stands. See [`EntryState`] — a bool used to carry
     /// three meanings and two of them shared a value.
     pub state: EntryState,
+    /// Set only for a tag-adding entry ([`Method::Tag`]).
+    pub tag: Option<TagChange>,
 }
 
 /// What has physically happened to one entry's file.
@@ -438,6 +470,17 @@ impl Journal {
                     EntryState::Stranded => 5,
                 }
             ));
+            // Tag entries append two fields. Journals without tag entries are
+            // encoded exactly as before, and a reader that ignores trailing
+            // fields sees the same nine.
+            if let Some(change) = &e.tag {
+                s.pop();
+                s.push_str(&format!(
+                    "\t{}\t{}\n",
+                    change.previous.as_deref().map_or("-".to_string(), hex),
+                    hex(&change.written)
+                ));
+            }
         }
         s
     }
@@ -494,11 +537,28 @@ impl Journal {
                     if f.len() < 9 {
                         return Err(JournalError::Malformed("short mv record"));
                     }
+                    let method =
+                        Method::parse(f[3]).ok_or(JournalError::Malformed("unknown method"))?;
+                    let tag = if method == Method::Tag {
+                        if f.len() < 11 {
+                            return Err(JournalError::Malformed("short tag record"));
+                        }
+                        Some(TagChange {
+                            previous: if f[9] == "-" {
+                                None
+                            } else {
+                                Some(unhex(f[9]).ok_or(JournalError::Malformed("tag bytes"))?)
+                            },
+                            written: unhex(f[10]).ok_or(JournalError::Malformed("tag bytes"))?,
+                        })
+                    } else {
+                        None
+                    };
                     j.entries.push(Entry {
+                        tag,
                         from: PathBuf::from(unesc(f[1])),
                         to: PathBuf::from(unesc(f[2])),
-                        method: Method::parse(f[3])
-                            .ok_or(JournalError::Malformed("unknown method"))?,
+                        method,
                         size: f[4].parse().map_err(|_| JournalError::Malformed("size"))?,
                         mtime_secs: f[5].parse().map_err(|_| JournalError::Malformed("mtime"))?,
                         inode: f[6].parse().map_err(|_| JournalError::Malformed("inode"))?,
@@ -915,7 +975,13 @@ impl Journal {
                     // stream is inconsistent — replayed out of order, or two
                     // undone frames for one entry — and a review asked for it
                     // to be caught rather than absorbed.
-                    if !self.entries[index].is_moved() {
+                    // A tag entry whose write landed but whose done frame was
+                    // lost is still Planned here; undo restores it by reading
+                    // the file, so its reversal frame is legitimate.
+                    let entry = &self.entries[index];
+                    let unrecorded_tag_write =
+                        entry.tag.is_some() && entry.state == EntryState::Planned;
+                    if !entry.is_moved() && !unrecorded_tag_write {
                         return Err(JournalError::Malformed(
                             "journal damaged: a reversal for an entry that was not moved",
                         ));
@@ -1284,6 +1350,118 @@ pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn golden_journal(tool: &str) -> Journal {
+        let states = [
+            EntryState::Planned,
+            EntryState::Moved,
+            EntryState::Reversed,
+            EntryState::Held,
+            EntryState::Returned,
+            EntryState::Stranded,
+        ];
+        Journal {
+            id: "golden-id".into(),
+            tool: tool.into(),
+            root: PathBuf::from("/golden/root"),
+            entries: states
+                .into_iter()
+                .enumerate()
+                .map(|(i, state)| Entry {
+                    from: PathBuf::from(format!("/golden/root/f{i}.txt")),
+                    to: PathBuf::from(format!("/golden/root/Group/f{i}.txt")),
+                    method: if i % 2 == 0 {
+                        Method::Rename
+                    } else {
+                        Method::CopyUnlink
+                    },
+                    size: 10 + i as u64,
+                    mtime_secs: 1000 + i as i64,
+                    inode: 77 + i as u64,
+                    edge_hash: 9000 + i as u64,
+                    state,
+                    tag: None,
+                })
+                .collect(),
+            created_directories: vec![CreatedDirectory {
+                path: PathBuf::from("/golden/root/Group"),
+                device: 5,
+                inode: 6,
+            }],
+            validated_directories: vec![ValidatedDirectory {
+                path: PathBuf::from("/golden/root"),
+                device: 5,
+                inode: 4,
+            }],
+            progress_tail_damaged: false,
+        }
+    }
+
+    /// Journals that move files encode exactly as they did before tag entries
+    /// existed. The digests were taken from the encoding of the previous
+    /// release for the same journal.
+    #[test]
+    fn journals_without_tag_entries_keep_their_earlier_encoding_byte_for_byte() {
+        for (tool, length, digest) in [
+            (
+                "sweep",
+                522,
+                "d5f76d76ca13b338b52a0e343619e667c1a737cfbeb7dea476a7440586f38774",
+            ),
+            (
+                "stash",
+                547,
+                "4ea85b2760ddf885700c375fe7a3917b3132a2d5328e553bc0832324b18e6b4e",
+            ),
+        ] {
+            let text = golden_journal(tool).encode();
+            assert_eq!(text.len(), length, "{tool}");
+            assert_eq!(
+                crate::plan::binding_digest(text.as_bytes()),
+                digest,
+                "{tool}"
+            );
+            // And it still loads to the same journal.
+            let loaded = Journal::decode(&text).expect("an earlier journal loads");
+            assert_eq!(loaded.entries.len(), 6);
+            assert!(loaded.entries.iter().all(|e| e.tag.is_none()));
+            assert_eq!(loaded.encode(), text);
+        }
+    }
+
+    #[test]
+    fn a_tag_entry_round_trips_with_its_previous_and_written_bytes() {
+        let mut journal = golden_journal("sweep");
+        journal.entries.truncate(2);
+        for (i, entry) in journal.entries.iter_mut().enumerate() {
+            entry.method = Method::Tag;
+            entry.to = entry.from.clone();
+            entry.tag = Some(TagChange {
+                previous: if i == 0 {
+                    None
+                } else {
+                    Some(vec![0, 1, 254, 255])
+                },
+                written: vec![0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, i as u8],
+            });
+        }
+        let text = journal.encode();
+        let loaded = Journal::decode(&text).expect("loads");
+        assert_eq!(loaded.entries[0].tag, journal.entries[0].tag);
+        assert_eq!(loaded.entries[1].tag, journal.entries[1].tag);
+        assert_eq!(loaded.entries[0].method, Method::Tag);
+        assert_eq!(loaded.encode(), text);
+        // A tag record that lost its fields is refused, not read as a move.
+        let short = text.lines().map(|l| {
+            if l.starts_with("mv\t") {
+                l.split('\t').take(9).collect::<Vec<_>>().join("\t")
+            } else {
+                l.to_string()
+            }
+        });
+        let short: Vec<String> = short.collect();
+        assert!(Journal::decode(&short.join("\n")).is_err());
+    }
+
     use std::sync::Mutex;
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
@@ -1321,6 +1499,8 @@ mod tests {
             inode: 1,
             edge_hash: 1,
             state,
+
+            tag: None,
         };
         let summarize = |states: &[EntryState]| {
             Journal {
@@ -1360,6 +1540,8 @@ mod tests {
             inode: 1,
             edge_hash: 1,
             state,
+
+            tag: None,
         };
         let summarize = |states: &[EntryState]| {
             Journal {
@@ -1598,6 +1780,8 @@ mod tests {
                 inode: 7,
                 edge_hash: 1234,
                 state: EntryState::Moved,
+
+                tag: None,
             }],
             created_directories: Vec::new(),
             validated_directories: Vec::new(),
@@ -1639,6 +1823,8 @@ mod tests {
             inode: 1,
             edge_hash: 0,
             state: EntryState::Planned,
+
+            tag: None,
         };
         let journal = |id: &str| Journal {
             id: id.into(),
@@ -1751,6 +1937,8 @@ mod tests {
                 inode: 1,
                 edge_hash: 0,
                 state: EntryState::Planned,
+
+                tag: None,
             }],
             created_directories: Vec::new(),
             validated_directories: Vec::new(),
@@ -1810,6 +1998,8 @@ mod tests {
                 inode: 1,
                 edge_hash: 0,
                 state: EntryState::Planned,
+
+                tag: None,
             }],
             created_directories: Vec::new(),
             validated_directories: Vec::new(),
@@ -1874,6 +2064,8 @@ mod tests {
                     inode: 1,
                     edge_hash: 0,
                     state: EntryState::Planned,
+
+                    tag: None,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/b"),
@@ -1884,6 +2076,8 @@ mod tests {
                     inode: 2,
                     edge_hash: 0,
                     state: EntryState::Planned,
+
+                    tag: None,
                 },
             ],
             created_directories: Vec::new(),
@@ -1992,6 +2186,8 @@ mod tests {
                     inode: 1,
                     edge_hash: 0,
                     state: EntryState::Planned,
+
+                    tag: None,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/b"),
@@ -2002,6 +2198,8 @@ mod tests {
                     inode: 2,
                     edge_hash: 0,
                     state: EntryState::Planned,
+
+                    tag: None,
                 },
             ],
             created_directories: Vec::new(),
@@ -2063,6 +2261,8 @@ mod tests {
                     inode: 7,
                     edge_hash: 1234,
                     state: EntryState::Moved,
+
+                    tag: None,
                 },
                 Entry {
                     from: PathBuf::from("/tmp/root/c"),
@@ -2073,6 +2273,8 @@ mod tests {
                     inode: 2,
                     edge_hash: 5,
                     state: EntryState::Planned,
+
+                    tag: None,
                 },
             ],
             created_directories: Vec::new(),

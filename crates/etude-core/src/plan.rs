@@ -95,6 +95,15 @@ pub enum Signal {
     Proposed {
         count: usize,
     },
+    /// Files that get a Finder tag (`--scheme tags`): the group's name is the
+    /// tag. `new` records whether the tag was absent from the scanned folder
+    /// when the plan was made; `entry` is the exact string stored in the
+    /// attribute (the name, plus a colour suffix an existing tag carried).
+    Tagged {
+        ext: String,
+        new: bool,
+        entry: String,
+    },
 }
 
 impl Signal {
@@ -121,6 +130,13 @@ impl Signal {
             }
             Signal::Collected { count } => format!("{count} items"),
             Signal::Proposed { count } => format!("{count} items placed by a proposal"),
+            Signal::Tagged { ext, new, .. } => {
+                if *new {
+                    format!(".{ext} (new tag)")
+                } else {
+                    format!(".{ext} (tag already on files in this folder)")
+                }
+            }
         }
     }
 }
@@ -134,6 +150,17 @@ pub struct Group {
     pub members: Vec<PathBuf>,
     /// Set by `sweep review`. Only accepted groups are applied.
     pub accepted: bool,
+}
+
+/// One tag in a tag plan: how many files get it and whether it is new.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagSummary {
+    pub name: String,
+    pub files: usize,
+    /// Not on any file sweep could tag in the scanned folder when the plan
+    /// was made. Finder's own tag list cannot be read, so this is the test.
+    pub new: bool,
+    pub extensions: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +194,10 @@ pub struct Plan {
     /// Whether tagged items were included. Apply re-checks every item's tag
     /// at move time and holds a newly tagged one unless this is set.
     pub include_tagged: bool,
+    /// Set by `--scheme tags`. The groups are then tags, not folders: each
+    /// group's name is a tag and its members are the files that get it.
+    /// Apply adds the tag and moves nothing.
+    pub adds_tags: bool,
     pub root_is_synced: bool,
     /// The `--allow-sync` this plan's scan was actually run with. Copied
     /// straight from `ScanOutcome::allow_sync`. NOT derived from
@@ -231,6 +262,7 @@ impl Plan {
             skipped_unreadable: 0,
             skipped_tagged: 0,
             include_tagged: false,
+            adds_tags: false,
             root_is_synced: false,
             allow_sync: false,
         }
@@ -262,6 +294,7 @@ impl Plan {
             skipped_unreadable: scan.skipped_unreadable,
             skipped_tagged: scan.skipped_tagged,
             include_tagged: scan.include_tagged,
+            adds_tags: false,
             root_is_synced: scan.root_is_synced,
             allow_sync: scan.allow_sync,
         }
@@ -334,6 +367,54 @@ impl Plan {
             .count()
     }
 
+    /// Files that already carry the tag a tag plan would add.
+    pub fn tag_already_present(&self) -> usize {
+        self.untouched
+            .iter()
+            .filter(|(_, reason)| *reason == Untouched::TagAlreadyPresent)
+            .count()
+    }
+
+    /// Files whose tag attribute could not be read or parsed, so no tag was
+    /// planned for them.
+    pub fn tag_state_unreadable(&self) -> usize {
+        self.untouched
+            .iter()
+            .filter(|(_, reason)| *reason == Untouched::TagStateUnreadable)
+            .count()
+    }
+
+    /// Whether applying this plan adds Finder tags instead of moving files.
+    pub fn applies_tags(&self) -> bool {
+        self.adds_tags
+    }
+
+    /// One row per distinct tag in a tag plan, in the order the tags first
+    /// appear, with how many files get it across all its extensions.
+    pub fn tag_summary(&self) -> Vec<TagSummary> {
+        let mut rows: Vec<TagSummary> = Vec::new();
+        for group in &self.groups {
+            let Signal::Tagged { ext, new, .. } = &group.signal else {
+                continue;
+            };
+            if let Some(row) = rows.iter_mut().find(|row| row.name == group.name) {
+                row.files += group.members.len();
+                row.new |= *new;
+                if !row.extensions.contains(ext) {
+                    row.extensions.push(ext.clone());
+                }
+            } else {
+                rows.push(TagSummary {
+                    name: group.name.clone(),
+                    files: group.members.len(),
+                    new: *new,
+                    extensions: vec![ext.clone()],
+                });
+            }
+        }
+        rows
+    }
+
     pub fn moves(&self) -> usize {
         self.groups
             .iter()
@@ -368,6 +449,41 @@ pub trait Inspector {
 /// to prevent.
 impl Plan {
     pub fn to_json(&self) -> String {
+        let mut out = self.to_json_base();
+        if self.adds_tags {
+            use crate::json as j;
+            let rows = self.tag_summary();
+            let tags = j::arr(rows.iter().map(|row| {
+                j::obj(&[
+                    ("name", j::str(&row.name)),
+                    ("files", j::num(row.files)),
+                    ("new", j::bool(row.new)),
+                    (
+                        "extensions",
+                        j::arr(row.extensions.iter().map(|ext| j::str(ext))),
+                    ),
+                ])
+            }));
+            let new_tags = j::arr(
+                rows.iter()
+                    .filter(|row| row.new)
+                    .map(|row| j::str(&row.name)),
+            );
+            out.pop();
+            out.push_str(&format!(
+                ",\"scheme\":\"tags\",\"tags\":{tags},\"new_tags\":{new_tags},\
+                 \"new_tag_basis\":{},\"tag_left_alone\":{}}}",
+                j::str(TAG_BASIS),
+                j::obj(&[
+                    ("already_present", j::num(self.tag_already_present())),
+                    ("state_unreadable", j::num(self.tag_state_unreadable())),
+                ])
+            ));
+        }
+        out
+    }
+
+    fn to_json_base(&self) -> String {
         use crate::json as j;
 
         let groups = j::arr(self.groups.iter().map(|g| {
@@ -1022,6 +1138,7 @@ fn build_with_policy(
         skipped_unreadable: scan.skipped_unreadable,
         skipped_tagged: scan.skipped_tagged,
         include_tagged: scan.include_tagged,
+        adds_tags: false,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
     };
@@ -1034,6 +1151,180 @@ fn build_with_policy(
         .cloned()
         .collect();
     plan.unclaimed = regular;
+    plan
+}
+
+/// The sentence that says how "new" is decided for a tag. Finder's own tag
+/// list is not readable without extra permissions, so a tag counts as existing
+/// only when it is already on a file sweep could tag in the scanned folder.
+pub const TAG_BASIS: &str = "a tag is new when no file in the scanned folder carries it; \
+Finder's own tag list cannot be read, so a tag you have in Finder but not on a file here is also shown as new";
+
+/// One tag a caller asked for: files with this extension get this tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagSpec {
+    pub ext: String,
+    pub name: String,
+}
+
+/// Validate `--map EXT=TAG` pairs for `--scheme tags`. All-or-nothing, like
+/// folder maps. Any extension may be mapped: a tag claims no destination, so
+/// the built-in groups do not conflict. A tag name is plain text from the
+/// caller; sweep never makes one up.
+pub fn validate_tag_maps(raw: &[(String, String)]) -> Result<Vec<TagSpec>, String> {
+    if raw.is_empty() {
+        return Err(
+            "--scheme tags needs at least one --map EXT=TAG (sweep never invents a tag)".into(),
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (ext_raw, name) in raw {
+        let ext = ext_raw
+            .strip_prefix('.')
+            .unwrap_or(ext_raw)
+            .to_ascii_lowercase();
+        if ext.is_empty() || ext.contains('.') || ext.contains('/') || ext.len() > 32 {
+            return Err(format!(
+                "--map: {ext_raw:?} is not a single extension (like pdf)"
+            ));
+        }
+        if !seen.insert(ext.clone()) {
+            return Err(format!("--map: .{ext} is mapped twice"));
+        }
+        crate::tags::validate_name(name).map_err(|why| format!("--map: {why}"))?;
+        out.push(TagSpec {
+            ext,
+            name: name.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// The seven colour tags Finder ships with, and the colour number it stores
+/// after the name. Adding one of these by name must write the number, or the
+/// tag would show without its colour.
+fn finder_colour_tag(name: &str) -> Option<&'static str> {
+    match name.to_lowercase().as_str() {
+        "gray" | "grey" => Some("Gray\n1"),
+        "green" => Some("Green\n2"),
+        "purple" => Some("Purple\n3"),
+        "blue" => Some("Blue\n4"),
+        "yellow" => Some("Yellow\n5"),
+        "red" => Some("Red\n6"),
+        "orange" => Some("Orange\n7"),
+        _ => None,
+    }
+}
+
+/// Build a tag plan: which files get which tag. Reads each taggable file's tag
+/// attribute (never its contents) to learn which tags exist in the folder and
+/// which files already carry the one asked for. Writes nothing.
+///
+/// Every safety refusal still applies: a file sweep would not touch is not
+/// tagged either, and its tags are not read. A file whose tag state cannot be
+/// parsed is listed as unreadable and given nothing.
+pub fn build_tags(
+    scan: &ScanOutcome,
+    specs: &[TagSpec],
+    inspector: Option<&mut dyn Inspector>,
+) -> Plan {
+    use std::collections::{BTreeMap, HashSet};
+    let mut plan = build_with_policy(scan, inspector, &[], false);
+    let refused: HashSet<PathBuf> = plan
+        .untouched
+        .iter()
+        .filter(|(_, reason)| *reason != Untouched::NoClearGroup)
+        .map(|(path, _)| path.clone())
+        .collect();
+    let mut candidates: Vec<&Entry> = scan
+        .entries
+        .iter()
+        .filter(|entry| !entry.is_dir && !refused.contains(&entry.path))
+        .collect();
+    candidates.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // Tag state of every file that could be tagged. `None`: unknown.
+    let states: Vec<Option<Vec<String>>> = candidates
+        .iter()
+        .map(|entry| match crate::tags::read(&entry.path) {
+            Ok(None) => Some(Vec::new()),
+            Ok(Some(raw)) => crate::tags::decode(&raw),
+            Err(_) => None,
+        })
+        .collect();
+    // Tags already on those files, by lower-cased name, keeping the first
+    // stored spelling (with its colour) so a new use matches the old one.
+    let mut known: BTreeMap<String, String> = BTreeMap::new();
+    for entry in states.iter().flatten().flatten() {
+        known
+            .entry(crate::tags::name_of(entry).to_lowercase())
+            .or_insert_with(|| entry.clone());
+    }
+
+    let mut groups = Vec::new();
+    let mut claimed: HashSet<PathBuf> = HashSet::new();
+    for spec in specs {
+        let (entry, new) = match known.get(&spec.name.to_lowercase()) {
+            Some(existing) => (existing.clone(), false),
+            None => (
+                finder_colour_tag(&spec.name).map_or_else(|| spec.name.clone(), str::to_string),
+                true,
+            ),
+        };
+        let display = crate::tags::name_of(&entry).to_string();
+        let mut members = Vec::new();
+        for (candidate, state) in candidates.iter().zip(&states) {
+            if !candidate.ext.eq_ignore_ascii_case(&spec.ext) {
+                continue;
+            }
+            claimed.insert(candidate.path.clone());
+            match state {
+                None => plan
+                    .untouched
+                    .push((candidate.path.clone(), Untouched::TagStateUnreadable)),
+                Some(tags)
+                    if tags
+                        .iter()
+                        .any(|tag| crate::tags::same_name(crate::tags::name_of(tag), &display)) =>
+                {
+                    plan.untouched
+                        .push((candidate.path.clone(), Untouched::TagAlreadyPresent));
+                }
+                Some(_) => members.push(candidate.path.clone()),
+            }
+        }
+        if members.is_empty() {
+            continue;
+        }
+        groups.push(Group {
+            name: display,
+            signal: Signal::Tagged {
+                ext: spec.ext.clone(),
+                new,
+                entry,
+            },
+            members,
+            accepted: false,
+        });
+    }
+    // A claimed file is no longer "matched no group".
+    plan.untouched
+        .retain(|(path, reason)| !(*reason == Untouched::NoClearGroup && claimed.contains(path)));
+    plan.untouched.sort_by(|a, b| a.0.cmp(&b.0));
+    let regular: Vec<PathBuf> = plan
+        .untouched
+        .iter()
+        .filter(|(path, reason)| {
+            *reason == Untouched::NoClearGroup && plan.observed_file_size(path).is_some()
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    plan.unclaimed = regular;
+    plan.groups = groups;
+    plan.adds_tags = true;
+    plan.include_tagged = false;
+    plan.skipped_tagged = 0;
     plan
 }
 

@@ -40,6 +40,8 @@ impl Fixture {
                 inode: 0,
                 edge_hash: 0,
                 state: EntryState::Planned,
+
+                tag: None,
             }],
             created_directories: Vec::new(),
             validated_directories: Vec::new(),

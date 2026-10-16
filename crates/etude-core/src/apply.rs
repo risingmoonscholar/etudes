@@ -21,7 +21,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::journal::{
-    CreatedDirectory, Entry, EntryState, Journal, Method, Sealer, ValidatedDirectory, fingerprint,
+    CreatedDirectory, Entry, EntryState, Journal, Method, Sealer, TagChange, ValidatedDirectory,
+    fingerprint,
 };
 use crate::plan::{BindingContext, BoundPlan, Plan};
 
@@ -139,6 +140,18 @@ pub struct ApplyReport {
     /// filesystem is the truth; undo reconciles from it. Apply stops at the
     /// first such failure.
     pub hold_record_failed: usize,
+    /// Files that got their tag (a tag plan). Nothing moves in a tag plan, so
+    /// `moved` stays zero.
+    pub tagged: usize,
+    /// Tag plan: files whose tag attribute could not be read or parsed, or
+    /// could not hold one more tag. Their tag state is unknown, so nothing was
+    /// written to them.
+    pub tag_skipped_unreadable: usize,
+    /// Tag plan: files that already carried the tag when apply looked.
+    pub tag_skipped_present: usize,
+    /// Tag plan: files whose tags changed between the journal being written
+    /// and the write. Left as they were found.
+    pub tag_skipped_changed: usize,
     pub journal_id: String,
     pub journal_path: Option<PathBuf>,
 }
@@ -423,6 +436,18 @@ fn apply_plan_with_structured_progress(
     let mut durable_journal_id = None;
     let result = (|| {
         validate(&mut durable_journal_id)?;
+        if plan.applies_tags() {
+            return apply_tags(
+                plan,
+                tool,
+                sealer,
+                fail_at,
+                &mut event,
+                &mut progress,
+                faults,
+                &mut durable_journal_id,
+            );
+        }
         // Every entrypoint, including unbound selection plans, shares this
         // destination rule. Sources intentionally may come from other roots.
         let resolved_root = fs::canonicalize(&plan.root).map_err(ApplyError::Io)?;
@@ -498,6 +523,7 @@ fn apply_plan_with_structured_progress(
                     inode,
                     edge_hash,
                     state: EntryState::Planned,
+                    tag: None,
                 });
             }
         }
@@ -667,6 +693,7 @@ fn apply_plan_with_structured_progress(
             hold_record_failed,
             journal_id: id,
             journal_path: sealer.map(|_| j.path()),
+            ..Default::default()
         })
     })();
     event.phase = if result.is_ok() {
@@ -679,6 +706,149 @@ fn apply_plan_with_structured_progress(
         error,
         durable_journal_id,
     })
+}
+
+/// Apply a tag plan: add each tag to its files, in place.
+///
+/// Every file's tag attribute is read before anything is written, and the
+/// journal records the bytes found and the bytes to be written for every file
+/// before the first write. A tag is only ever added: the new attribute is the
+/// old tag list plus the one tag, in the old order. A file whose tag state
+/// cannot be read or parsed gets nothing. Nothing is moved, renamed, created
+/// or deleted.
+#[allow(clippy::too_many_arguments)]
+fn apply_tags(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    event: &mut StructuredProgress,
+    progress: &mut impl FnMut(StructuredProgress),
+    faults: &mut ApplyFaults<'_>,
+    durable_journal_id: &mut Option<String>,
+) -> Result<ApplyReport, ApplyError> {
+    let Some(sl) = sealer else {
+        return Err(ApplyError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "adding tags needs a journal, so that undo can restore the previous tags",
+        )));
+    };
+    let id = journal_id(plan);
+    let mut j = Journal {
+        id: id.clone(),
+        tool: tool.to_string(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+        created_directories: Vec::new(),
+        validated_directories: Vec::new(),
+        progress_tail_damaged: false,
+    };
+    let mut report = ApplyReport::default();
+    let mut seen = HashSet::new();
+    for group in plan.groups.iter().filter(|group| group.accepted) {
+        let crate::plan::Signal::Tagged { entry, .. } = &group.signal else {
+            return Err(ApplyError::StalePlan(io::Error::other(
+                "a tag plan holds a group that is not a tag; replan required",
+            )));
+        };
+        for source in &group.members {
+            if !seen.insert(source.clone()) {
+                continue;
+            }
+            if !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.is_file()) {
+                report.tag_skipped_unreadable += 1;
+                continue;
+            }
+            let Ok(previous) = crate::tags::read(source) else {
+                report.tag_skipped_unreadable += 1;
+                continue;
+            };
+            let mut list = match &previous {
+                None => Vec::new(),
+                Some(raw) => match crate::tags::decode(raw) {
+                    Some(list) => list,
+                    None => {
+                        report.tag_skipped_unreadable += 1;
+                        continue;
+                    }
+                },
+            };
+            if list.iter().any(|tag| {
+                crate::tags::same_name(crate::tags::name_of(tag), crate::tags::name_of(entry))
+            }) {
+                report.tag_skipped_present += 1;
+                continue;
+            }
+            list.push(entry.clone());
+            let Some(written) = crate::tags::encode(&list) else {
+                report.tag_skipped_unreadable += 1;
+                continue;
+            };
+            j.entries.push(Entry {
+                from: source.clone(),
+                to: source.clone(),
+                method: Method::Tag,
+                size: 0,
+                mtime_secs: 0,
+                inode: 0,
+                edge_hash: 0,
+                state: EntryState::Planned,
+                tag: Some(TagChange { previous, written }),
+            });
+        }
+    }
+    event.planned = j.entries.len();
+    progress(*event);
+    report.journal_id = id.clone();
+    if j.entries.is_empty() {
+        return Ok(report);
+    }
+    // Journal first. Nothing has been written yet.
+    j.save_sealed(sl).map_err(ApplyError::Journal)?;
+    *durable_journal_id = Some(id);
+    for i in 0..j.entries.len() {
+        if fail_at == Some(i) {
+            return Err(ApplyError::Injected(i));
+        }
+        let path = j.entries[i].from.clone();
+        if let Some(hook) = faults.before_rename.as_mut() {
+            hook(i, &path);
+        }
+        let change = j.entries[i]
+            .tag
+            .clone()
+            .expect("a tag plan only journals tag entries");
+        // The file must still hold exactly what the journal says was found.
+        let unchanged = crate::tags::read(&path).is_ok_and(|now| now == change.previous);
+        if !unchanged {
+            j.entries[i].state = EntryState::Held;
+            report.tag_skipped_changed += 1;
+            j.record_held(i, sl).map_err(ApplyError::Journal)?;
+            continue;
+        }
+        crate::tags::write(&path, &change.written).map_err(ApplyError::Io)?;
+        let landed = crate::tags::read(&path)
+            .map_err(ApplyError::Io)?
+            .is_some_and(|now| now == change.written);
+        if !landed {
+            return Err(ApplyError::Io(io::Error::other(
+                "the tag was written but did not read back as written",
+            )));
+        }
+        j.entries[i].state = EntryState::Moved;
+        report.tagged += 1;
+        event.completed = report.tagged;
+        j.record_done(i, Method::Tag, sl)
+            .map_err(ApplyError::Journal)?;
+        event.journalled += 1;
+        if let Some(hook) = faults.after_rename.as_mut() {
+            hook(i, &path);
+        }
+        event.phase = ProgressPhase::Advancing;
+        progress(*event);
+    }
+    report.journal_path = Some(j.path());
+    Ok(report)
 }
 
 fn destination_outside_root() -> ApplyError {
@@ -1201,6 +1371,21 @@ pub struct UndoReport {
     /// Holds how many entries look moved-but-unrecorded, because the number is
     /// the evidence: one is a crash, several is a damaged file.
     pub unrecorded_moves: usize,
+    /// Tag journals: files whose previous tags were put back.
+    pub tags_restored: usize,
+    /// Tag journals: files undo left alone, each with the reason. A file whose
+    /// tags are not what apply wrote is never overwritten.
+    pub tags_refused: Vec<(PathBuf, TagRefusal)>,
+}
+
+/// Why undo left a file's tags as they were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagRefusal {
+    /// The file's tags are no longer what apply wrote: someone changed them
+    /// since. Restoring would overwrite that change.
+    Changed,
+    /// The file's tags could not be read, so nothing can be said about them.
+    Unreadable,
 }
 
 /// Whether two paths are the same file on disk, by device AND inode.
@@ -1262,6 +1447,16 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
     j.entries
         .iter()
         .filter(|e| {
+            // A tag entry writes in place, so there is no second path to look
+            // at. A write whose record was lost leaves the file holding exactly
+            // the bytes the journal says apply was about to write.
+            if let Some(change) = &e.tag {
+                return e.state == EntryState::Planned
+                    && crate::tags::read(&e.from)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|now| now == change.written);
+            }
             // symlink_metadata, not exists(): exists() follows the last
             // component, so a symlink at the destination reports on whatever
             // it points at. A dangling one would read as absent and a live one
@@ -1457,6 +1652,14 @@ fn undo_selected_with_progress(
             continue;
         }
         let e = j.entries[i].clone();
+        if e.tag.is_some() {
+            undo_tag_entry(j, i, &e, first_planned == Some(i), sealer, &mut r);
+            if r.error.is_some() {
+                break;
+            }
+            advance!();
+            continue;
+        }
         if !e.is_moved() {
             // Held and returned entries are at their origins: apply left them
             // there. There is nothing to put back and no recovery to infer.
@@ -1666,6 +1869,86 @@ fn undo_selected_with_progress(
     }
 
     r
+}
+
+/// Put one file's previous tags back, only if its tags are still what apply
+/// wrote.
+///
+/// A file whose tags were changed by someone else since is left alone and
+/// reported: restoring would overwrite their change. A tag write whose record
+/// was lost (the entry still reads Planned) is recovered only for the first
+/// Planned entry, the one apply was working on when it stopped.
+fn undo_tag_entry(
+    j: &mut Journal,
+    index: usize,
+    entry: &Entry,
+    first_planned: bool,
+    sealer: &dyn Sealer,
+    report: &mut UndoReport,
+) {
+    let change = entry
+        .tag
+        .as_ref()
+        .expect("only tag entries are handled here");
+    match entry.state {
+        EntryState::Held | EntryState::Returned => return,
+        EntryState::Reversed => {
+            report.already_reversed += 1;
+            return;
+        }
+        EntryState::Planned if !first_planned => return,
+        _ => {}
+    }
+    let current = match crate::tags::read(&entry.from) {
+        Ok(current) => current,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            report.skipped_missing.push(entry.from.clone());
+            return;
+        }
+        Err(_) => {
+            report
+                .tags_refused
+                .push((entry.from.clone(), TagRefusal::Unreadable));
+            return;
+        }
+    };
+    if current.as_deref() == Some(change.written.as_slice()) {
+        let restored = match &change.previous {
+            Some(bytes) => crate::tags::write(&entry.from, bytes),
+            None => crate::tags::remove(&entry.from),
+        };
+        if let Err(error) = restored {
+            report.error = Some(ApplyError::Io(error));
+            return;
+        }
+        let exact = crate::tags::read(&entry.from).is_ok_and(|now| now == change.previous);
+        if !exact {
+            report.error = Some(ApplyError::Io(io::Error::other(
+                "the previous tags were written but did not read back as recorded",
+            )));
+            return;
+        }
+        j.entries[index].state = EntryState::Reversed;
+        report.tags_restored += 1;
+        if let Err(error) = j.record_undone(index, sealer) {
+            report.error = Some(ApplyError::Journal(error));
+        }
+    } else if current == change.previous {
+        // Nothing of apply's is there. For an entry apply recorded as done,
+        // someone put the tags back already: agree with the disk. For the
+        // in-flight entry, the write never landed.
+        if entry.state == EntryState::Moved {
+            j.entries[index].state = EntryState::Reversed;
+            report.reconciled.push(entry.from.clone());
+            if let Err(error) = j.record_undone(index, sealer) {
+                report.error = Some(ApplyError::Journal(error));
+            }
+        }
+    } else {
+        report
+            .tags_refused
+            .push((entry.from.clone(), TagRefusal::Changed));
+    }
 }
 
 fn validated_directory_matches(journal: &Journal, path: &Path) -> bool {
