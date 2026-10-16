@@ -17,6 +17,7 @@ import secrets
 import signal
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -422,6 +423,65 @@ class Probe:
         require(snapshot(self.state) == state_before, "--no-journal still wrote persistent state")
         require("--no-journal" in self.contract["reversibility"]["disabled_by"],
                 "contract omits unjournaled recovery loss")
+
+    def tags(self):
+        """`sweep --scheme tags`: the declared tag scopes, and that the tool only
+        adds tags, from an exported plan, moving nothing and restoring on undo.
+        Tag values are written and read with the system's xattr and plutil."""
+        attribute = "com.apple.metadata:_kMDItemUserTags"
+        require("finder_tag_names" in self.operation("scan")["reads"],
+                "the tag scheme's tag-name reads are not declared on scan")
+        require("selected_tree_finder_tags" in self.operation("apply_exported_plan")["writes"],
+                "apply of a tag plan omits its tag writes")
+        require("selected_tree_finder_tags" in self.operation("undo")["writes"],
+                "undo of a tag plan omits its tag writes")
+        require("selected_tree_finder_tags" not in self.operation("scan")["writes"],
+                "a scan declares tag writes")
+        tree = self.directory / "tag-tree"
+        tree.mkdir()
+        names = ["one.pdf", "two.pdf", "three.pdf"]
+        for name in names:
+            (tree / name).write_bytes(b"synthetic payload")
+        before_value = subprocess.run(
+            ["plutil", "-convert", "binary1", "-o", "-", "-"], input=b'["Red\\n6","Old"]',
+            capture_output=True, check=True).stdout
+        subprocess.run(["xattr", "-wx", attribute, before_value.hex(), str(tree / "one.pdf")], check=True)
+
+        def tag_bytes():
+            rows = {}
+            for name in names:
+                shown = subprocess.run(["xattr", "-px", attribute, str(tree / name)],
+                                       capture_output=True)
+                rows[name] = bytes.fromhex(shown.stdout.decode().replace("\n", "").replace(" ", "")) \
+                    if shown.returncode == 0 else None
+            return rows
+
+        def tag_names(name):
+            raw = tag_bytes()[name]
+            shown = subprocess.run(["plutil", "-convert", "json", "-o", "-", "-"], input=raw,
+                                   capture_output=True, check=True).stdout
+            return json.loads(shown)
+
+        files_before, tags_before = snapshot(tree), tag_bytes()
+        plan = self.directory / "tag-plan.bin"
+        scan = self.run(tree, "--scheme", "tags", "--map", "pdf=Work", "--since", "0",
+                        "--export-plan", plan, "--json")
+        require(snapshot(tree) == files_before and tag_bytes() == tags_before,
+                "planning a tag change wrote to the tree")
+        detail = json.loads(scan.stdout)["details"]
+        require(detail["new_tags"] == ["Work"] and detail["tags"][0]["files"] == 3,
+                "the tag plan does not list its tag, count and new flag")
+        live = self.run("apply", tree, "--scheme", "tags", "--map", "pdf=Work", "--yes",
+                        "--since", "0", codes=(2,))
+        require(tag_bytes() == tags_before, "the live apply path wrote tags")
+        digest = detail["binding"]["plan_digest"]
+        self.run("apply", "--plan", plan, "--plan-digest", digest, "--yes", "--json")
+        require(snapshot(tree) == files_before, "a tag apply moved or changed a file")
+        require(tag_names("one.pdf") == ["Red\n6", "Old", "Work"], "a tag apply did not only add")
+        require(tag_names("two.pdf") == ["Work"], "a tag apply did not tag an untagged file")
+        self.run("undo", tree)
+        require(tag_bytes() == tags_before, "undo did not restore the exact previous tags")
+        require(snapshot(tree) == files_before, "undo changed a file")
 
     def unpack(self):
         require(self.contract["deletion"]["source_entries"] == "never",
@@ -945,6 +1005,8 @@ def main():
             probe.unpack()
         else:
             probe.custody()
+            if arguments.tool == "sweep" and sys.platform == "darwin":
+                probe.tags()
     with tempfile.TemporaryDirectory(prefix="etudes-contract-codes-") as directory:
         refusal_codes(arguments.tool, arguments.bin, probe.contract["refusal_codes"],
                       Path(directory).resolve())

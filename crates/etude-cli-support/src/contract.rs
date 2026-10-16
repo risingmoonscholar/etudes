@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 6,
+                Tool::Sweep => SCHEMA_VERSION + 7,
                 Tool::Stash => 10,
                 Tool::Unpack => SCHEMA_VERSION + 2,
             }),
@@ -475,6 +475,20 @@ pub fn declaration(
             ("side_effects", j::str("none;_no_key_creation_migration_pruning_or_file_content_reads")),
             ("disclosure", j::str("path_query_returns_newest_first_without_file_names")),
         ])));
+        fields.push(("tag_scheme", j::obj(&[
+            ("flag", j::str("--scheme tags")),
+            ("platform", j::str("macos_only;_refused_by_name_elsewhere")),
+            ("tag_source", j::str("every_tag_name_comes_from_the_caller_through_--map_EXT=TAG;_sweep_invents_none")),
+            ("applied_by", j::str("apply_--plan_FILE_--plan_digest_SHA_--yes_only;_the_live_apply_and_review_paths_refuse_tags")),
+            ("writes", j::str("adds_one_tag_to_the_tag_list_of_planned_files;_existing_tags_kept_in_their_order;_nothing_moved_renamed_created_or_deleted")),
+            ("reads", j::str("the_tag_list_of_files_sweep_may_tag_never_file_contents_and_never_finder_comments")),
+            ("new_tag", j::str("no_file_in_the_scanned_folder_carries_it;_finder's_own_tag_list_is_not_readable_without_extra_permissions")),
+            ("plan_output", j::str("each_tag_with_its_file_count_and_a_new_flag_in_human_and_json_output")),
+            ("unreadable_state", j::str("a_file_whose_tag_attribute_cannot_be_read_or_parsed_is_listed_and_given_nothing")),
+            ("journal", j::str("records_each_file's_previous_and_written_tag_bytes_before_the_first_write;_no_journal_refused")),
+            ("undo", j::str("restores_the_recorded_previous_bytes_only_while_the_file_still_holds_what_apply_wrote;_a_changed_file_is_left_and_named")),
+            ("status_counts", j::str("moved_counts_files_tagged_for_a_tag_operation")),
+        ])));
     }
     if matches!(tool, Tool::Stash) {
         fields.push(("explicit_selection", j::obj(&[
@@ -552,6 +566,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "project_marker_names",
                     "consented_text_prefixes",
                     "sweep_existing_profile_bytes",
+                    "finder_tag_names",
                 ],
                 &["explicit_plan_file"],
             ),
@@ -578,9 +593,11 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "journal_fingerprint_bytes",
                     "cross_device_source_bytes",
                     "sweep_existing_profile_bytes",
+                    "finder_tag_names",
                 ],
                 &[
                     "selected_tree_entries",
+                    "selected_tree_finder_tags",
                     "journal_store",
                     "keychain_if_no_supplied_key",
                 ],
@@ -592,6 +609,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "ancestor_metadata",
                     "project_marker_names",
                     "sweep_existing_profile_bytes",
+                    "finder_tag_names",
                 ],
                 &[],
             ),
@@ -603,6 +621,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "project_marker_names",
                     "consented_text_prefixes",
                     "sweep_existing_profile_bytes",
+                    "finder_tag_names",
                 ],
                 &[],
             ),
@@ -649,12 +668,14 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "journal_recorded_paths_metadata",
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
+                    "finder_tag_names",
                 ],
                 &[
                     "journal_recorded_entries",
                     "journal_store",
                     "empty_group_directories",
                     "keychain_if_no_supplied_key",
+                    "selected_tree_finder_tags",
                 ],
             ),
             scope(
