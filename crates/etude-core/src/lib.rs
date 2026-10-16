@@ -3,10 +3,13 @@
 //! Zero dependencies. Nothing in this crate can open a socket, because there is
 //! no third-party code here at all.
 //!
-//! Scanning and classification read **filesystem metadata only** in v0.1:
-//! names, sizes, timestamps, and file type. Regular document markers are
-//! opened to check access, without reading their contents.
-//! The journal's edge-hash step does: it reads file bytes to detect changes
+//! Scanning and classification decide from **filesystem and Finder
+//! organization metadata only**: names, sizes, timestamps, file type, and
+//! whether a Finder tag is present. Tag names and Finder comments are never
+//! read. Regular document markers are opened to check access, without reading
+//! their contents.
+//! The journal's edge-hash step reads bytes, but it does not decide anything:
+//! it reads the first and last 4 KiB of a file it moves, to detect changes
 //! before undo.
 
 pub mod apply;
