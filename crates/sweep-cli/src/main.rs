@@ -58,6 +58,9 @@ FLAGS
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
+    --include-tagged  LOUD: also organise Finder-tagged items (default: left
+                      alone and counted). Tags stay on the item; a tagged item
+                      that would cross volumes is left in place
     --no-journal    apply without recording undo
     --version       print the version and exit
     --inspect-content  read text file contents to refuse MORE files
@@ -68,7 +71,11 @@ KEY
                        Retain the same key for undo; see README for setup.
 
 Only `apply` moves anything. Files that look like personal records are
-never moved, in any mode.";
+never moved, in any mode.
+
+Sweep decides from filesystem and Finder organization metadata only; it never
+reads file contents to decide. When it moves a file it reads the first and last
+4 KiB, so undo can tell if that file changed.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -426,7 +433,8 @@ const LESSON: &[(&str, &str)] = &[
          Every file, and the signals that placed it. This is how you disagree\n\
          with a grouping instead of just distrusting it.\n\
          \n\
-         Contents were not read. The signals are names, sizes and dates.\n\
+         Contents were not read to decide. The signals are filesystem and Finder\n\
+         organization metadata.\n\
          \n\
          The same plan comes in two other shapes:\n\
          \n\
@@ -665,6 +673,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--quiet", false),
             ("--explain", false),
             ("--allow-sync", false),
+            ("--include-tagged", false),
             ("--inspect-content", false),
             ("--since", true),
             ("--map", true),
@@ -683,6 +692,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
             ("--no-journal", false),
             ("--depth", true),
             ("--allow-sync", false),
+            ("--include-tagged", false),
             ("--since", true),
             ("--map", true),
             ("--scheme", true),
@@ -693,6 +703,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         &[
             ("--progress-json", false),
             ("--allow-sync", false),
+            ("--include-tagged", false),
             ("--no-journal", false),
             ("--depth", true),
             ("--since", true),
@@ -1041,8 +1052,15 @@ fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, String> 
 }
 
 fn planning_profile(args: &[String], inspected: bool, scheme: &SchemeConfig) -> String {
+    // Written only when set, so a plan made under the default policy binds
+    // exactly as before.
+    let tagged = if has(args, "--include-tagged") {
+        ";include_tagged=true"
+    } else {
+        ""
+    };
     let configuration = format!(
-        "scheme={};depth={:?};sync={};grace={:?};maps={:?};content={inspected};profile_sha256={}",
+        "scheme={};depth={:?};sync={};grace={:?};maps={:?};content={inspected};profile_sha256={}{tagged}",
         scheme.name,
         parse_depth(args),
         has(args, "--allow-sync"),
@@ -1102,6 +1120,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         "--depth",
         "--since",
         "--allow-sync",
+        "--include-tagged",
         "--inspect-content",
         "--export-plan",
         "--scheme",
@@ -1236,6 +1255,7 @@ fn scan_and_plan(
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        include_tagged: has(args, "--include-tagged"),
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -1283,7 +1303,9 @@ fn scan_and_plan(
     match inspect::consent_interactive() {
         Ok(true) => {}
         Ok(false) => {
-            println!("  Contents were not read. Continuing on names and dates only.\n");
+            println!(
+                "  Contents were not read. Continuing on filesystem and Finder organization metadata.\n"
+            );
             let proposed = if scheme.name == "existing" {
                 plan::build_existing(&outcome, &scheme.maps)
             } else {
@@ -1317,6 +1339,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Ok(v) => v,
         Err(code) => return code,
     };
+    print_include_tagged_warning(args);
 
     let mut export_binding = None;
     let mut export_items = None;
@@ -1373,7 +1396,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() {
         println!(
-            "\nScanned {} items  ·  names, sizes and dates only  ·  no contents read  ·  sweep {}",
+            "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
             plan.scanned,
             env!("CARGO_PKG_VERSION")
         );
@@ -1390,7 +1413,8 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         // "Nothing here needs organising", which denies what it just said.
         // A download in progress is something to organise later, whether it
         // arrived as a file or as a directory.
-        let held = plan.too_recent() + plan.in_flight() + plan.skipped_in_flight;
+        let held =
+            plan.too_recent() + plan.in_flight() + plan.skipped_in_flight + plan.skipped_tagged;
         if held > 0 {
             println!();
             let recent = plan.too_recent();
@@ -1409,29 +1433,11 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // back. An in-flight download is refused regardless of the
             // window, so telling someone to pass --since 0 for a folder of
             // .part files sends them to run a command that changes nothing
-            // and prints the same refusal.
-            // Not re-printed here: print_projects_skipped_note above already
-            // disclosed the directory-form downloads. This branch only needs
-            // to count them so the conclusion does not contradict it.
-            // Three cases, because "--since 0 includes everything" is only
-            // true when the grace window is the ONLY thing holding anything
-            // back. With one recent file and one .part beside it, that
-            // sentence promised to include a download the flag cannot reach.
+            // and prints the same refusal. The directory-form downloads were
+            // already disclosed by the left-alone notes above; they are only
+            // counted here so the conclusion does not contradict them.
             let still_arriving = downloading + plan.skipped_in_flight;
-            match (recent > 0, still_arriving > 0) {
-                (true, false) => println!(
-                    "\nNothing else here needs organising. Run again later, or pass\n\
-                     --since 0 to include everything."
-                ),
-                (false, true) => println!(
-                    "\nNothing else here needs organising. These finish downloading on\n\
-                     their own; run again once they have."
-                ),
-                _ => println!(
-                    "\nNothing else here needs organising. --since 0 would include the\n\
-                     recent ones; the downloads have to finish first either way."
-                ),
-            }
+            print_hold_advice(recent, still_arriving, plan.skipped_tagged);
             println!("\nNothing has been moved.  Nothing left this machine.");
         } else {
             println!(
@@ -1471,9 +1477,9 @@ fn print_unreadable_warning(p: &plan::Plan) {
              or another read failure). Contents unknown. NOT included in the count above",
             p.skipped_unreadable,
             if p.skipped_unreadable == 1 {
-                "directory"
+                "item"
             } else {
-                "directories"
+                "items"
             }
         );
     }
@@ -1517,6 +1523,7 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     let projects = p.skipped_project;
     let incomplete = p.skipped_in_flight;
     let packages = p.skipped_package;
+    let tagged = p.skipped_tagged;
 
     let doc_held = p.project_documents() + p.near_document().map(|(n, _)| n).unwrap_or(0);
     if personal
@@ -1527,6 +1534,7 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
         + projects
         + incomplete
         + packages
+        + tagged
         + doc_held
         == 0
     {
@@ -1596,6 +1604,48 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     } else if packages > 1 {
         println!("  {packages} folders were left alone because macOS treats each as a single item");
     }
+    // A count only: the tag names are never read, so they cannot be shown.
+    if tagged == 1 {
+        println!("  1 Finder-tagged item was left alone (tag names not read)");
+    } else if tagged > 1 {
+        println!("  {tagged} Finder-tagged items were left alone (tag names not read)");
+    }
+}
+
+/// `--include-tagged` changes the default custody rule, so it is announced
+/// on stderr every time it is used, including under `--json` and `--quiet`.
+fn print_include_tagged_warning(args: &[String]) {
+    if has(args, "--include-tagged") {
+        eprintln!(
+            "sweep: WARNING: --include-tagged is on. Finder-tagged items WILL be organised.\n       \
+             Their tags stay on them. A tagged item that would have to cross volumes is\n       \
+             left in place, because the copy would drop its tag."
+        );
+    }
+}
+
+/// What to do about the items a scan held back, one sentence per cause.
+fn print_hold_advice(recent: usize, downloading: usize, tagged: usize) {
+    match (recent > 0, downloading > 0) {
+        (true, false) => println!(
+            "\nNothing else here needs organising. Run again later, or pass\n\
+             --since 0 to include everything."
+        ),
+        (false, true) => println!(
+            "\nNothing else here needs organising. These finish downloading on\n\
+             their own; run again once they have."
+        ),
+        (true, true) => println!(
+            "\nNothing else here needs organising. --since 0 would include the\n\
+             recent ones; the downloads have to finish first either way."
+        ),
+        (false, false) => println!("\nNothing else here needs organising."),
+    }
+    if tagged > 0 {
+        println!(
+            "Tagged items stay where they are unless --include-tagged is passed deliberately."
+        );
+    }
 }
 
 /// Say when a folder name came from an agent rather than from the files.
@@ -1630,9 +1680,9 @@ fn print_agent_named_note(p: &plan::Plan) {
 fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     // This line must never claim more restraint than actually happened.
     let basis = if read_contents {
-        "names, dates, and the contents of some text files"
+        "filesystem and Finder organization metadata, and the contents of some text files"
     } else {
-        "names, sizes and dates only  ·  no contents read"
+        "filesystem and Finder organization metadata  ·  no contents read to decide"
     };
     println!(
         "\nScanned {} items  ·  {basis}  ·  sweep {}\n",
@@ -1799,6 +1849,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        include_tagged: has(args, "--include-tagged"),
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -1820,13 +1871,15 @@ fn cmd_review(args: &[String]) -> ExitCode {
     } else {
         plan::build_mapped(&outcome, &scheme.maps)
     };
+    print_include_tagged_warning(args);
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
     if p.groups.is_empty() {
-        if p.too_recent() + p.in_flight() > 0 {
-            println!(
-                "\nNothing else here needs organising. Run again later, or pass\n\
-                 --since 0 to include everything."
+        if p.too_recent() + p.in_flight() + p.skipped_in_flight + p.skipped_tagged > 0 {
+            print_hold_advice(
+                p.too_recent(),
+                p.in_flight() + p.skipped_in_flight,
+                p.skipped_tagged,
             );
         } else {
             println!("\nNothing here needs organising.");
@@ -2066,28 +2119,7 @@ fn run_apply(
             {
                 etude_cli_support::envelope::recovery_operation(id);
             }
-            etude_cli_support::envelope::effect("items_moved", r.moved);
-            etude_cli_support::envelope::detail(etude_core::json::obj(&[
-                ("moved", etude_core::json::num(r.moved)),
-                ("binding", p.binding_json()),
-                (
-                    "journal",
-                    r.journal_path
-                        .as_deref()
-                        .map(etude_core::json::path)
-                        .unwrap_or_else(|| "null".into()),
-                ),
-            ]));
-            println!("\nMoved {} files.", r.moved);
-            match r.journal_path {
-                Some(jp) => {
-                    println!("Undo with: sweep undo");
-                    println!("Encrypted journal: {}", jp.display());
-                }
-                None => println!("No journal was written. This cannot be undone."),
-            }
-            println!("\nNothing left this machine.");
-            ExitCode::SUCCESS
+            finish_apply(&r, &p.binding_json())
         }
         Err(failure) => {
             // A journal that became durable before the failure is the handle
@@ -2106,6 +2138,107 @@ fn run_apply(
             eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
             apply_exit_code(&e)
         }
+    }
+}
+
+/// Report an apply that ran to the end, and pick its exit.
+///
+/// Held items are counts in the normal result. Two outcomes are not normal: a
+/// tagged item that could not be returned (it is where the tag was found, not
+/// where the plan said), and a hold the journal could not record. Both finish
+/// as `incomplete` with exit 3 and the counts printed, never a bare error. A
+/// run where every item was held moved nothing and is reported the way a run
+/// with nothing to do is.
+fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str) -> ExitCode {
+    etude_cli_support::envelope::effect("items_moved", r.moved);
+    etude_cli_support::envelope::detail(etude_core::json::obj(&[
+        ("moved", etude_core::json::num(r.moved)),
+        ("held_tagged", etude_core::json::num(r.held_tagged)),
+        (
+            "held_cross_volume",
+            etude_core::json::num(r.held_cross_volume),
+        ),
+        (
+            "tagged_not_returned",
+            etude_core::json::num(r.tagged_not_returned),
+        ),
+        (
+            "hold_record_failed",
+            etude_core::json::num(r.hold_record_failed),
+        ),
+        ("binding", binding.to_string()),
+        (
+            "journal",
+            r.journal_path
+                .as_deref()
+                .map(etude_core::json::path)
+                .unwrap_or_else(|| "null".into()),
+        ),
+    ]));
+    println!("\nMoved {} files.", r.moved);
+    print_apply_holds(r);
+    if r.moved > 0 {
+        match &r.journal_path {
+            Some(jp) => {
+                println!("Undo with: sweep undo");
+                println!("Encrypted journal: {}", jp.display());
+            }
+            None => println!("No journal was written. This cannot be undone."),
+        }
+    }
+    println!("\nNothing left this machine.");
+    if r.tagged_not_returned > 0 || r.hold_record_failed > 0 {
+        etude_cli_support::envelope::status("incomplete");
+        return failure(
+            etude_cli_support::reason::Code::OperationIncomplete,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        );
+    }
+    if r.moved == 0 && r.held_tagged + r.held_cross_volume > 0 {
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
+/// Counts of what apply left alone, with the reason for each. No tag names and
+/// no paths.
+fn print_apply_holds(r: &etude_core::apply::ApplyReport) {
+    let items = |n: usize| if n == 1 { "item" } else { "items" };
+    if r.held_tagged > 0 {
+        println!(
+            "{} Finder-tagged {} left in place (tagged after the scan, or during the move and moved back).",
+            r.held_tagged,
+            items(r.held_tagged)
+        );
+    }
+    if r.held_cross_volume > 0 {
+        println!(
+            "{} Finder-tagged {} left in place: moving to another volume would drop the tag.",
+            r.held_cross_volume,
+            items(r.held_cross_volume)
+        );
+    }
+    if r.tagged_not_returned > 0 {
+        println!(
+            "{} Finder-tagged {} could not be returned because the original place was taken or the return failed. {} at the destination; `sweep undo` reports {}.",
+            r.tagged_not_returned,
+            items(r.tagged_not_returned),
+            if r.tagged_not_returned == 1 {
+                "It stays"
+            } else {
+                "They stay"
+            },
+            if r.tagged_not_returned == 1 {
+                "it"
+            } else {
+                "them"
+            },
+        );
+    }
+    if r.hold_record_failed > 0 {
+        eprintln!(
+            "sweep: the journal could not record a held item and apply stopped. The files are where the counts above say; `sweep undo` reconciles from the filesystem."
+        );
     }
 }
 
@@ -2170,6 +2303,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
+        include_tagged: has(args, "--include-tagged"),
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -2207,6 +2341,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             None => true,
         };
     }
+    print_include_tagged_warning(args);
     print_unreadable_warning(&p);
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
@@ -2865,6 +3000,19 @@ sweep {v}
                            consent at a separate prompt. --yes does not cover it.
     network code           none. etude-core has 0 dependencies; the binary
                            links no socket symbols.
+
+  What it reads
+    to decide              filesystem and Finder organization metadata only;
+                           never file contents
+    when it moves a file   the first and last 4 KiB, so undo can tell if that
+                           file changed
+    Finder tags            whether one is present, never its name; Finder
+                           comments are never read
+    one exception          if a tag lands on a file while sweep is moving it
+                           and the file cannot be moved back because its
+                           original place has been taken, sweep leaves it
+                           where it is, counts it as an item it could not
+                           return, and records that in the journal
 
   What is on this machine
     journals held          {count} in {dir}
@@ -3592,5 +3740,107 @@ mod tests {
                 "`-x` was ignored by {cmd:?}"
             );
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tag_report_tests {
+    use super::*;
+    use etude_core::apply::{ApplyFaults, ApplyReport};
+    use etude_core::plan::{Group, Plan, Signal};
+    use std::path::Path;
+
+    fn tag(path: &Path) {
+        let status = std::process::Command::new("xattr")
+            .args(["-w", "com.apple.metadata:_kMDItemUserTags", "opaque"])
+            .arg(path)
+            .status()
+            .expect("xattr runs");
+        assert!(status.success());
+    }
+
+    fn one_file_plan(label: &str) -> (PathBuf, PathBuf, Plan) {
+        let root =
+            std::env::temp_dir().join(format!("sweep_tag_exit_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = root.join("a.txt");
+        std::fs::write(&file, b"contents").unwrap();
+        let out = scan::scan(
+            &root,
+            &ScanConfig {
+                grace: None,
+                ..ScanConfig::default()
+            },
+        )
+        .unwrap();
+        let plan = Plan::with_groups(
+            &out,
+            vec![Group {
+                name: "Collected".into(),
+                signal: Signal::Collected { count: 1 },
+                members: vec![file.clone()],
+                accepted: true,
+            }],
+        );
+        (root, file, plan)
+    }
+
+    /// The origin is taken between the move and the return, so the tagged
+    /// item stays where it landed. The run ends with the counts printed and
+    /// exit 3 as `incomplete`, never a bare error and never a clean 0.
+    #[test]
+    fn an_item_that_could_not_be_returned_exits_incomplete_with_its_count() {
+        let (root, file, plan) = one_file_plan("stranded");
+        let origin = file.clone();
+        let mut tag_it = |_: usize, from: &Path| tag(from);
+        let mut occupy = |_: usize, _: &Path| std::fs::write(&origin, b"occupant").unwrap();
+        let report = etude_core::apply::apply_with_faults_for_tests(
+            &plan,
+            "sweep",
+            None,
+            ApplyFaults {
+                before_rename: Some(&mut tag_it),
+                after_rename: Some(&mut occupy),
+            },
+        )
+        .expect("apply reports instead of failing");
+        assert_eq!(report.tagged_not_returned, 1);
+        assert_eq!(report.moved, 1);
+        assert_eq!(std::fs::read(&file).unwrap(), b"occupant");
+        assert_eq!(finish_apply(&report, "{}"), ExitCode::from(3));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_hold_the_journal_could_not_record_exits_incomplete_with_its_count() {
+        let report = ApplyReport {
+            held_tagged: 1,
+            hold_record_failed: 1,
+            ..Default::default()
+        };
+        assert_eq!(finish_apply(&report, "{}"), ExitCode::from(3));
+    }
+
+    /// An item returned because it was tagged mid-move is a count in a normal
+    /// run; a run where every item was held moved nothing and is reported as
+    /// having nothing to do.
+    #[test]
+    fn held_items_are_counts_and_an_all_held_run_reports_nothing_to_do() {
+        let some = ApplyReport {
+            moved: 2,
+            held_tagged: 1,
+            ..Default::default()
+        };
+        assert_eq!(finish_apply(&some, "{}"), ExitCode::SUCCESS);
+        let all = ApplyReport {
+            held_tagged: 2,
+            held_cross_volume: 1,
+            ..Default::default()
+        };
+        assert_eq!(finish_apply(&all, "{}"), ExitCode::from(1));
+        let nothing = ApplyReport::default();
+        assert_eq!(finish_apply(&nothing, "{}"), ExitCode::SUCCESS);
     }
 }
