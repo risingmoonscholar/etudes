@@ -272,6 +272,52 @@ fn an_item_tagged_after_the_plan_was_exported_is_not_moved() {
 }
 
 #[test]
+fn replaying_a_plan_made_with_include_tagged_is_loud_and_moves_the_tagged_item() {
+    let s = scene("replay");
+    let tagged = s.root.join("document-2.pdf");
+    tag(&tagged, "replayed");
+    let root = s.root.to_str().unwrap();
+    let plan = s.state.join("tagged.plan");
+    let exported = sweep(
+        &s,
+        &[
+            root,
+            "--since",
+            "0",
+            "--include-tagged",
+            "--export-plan",
+            plan.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let digest = out(&exported)
+        .split("\"plan_digest\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("digest in the result")
+        .to_string();
+    let applied = sweep(
+        &s,
+        &[
+            "apply",
+            "--plan",
+            plan.to_str().unwrap(),
+            "--plan-digest",
+            &digest,
+            "--yes",
+        ],
+    );
+    assert!(
+        applied.status.success(),
+        "{}{}",
+        out(&applied),
+        err(&applied)
+    );
+    assert!(err(&applied).contains("WARNING: --include-tagged is on"));
+    assert!(!tagged.exists(), "the plan included the tagged item");
+}
+
+#[test]
 fn the_promise_is_stated_as_the_owner_worded_it() {
     let s = scene("promise");
     let help = out(&sweep(&s, &["help"]));

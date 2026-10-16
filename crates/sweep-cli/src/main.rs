@@ -1183,6 +1183,9 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             Some(etude_cli_support::reason::Subject::wait("plan", None)),
         );
     }
+    if bound.plan.include_tagged {
+        include_tagged_warning();
+    }
     let only = value(args, "--only");
     if !has(args, "--yes") && only.is_none() {
         eprintln!("sweep: applying requires --yes or --only NAME");
@@ -1616,12 +1619,16 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
 /// on stderr every time it is used, including under `--json` and `--quiet`.
 fn print_include_tagged_warning(args: &[String]) {
     if has(args, "--include-tagged") {
-        eprintln!(
-            "sweep: WARNING: --include-tagged is on. Finder-tagged items WILL be organised.\n       \
-             Their tags stay on them. A tagged item that would have to cross volumes is\n       \
-             left in place, because the copy would drop its tag."
-        );
+        include_tagged_warning();
     }
+}
+
+fn include_tagged_warning() {
+    eprintln!(
+        "sweep: WARNING: --include-tagged is on. Finder-tagged items WILL be organised.\n       \
+         Their tags stay on them. A tagged item that would have to cross volumes is\n       \
+         left in place, because the copy would drop its tag."
+    );
 }
 
 /// What to do about the items a scan held back, one sentence per cause.
