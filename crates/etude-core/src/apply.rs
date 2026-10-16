@@ -120,7 +120,25 @@ impl std::fmt::Display for ApplyError {
 
 #[derive(Debug, Default)]
 pub struct ApplyReport {
+    /// Items now at their destinations. An item that was tagged during its
+    /// move and could not be returned is still counted here, because it is
+    /// there; it is also counted in `tagged_not_returned`.
     pub moved: usize,
+    /// Items left at their origins because they carry a Finder tag: tagged
+    /// when checked at move time, or tagged during the move and moved back.
+    /// A count only; no tag names and no paths.
+    pub held_tagged: usize,
+    /// Tagged items that would have had to cross volumes, which would strip
+    /// the tag. Left at their origins.
+    pub held_cross_volume: usize,
+    /// Items tagged during their move that could not be moved back (the
+    /// origin was occupied, or the return failed). They stay at their
+    /// destinations, and the journal says so.
+    pub tagged_not_returned: usize,
+    /// Held or stranded items whose journal record could not be written. The
+    /// filesystem is the truth; undo reconciles from it. Apply stops at the
+    /// first such failure.
+    pub hold_record_failed: usize,
     pub journal_id: String,
     pub journal_path: Option<PathBuf>,
 }
@@ -152,6 +170,61 @@ pub struct StructuredProgress {
 
 /// Test hook. Production callers pass `None`.
 pub type FailAt = Option<usize>;
+
+/// A fault-injection callback: the entry index and the path involved.
+#[doc(hidden)]
+pub type FaultHook<'a> = &'a mut dyn FnMut(usize, &Path);
+
+/// Deterministic fault-injection points inside the move loop. Production
+/// callers never supply one; `apply_with_faults_for_tests` is the only way in.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct ApplyFaults<'a> {
+    /// Runs after the move-time tag check and immediately before the rename.
+    pub before_rename: Option<FaultHook<'a>>,
+    /// Runs after the rename and before the destination's tag is re-read.
+    pub after_rename: Option<FaultHook<'a>>,
+}
+
+/// `apply` for an unbound plan with fault-injection points.
+#[doc(hidden)]
+pub fn apply_with_faults_for_tests(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    mut faults: ApplyFaults<'_>,
+) -> Result<ApplyReport, ApplyFailure> {
+    apply_plan_with_structured_progress(plan, tool, sealer, None, |_| {}, &mut faults, |_| Ok(()))
+}
+
+/// The error a move returns when the item carries a Finder tag and would have
+/// to cross volumes. The cross-volume copy requests data and POSIX stat only,
+/// so the tag would be dropped; the item is left in place instead.
+#[derive(Debug)]
+struct TaggedAcrossVolumes;
+
+impl std::fmt::Display for TaggedAcrossVolumes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "refused: a Finder-tagged item cannot cross volumes without losing its tag; it was left in place"
+        )
+    }
+}
+
+impl std::error::Error for TaggedAcrossVolumes {}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn tagged_across_volumes() -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, TaggedAcrossVolumes)
+}
+
+/// Whether a move error is the named cross-volume refusal for a tagged item.
+pub fn is_tagged_across_volumes(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<TaggedAcrossVolumes>())
+}
 
 /// Execute the accepted groups of `plan`.
 ///
@@ -240,6 +313,7 @@ pub fn apply_bound_with_structured_progress_outcome(
         sealer,
         fail_at,
         progress,
+        &mut ApplyFaults::default(),
         |durable_journal_id| {
             if let Err(error) = bound.validate(context) {
                 if bound.is_live() {
@@ -320,7 +394,15 @@ pub fn apply_with_structured_progress_outcome(
     fail_at: FailAt,
     progress: impl FnMut(StructuredProgress),
 ) -> Result<ApplyReport, ApplyFailure> {
-    apply_plan_with_structured_progress(plan, tool, sealer, fail_at, progress, |_| Ok(()))
+    apply_plan_with_structured_progress(
+        plan,
+        tool,
+        sealer,
+        fail_at,
+        progress,
+        &mut ApplyFaults::default(),
+        |_| Ok(()),
+    )
 }
 
 fn apply_plan_with_structured_progress(
@@ -329,6 +411,7 @@ fn apply_plan_with_structured_progress(
     sealer: Option<&dyn Sealer>,
     fail_at: FailAt,
     mut progress: impl FnMut(StructuredProgress),
+    faults: &mut ApplyFaults<'_>,
     validate: impl FnOnce(&mut Option<String>) -> Result<(), ApplyError>,
 ) -> Result<ApplyReport, ApplyFailure> {
     let mut event = StructuredProgress {
@@ -442,6 +525,7 @@ fn apply_plan_with_structured_progress(
                 moved: 0,
                 journal_id: id,
                 journal_path: None,
+                ..Default::default()
             });
         }
 
@@ -452,12 +536,29 @@ fn apply_plan_with_structured_progress(
         }
 
         let mut moved = 0usize;
+        let mut held_tagged = 0usize;
+        let mut held_cross_volume = 0usize;
+        let mut tagged_not_returned = 0usize;
+        let mut hold_record_failed = 0usize;
         let mut created_directories = HashMap::new();
         for i in 0..j.entries.len() {
             if fail_at == Some(i) {
                 return Err(ApplyError::Injected(i));
             }
             let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
+            // Move-time tag check, before this item's folder is created: a
+            // tag added after the scan holds the item unless the plan was
+            // made with tagged items included. Only the attribute's presence
+            // is asked. An answer other than yes or no stops the apply; the
+            // moves so far are journalled.
+            if !plan.include_tagged && crate::scan::has_finder_tag(&from).map_err(ApplyError::Io)? {
+                j.entries[i].state = EntryState::Held;
+                held_tagged += 1;
+                if let Some(sl) = sealer {
+                    j.record_held(i, sl).map_err(ApplyError::Journal)?;
+                }
+                continue;
+            }
             if let Some(parent) = to.parent() {
                 let observed_identity = plan.observed_directory_identity(parent);
                 // Keep the existing named refusal for an observed folder
@@ -484,7 +585,23 @@ fn apply_plan_with_structured_progress(
             if let Some(parent) = to.parent() {
                 ensure_destination_under_root(parent, &resolved_root)?;
             }
-            let method = move_one(&from, &to).map_err(ApplyError::Io)?;
+            if let Some(hook) = faults.before_rename.as_mut() {
+                hook(i, &from);
+            }
+            let method = match move_one(&from, &to) {
+                Ok(method) => method,
+                // A tagged item that would have to cross volumes stays put.
+                // Nothing was copied, or the copy was removed.
+                Err(error) if is_tagged_across_volumes(&error) => {
+                    j.entries[i].state = EntryState::Held;
+                    held_cross_volume += 1;
+                    if let Some(sl) = sealer {
+                        j.record_held(i, sl).map_err(ApplyError::Journal)?;
+                    }
+                    continue;
+                }
+                Err(error) => return Err(ApplyError::Io(error)),
+            };
             j.entries[i].method = method;
             j.entries[i].state = EntryState::Moved;
             moved += 1;
@@ -495,12 +612,59 @@ fn apply_plan_with_structured_progress(
                 j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
                 event.journalled += 1;
             }
+            if let Some(hook) = faults.after_rename.as_mut() {
+                hook(i, &to);
+            }
+            // A tag can arrive between the check above and the rename. The
+            // attribute travels with the inode, so read it at the destination.
+            // The move is already journalled, so a failed read stops the
+            // apply with this item undoable.
+            if !plan.include_tagged && crate::scan::has_finder_tag(&to).map_err(ApplyError::Io)? {
+                // Return it through the same exclusive rename. It never
+                // replaces anything: an occupied origin refuses.
+                match move_one(&to, &from) {
+                    Ok(_) => {
+                        moved -= 1;
+                        event.completed = moved;
+                        held_tagged += 1;
+                        j.entries[i].state = EntryState::Returned;
+                        if let Some(sl) = sealer
+                            && j.record_returned(i, sl).is_err()
+                        {
+                            // The file is home and the record is not. Undo
+                            // finds the origin holding the recorded file and
+                            // reconciles. Stop: the journal cannot be written.
+                            hold_record_failed += 1;
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(_) => {
+                        tagged_not_returned += 1;
+                        j.entries[i].state = EntryState::Stranded;
+                        if let Some(sl) = sealer
+                            && j.record_stranded(i, sl).is_err()
+                        {
+                            hold_record_failed += 1;
+                            event.completed = moved;
+                            event.phase = ProgressPhase::Advancing;
+                            progress(event);
+                            break;
+                        }
+                    }
+                }
+            }
+            event.completed = moved;
             event.phase = ProgressPhase::Advancing;
             progress(event);
         }
 
         Ok(ApplyReport {
             moved,
+            held_tagged,
+            held_cross_volume,
+            tagged_not_returned,
+            hold_record_failed,
             journal_id: id,
             journal_path: sealer.map(|_| j.path()),
         })
@@ -921,6 +1085,13 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
 /// remove the source only after the copied size has been checked.
 #[cfg(target_os = "macos")]
 fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
+    // The copy below requests data and POSIX stat only, so a Finder tag would
+    // not reach the destination. A tagged item is refused before anything is
+    // copied, and asked again before the source is unlinked in case a tag
+    // arrived during the copy.
+    if crate::scan::has_finder_tag(from)? {
+        return Err(tagged_across_volumes());
+    }
     copy_data_and_stat(from, to)?;
     let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
     let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
@@ -929,8 +1100,26 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
         return Err(io::Error::other("cross-device copy size mismatch"));
     }
     crate::scan::verify_read("cross_device_bytes");
+    #[cfg(test)]
+    AFTER_COPY.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook(from);
+        }
+    });
+    if crate::scan::has_finder_tag(from)? {
+        let _ = fs::remove_file(to);
+        return Err(tagged_across_volumes());
+    }
     fs::remove_file(from)?;
     Ok(Method::CopyUnlink)
+}
+
+#[cfg(test)]
+type CopyHook = Box<dyn FnOnce(&Path)>;
+#[cfg(test)]
+thread_local! {
+    static AFTER_COPY: std::cell::RefCell<Option<CopyHook>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The pre-#5 strategy, kept only as the fallback for filesystems without
@@ -1269,6 +1458,12 @@ fn undo_selected_with_progress(
         }
         let e = j.entries[i].clone();
         if !e.is_moved() {
+            // Held and returned entries are at their origins: apply left them
+            // there. There is nothing to put back and no recovery to infer.
+            if matches!(e.state, EntryState::Held | EntryState::Returned) {
+                advance!();
+                continue;
+            }
             // Only the successor entry gets recovery. Everything past it never
             // started, and no inference is applied there — which is what keeps
             // a user's own hard links out of reach.
@@ -1807,6 +2002,103 @@ mod tests {
             "the failed copy must not create a second entry"
         );
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_tag_for_test(path: &Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        unsafe extern "C" {
+            fn setxattr(
+                path: *const core::ffi::c_char,
+                name: *const core::ffi::c_char,
+                value: *const core::ffi::c_void,
+                size: usize,
+                position: u32,
+                options: i32,
+            ) -> i32;
+        }
+        let path = CString::new(path.as_os_str().as_bytes()).expect("path has no NUL");
+        // SAFETY: valid C strings and a byte slice that outlives the call.
+        let rc = unsafe {
+            setxattr(
+                path.as_ptr(),
+                c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
+                b"opaque".as_ptr().cast(),
+                6,
+                0,
+                0,
+            )
+        };
+        assert_eq!(rc, 0, "could not set the test tag");
+    }
+
+    /// A tagged item whose move would be cross-volume is refused by name,
+    /// before anything is copied: the copy requests data and stat only, so
+    /// the tag would be dropped. The source keeps its tag and the destination
+    /// is never created.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_tagged_item_is_refused_before_a_cross_volume_copy() {
+        let dir = std::env::temp_dir().join(format!("etudes_tag_exdev_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        let source = dir.join("tagged.dat");
+        let destination = dir.join("moved.dat");
+        fs::write(&source, b"payload").expect("write");
+        set_tag_for_test(&source);
+
+        let error = move_one_macos_with(&source, &destination, |_, _| {
+            Err(io::Error::from_raw_os_error(18))
+        })
+        .expect_err("a tagged item must not cross volumes");
+        assert!(is_tagged_across_volumes(&error), "got {error}");
+        assert!(
+            !error.to_string().contains("tagged.dat"),
+            "no path in {error}"
+        );
+        assert_eq!(fs::read(&source).expect("source survives"), b"payload");
+        assert!(crate::scan::has_finder_tag(&source).unwrap(), "tag kept");
+        assert!(!destination.exists(), "nothing was copied");
+
+        // The same injected EXDEV on an untagged file still copies and
+        // unlinks, so the refusal is about the tag and not the path.
+        let plain = dir.join("plain.dat");
+        let plain_destination = dir.join("plain-moved.dat");
+        fs::write(&plain, b"payload").expect("write");
+        let method = move_one_macos_with(&plain, &plain_destination, |_, _| {
+            Err(io::Error::from_raw_os_error(18))
+        })
+        .expect("an untagged cross-volume move proceeds");
+        assert_eq!(method, Method::CopyUnlink);
+        assert!(!plain.exists() && plain_destination.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A tag that arrives while the copy runs is caught before the source is
+    /// unlinked: the copy is removed and the tagged source stays.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_tag_that_arrives_during_a_cross_volume_copy_keeps_the_source() {
+        let dir =
+            std::env::temp_dir().join(format!("etudes_tag_during_copy_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        let source = dir.join("source.dat");
+        let destination = dir.join("destination.dat");
+        fs::write(&source, b"payload").expect("write");
+        AFTER_COPY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(set_tag_for_test));
+        });
+        let error = move_one_macos_with(&source, &destination, |_, _| {
+            Err(io::Error::from_raw_os_error(18))
+        })
+        .expect_err("the late tag must stop the unlink");
+        assert!(is_tagged_across_volumes(&error));
+        assert_eq!(fs::read(&source).expect("source survives"), b"payload");
+        assert!(crate::scan::has_finder_tag(&source).unwrap());
+        assert!(!destination.exists(), "the copy was removed");
         let _ = fs::remove_dir_all(&dir);
     }
 

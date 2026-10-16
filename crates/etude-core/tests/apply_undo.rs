@@ -830,7 +830,18 @@ fn no_journal_apply_moves_a_source_that_cannot_be_opened_for_reading() {
     let source = root.join("selected.qoi");
     fs::write(&source, b"private fixture").expect("write source");
     fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).expect("make unreadable");
-    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source");
+    // Reading an extended attribute needs read permission, so the tag check
+    // cannot run on this file. This test is about apply not opening the file,
+    // so the scan does not consult tags; the held-by-default counterpart is
+    // `an_item_whose_tag_cannot_be_read_is_held_by_default`.
+    let out = scan::scan(
+        &root,
+        &ScanConfig {
+            include_tagged: true,
+            ..ScanConfig::default()
+        },
+    )
+    .expect("scan source");
     let p = proposal_from_scan(
         &out,
         vec![plan::Group {
