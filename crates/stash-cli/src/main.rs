@@ -732,7 +732,7 @@ fn execute_stash(
             if clear {
                 println!("The selected folder is clear.\n");
             } else {
-                print_stash_holds(&r);
+                print_stash_holds(&r, true);
             }
             if sl.is_some() && r.moved > 0 {
                 println!(
@@ -902,7 +902,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     report.journal_id
                 );
                 if held > 0 {
-                    print_stash_holds(&report);
+                    print_stash_holds(&report, false);
                 }
             }
             if held > 0 {
@@ -930,7 +930,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
 
 /// What stash left in the folder, with the reason. Counts only: no names, no
 /// paths. A held item means the folder is not clear, and this says so.
-fn print_stash_holds(r: &etude_core::apply::ApplyReport) {
+fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
     if r.held_cross_volume > 0 {
         println!(
             "{} Finder-tagged {} left in the folder: moving to another volume would drop the tag.",
@@ -970,7 +970,11 @@ fn print_stash_holds(r: &etude_core::apply::ApplyReport) {
         );
     }
     if !folder_is_clear(r) {
-        println!("The selected folder is NOT clear.\n");
+        if folder {
+            println!("The selected folder is NOT clear.\n");
+        } else {
+            println!("Not every selected object was stashed.");
+        }
     }
 }
 
