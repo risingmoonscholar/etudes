@@ -1114,9 +1114,9 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     Ok(Method::CopyUnlink)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 type CopyHook = Box<dyn FnOnce(&Path)>;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 thread_local! {
     static AFTER_COPY: std::cell::RefCell<Option<CopyHook>> =
         const { std::cell::RefCell::new(None) };
