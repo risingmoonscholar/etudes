@@ -6,7 +6,7 @@ Three small command-line tools that tidy a folder without reading your private f
 ```console
 $ sweep --scheme folders ~/Desktop
 
-Scanned 108 items  ·  names, sizes and dates only  ·  no contents read
+Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no contents read to decide
 
   Screenshots      34 files   named "Screenshot ..."
   Photos, Jan 15   27 files   camera names, taken within 3 days
@@ -168,6 +168,19 @@ The four main plan-level refusal groups are named in the output with counts.
 A count with no reason beside it is the defect this project keeps finding in
 itself.
 
+**Finder-tagged items.** A file or folder with a Finder tag is organisation
+you may be using, so sweep leaves it where it is and says how many
+(`1 Finder-tagged item was left alone`). It asks only whether a tag is
+present: it never reads the tag names, never reads Finder comments, and gives a
+caller a count, not names or paths. `--include-tagged` organises tagged items
+anyway; it prints a warning on stderr every time, and the tag stays on the
+item through a move on the same volume. A tagged item that would have to cross
+volumes stays where it is, because a cross-volume copy does not carry the tag.
+`sweep apply` checks each item's tag again just before it moves the item and
+again just after, so a tag added at the last moment holds the item or moves it
+back. `stash` exists to clear a folder, so it takes tagged items too, and says
+the folder is clear only when it is.
+
 **Your projects.** A folder holding `project.godot`, `Cargo.toml`, a `.flp`,
 a `.blend`, a `.ptx` -- 25 markers in all -- is stepped over rather than
 sorted. A Godot `.tscn` references its siblings as `res://scripts/main.gd`,
@@ -199,13 +212,16 @@ $ sweep ~/Downloads
 
 ### What it does not protect
 
-`sweep` reads no file contents to decide what to move, and that has a cost
-worth stating plainly.
+Sweep decides from filesystem and Finder organization metadata only; it never
+reads file contents to decide. When it moves a file it reads the first and last
+4 KiB, so undo can tell if that file changed. If a Finder tag lands on a file
+while sweep is moving it and the file cannot be moved back because its original
+place has been taken, sweep leaves it where it is, counts it as an item it
+could not return, and records that in the journal.
 
-It does read some bytes once you apply. `sweep apply` reads the first and last
-4 KiB of each file it moves, so `sweep undo` can tell whether a file changed.
-It reads whole contents only if you pass `--inspect-content` and consent, or
-when a move crosses volumes and the file has to be copied.
+That has a cost worth stating plainly. Sweep reads whole contents only if you
+pass `--inspect-content` and consent, or when a move crosses volumes and the
+file has to be copied.
 
 A project *document* -- a `.blend`, an `.flp`, an `.als` -- references its
 assets relative to itself and freely upward, out of its own folder. In this

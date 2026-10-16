@@ -25,7 +25,7 @@ Scope domains resolve as follows:
 
 | Domain | Meaning |
 | --- | --- |
-| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules |
+| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The read is counted in the `finder_tag_presence` observation category |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
 | `project_marker_names` | Names of project markers; no parsing of marker contents |
 | `explicit_proposal_file_bytes` | The proposal file named by `sweep propose --proposal`, at most 1 MiB; its decisions are checked against the plan and never read file contents |
@@ -194,8 +194,9 @@ durable journal identifier.
 `scope` identifies the tool and operation and includes its conditional declared
 read/write domains and startup domains. Those are capabilities, not observations.
 `observations.categories` records instrumented read operations by category:
-metadata, directory enumeration, access opens, encrypted journal bytes, key
-acquisition, fingerprint bytes, cross-device copying and archive copying.
+metadata, Finder tag presence, directory enumeration, access opens, encrypted
+journal bytes, key acquisition, fingerprint bytes, cross-device copying and
+archive copying.
 `attempted` counts calls, `observed` successful calls, `failed` failed calls,
 and `verified` successful calls with a separate check. An open is not a payload
 read. Directory-enumeration calls and yielded directory entries have separate
