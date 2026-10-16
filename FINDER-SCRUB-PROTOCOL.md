@@ -82,9 +82,10 @@ The four open issues were read and change the plan:
   document in one subfolder does not protect sibling assets. Finder must show
   project/package/recent/unknown refusals and may not turn “Organize” into
   unconditional `--yes`.
-- [#44](https://github.com/risingmoonscholar/etudes/issues/44): Finder tags are
-  deliberately outside sweep's “names, sizes and dates only” promise. The
-  Finder adapter must not inspect tags and quietly change sweep policy.
+- [#44](https://github.com/risingmoonscholar/etudes/issues/44): sweep holds
+  Finder-tagged items by default and counts them; `--include-tagged` opts in.
+  The Finder adapter must not pass that flag or read tags on its own to change
+  sweep policy.
 - [#33](https://github.com/risingmoonscholar/etudes/issues/33): a safety cleanup
   can exist without a witness that its destructor invokes it. Any new sensitive
   buffer or temporary artifact needs a call-path witness, not only a helper
@@ -543,7 +544,8 @@ refusal difference fails the gate.
 **The read surface is part of the equivalence claim.** A sandbox entitlement
 is a capability, not a behavior: `user-selected.read-write` says what macOS
 permits, not what the code does. Each engine's read surface is its existing
-contract — sweep reads names, sizes, and dates and never file contents;
+contract — sweep decides from filesystem and Finder organization metadata and
+never reads file contents to decide;
 unpack reads archives because that is its job; scrub reads image bytes by
 stated contract — and the Finder path must exhibit the same surface as the
 CLI path. Witness it, do not assume it: trace file-content opens (for

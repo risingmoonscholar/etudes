@@ -48,5 +48,9 @@
   {"id":"80-finder-unpack","tier":"fast","capability":"zip","contract":"Ordinary archive listing and extraction preserve exact paths and bytes.","disposition":"keep"},
   {"id":"80-interrupted-extraction","tier":"load","capability":"signals","contract":"Killed unpack never publishes a partial target and retry extracts the exact archive.","disposition":"keep"},
   {"id":"81-unpack-quarantine","tier":"platform","capability":"hdiutil-exfat","contract":"Captured archive quarantine is preserved and exactly read back before publication, including AppleDouble storage.","disposition":"keep"},
-  {"id":"85-scenario-exit-status","tier":"fast","capability":"shell","contract":"The scenario wrapper propagates failure, signal, and completion status.","disposition":"keep"}
+  {"id":"85-scenario-exit-status","tier":"fast","capability":"shell","contract":"The scenario wrapper propagates failure, signal, and completion status.","disposition":"keep"},
+  {"id":"86-sweep-finder-tags","tier":"fast","capability":"macos","contract":"A tagged item is left alone and counted without its name, --include-tagged is loud and keeps the tag through move and undo, Finder comments are not read, and an item tagged after planning is not moved.","disposition":"keep"},
+  {"id":"87-stash-finder-tags","tier":"fast","capability":"macos","contract":"stash clears tagged items too, keeps their tags through stash and pop, and reports the folder clear only when nothing was left behind.","disposition":"keep"},
+  {"id":"88-unpack-synthetic-archive","tier":"fast","capability":"zip","contract":"unpack extracts a small archive made in the scenario to its exact bytes after etude-core changes.","disposition":"keep"},
+  {"id":"89-tagged-cross-volume","tier":"platform","capability":"hdiutil-apfs","contract":"A tagged item whose move would cross volumes stays in place with its tag and is counted by name, in sweep and in stash, while untagged items still cross.","disposition":"keep"}
 ]

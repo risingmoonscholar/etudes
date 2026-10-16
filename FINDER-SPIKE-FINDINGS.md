@@ -74,7 +74,7 @@ surface, which the safety model wanted anyway.
    or services-style delivery hands the extension `public.plain-text`
    representations — the platform reads every selected file to do it. Under
    this project's read-surface rule (Gate U), that disqualifies the route for
-   any tool whose contract is names, sizes, and dates only. The Action
+   any tool whose contract is metadata only. The Action
    Extension route with in-place URLs is the only delivery mode observed that
    does not open file contents.
 3. **Hand-assembled extension bundles are refused silently.** A structurally

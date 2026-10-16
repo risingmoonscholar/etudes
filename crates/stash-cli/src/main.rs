@@ -66,8 +66,11 @@ KEY
     ETUDE_JOURNAL_KEY  64 hex digits (32 random bytes), overrides the keychain.
                        Retain the same key for undo; see README for setup.
 
-stash moves everything sweep can see, including the files sweep would refuse
-to organise. Hidden items are left in place, and it says how many.
+stash moves everything sweep can see, including Finder-tagged items and the
+files sweep would refuse to organise. Hidden items are left in place, and it
+says how many. A tagged item that would have to cross volumes is the one thing
+it leaves, because the copy would drop the tag; it then says the folder is NOT
+clear.
 That is deliberate: clearing a folder for a screen share means clearing it.
 With a journal, everything is reversible. stash prints what it took.";
 
@@ -572,6 +575,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         // Clearing a folder means clearing it: directories and symlinks move
         // too, as whole units.
         whole_units: true,
+        // sweep holds tagged items by default; stash exists to clear the
+        // folder, so it asks for them and says so here rather than inheriting
+        // the default.
+        include_tagged: true,
         ..Default::default()
     };
     let outcome = match scan::scan(path, &cfg) {
@@ -687,6 +694,7 @@ fn execute_stash(
                 etude_cli_support::envelope::recovery_operation(&r.journal_id);
             }
             etude_cli_support::envelope::effect("items_moved", r.moved);
+            let clear = folder_is_clear(&r);
             if json {
                 use etude_core::json as j;
                 println!(
@@ -703,6 +711,10 @@ fn execute_stash(
                         ),
                         ("root", j::str("<redacted>")),
                         ("moved", j::num(r.moved)),
+                        ("clear", j::bool(clear)),
+                        ("held_cross_volume", j::num(r.held_cross_volume)),
+                        ("held_tagged", j::num(r.held_tagged)),
+                        ("tagged_not_returned", j::num(r.tagged_not_returned)),
                         ("holding", j::str(&bound.groups[0].name)),
                         ("binding", bound.binding_json()),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into())),
@@ -710,11 +722,19 @@ fn execute_stash(
                         ("skipped_unreadable", j::num(bound.skipped_unreadable)),
                     ])
                 );
+                if !clear {
+                    etude_cli_support::envelope::status("incomplete");
+                    return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                }
                 return ExitCode::SUCCESS;
             }
             println!("\nStashed {} items.", r.moved);
-            println!("The selected folder is clear.\n");
-            if sl.is_some() {
+            if clear {
+                println!("The selected folder is clear.\n");
+            } else {
+                print_stash_holds(&r, true);
+            }
+            if sl.is_some() && r.moved > 0 {
                 println!(
                     "  Operation id: {}. Restore with: stash pop --id {}",
                     r.journal_id, r.journal_id
@@ -738,6 +758,10 @@ fn execute_stash(
                         "items were"
                     }
                 );
+            }
+            if !clear {
+                etude_cli_support::envelope::status("incomplete");
+                return fail(etude_cli_support::reason::Code::OperationIncomplete);
             }
             ExitCode::SUCCESS
         }
@@ -845,6 +869,10 @@ fn cmd_select(args: &[String]) -> ExitCode {
         Ok(report) => {
             etude_cli_support::envelope::recovery_operation(&report.journal_id);
             etude_cli_support::envelope::effect("items_moved", report.moved);
+            let held = report.held_tagged
+                + report.held_cross_volume
+                + report.tagged_not_returned
+                + report.hold_record_failed;
             if options.json {
                 use etude_core::json as j;
                 println!(
@@ -853,6 +881,9 @@ fn cmd_select(args: &[String]) -> ExitCode {
                         ("action", j::str("stash_selected")),
                         ("stash_id", j::str(&report.journal_id)),
                         ("moved", j::num(report.moved)),
+                        ("held_cross_volume", j::num(report.held_cross_volume)),
+                        ("held_tagged", j::num(report.held_tagged)),
+                        ("tagged_not_returned", j::num(report.tagged_not_returned)),
                         ("selected", j::num(prepared.sources.len())),
                         ("holding_root", j::str("<redacted>")),
                         ("due", deadline.map(j::num).unwrap_or_else(|| "null".into()))
@@ -870,6 +901,13 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     report.journal_id,
                     report.journal_id
                 );
+                if held > 0 {
+                    print_stash_holds(&report, false);
+                }
+            }
+            if held > 0 {
+                etude_cli_support::envelope::status("incomplete");
+                return fail(etude_cli_support::reason::Code::OperationIncomplete);
             }
             ExitCode::SUCCESS
         }
@@ -888,6 +926,62 @@ fn cmd_select(args: &[String]) -> ExitCode {
             apply_exit_code(&error)
         }
     }
+}
+
+/// What stash left in the folder, with the reason. Counts only: no names, no
+/// paths. A held item means the folder is not clear, and this says so.
+fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
+    if r.held_cross_volume > 0 {
+        println!(
+            "{} Finder-tagged {} left in the folder: moving to another volume would drop the tag.",
+            r.held_cross_volume,
+            if r.held_cross_volume == 1 {
+                "item was"
+            } else {
+                "items were"
+            }
+        );
+    }
+    if r.held_tagged > 0 {
+        println!(
+            "{} {} left in the folder because of a Finder tag.",
+            r.held_tagged,
+            if r.held_tagged == 1 {
+                "item was"
+            } else {
+                "items were"
+            }
+        );
+    }
+    if r.tagged_not_returned > 0 {
+        println!(
+            "{} Finder-tagged {} could not be returned and stays in the holding folder.",
+            r.tagged_not_returned,
+            if r.tagged_not_returned == 1 {
+                "item"
+            } else {
+                "items"
+            }
+        );
+    }
+    if r.hold_record_failed > 0 {
+        eprintln!(
+            "stash: the journal could not record a held item and stash stopped. `stash pop` reconciles from the filesystem."
+        );
+    }
+    if !folder_is_clear(r) {
+        if folder {
+            println!("The selected folder is NOT clear.\n");
+        } else {
+            println!("Not every selected object was stashed.");
+        }
+    }
+}
+
+/// The folder is clear only when apply left nothing behind and wrote a
+/// journal that agrees. Any held, stranded or unrecorded item says otherwise.
+fn folder_is_clear(r: &etude_core::apply::ApplyReport) -> bool {
+    r.held_tagged + r.held_cross_volume + r.tagged_not_returned + r.hold_record_failed == 0
 }
 
 /// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
@@ -2055,6 +2149,7 @@ mod tests {
                 depth: 1,
                 allow_sync: true,
                 whole_units: true,
+                include_tagged: true,
                 ..Default::default()
             },
         )
@@ -2444,5 +2539,39 @@ mod tests {
             paths_gate(false, false).is_ok(),
             "redacted --all from a pipe was refused"
         );
+    }
+
+    #[test]
+    fn the_folder_is_reported_clear_only_when_nothing_was_left_behind() {
+        use etude_core::apply::ApplyReport;
+        let moved = ApplyReport {
+            moved: 4,
+            ..Default::default()
+        };
+        assert!(folder_is_clear(&moved));
+        for left_behind in [
+            ApplyReport {
+                moved: 3,
+                held_cross_volume: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 3,
+                held_tagged: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 4,
+                tagged_not_returned: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 3,
+                hold_record_failed: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(!folder_is_clear(&left_behind), "{left_behind:?}");
+        }
     }
 }

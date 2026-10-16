@@ -1,6 +1,9 @@
 //! Filesystem walk with the safety rules for untrusted trees.
 //!
-//! No content reads. Regular document markers are opened only to check access.
+//! No content reads to decide. Regular document markers are opened only to
+//! check access. The one Finder attribute consulted is whether a tag is
+//! present; its value (the tag names) is never read, and Finder comments are
+//! never queried.
 
 use std::collections::HashSet;
 use std::fs;
@@ -815,6 +818,15 @@ pub struct ScanConfig {
     /// it on, because "clear this folder" is meaningless if a directory stays
     /// behind. Added when stash became the second caller.
     pub whole_units: bool,
+    /// Include items that carry a Finder tag. Off by default: a tag is
+    /// organisation the owner may be using, so a tagged item stays where it
+    /// is and is only counted. Only `presence` of the tag attribute is asked;
+    /// the tag names are never read.
+    ///
+    /// Every consumer of `ScanConfig::default()` therefore holds tagged items.
+    /// stash is the one caller whose contract is to clear a folder, and it
+    /// sets this to `true` explicitly.
+    pub include_tagged: bool,
 }
 
 impl Default for ScanConfig {
@@ -828,6 +840,7 @@ impl Default for ScanConfig {
             allow_sync: false,
             max_entries: 20_000,
             whole_units: false,
+            include_tagged: false,
         }
     }
 }
@@ -982,6 +995,12 @@ pub struct ScanOutcome {
     /// unaccounted for and MUST be disclosed, or "Scanned N items" silently
     /// claims completeness it does not have.
     pub skipped_unreadable: usize,
+    /// Items left alone because they carry a Finder tag. A count only: tag
+    /// names and the held items' paths are not retained.
+    pub skipped_tagged: usize,
+    /// The `include_tagged` this scan ran with, carried through the plan to
+    /// apply, which re-checks tags at move time.
+    pub include_tagged: bool,
     /// Directories not entered because they hold a project marker.
     ///
     /// Distinct from `skipped_system`: this is not policy about WHERE the
@@ -1300,6 +1319,8 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
         skipped_in_flight: 0,
         skipped_package: 0,
         skipped_unreadable: 0,
+        skipped_tagged: 0,
+        include_tagged: cfg.include_tagged,
         root_is_synced,
         allow_sync: cfg.allow_sync,
     };
@@ -1505,6 +1526,11 @@ fn walk(
                 }
                 Ok(None) => {}
             }
+            // A tagged folder is held whole and not entered. The probe asks
+            // about this directory entry only (no symlink following).
+            if !cfg.include_tagged && hold_for_tag_probe(has_finder_tag(&path), out) {
+                continue;
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -1513,6 +1539,12 @@ fn walk(
                 }
             }
             walk(root, &path, depth + 1, cfg, out, visited)?;
+            continue;
+        }
+
+        // A file or an opaque unit. The refusals above keep their own
+        // accounting; a tagged item that reaches here is held and counted.
+        if !cfg.include_tagged && hold_for_tag_probe(has_finder_tag(&path), out) {
             continue;
         }
 
@@ -1547,6 +1579,89 @@ type ProbeHook = Box<dyn FnOnce(&Path)>;
 thread_local! {
     static BEFORE_CHILD_DOCUMENT_PROBE: std::cell::RefCell<Option<ProbeHook>> = const { std::cell::RefCell::new(None) };
     static AFTER_DOCUMENT_PROBE: std::cell::RefCell<Option<ProbeHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Apply the count-only tag policy to a presence probe. An unknown answer is
+/// not "untagged": a probe that fails for a reason other than the attribute
+/// being absent holds the item and counts it as unreadable.
+fn hold_for_tag_probe(probe: io::Result<bool>, out: &mut ScanOutcome) -> bool {
+    match probe {
+        Ok(true) => {
+            out.skipped_tagged += 1;
+            true
+        }
+        Ok(false) => false,
+        Err(_) => {
+            out.skipped_unreadable += 1;
+            true
+        }
+    }
+}
+
+/// Whether Finder attached at least one tag to this directory entry.
+///
+/// Asks for the attribute's length only, through a zero-length buffer, so the
+/// value (tag names and colours) is never copied into this process. Finder
+/// comments live in a different attribute that nothing here names. The probe
+/// does not follow symlinks. A volume that cannot hold attributes (`ENOTSUP`)
+/// has no tags, so it reads as untagged; any other failure is an error and
+/// the caller holds the item.
+#[cfg(target_os = "macos")]
+pub fn has_finder_tag(path: &Path) -> io::Result<bool> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    // SAFETY: both strings are NUL-terminated; the value buffer is null with
+    // length zero, so getxattr cannot write Rust memory.
+    let result = unsafe {
+        getxattr(
+            path.as_ptr(),
+            c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
+            std::ptr::null_mut(),
+            0,
+            0,
+            XATTR_NOFOLLOW,
+        )
+    };
+    let outcome = if result >= 0 {
+        Ok(true)
+    } else {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(ENOATTR) | Some(ENOTSUP) => Ok(false),
+            _ => Err(error),
+        }
+    };
+    observe_read("finder_tag_presence", outcome)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn has_finder_tag(_: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+/// Darwin `XATTR_NOFOLLOW`: inspect the directory entry, never a link target.
+#[cfg(target_os = "macos")]
+const XATTR_NOFOLLOW: i32 = 0x0001;
+/// Darwin `ENOATTR`: the attribute is absent.
+#[cfg(target_os = "macos")]
+const ENOATTR: i32 = 93;
+/// Darwin `ENOTSUP`: the volume cannot hold extended attributes.
+#[cfg(target_os = "macos")]
+const ENOTSUP: i32 = 45;
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn getxattr(
+        path: *const std::ffi::c_char,
+        name: *const std::ffi::c_char,
+        value: *mut std::ffi::c_void,
+        size: usize,
+        position: u32,
+        options: i32,
+    ) -> isize;
 }
 
 #[cfg(unix)]

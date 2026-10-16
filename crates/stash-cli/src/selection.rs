@@ -293,7 +293,7 @@ fn io_reason(error: &std::io::Error) -> etude_cli_support::reason::Code {
 }
 
 pub fn plan(prepared: &Prepared, root: PathBuf, holding: &str) -> Plan {
-    Plan::display_only(
+    let mut plan = Plan::display_only(
         root,
         prepared
             .sources
@@ -306,7 +306,10 @@ pub fn plan(prepared: &Prepared, root: PathBuf, holding: &str) -> Plan {
                 accepted: true,
             })
             .collect(),
-    )
+    );
+    // The caller named these objects, tagged or not.
+    plan.include_tagged = true;
+    plan
 }
 
 pub fn is_selection_root(root: &Path) -> bool {

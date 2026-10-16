@@ -90,6 +90,16 @@ pub enum EntryState {
     Moved,
     /// Undo moved it back. It is at the origin, and undo is finished with it.
     Reversed,
+    /// Apply left it where it was: it carried a Finder tag at move time, or
+    /// would have crossed volumes and lost the tag. It never moved.
+    Held,
+    /// Apply moved it, found a tag that appeared during the move, and moved it
+    /// straight back. It is at the origin and there is nothing to undo.
+    Returned,
+    /// Apply moved it, found a tag that appeared during the move, and could
+    /// not move it back (the origin was occupied, or the return failed). It is
+    /// at the destination, so undo treats it as moved.
+    Stranded,
 }
 
 impl Entry {
@@ -98,7 +108,7 @@ impl Entry {
     /// distinguishable.
     #[must_use]
     pub fn is_moved(&self) -> bool {
-        self.state == EntryState::Moved
+        matches!(self.state, EntryState::Moved | EntryState::Stranded)
     }
 }
 
@@ -171,11 +181,7 @@ impl Journal {
             .iter()
             .filter(|entry| entry.state == EntryState::Planned)
             .count();
-        let moved = self
-            .entries
-            .iter()
-            .filter(|entry| entry.state == EntryState::Moved)
-            .count();
+        let moved = self.entries.iter().filter(|entry| entry.is_moved()).count();
         let reversed = self
             .entries
             .iter()
@@ -425,6 +431,11 @@ impl Journal {
                     // the file really is at its origin. They lose only the
                     // knowledge that undo was what put it there.
                     EntryState::Reversed => 2,
+                    // Written only if a journal that holds these states is
+                    // saved whole. Apply records them as progress frames.
+                    EntryState::Held => 3,
+                    EntryState::Returned => 4,
+                    EntryState::Stranded => 5,
                 }
             ));
         }
@@ -498,6 +509,9 @@ impl Journal {
                         state: match f[8] {
                             "1" => EntryState::Moved,
                             "2" => EntryState::Reversed,
+                            "3" => EntryState::Held,
+                            "4" => EntryState::Returned,
+                            "5" => EntryState::Stranded,
                             // Anything else is Planned. Journals written
                             // before this only ever wrote 0 or 1.
                             _ => EntryState::Planned,
@@ -549,6 +563,25 @@ impl Journal {
         // on the file is enough. That's why this is O(1).
         f.sync_all().map_err(JournalError::Io)?;
         Ok(())
+    }
+
+    /// Append one sealed "entry i was held and never moved" frame. It takes
+    /// the place of a done frame in apply's in-order stream, so the stream of
+    /// done frames stays a gap-free prefix.
+    pub fn record_held(&self, index: usize, sealer: &dyn Sealer) -> Result<(), JournalError> {
+        append_progress(self, format!("held\t{index}\n").as_bytes(), sealer)
+    }
+
+    /// Append one sealed "entry i was moved and straight back" frame. Written
+    /// after the entry's done frame.
+    pub fn record_returned(&self, index: usize, sealer: &dyn Sealer) -> Result<(), JournalError> {
+        append_progress(self, format!("returned\t{index}\n").as_bytes(), sealer)
+    }
+
+    /// Append one sealed "entry i is tagged and could not be returned" frame.
+    /// Written after the entry's done frame; the entry stays reversible.
+    pub fn record_stranded(&self, index: usize, sealer: &dyn Sealer) -> Result<(), JournalError> {
+        append_progress(self, format!("stranded\t{index}\n").as_bytes(), sealer)
     }
 
     /// Record a destination directory created by this apply operation.
@@ -821,6 +854,40 @@ impl Journal {
                     self.entries[index].method = method;
                     expected_done += 1;
                 }
+                // Apply's frames for an entry it did not leave moved. `held`
+                // stands in for the done frame; `returned` and `stranded`
+                // follow the done frame of an entry that moved.
+                Some("held") if f.len() == 2 => {
+                    let index: usize = f[1].parse().map_err(|_| {
+                        JournalError::Malformed("journal damaged: progress record index")
+                    })?;
+                    if index != expected_done
+                        || index >= self.entries.len()
+                        || self.entries[index].state != EntryState::Planned
+                    {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: progress record out of order",
+                        ));
+                    }
+                    self.entries[index].state = EntryState::Held;
+                    expected_done += 1;
+                }
+                Some(kind @ ("returned" | "stranded")) if f.len() == 2 => {
+                    let index: usize = f[1].parse().map_err(|_| {
+                        JournalError::Malformed("journal damaged: progress record index")
+                    })?;
+                    if index >= self.entries.len() || self.entries[index].state != EntryState::Moved
+                    {
+                        return Err(JournalError::Malformed(
+                            "journal damaged: a return for an entry that was not moved",
+                        ));
+                    }
+                    self.entries[index].state = if kind == "returned" {
+                        EntryState::Returned
+                    } else {
+                        EntryState::Stranded
+                    };
+                }
                 // Undo's frames, written n-1..0 as it walks back. Its own
                 // cursor, counting down, so an out-of-order frame of either
                 // kind is still caught rather than trusted.
@@ -848,7 +915,7 @@ impl Journal {
                     // stream is inconsistent — replayed out of order, or two
                     // undone frames for one entry — and a review asked for it
                     // to be caught rather than absorbed.
-                    if self.entries[index].state != EntryState::Moved {
+                    if !self.entries[index].is_moved() {
                         return Err(JournalError::Malformed(
                             "journal damaged: a reversal for an entry that was not moved",
                         ));
@@ -1540,6 +1607,113 @@ mod tests {
         assert_eq!(back.entries[0].from, j.entries[0].from);
         assert_eq!(back.entries[0].to, j.entries[0].to);
         assert!(back.entries[0].is_moved());
+    }
+
+    /// The three tag outcomes are progress frames on top of the base journal,
+    /// so a journal written before them loads unchanged and a stream that uses
+    /// them replays to the right states. Out-of-order frames are refused like
+    /// every other progress frame.
+    #[test]
+    fn held_returned_and_stranded_frames_replay_and_are_checked() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_tag_frames_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
+
+        struct Identity;
+        impl Sealer for Identity {
+            fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(plaintext.to_vec())
+            }
+            fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(sealed.to_vec())
+            }
+        }
+        let entry = |name: &str| Entry {
+            from: PathBuf::from(format!("/tmp/root/{name}")),
+            to: PathBuf::from(format!("/tmp/root/G/{name}")),
+            method: Method::Rename,
+            size: 1,
+            mtime_secs: 0,
+            inode: 1,
+            edge_hash: 0,
+            state: EntryState::Planned,
+        };
+        let journal = |id: &str| Journal {
+            id: id.into(),
+            tool: "test".into(),
+            root: PathBuf::from("/tmp/root"),
+            entries: vec![entry("a"), entry("b"), entry("c"), entry("d")],
+            created_directories: Vec::new(),
+            validated_directories: Vec::new(),
+            progress_tail_damaged: false,
+        };
+
+        // a: held, b: moved then returned, c: moved then stranded, d: moved.
+        let j = journal("frames");
+        j.save_sealed(&Identity).unwrap();
+        j.record_held(0, &Identity).unwrap();
+        j.record_done(1, Method::Rename, &Identity).unwrap();
+        j.record_returned(1, &Identity).unwrap();
+        j.record_done(2, Method::Rename, &Identity).unwrap();
+        j.record_stranded(2, &Identity).unwrap();
+        j.record_done(3, Method::Rename, &Identity).unwrap();
+        let back = Journal::load_sealed("test", "frames", &Identity).expect("reload");
+        let states: Vec<_> = back.entries.iter().map(|e| e.state).collect();
+        assert_eq!(
+            states,
+            [
+                EntryState::Held,
+                EntryState::Returned,
+                EntryState::Stranded,
+                EntryState::Moved
+            ]
+        );
+        assert!(!back.entries[0].is_moved() && !back.entries[1].is_moved());
+        assert!(back.entries[2].is_moved() && back.entries[3].is_moved());
+        let summary = back.summary();
+        assert_eq!(
+            (summary.planned, summary.moved, summary.reversed),
+            (0, 2, 0)
+        );
+
+        // Saving the whole journal keeps the states.
+        back.save_sealed(&Identity).unwrap();
+        let again = Journal::load_sealed("test", "frames", &Identity).expect("reload whole");
+        let states: Vec<_> = again.entries.iter().map(|e| e.state).collect();
+        assert_eq!(
+            states,
+            [
+                EntryState::Held,
+                EntryState::Returned,
+                EntryState::Stranded,
+                EntryState::Moved
+            ]
+        );
+
+        // A held frame must take the place of the next done frame.
+        let skipped = journal("held_out_of_order");
+        skipped.save_sealed(&Identity).unwrap();
+        skipped.record_held(2, &Identity).unwrap();
+        assert!(Journal::load_sealed("test", "held_out_of_order", &Identity).is_err());
+
+        // A return needs a move before it.
+        let unmoved = journal("return_unmoved");
+        unmoved.save_sealed(&Identity).unwrap();
+        unmoved.record_returned(0, &Identity).unwrap();
+        assert!(Journal::load_sealed("test", "return_unmoved", &Identity).is_err());
+
+        // A stranded item is still reversible by undo's own frame.
+        let undone = journal("stranded_then_undone");
+        undone.save_sealed(&Identity).unwrap();
+        undone.record_done(0, Method::Rename, &Identity).unwrap();
+        undone.record_stranded(0, &Identity).unwrap();
+        undone.record_undone(0, &Identity).unwrap();
+        let back = Journal::load_sealed("test", "stranded_then_undone", &Identity).unwrap();
+        assert_eq!(back.entries[0].state, EntryState::Reversed);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Appended progress frames must carry the corrected method, not just the

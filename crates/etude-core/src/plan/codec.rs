@@ -303,6 +303,16 @@ pub(super) fn encode(
             w.path(path)?;
         }
     }
+    // Optional second trailing section, written only when it says something:
+    // the tag policy the plan was scanned under and how many tagged items the
+    // scan left alone. A plan scanned with the default policy and no tagged
+    // items keeps its earlier encoding byte for byte, and a plan file written
+    // before tags were honoured still loads (as `include_tagged = false`).
+    if plan.include_tagged || plan.skipped_tagged > 0 {
+        w.byte(2);
+        w.byte(u8::from(plan.include_tagged));
+        w.n(plan.skipped_tagged as u64);
+    }
     if w.0.len() > MAX_BYTES {
         return Err(invalid());
     }
@@ -404,6 +414,8 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         skipped_in_flight: r.usize()?,
         skipped_package: r.usize()?,
         skipped_unreadable: r.usize()?,
+        skipped_tagged: 0,
+        include_tagged: false,
         observations: None,
         root_is_synced: r.boolean()?,
         allow_sync: r.boolean()?,
@@ -421,10 +433,8 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         ancestors: r.entries()?,
         entries: r.entries()?,
     };
-    if r.at != data.len() {
-        if r.byte()? != 1 {
-            return Err(invalid());
-        }
+    if r.at != data.len() && data[r.at] == 1 {
+        r.byte()?;
         let count = r.count()?;
         if count == 0 {
             return Err(invalid());
@@ -432,9 +442,19 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         for _ in 0..count {
             plan.unclaimed.push(r.path()?);
         }
-        if r.at != data.len() {
+    }
+    if r.at != data.len() {
+        if r.byte()? != 2 {
             return Err(invalid());
         }
+        plan.include_tagged = r.boolean()?;
+        plan.skipped_tagged = r.usize()?;
+        if !plan.include_tagged && plan.skipped_tagged == 0 {
+            return Err(invalid());
+        }
+    }
+    if r.at != data.len() {
+        return Err(invalid());
     }
     plan.observations = Some(snapshot.clone());
     Ok((plan, snapshot, context))
@@ -581,6 +601,8 @@ mod tests {
             skipped_in_flight: 5,
             skipped_package: 6,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: true,
         };
@@ -684,6 +706,41 @@ mod tests {
             committed,
             TreeSnapshot::path_commitment(Path::new("/synthetic/private-name2"))
         );
+    }
+
+    #[test]
+    fn tag_policy_round_trips_and_a_plan_without_it_is_unchanged() {
+        let (mut plan, snapshot, context) = fixture();
+        let without = encode(&plan, &snapshot, &context).unwrap();
+        let (older, _, _) = decode(&without).unwrap();
+        assert!(!older.include_tagged);
+        assert_eq!(older.skipped_tagged, 0);
+
+        plan.skipped_tagged = 3;
+        let counted = encode(&plan, &snapshot, &context).unwrap();
+        assert!(counted.starts_with(&without), "the section only appends");
+        let (decoded, _, _) = decode(&counted).unwrap();
+        assert_eq!((decoded.include_tagged, decoded.skipped_tagged), (false, 3));
+
+        plan.include_tagged = true;
+        plan.unclaimed = vec![PathBuf::from("/synthetic/root/a.xyz")];
+        let both = encode(&plan, &snapshot, &context).unwrap();
+        let (decoded, _, _) = decode(&both).unwrap();
+        assert_eq!((decoded.include_tagged, decoded.skipped_tagged), (true, 3));
+        assert_eq!(decoded.unclaimed, plan.unclaimed);
+        // The policy is part of the bytes the digest covers.
+        assert_ne!(
+            digest(&both),
+            digest(&{
+                plan.include_tagged = false;
+                encode(&plan, &snapshot, &context).unwrap()
+            })
+        );
+        // An empty section is not a valid encoding.
+        let mut padded = without.clone();
+        padded.extend([2, 0]);
+        padded.extend(0u64.to_le_bytes());
+        assert!(decode(&padded).is_err());
     }
 
     #[test]

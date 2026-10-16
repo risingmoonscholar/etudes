@@ -201,7 +201,13 @@ pub fn select(selector: Selector, sealer: &dyn Sealer) -> Result<Option<Journal>
 pub fn held(journal: &Journal) -> Result<usize, JournalError> {
     let mut held = 0;
     for entry in &journal.entries {
-        if entry.state == journal::EntryState::Reversed {
+        // Reversed, held and returned entries are not at their destinations.
+        if matches!(
+            entry.state,
+            journal::EntryState::Reversed
+                | journal::EntryState::Held
+                | journal::EntryState::Returned
+        ) {
             continue;
         }
         match etude_core::scan::observe_read("metadata", std::fs::symlink_metadata(&entry.to)) {

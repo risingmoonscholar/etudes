@@ -162,6 +162,11 @@ pub struct Plan {
     /// `scanned` is a floor, not a total: some part of the tree was
     /// completely invisible to this scan.
     pub skipped_unreadable: usize,
+    /// Tagged Finder items the scan left alone. A count; no names or paths.
+    pub skipped_tagged: usize,
+    /// Whether tagged items were included. Apply re-checks every item's tag
+    /// at move time and holds a newly tagged one unless this is set.
+    pub include_tagged: bool,
     pub root_is_synced: bool,
     /// The `--allow-sync` this plan's scan was actually run with. Copied
     /// straight from `ScanOutcome::allow_sync`. NOT derived from
@@ -224,6 +229,8 @@ impl Plan {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: false,
         }
@@ -253,6 +260,8 @@ impl Plan {
             skipped_in_flight: scan.skipped_in_flight,
             skipped_package: scan.skipped_package,
             skipped_unreadable: scan.skipped_unreadable,
+            skipped_tagged: scan.skipped_tagged,
+            include_tagged: scan.include_tagged,
             root_is_synced: scan.root_is_synced,
             allow_sync: scan.allow_sync,
         }
@@ -433,6 +442,7 @@ impl Plan {
                     ("projects_skipped", j::num(self.skipped_project)),
                     ("downloads_skipped", j::num(self.skipped_in_flight)),
                     ("packages_skipped", j::num(self.skipped_package)),
+                    ("tagged_skipped", j::num(self.skipped_tagged)),
                     ("in_flight", j::num(self.in_flight())),
                     ("in_place", j::num(self.already_in_destination())),
                     ("in_place_paths", in_place),
@@ -457,6 +467,7 @@ impl Plan {
                 ]),
             ),
             ("root_is_synced", j::bool(self.root_is_synced)),
+            ("include_tagged", j::bool(self.include_tagged)),
         ])
     }
 }
@@ -1009,6 +1020,8 @@ fn build_with_policy(
         skipped_in_flight: scan.skipped_in_flight,
         skipped_package: scan.skipped_package,
         skipped_unreadable: scan.skipped_unreadable,
+        skipped_tagged: scan.skipped_tagged,
+        include_tagged: scan.include_tagged,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
     };
@@ -1130,6 +1143,8 @@ mod tests {
             skipped_in_flight: 0,
             skipped_package: 0,
             skipped_unreadable: 0,
+            skipped_tagged: 0,
+            include_tagged: false,
             root_is_synced: false,
             allow_sync: false,
         }
