@@ -1154,11 +1154,13 @@ fn build_with_policy(
     plan
 }
 
-/// The sentence that says how "new" is decided for a tag. Finder's own tag
-/// list is not readable without extra permissions, so a tag counts as existing
-/// only when it is already on a file sweep could tag in the scanned folder.
-pub const TAG_BASIS: &str = "a tag is new when no file in the scanned folder carries it; \
-Finder's own tag list cannot be read, so a tag you have in Finder but not on a file here is also shown as new";
+/// How "new" is decided for a tag, in two sentences. Finder's own tag list is
+/// not readable without extra permissions, so a tag counts as existing only
+/// when it is already on a file sweep could tag in the scanned folder.
+pub const TAG_NEW_RULE: &str = "A tag is new when no file in the scanned folder carries it.";
+pub const TAG_LIST_NOTE: &str = "Finder's own tag list cannot be read, so a tag you use in Finder but not on a file here also shows as new.";
+/// Both sentences, for the JSON result.
+pub const TAG_BASIS: &str = "A tag is new when no file in the scanned folder carries it. Finder's own tag list cannot be read, so a tag you use in Finder but not on a file here also shows as new.";
 
 /// One tag a caller asked for: files with this extension get this tag.
 #[derive(Debug, Clone, PartialEq, Eq)]

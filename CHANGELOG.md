@@ -16,7 +16,8 @@ reviewers were pointed at the tools before anyone else could be.
   names or paths. The promise now reads: sweep decides from filesystem and
   Finder organization metadata only, never reads file contents to decide, and
   when it moves a file reads the first and last 4 KiB so undo can tell if that
-  file changed. Tag names and Finder comments are never read. `--include-tagged`
+  file changed. Finder comments are never read, and tag names are read only by
+  `--scheme tags`, below. `--include-tagged`
   organises tagged items, prints a warning on stderr every time, and keeps the
   tag through a same-volume move. A tagged item whose move would cross volumes
   stays where it is, because the cross-volume copy does not carry the tag. Apply
@@ -29,6 +30,24 @@ reviewers were pointed at the tools before anyone else could be.
   `include_tagged`. Journals gain optional `held`, `returned` and `stranded`
   progress frames; plan files gain an optional trailing section for the tag
   policy. Files written before this load unchanged.
+- **sweep:** `sweep --scheme tags --map EXT=TAG` adds Finder tags and moves
+  nothing (macOS only). Every tag name comes from the caller; sweep invents
+  none. The plan lists each tag with its file count and marks a tag new when no
+  file in the scanned folder carries it, because Finder's own tag list cannot be
+  read. Tags are written only by `sweep apply --plan FILE --plan-digest SHA
+  --yes`; planning, exporting, the live `sweep apply PATH` and `sweep review`
+  write none. A tag is only added: the file keeps its tags in order and gains the
+  new one, and a file that has it is left alone. Tagged files are tagged without
+  `--include-tagged`, which is refused with this scheme. A file whose tag
+  attribute cannot be read or parsed is listed and given nothing. The journal
+  records each file's tag attribute before the first write, `sweep undo` writes
+  those exact bytes back, a file whose tags changed since apply is left and
+  named, and `sweep status` reports the operation. The sweep contract is
+  version 11: it adds the domains `finder_tag_names` and
+  `selected_tree_finder_tags` and a `tag_scheme` section. Plan files gain an
+  optional trailing section and a group kind, and journals gain a `tag` entry
+  method with two trailing fields; plans and journals that move files encode
+  exactly as before.
 - **stash:** stash sets `include_tagged` explicitly and clears tagged items. It
   reports the folder clear only when nothing was left behind; a tagged item
   that would have to cross volumes is left in place, the result says the folder

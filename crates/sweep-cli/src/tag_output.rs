@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use etude_core::apply::{ApplyReport, TagRefusal, UndoReport};
 use etude_core::json as j;
-use etude_core::plan::{Plan, TAG_BASIS};
+use etude_core::plan::{Plan, TAG_LIST_NOTE, TAG_NEW_RULE};
 
 fn files(n: usize) -> &'static str {
     if n == 1 { "file" } else { "files" }
@@ -92,8 +92,8 @@ pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
         1 => println!("  1 tag is new: {}", new[0]),
         n => println!("  {n} tags are new: {}", new.join(", ")),
     }
-    println!("  New means {TAG_BASIS}.");
-    println!();
+    println!("  {TAG_NEW_RULE}");
+    println!("  {TAG_LIST_NOTE}");
     left_alone(p);
     super::print_left_alone_notes(p, explain);
     if p.skipped_hidden + p.skipped_symlink > 0 {

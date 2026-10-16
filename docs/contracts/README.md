@@ -26,6 +26,8 @@ Scope domains resolve as follows:
 | Domain | Meaning |
 | --- | --- |
 | `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The read is counted in the `finder_tag_presence` observation category |
+| `finder_tag_names` | `sweep --scheme tags` only: the tag attribute of files sweep may tag, read in full to learn which tags exist in the folder, which files already carry the tag asked for, and what to put back on undo. Nothing else is read from the attribute list, Finder comments are never queried, and file contents are not read. The read is counted in the `finder_tag_names` observation category |
+| `selected_tree_finder_tags` | `sweep --scheme tags` only: the tag attribute of planned files, replaced by the old tag list plus one tag on apply of an exported plan, and by the recorded old bytes on undo. No file is moved, renamed, created or deleted |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
 | `project_marker_names` | Names of project markers; no parsing of marker contents |
 | `explicit_proposal_file_bytes` | The proposal file named by `sweep propose --proposal`, at most 1 MiB; its decisions are checked against the plan and never read file contents |
@@ -142,6 +144,22 @@ destination folders by metadata, and writes one new plan file; it moves nothing.
 `profile_missing` also apply to it. `v10/sweep.json` pins this declaration and
 `v1/` mirrors it; stash stays at version 10 and unpack at version 6.
 
+**Declaration version 11 (sweep)** adds `--scheme tags`. The domains
+`finder_tag_names` (read) and `selected_tree_finder_tags` (write) are declared on
+the operations that use them: scan, scan with content inspection, export,
+`apply_exported_plan` and undo. The live `apply` and `review` operations refuse
+tags and declare neither. A `tag_scheme` section states the rules: every tag
+name comes from the caller, tags are written only by applying an exported plan,
+a tag is only added, "new" means no file in the scanned folder carries the tag
+(Finder's own tag list is not readable without extra permissions), a file with
+unreadable tag state is listed and given nothing, the journal holds the previous
+and written bytes before the first write, and undo restores them only while the
+file still holds what apply wrote. In `status`, `moved` counts files tagged.
+No refusal code is added: a refused request is `invalid_arguments`,
+`unsafe_input` or `plan_stale` as before. `v11/sweep.json` pins this declaration
+and `v1/` mirrors it; stash stays at version 10 and unpack at version 6. The
+witness drives a tag plan end to end on a synthetic folder.
+
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
 conditional path (including keychain, EXDEV, review and crash recovery). Those
@@ -157,7 +175,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v10/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
+contract envelopes (`v11/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -194,7 +212,7 @@ durable journal identifier.
 `scope` identifies the tool and operation and includes its conditional declared
 read/write domains and startup domains. Those are capabilities, not observations.
 `observations.categories` records instrumented read operations by category:
-metadata, Finder tag presence, directory enumeration, access opens, encrypted
+metadata, Finder tag presence, Finder tag names (tag scheme only), directory enumeration, access opens, encrypted
 journal bytes, key acquisition, fingerprint bytes, cross-device copying and
 archive copying.
 `attempted` counts calls, `observed` successful calls, `failed` failed calls,
