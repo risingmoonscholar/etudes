@@ -12,6 +12,27 @@ reviewers were pointed at the tools before anyone else could be.
 
 ### 0.5.4 candidate — sweep, stash and unpack
 
+- **sweep:** sweep holds Finder-tagged items by default and reports a count, not
+  names or paths. The promise now reads: sweep decides from filesystem and
+  Finder organization metadata only, never reads file contents to decide, and
+  when it moves a file reads the first and last 4 KiB so undo can tell if that
+  file changed. Tag names and Finder comments are never read. `--include-tagged`
+  organises tagged items, prints a warning on stderr every time, and keeps the
+  tag through a same-volume move. A tagged item whose move would cross volumes
+  stays where it is, because the cross-volume copy does not carry the tag. Apply
+  checks each item's tag again just before and just after the rename: a tag added
+  late holds the item or moves it back, and if the original place has been taken
+  the item stays, is counted as one that could not be returned, and the run ends
+  incomplete (exit 3). A run that held every item reports `nothing_to_do`.
+  Results gain `held_tagged`, `held_cross_volume`, `tagged_not_returned` and
+  `hold_record_failed` in `details`, and the plan gains `tagged_skipped` and
+  `include_tagged`. Journals gain optional `held`, `returned` and `stranded`
+  progress frames; plan files gain an optional trailing section for the tag
+  policy. Files written before this load unchanged.
+- **stash:** stash sets `include_tagged` explicitly and clears tagged items. It
+  reports the folder clear only when nothing was left behind; a tagged item
+  that would have to cross volumes is left in place, the result says the folder
+  is NOT clear, and the run ends incomplete (exit 3).
 - **sweep:** `sweep undo` finishes after being killed at the last step. If it
   was killed after the last file went back, the empty folder that `sweep apply`
   created stayed, and a second `sweep undo` said there was nothing to undo.
