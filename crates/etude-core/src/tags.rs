@@ -154,10 +154,8 @@ pub fn decode(raw: &[u8]) -> Option<Vec<String>> {
             }
             0x6 => {
                 let bytes = body.get(start..start.checked_add(size.checked_mul(2)?)?)?;
-                let units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-                    .collect();
+                let (pairs, _) = bytes.as_chunks::<2>();
+                let units: Vec<u16> = pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect();
                 out.push(String::from_utf16(&units).ok()?);
             }
             _ => return None,
