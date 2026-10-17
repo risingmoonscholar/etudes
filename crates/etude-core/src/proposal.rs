@@ -152,6 +152,11 @@ pub fn propose(plan: &BoundPlan, proposal: &[u8]) -> Result<Proposed, Refusal> {
     if plan.context().tool != "sweep" {
         return Err(invalid("per-file proposals apply to sweep plans only"));
     }
+    if plan.applies_tags() {
+        return Err(invalid(
+            "a tags plan adds tags and places no files; proposals place files in folders",
+        ));
+    }
     let parsed = parse(proposal)?;
     if parsed.digest != plan.digest() {
         return Err(Refusal::PlanStale(

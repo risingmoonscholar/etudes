@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 539 tests
+cargo test --all                # 580 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -116,8 +116,52 @@ can skip a group, and `apply --only NAME` selects only the named group. Safety
 holds come next and remove files from every grouping rule. Built-in grouping
 then claims eligible files; an agent `--map` can claim only what those built-in
 rules leave behind. This is the policy order, not a claim that sweep detects
-every filesystem state. The declared schemes are `folders`, `existing` and
-`tags`. `folders` and `existing` are implemented; `tags` is not.
+every filesystem state. The schemes are `folders`, `existing` and `tags`.
+
+### Tag files, move nothing
+
+`sweep --scheme tags` adds Finder tags and moves nothing. You name the tag for
+each extension with `--map EXT=TAG`. The tag can be one you already use, a new
+one an agent proposes, or a new one you asked for. Sweep never makes up a tag.
+
+```console
+$ sweep ~/Downloads --scheme tags --map pdf=Receipts --map png=Photos --export-plan ~/plan.bin
+
+  Tags to add
+  Receipts    12 files  .pdf
+  Photos       4 files  .png   NEW TAG
+
+  1 tag is new: Photos
+  A tag is new when no file in the scanned folder carries it.
+  Finder's own tag list cannot be read, so a tag you use in Finder but not on a file here also shows as new.
+
+Nothing has been tagged or moved.  Nothing left this machine.
+
+$ sweep apply --plan ~/plan.bin --plan-digest <digest> --yes
+```
+
+- **The plan is the gate.** Planning and exporting write no tag and touch no
+  file. Tags are written only by `sweep apply --plan FILE --plan-digest SHA
+  --yes`, for a plan you have seen. The live `sweep apply PATH` and `sweep review`
+  refuse tags, and a plan made before a file's tags changed is refused as stale.
+- **Tags are only added.** A file keeps every tag it has, in the same order, and
+  the new tag goes after them. A file that already has the tag is left as it is.
+  Nothing is moved, renamed, created or deleted.
+- **Tagged files are tagged too.** Because a tag change is add-only and moves
+  nothing, `--scheme tags` works on files that already carry tags without
+  `--include-tagged`. That flag is refused with this scheme.
+- **New tags are marked.** The plan, in words and in `--json`, lists each tag
+  with its file count and marks each tag no file in the folder carries as new.
+  An existing tag is added exactly as the folder spells it, colour included.
+- **Unknown tag state is not guessed.** A file whose tag attribute cannot be read
+  or parsed is listed and given nothing.
+- **Undo puts each file's tags back.** The journal records the tag attribute of
+  every file before the first write, and `sweep undo` writes those exact bytes
+  back. A file whose tags someone else changed since apply is left alone and
+  named. Apply needs a journal; `--no-journal` is refused.
+- Sweep reads the tag list of the files it may tag, never their contents and
+  never Finder comments. Personal-looking, recent, in-progress, project and
+  hidden files are skipped, as in every scheme. `--scheme tags` needs macOS.
 
 ### Use folders you already have
 
@@ -171,8 +215,9 @@ itself.
 **Finder-tagged items.** A file or folder with a Finder tag is organisation
 you may be using, so sweep leaves it where it is and says how many
 (`1 Finder-tagged item was left alone`). It asks only whether a tag is
-present: it never reads the tag names, never reads Finder comments, and gives a
-caller a count, not names or paths. `--include-tagged` organises tagged items
+present: it never reads the tag names (only `--scheme tags` does, to add to
+them), never reads Finder comments, and gives a caller a count, not names or
+paths. `--include-tagged` organises tagged items
 anyway; it prints a warning on stderr every time, and the tag stays on the
 item through a move on the same volume. A tagged item that would have to cross
 volumes stays where it is, because a cross-volume copy does not carry the tag.
@@ -217,7 +262,9 @@ reads file contents to decide. When it moves a file it reads the first and last
 4 KiB, so undo can tell if that file changed. If a Finder tag lands on a file
 while sweep is moving it and the file cannot be moved back because its original
 place has been taken, sweep leaves it where it is, counts it as an item it
-could not return, and records that in the journal.
+could not return, and records that in the journal. With `--scheme tags` it reads
+each taggable file's tag list and writes it back with one more tag; it moves
+nothing.
 
 That has a cost worth stating plainly. Sweep reads whole contents only if you
 pass `--inspect-content` and consent, or when a move crosses volumes and the
@@ -459,13 +506,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 54 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 57 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 54 scenarios
+bash stress/run.sh        # 57 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
