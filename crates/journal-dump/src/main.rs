@@ -332,7 +332,9 @@ fn watch_apply(args: &[String]) -> ExitCode {
                     && moved < paused.entries.len()
                     && target.state == EntryState::Planned
                     && target.from.is_file()
-                    && !target.to.exists()
+                    // A tag entry changes a file in place, so its destination
+                    // is the file itself.
+                    && (target.tag.is_some() || !target.to.exists())
                 {
                     // The caller owns resume/termination from this point.
                     stopped.resume_on_drop = false;

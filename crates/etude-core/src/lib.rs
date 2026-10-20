@@ -5,8 +5,8 @@
 //!
 //! Scanning and classification decide from **filesystem and Finder
 //! organization metadata only**: names, sizes, timestamps, file type, and
-//! whether a Finder tag is present. Tag names and Finder comments are never
-//! read. Regular document markers are opened to check access, without reading
+//! whether a Finder tag is present. Finder comments are never read. Tag names
+//! are read only by `--scheme tags`, to add to them. Regular document markers are opened to check access, without reading
 //! their contents.
 //! The journal's edge-hash step reads bytes, but it does not decide anything:
 //! it reads the first and last 4 KiB of a file it moves, to detect changes
@@ -20,6 +20,7 @@ pub mod plan;
 pub mod proposal;
 pub mod redact;
 pub mod scan;
+pub mod tags;
 
 pub use apply::{ApplyFailure, ApplyReport, UndoReport};
 pub use journal::Journal;
@@ -57,6 +58,13 @@ pub enum Untouched {
     /// document could not reference (Documents, Archives, Installers) still
     /// sorts. Carries the marker's name so the output can say WHY.
     NearProjectDocument(String),
+    /// A tag plan only: the file already carries the tag the plan would add,
+    /// so there is nothing to add.
+    TagAlreadyPresent,
+    /// A tag plan only: the file's tag attribute could not be read, or is not
+    /// a list of tags sweep can parse. Its tag state is unknown, so nothing is
+    /// added to it.
+    TagStateUnreadable,
 }
 
 /// Categories of personal record sweep recognises well enough to refuse.

@@ -2419,6 +2419,7 @@ mod tests {
             } else {
                 etude_core::journal::EntryState::Planned
             },
+            tag: None,
         }
     }
 

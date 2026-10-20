@@ -1524,6 +1524,8 @@ fn undo_collapses_a_half_move_instead_of_leaving_a_duplicate() {
             // caught the first version of this test setting it true, which is
             // the user-hard-linked-something case and not this bug at all.
             state: etude_core::journal::EntryState::Planned,
+
+            tag: None,
         }],
         created_directories: Vec::new(),
         validated_directories: vec![directory_guard(&root)],
@@ -1593,6 +1595,8 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
                 inode: i0,
                 edge_hash: h0,
                 state: etude_core::journal::EntryState::Planned,
+
+                tag: None,
             },
             Entry {
                 from: b_from.clone(),
@@ -1603,6 +1607,8 @@ fn a_users_own_hard_link_is_never_deleted_by_recovery() {
                 inode: i1,
                 edge_hash: h1,
                 state: etude_core::journal::EntryState::Planned,
+
+                tag: None,
             },
         ],
         created_directories: Vec::new(),
@@ -1695,6 +1701,8 @@ fn a_killed_undo_resumes_where_it_stopped_instead_of_starting_over() {
             inode,
             edge_hash: edge,
             state: etude_core::journal::EntryState::Moved,
+
+            tag: None,
         });
     }
     let mut j = Journal {
@@ -1783,6 +1791,8 @@ fn a_reversal_survives_being_saved_and_reloaded() {
             inode,
             edge_hash: edge,
             state: etude_core::journal::EntryState::Reversed,
+
+            tag: None,
         }],
         created_directories: Vec::new(),
         validated_directories: Vec::new(),
@@ -1845,6 +1855,8 @@ fn a_skip_between_two_reversals_still_reloads() {
             inode,
             edge_hash: edge,
             state: etude_core::journal::EntryState::Moved,
+
+            tag: None,
         });
     }
     let mut j = Journal {
@@ -1912,6 +1924,8 @@ fn selective_undo_records_holes_and_preserves_unselected_entries() {
             inode,
             edge_hash,
             state: etude_core::journal::EntryState::Moved,
+
+            tag: None,
         });
     }
     let mut journal = Journal {
@@ -2229,6 +2243,8 @@ fn contended_journals(tag: &str, count: usize) -> (PathBuf, Vec<Journal>) {
             inode,
             edge_hash,
             state: etude_core::journal::EntryState::Planned,
+
+            tag: None,
         });
         fs::rename(from, to).unwrap();
     }

@@ -232,6 +232,12 @@ pub(super) fn encode(
                 w.byte(6);
                 w.count(*count)?;
             }
+            Signal::Tagged { ext, new, entry } => {
+                w.byte(7);
+                w.text(ext)?;
+                w.byte(u8::from(*new));
+                w.text(entry)?;
+            }
         }
         total = total.checked_add(group.members.len()).ok_or_else(invalid)?;
         if total > MAX_ROWS {
@@ -260,6 +266,8 @@ pub(super) fn encode(
             }
             Untouched::NoClearGroup => w.byte(1),
             Untouched::AlreadyInDestination => w.byte(6),
+            Untouched::TagAlreadyPresent => w.byte(7),
+            Untouched::TagStateUnreadable => w.byte(8),
             Untouched::TooRecent => w.byte(2),
             Untouched::InFlight => w.byte(3),
             Untouched::ProjectDocument => w.byte(4),
@@ -313,6 +321,14 @@ pub(super) fn encode(
         w.byte(u8::from(plan.include_tagged));
         w.n(plan.skipped_tagged as u64);
     }
+    // Optional third trailing section: the plan adds Finder tags instead of
+    // moving files. Absent for every folder plan, so those keep their earlier
+    // encoding byte for byte; a binary that predates it refuses the plan at the
+    // unknown section rather than reading tag groups as folders.
+    if plan.adds_tags {
+        w.byte(3);
+        w.byte(1);
+    }
     if w.0.len() > MAX_BYTES {
         return Err(invalid());
     }
@@ -359,6 +375,11 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
             },
             5 => Signal::Collected { count: r.count()? },
             6 => Signal::Proposed { count: r.count()? },
+            7 => Signal::Tagged {
+                ext: r.text()?,
+                new: r.boolean()?,
+                entry: r.text()?,
+            },
             _ => return Err(invalid()),
         };
         let count = r.count()?;
@@ -393,6 +414,8 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
             }),
             1 => Untouched::NoClearGroup,
             6 => Untouched::AlreadyInDestination,
+            7 => Untouched::TagAlreadyPresent,
+            8 => Untouched::TagStateUnreadable,
             2 => Untouched::TooRecent,
             3 => Untouched::InFlight,
             4 => Untouched::ProjectDocument,
@@ -416,6 +439,7 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         skipped_unreadable: r.usize()?,
         skipped_tagged: 0,
         include_tagged: false,
+        adds_tags: false,
         observations: None,
         root_is_synced: r.boolean()?,
         allow_sync: r.boolean()?,
@@ -443,17 +467,31 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
             plan.unclaimed.push(r.path()?);
         }
     }
-    if r.at != data.len() {
-        if r.byte()? != 2 {
-            return Err(invalid());
-        }
+    if r.at != data.len() && data[r.at] == 2 {
+        r.byte()?;
         plan.include_tagged = r.boolean()?;
         plan.skipped_tagged = r.usize()?;
         if !plan.include_tagged && plan.skipped_tagged == 0 {
             return Err(invalid());
         }
     }
+    if r.at != data.len() && data[r.at] == 3 {
+        r.byte()?;
+        if r.byte()? != 1 {
+            return Err(invalid());
+        }
+        plan.adds_tags = true;
+    }
     if r.at != data.len() {
+        return Err(invalid());
+    }
+    // A tag plan holds only tag groups, and a folder plan holds none.
+    let tagged = plan
+        .groups
+        .iter()
+        .filter(|group| matches!(group.signal, Signal::Tagged { .. }))
+        .count();
+    if tagged != if plan.adds_tags { plan.groups.len() } else { 0 } {
         return Err(invalid());
     }
     plan.observations = Some(snapshot.clone());
@@ -603,6 +641,7 @@ mod tests {
             skipped_unreadable: 0,
             skipped_tagged: 0,
             include_tagged: false,
+            adds_tags: false,
             root_is_synced: false,
             allow_sync: true,
         };
@@ -638,6 +677,106 @@ mod tests {
             observation_contract: "synthetic-contract".into(),
         };
         (plan, snapshot, context)
+    }
+
+    /// A plan that carries no tag information encodes exactly as the previous
+    /// release did: the digest was taken from that release's encoding of this
+    /// same plan, so an old plan file keeps its digest and still loads.
+    #[test]
+    fn a_plan_without_tags_keeps_its_earlier_encoding_byte_for_byte() {
+        let (plan, snapshot, context) = fixture();
+        let bytes = encode(&plan, &snapshot, &context).unwrap();
+        assert_eq!(bytes.len(), 2203);
+        assert_eq!(
+            digest(&bytes),
+            "373a5a4763d593fc836b79f6d8fa2675146b6fefbec5afe9be104b20c5472fa8"
+        );
+        let (decoded, _, _) = decode(&bytes).unwrap();
+        assert!(!decoded.adds_tags);
+    }
+
+    fn tag_fixture() -> (Plan, TreeSnapshot, BindingContext) {
+        let (mut plan, snapshot, context) = fixture();
+        plan.groups = vec![
+            Group {
+                name: "Work".into(),
+                signal: Signal::Tagged {
+                    ext: "pdf".into(),
+                    new: true,
+                    entry: "Work".into(),
+                },
+                members: vec![PathBuf::from("/synthetic/root/a.pdf")],
+                accepted: false,
+            },
+            Group {
+                name: "Red".into(),
+                signal: Signal::Tagged {
+                    ext: "png".into(),
+                    new: false,
+                    entry: "Red\n6".into(),
+                },
+                members: vec![PathBuf::from("/synthetic/root/b.png")],
+                accepted: false,
+            },
+        ];
+        plan.untouched = vec![
+            (
+                PathBuf::from("/synthetic/root/c.pdf"),
+                Untouched::TagAlreadyPresent,
+            ),
+            (
+                PathBuf::from("/synthetic/root/d.pdf"),
+                Untouched::TagStateUnreadable,
+            ),
+        ];
+        plan.adds_tags = true;
+        (plan, snapshot, context)
+    }
+
+    #[test]
+    fn a_tag_plan_round_trips_and_the_section_only_appends() {
+        let (plan, snapshot, context) = tag_fixture();
+        let bytes = encode(&plan, &snapshot, &context).unwrap();
+        assert!(bytes.ends_with(&[3, 1]), "the tag section closes the plan");
+        let (decoded, decoded_snapshot, decoded_context) = decode(&bytes).unwrap();
+        assert!(decoded.adds_tags);
+        assert_eq!(decoded.groups.len(), 2);
+        assert_eq!(decoded.groups[1].name, "Red");
+        assert!(matches!(
+            &decoded.groups[1].signal,
+            Signal::Tagged { ext, new: false, entry } if ext == "png" && entry == "Red\n6"
+        ));
+        assert_eq!(decoded.untouched.len(), 2);
+        assert_eq!(
+            encode(&decoded, &decoded_snapshot, &decoded_context).unwrap(),
+            bytes
+        );
+        // Same plan with the flag off differs only by that section.
+        let mut flagless = plan.clone();
+        flagless.adds_tags = false;
+        let bare = encode(&flagless, &snapshot, &context).unwrap();
+        assert_eq!(&bytes[..bytes.len() - 2], &bare[..]);
+        assert_ne!(digest(&bytes), digest(&bare), "the digest covers it");
+    }
+
+    #[test]
+    fn tag_groups_and_the_tag_flag_must_agree_and_a_cut_section_refuses() {
+        let (plan, snapshot, context) = tag_fixture();
+        let bytes = encode(&plan, &snapshot, &context).unwrap();
+        // Tag groups in a plan that does not say it adds tags.
+        assert!(decode(&bytes[..bytes.len() - 2]).is_err());
+        // The flag on a plan that holds a folder group.
+        let (mut mixed, snapshot2, context2) = fixture();
+        mixed.adds_tags = true;
+        assert!(decode(&encode(&mixed, &snapshot2, &context2).unwrap()).is_err());
+        // A cut, an unknown value and extra bytes.
+        assert!(decode(&bytes[..bytes.len() - 1]).is_err());
+        let mut unknown = bytes[..bytes.len() - 1].to_vec();
+        unknown.push(0);
+        assert!(decode(&unknown).is_err());
+        let mut extra = bytes.clone();
+        extra.push(0);
+        assert!(decode(&extra).is_err());
     }
 
     #[test]

@@ -16,6 +16,7 @@ macro_rules! print {
 mod existing_profile;
 mod inspect;
 mod review;
+mod tag_output;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -30,6 +31,8 @@ USAGE
     sweep [PATH] [FLAGS]         analyse and build a plan; changes nothing
     sweep review PATH            walk each group, rename or skip, then apply
     sweep apply PATH --yes       move every proposed group
+    sweep PATH --scheme tags --map EXT=TAG --export-plan F
+                                 plan Finder tags to add; nothing is moved
     sweep apply PATH --only NAME move one group
     sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT
                                  check per-file decisions against an exported
@@ -46,13 +49,18 @@ USAGE
 FLAGS
     --scheme folders  group by file type and other built-in folder rules (default)
     --scheme existing use the saved, versioned existing-folder profile
+    --scheme tags     add Finder tags and move nothing (macOS); needs --map
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
     --map EXT=Folder  route an unknown extension into a folder, this run only
                       (repeatable; refusals still win; journal required)
+    --map EXT=TAG     with --scheme tags: add the tag TAG to files with that
+                      extension. Tags a file already has stay. Sweep never
+                      makes up a tag; the plan marks each new one
     --json          machine-readable results on stdout (for agents)
     --export-plan F save a private bound plan outside the selected tree
     apply --plan F --plan-digest SHA --yes applies that exact observed plan
+                      (the only way tags are added)
     --proposal P    propose: a JSON file of per-file folder decisions
     --progress-json bounded versioned progress on stderr for apply or review
     --quiet         counts and signals only; never prints a filename
@@ -70,12 +78,14 @@ KEY
     ETUDE_JOURNAL_KEY  64 hex digits (32 random bytes), overrides the keychain.
                        Retain the same key for undo; see README for setup.
 
-Only `apply` moves anything. Files that look like personal records are
-never moved, in any mode.
+Only `apply` changes anything: it moves files, or with --scheme tags adds
+tags and moves nothing. Files that look like personal records are never
+moved or tagged, in any mode.
 
 Sweep decides from filesystem and Finder organization metadata only; it never
 reads file contents to decide. When it moves a file it reads the first and last
-4 KiB, so undo can tell if that file changed.";
+4 KiB, so undo can tell if that file changed. With --scheme tags it reads each
+file's tag list, never its contents, and adds to the list.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -562,8 +572,13 @@ fn parse_scheme(args: &[String]) -> Result<(), String> {
     match value(args, "--scheme") {
         None => Ok(()),
         Some(name) if name == "folders" || name == "existing" => Ok(()),
+        Some(name) if name == "tags" && cfg!(target_os = "macos") => Ok(()),
+        Some(name) if name == "tags" => Err(
+            "`--scheme tags` needs macOS: Finder tags are stored in a macOS file attribute"
+                .to_string(),
+        ),
         Some(name) => Err(format!(
-            "unsupported scheme {name:?}; this version supports `--scheme folders` and `--scheme existing`"
+            "unsupported scheme {name:?}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`"
         )),
     }
 }
@@ -1016,6 +1031,8 @@ fn current_binding_context(profile: &str) -> plan::BindingContext {
 struct SchemeConfig {
     name: String,
     maps: Vec<plan::MapSpec>,
+    /// `--scheme tags` only: which extension gets which tag.
+    tag_maps: Vec<plan::TagSpec>,
     profile_sha256: String,
 }
 
@@ -1032,6 +1049,7 @@ fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, String> 
             Ok(SchemeConfig {
                 name: "folders".into(),
                 maps,
+                tag_maps: Vec::new(),
                 profile_sha256: "none".into(),
             })
         }
@@ -1044,7 +1062,23 @@ fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, String> 
             Ok(SchemeConfig {
                 name: "existing".into(),
                 maps,
+                tag_maps: Vec::new(),
                 profile_sha256: profile.digest,
+            })
+        }
+        "tags" => {
+            if has(args, "--include-tagged") {
+                return Err(
+                    "--include-tagged does nothing with --scheme tags: tags are added to tagged files too, and their existing tags stay"
+                        .into(),
+                );
+            }
+            let tag_maps = plan::validate_tag_maps(&map_flags(args)?)?;
+            Ok(SchemeConfig {
+                name: "tags".into(),
+                maps: Vec::new(),
+                tag_maps,
+                profile_sha256: "none".into(),
             })
         }
         _ => unreachable!("parse_scheme checked the scheme name"),
@@ -1059,8 +1093,14 @@ fn planning_profile(args: &[String], inspected: bool, scheme: &SchemeConfig) -> 
     } else {
         ""
     };
+    // Written only under `--scheme tags`, so every other plan binds as before.
+    let tag_maps = if scheme.name == "tags" {
+        format!(";tag_maps={:?}", scheme.tag_maps)
+    } else {
+        String::new()
+    };
     let configuration = format!(
-        "scheme={};depth={:?};sync={};grace={:?};maps={:?};content={inspected};profile_sha256={}{tagged}",
+        "scheme={};depth={:?};sync={};grace={:?};maps={:?};content={inspected};profile_sha256={}{tagged}{tag_maps}",
         scheme.name,
         parse_depth(args),
         has(args, "--allow-sync"),
@@ -1183,6 +1223,10 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             Some(etude_cli_support::reason::Subject::wait("plan", None)),
         );
     }
+    if bound.plan.adds_tags && !cfg!(target_os = "macos") {
+        eprintln!("sweep: this plan adds Finder tags, which needs macOS");
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
     if bound.plan.include_tagged {
         include_tagged_warning();
     }
@@ -1209,11 +1253,13 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             group.accepted
                 && matches!(
                     group.signal,
-                    plan::Signal::Mapped { .. } | plan::Signal::Proposed { .. }
+                    plan::Signal::Mapped { .. }
+                        | plan::Signal::Proposed { .. }
+                        | plan::Signal::Tagged { .. }
                 )
         })
     {
-        eprintln!("sweep: mapped and proposed plans require a journal");
+        eprintln!("sweep: mapped, proposed and tag plans require a journal");
         return refusal(
             etude_cli_support::reason::Code::UnsafeInput,
             Some(etude_cli_support::reason::Subject::wait("input", None)),
@@ -1228,6 +1274,22 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         Some(sl)
     };
     run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
+}
+
+/// Build the plan the chosen scheme describes.
+fn plan_for(
+    scheme: &SchemeConfig,
+    outcome: &scan::ScanOutcome,
+    inspector: Option<&mut dyn plan::Inspector>,
+) -> plan::Plan {
+    match (scheme.name.as_str(), inspector) {
+        ("tags", inspector) => plan::build_tags(outcome, &scheme.tag_maps, inspector),
+        ("existing", None) => plan::build_existing(outcome, &scheme.maps),
+        ("existing", Some(inspector)) => {
+            plan::build_existing_with(outcome, inspector, &scheme.maps)
+        }
+        (_, inspector) => plan::build_with_maps(outcome, inspector, &scheme.maps),
+    }
 }
 
 fn scan_and_plan(
@@ -1258,7 +1320,9 @@ fn scan_and_plan(
     let cfg = ScanConfig {
         depth,
         allow_sync: has(args, "--allow-sync"),
-        include_tagged: has(args, "--include-tagged"),
+        // A tag plan adds to a file's tags and moves nothing, so a tagged
+        // file is not held back from it.
+        include_tagged: has(args, "--include-tagged") || scheme.name == "tags",
         grace: match since_flag(args) {
             Ok(g) => g.or(ScanConfig::default().grace),
             Err(msg) => {
@@ -1281,6 +1345,16 @@ fn scan_and_plan(
 
     // Agent-directed moves without a journal would be moves nobody can
     // reverse, initiated by the party most likely to be wrong. Refused.
+    if scheme.name == "tags" && has(args, "--no-journal") {
+        eprintln!(
+            "sweep: adding tags with --no-journal is refused. Tags must stay restorable;\n\
+             drop --no-journal."
+        );
+        return Err(refusal(
+            etude_cli_support::reason::Code::UnsafeInput,
+            Some(etude_cli_support::reason::Subject::wait("input", None)),
+        ));
+    }
     if !scheme.maps.is_empty() && has(args, "--no-journal") {
         eprintln!(
             "sweep: routed moves with --no-journal are refused. A mapped move must stay\n\
@@ -1293,11 +1367,7 @@ fn scan_and_plan(
     }
 
     if !has(args, "--inspect-content") {
-        let proposed = if scheme.name == "existing" {
-            plan::build_existing(&outcome, &scheme.maps)
-        } else {
-            plan::build_mapped(&outcome, &scheme.maps)
-        };
+        let proposed = plan_for(&scheme, &outcome, None);
         return Ok((proposed, None, scheme));
     }
 
@@ -1309,11 +1379,7 @@ fn scan_and_plan(
             println!(
                 "  Contents were not read. Continuing on filesystem and Finder organization metadata.\n"
             );
-            let proposed = if scheme.name == "existing" {
-                plan::build_existing(&outcome, &scheme.maps)
-            } else {
-                plan::build_mapped(&outcome, &scheme.maps)
-            };
+            let proposed = plan_for(&scheme, &outcome, None);
             return Ok((proposed, None, scheme));
         }
         Err(e) => {
@@ -1326,11 +1392,7 @@ fn scan_and_plan(
     }
 
     let mut insp = ReceiptInspector(inspect::ContentInspector::new());
-    let p = if scheme.name == "existing" {
-        plan::build_existing_with(&outcome, &mut insp, &scheme.maps)
-    } else {
-        plan::build_with_maps(&outcome, Some(&mut insp), &scheme.maps)
-    };
+    let p = plan_for(&scheme, &outcome, Some(&mut insp));
     Ok((p, Some(insp.0.stats), scheme))
 }
 
@@ -1368,9 +1430,12 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         export_binding = Some(bound.binding_json());
         // The files a later `sweep propose` may name, in the plan's own
         // order, bound to this plan's digest.
-        export_items = Some(etude_core::proposal::items_json(
-            &etude_core::proposal::eligible_items(&bound),
-        ));
+        // A tags plan places no files, so it offers nothing to propose.
+        if !plan.adds_tags {
+            export_items = Some(etude_core::proposal::items_json(
+                &etude_core::proposal::eligible_items(&bound),
+            ));
+        }
     }
     let plan_json = || {
         let mut json = plan.to_json();
@@ -1395,6 +1460,10 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() && has(args, "--json") {
         println!("{}", plan_json());
+        return ExitCode::from(1);
+    }
+    if plan.groups.is_empty() && plan.adds_tags {
+        tag_output::nothing_to_tag(&plan);
         return ExitCode::from(1);
     }
     if plan.groups.is_empty() {
@@ -1458,7 +1527,11 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    render(&plan, quiet, explain, stats.is_some());
+    if plan.adds_tags {
+        tag_output::render(&plan, quiet, explain, stats.is_some());
+    } else {
+        render(&plan, quiet, explain, stats.is_some());
+    }
     if let Some(st) = stats {
         inspect::report(&st);
     }
@@ -1521,7 +1594,8 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     let personal: usize = counts.values().sum();
     let recent = p.too_recent();
     let downloading = p.in_flight();
-    let unclear = p.no_clear_group();
+    // A tag plan reports files no --map names itself.
+    let unclear = if p.adds_tags { 0 } else { p.no_clear_group() };
     let in_place = p.already_in_destination();
     let projects = p.skipped_project;
     let incomplete = p.skipped_in_flight;
@@ -1845,6 +1919,10 @@ fn cmd_review(args: &[String]) -> ExitCode {
             );
         }
     };
+    if scheme.name == "tags" {
+        eprintln!("sweep: review moves files; tags are added from an exported plan instead.");
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
 
     let depth = match parse_depth(args) {
         Ok(d) => d,
@@ -2126,7 +2204,7 @@ fn run_apply(
             {
                 etude_cli_support::envelope::recovery_operation(id);
             }
-            finish_apply(&r, &p.binding_json())
+            finish_apply(&r, &p.binding_json(), p.adds_tags)
         }
         Err(failure) => {
             // A journal that became durable before the failure is the handle
@@ -2156,7 +2234,10 @@ fn run_apply(
 /// as `incomplete` with exit 3 and the counts printed, never a bare error. A
 /// run where every item was held moved nothing and is reported the way a run
 /// with nothing to do is.
-fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str) -> ExitCode {
+fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str, adds_tags: bool) -> ExitCode {
+    if adds_tags {
+        return tag_output::finish_apply(r, binding);
+    }
     etude_cli_support::envelope::effect("items_moved", r.moved);
     etude_cli_support::envelope::detail(etude_core::json::obj(&[
         ("moved", etude_core::json::num(r.moved)),
@@ -2288,6 +2369,14 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         }
     };
 
+    if scheme.name == "tags" {
+        eprintln!(
+            "sweep: tags are added only from an exported plan you have seen.\n\
+             Export it:  sweep PATH --scheme tags --map EXT=TAG --export-plan FILE\n\
+             Then apply: sweep apply --plan FILE --plan-digest SHA --yes"
+        );
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
     let accept_all = has(args, "--yes");
     let only = value(args, "--only");
     let use_journal = !has(args, "--no-journal");
@@ -2732,9 +2821,23 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
         );
     }
 
+    let tag_journal = j.entries.iter().any(|entry| entry.tag.is_some());
     let mut progress = etude_cli_support::ProgressReporter::stderr("sweep undo", j.entries.len());
     let r = etude_core::apply::undo_with_progress(j, sl, |p| progress.update(p.completed, p.total));
     drop(progress);
+    if r.unrecorded_moves > 1 && tag_journal {
+        eprintln!(
+            "sweep: refused. This journal is missing more than one record: {n} files hold\n\
+             the tags apply was writing while the journal says it never wrote them.\n\
+             A crash loses exactly one record, and that one is recoverable. Losing\n\
+             several means the journal itself was damaged. Nothing has been touched.",
+            n = r.unrecorded_moves
+        );
+        return failure(
+            etude_cli_support::reason::Code::OperationIncomplete,
+            Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        );
+    }
     if r.unrecorded_moves > 1 {
         eprintln!(
             "sweep: refused. This journal is missing more than one record: {n} files are\n\
@@ -2754,24 +2857,34 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
-    etude_cli_support::envelope::detail(etude_core::json::obj(&[
-        ("restored", etude_core::json::num(r.restored)),
-        (
-            "skipped_changed",
-            etude_core::json::num(r.skipped_changed.len()),
-        ),
-        (
-            "skipped_missing",
-            etude_core::json::num(r.skipped_missing.len()),
-        ),
-    ]));
-    if !r.skipped_changed.is_empty() || r.error.is_some() {
+    if tag_journal {
+        tag_output::undo_detail(&r);
+    } else {
+        etude_cli_support::envelope::detail(etude_core::json::obj(&[
+            ("restored", etude_core::json::num(r.restored)),
+            (
+                "skipped_changed",
+                etude_core::json::num(r.skipped_changed.len()),
+            ),
+            (
+                "skipped_missing",
+                etude_core::json::num(r.skipped_missing.len()),
+            ),
+        ]));
+    }
+    if !r.skipped_changed.is_empty() || !r.tags_refused.is_empty() || r.error.is_some() {
         etude_cli_support::envelope::status("incomplete");
     }
     etude_cli_support::envelope::effect("items_restored", r.restored);
     etude_cli_support::envelope::effect("changed_items_left", r.skipped_changed.len());
     etude_cli_support::envelope::effect("missing_items", r.skipped_missing.len());
-    println!("\nRestored {} files.", r.restored);
+    if tag_journal {
+        etude_cli_support::envelope::effect("tags_restored", r.tags_restored);
+        etude_cli_support::envelope::effect("tag_files_left", r.tags_refused.len());
+        tag_output::print_undo_headline(&r);
+    } else {
+        println!("\nRestored {} files.", r.restored);
+    }
     if !r.skipped_changed.is_empty() {
         println!(
             "  {} changed since apply and were left alone:",
@@ -2781,6 +2894,7 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
             println!("    {}", etude_core::redact::path(p));
         }
     }
+    tag_output::print_undo_refusals(&r);
     if !r.skipped_missing.is_empty() {
         println!("  {} were already gone.", r.skipped_missing.len());
     }
@@ -2843,7 +2957,7 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
             Some(etude_cli_support::reason::Subject::wait("journal", None)),
         );
     }
-    if !r.skipped_changed.is_empty() {
+    if !r.skipped_changed.is_empty() || !r.tags_refused.is_empty() {
         // Files were left where apply put them. The exit status stays 0, as
         // before, but the reason must not read `done` beside `incomplete`.
         set_reason(
@@ -3013,8 +3127,9 @@ sweep {v}
                            never file contents
     when it moves a file   the first and last 4 KiB, so undo can tell if that
                            file changed
-    Finder tags            whether one is present, never its name; Finder
-                           comments are never read
+    Finder tags            whether one is present, never its name; only
+                           --scheme tags reads a file's tag list, to add to
+                           it. Finder comments are never read
     one exception          if a tag lands on a file while sweep is moving it
                            and the file cannot be moved back because its
                            original place has been taken, sweep leaves it
@@ -3138,7 +3253,12 @@ mod tests {
             parse_scheme(&["--scheme".into(), "existing".into()]),
             Ok(())
         );
-        assert!(parse_scheme(&["--scheme".into(), "tags".into()]).is_err());
+        // `tags` is built, on macOS only: it writes a macOS file attribute.
+        assert_eq!(
+            parse_scheme(&["--scheme".into(), "tags".into()]).is_ok(),
+            cfg!(target_os = "macos")
+        );
+        assert!(parse_scheme(&["--scheme".into(), "labels".into()]).is_err());
     }
 
     /// A grace window the parser could not read must not become the default.
@@ -3410,6 +3530,7 @@ mod tests {
             } else {
                 etude_core::journal::EntryState::Planned
             },
+            tag: None,
         }
     }
 
@@ -3816,7 +3937,7 @@ mod tag_report_tests {
         assert_eq!(report.tagged_not_returned, 1);
         assert_eq!(report.moved, 1);
         assert_eq!(std::fs::read(&file).unwrap(), b"occupant");
-        assert_eq!(finish_apply(&report, "{}"), ExitCode::from(3));
+        assert_eq!(finish_apply(&report, "{}", false), ExitCode::from(3));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -3827,7 +3948,7 @@ mod tag_report_tests {
             hold_record_failed: 1,
             ..Default::default()
         };
-        assert_eq!(finish_apply(&report, "{}"), ExitCode::from(3));
+        assert_eq!(finish_apply(&report, "{}", false), ExitCode::from(3));
     }
 
     /// An item returned because it was tagged mid-move is a count in a normal
@@ -3840,14 +3961,14 @@ mod tag_report_tests {
             held_tagged: 1,
             ..Default::default()
         };
-        assert_eq!(finish_apply(&some, "{}"), ExitCode::SUCCESS);
+        assert_eq!(finish_apply(&some, "{}", false), ExitCode::SUCCESS);
         let all = ApplyReport {
             held_tagged: 2,
             held_cross_volume: 1,
             ..Default::default()
         };
-        assert_eq!(finish_apply(&all, "{}"), ExitCode::from(1));
+        assert_eq!(finish_apply(&all, "{}", false), ExitCode::from(1));
         let nothing = ApplyReport::default();
-        assert_eq!(finish_apply(&nothing, "{}"), ExitCode::SUCCESS);
+        assert_eq!(finish_apply(&nothing, "{}", false), ExitCode::SUCCESS);
     }
 }
