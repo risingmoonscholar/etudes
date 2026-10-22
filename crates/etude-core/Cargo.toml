@@ -1,6 +1,6 @@
 [package]
 name = "etude-core"
-version = "0.5.2"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 
@@ -10,4 +10,4 @@ license.workspace = true
 [dependencies]
 
 [dev-dependencies]
-fixtures = { path = "../fixtures", version = "0.5.1" }
+fixtures = { path = "../fixtures", version = "0.5.4" }
