@@ -28,10 +28,11 @@
           <li>Publishes only after staging, the tree audit and quarantine preservation pass. Preservation failure refuses and reports cleanup state; AppleDouble companions are retained where needed for attributes.</li>
           <li>Unpack refuses invalid arguments, such as a mistyped flag, a missing value or a bad <code>--max-size</code>, with exit 2, before it reads the archive or creates anything.</li>
           <li>On SIGTERM, unpack stops its extractor, removes its staging folder and exits 2.</li>
+          <li>Unpack refuses to replace a destination folder that appears during extraction, even when it is empty.</li>
           <li>The extraction budget remains a monitored soft limit, not a hard write-time cap.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
-          <code>schema_version: 2</code>. This is a breaking change for scripts and agents. Consumers must check that version and
+          <code>schema_version: 4</code>. This is a breaking change for scripts and agents. Consumers must check that version and
           read operation fields under <code>details</code>; they moved there
           from the top level. Capability-contract versions are separate.</p>
       </div>

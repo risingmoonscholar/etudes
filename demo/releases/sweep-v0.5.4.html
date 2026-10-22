@@ -28,10 +28,14 @@
           <li>Exported plans bind the reviewed filesystem observations. Changed observations or an existing-folder profile change require replanning before apply.</li>
           <li>The scan says that applying reads the first and last 4 KiB of each file it moves, so undo can tell if a file changed. With <code>--no-journal</code> sweep reads no file bytes.</li>
           <li>Undo leaves in place a folder that sweep did not create. Before each move, sweep checks that the destination folder is still the one it planned for and stops if it was replaced.</li>
+          <li>Finder-tagged files are held by default and reported as a count, not names or paths. <code>--include-tagged</code> organises them anyway, with a warning on stderr. A tagged item whose move would cross volumes stays where it is, because the copy does not carry the tag.</li>
+          <li>Held tagged items are not counted in the scan's &ldquo;Scanned N items&rdquo; total; the JSON plan reports them separately as <code>tagged_skipped</code>.</li>
+          <li><code>--scheme tags --map EXT=TAG</code> adds Finder tags and moves nothing (macOS only). Every tag name comes from the caller. Tags are written only when you apply an exported plan, a tag is only added, and <code>sweep undo</code> restores each file's previous tag attribute while its tags still match what apply wrote.</li>
+          <li><code>sweep propose</code> places individual files: it checks a proposal file against an exported plan and writes a new bound plan. It moves nothing and reads no file contents.</li>
           <li>Opt in to versioned progress records on stderr with <code>--progress-json</code>; <code>--json</code> stdout remains one result envelope. No speed improvement is claimed.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
-          <code>schema_version: 2</code>. This is a breaking change for scripts and agents. Consumers must check that version and
+          <code>schema_version: 4</code>. This is a breaking change for scripts and agents. Consumers must check that version and
           read operation fields under <code>details</code>; they moved there
           from the top level. Capability-contract versions are separate.</p>
       </div>

@@ -26,10 +26,11 @@
           <li>A selection receipt shows no holding path: <code>holding_root</code> reads <code>"&lt;redacted&gt;"</code>. Use the stash id, not that field, for recovery.</li>
           <li><code>stash inspect --id ID</code> lists opaque item ids; <code>stash pop --id ID --item ITEM</code> restores one item and records progress for later restoration.</li>
           <li>Folder pop requires one live matching batch and authenticates all stash journals first. An unreadable older completed or live journal, even from another folder, blocks a newer folder restore with exit 3 and an unreadable-journal/cannot-restore diagnostic. Files and journal bytes remain unchanged. Exact <code>--id</code> restoration uses only the chosen journal and its original key.</li>
+          <li>Stash clears Finder-tagged items too. It reports the folder as clear only when it is: a tagged item that would cross volumes is left in place, the result says the folder is not clear, and the run ends incomplete (exit 3).</li>
           <li>Keep different journal keys in separate <code>ETUDE_STATE_DIR</code> stores. Deadlines remain informational until you explicitly request pop.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
-          <code>schema_version: 2</code>. This is a breaking change for scripts and agents. Consumers must check that version and
+          <code>schema_version: 4</code>. This is a breaking change for scripts and agents. Consumers must check that version and
           read operation fields under <code>details</code>; they moved there
           from the top level. Capability-contract versions are separate.</p>
       </div>
