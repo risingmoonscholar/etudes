@@ -234,6 +234,11 @@ pub fn undo_detail(r: &UndoReport) {
         ("restored", j::num(0)),
         ("tags_restored", j::num(r.tags_restored)),
         (
+            "directories_left_for_journals",
+            j::num(r.directories_left_for_journals),
+        ),
+        ("skipped_changed", j::num(r.skipped_changed.len())),
+        (
             "tags_refused_changed",
             j::num(
                 r.tags_refused
