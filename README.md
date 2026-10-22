@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 580 tests
+cargo test --all                # 586 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -155,10 +155,14 @@ $ sweep apply --plan ~/plan.bin --plan-digest <digest> --yes
   An existing tag is added exactly as the folder spells it, colour included.
 - **Unknown tag state is not guessed.** A file whose tag attribute cannot be read
   or parsed is listed and given nothing.
-- **Undo puts each file's tags back.** The journal records the tag attribute of
-  every file before the first write, and `sweep undo` writes those exact bytes
-  back. A file whose tags someone else changed since apply is left alone and
-  named. Apply needs a journal; `--no-journal` is refused.
+- **Undo restores recorded tag writes.** The journal records each file's tag
+  attribute before the first write. Undo restores those exact bytes when a done
+  record proves the write completed, the file has the same identity, and its
+  tags still match. Replacement files and changed tags are left alone and named.
+  A write without a done record is left alone and settled, since matching tag
+  bytes cannot prove who wrote them. Older tag journals without file identity
+  retain their original tag-byte checks. Apply needs a journal; `--no-journal`
+  is refused.
 - Sweep reads the tag list of the files it may tag, never their contents and
   never Finder comments. Personal-looking, recent, in-progress, project and
   hidden files are skipped, as in every scheme. `--scheme tags` needs macOS.
@@ -470,8 +474,10 @@ If `sweep undo` is killed after it has put the last file back, the folder that
 `sweep apply` created can be left behind, empty. Run `sweep undo` again: it
 removes that folder and finishes. It removes only a folder the journal says
 apply created, and only if the folder is still the same one and has nothing
-in it. A folder with anything inside it, or one that was replaced, is left
-alone. Undo never deletes or overwrites a file.
+in it. A folder needed as an origin or guard by another live journal is kept;
+unreadable history also keeps the folder. Undo reports how many empty folders
+it retained for journals. A folder with anything inside it, or one that was
+replaced, is left alone. Undo never deletes or overwrites a file.
 
 Known gap: a folder that holds only recent files reports `nothing_to_do`, with
 no code that says "try again later".
@@ -508,13 +514,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 57 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 58 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 57 scenarios
+bash stress/run.sh        # 58 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
