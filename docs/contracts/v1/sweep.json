@@ -599,6 +599,22 @@
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
     },
+    "finder_aliases": {
+      "attribute": "com.apple.FinderInfo",
+      "read_scope": "selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category",
+      "handling": "skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload",
+      "counter": "plan.skipped.aliases_skipped",
+      "unreadable": "hold_and_count_unreadable;_scan_incomplete",
+      "platform": "macos_only"
+    },
+    "locked_items": {
+      "flag": "st_flags_UF_IMMUTABLE_or_SF_IMMUTABLE",
+      "read_scope": "selected_tree_metadata;_from_the_lstat_already_taken_per_entry;_no_extra_read",
+      "scan": "hold_locked_files_and_folders_by_name;_a_locked_folder_is_not_entered;_a_group_whose_existing_destination_folder_is_locked_is_held",
+      "apply": "one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move;_never_tagged",
+      "counters": "plan.skipped.locked_skipped;_apply.held_locked",
+      "platform": "macos_only;_never_locked_elsewhere"
+    },
     "structured_progress": {
       "flag": "--progress-json",
       "stream": "stderr_ndjson_alongside_diagnostics",
@@ -660,14 +676,6 @@
       "journal": "records_each_file's_previous_and_written_tag_bytes_before_the_first_write;_no_journal_refused",
       "undo": "restores_the_recorded_previous_bytes_only_while_the_file_still_holds_what_apply_wrote;_a_changed_file_is_left_and_named",
       "status_counts": "moved_counts_files_tagged_for_a_tag_operation"
-    },
-    "finder_aliases": {
-      "attribute": "com.apple.FinderInfo",
-      "read_scope": "selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category",
-      "handling": "skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload",
-      "counter": "plan.skipped.aliases_skipped",
-      "unreadable": "hold_and_count_unreadable;_scan_incomplete",
-      "platform": "macos_only"
     }
   },
   "reason": {

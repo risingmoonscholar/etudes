@@ -41,7 +41,7 @@ pub const SCAN_STATE_ACCOUNTING: &[(&str, &str)] = &[
     ),
     (
         "immutable",
-        "the immutable flag is not preflighted; an OS refusal is reported during apply",
+        "items and folders with the immutable flag (st_flags) are held by the scan and counted; apply checks the flag again before each move",
     ),
     ("invisible", "hidden entries are skipped and counted"),
     (
@@ -178,6 +178,9 @@ pub struct Plan {
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
     pub aliases_skipped: usize,
+    /// Items held because they, or the folder they would move into, carry
+    /// the immutable flag. A count only.
+    pub locked_skipped: usize,
     /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
@@ -256,6 +259,7 @@ impl Plan {
             skipped_hidden: 0,
             skipped_symlink: 0,
             aliases_skipped: 0,
+            locked_skipped: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -289,6 +293,7 @@ impl Plan {
             skipped_hidden: scan.skipped_hidden,
             skipped_symlink: scan.skipped_symlink,
             aliases_skipped: scan.aliases_skipped,
+            locked_skipped: scan.locked_skipped,
             skipped_system: scan.skipped_system,
             skipped_project: scan.skipped_project,
             skipped_in_flight: scan.skipped_in_flight,
@@ -336,6 +341,7 @@ impl Plan {
             && self.skipped_hidden
                 + self.skipped_symlink
                 + self.aliases_skipped
+                + self.locked_skipped
                 + self.skipped_system
                 + self.skipped_project
                 + self.skipped_in_flight
@@ -595,6 +601,7 @@ impl Plan {
                     ("hidden", j::num(self.skipped_hidden)),
                     ("symlinks", j::num(self.skipped_symlink)),
                     ("aliases_skipped", j::num(self.aliases_skipped)),
+                    ("locked_skipped", j::num(self.locked_skipped)),
                     // A deliberate refusal: sweep could have entered these
                     // and chose not to (credential/noise names, or a system
                     // location like /Library).
@@ -1139,6 +1146,21 @@ fn build_with_policy(
         untouched.push((e.path.clone(), Untouched::NoClearGroup));
     }
 
+    // A destination folder that already exists and carries the immutable
+    // flag cannot receive anything. Its group is held here, by name, and its
+    // members are counted as locked, so apply never has to refuse it.
+    let mut locked_skipped = scan.locked_skipped;
+    groups.retain(|group| {
+        let locked = matches!(
+            crate::scan::is_locked_at(&scan.root.join(&group.name)),
+            Ok(true)
+        );
+        if locked {
+            locked_skipped += group.members.len();
+        }
+        !locked
+    });
+
     untouched.sort_by(|a, b| a.0.cmp(&b.0));
     let unclaimed = untouched
         .iter()
@@ -1156,6 +1178,7 @@ fn build_with_policy(
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
         aliases_skipped: scan.aliases_skipped,
+        locked_skipped,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
@@ -1457,6 +1480,7 @@ mod tests {
             skipped_hidden: 0,
             skipped_symlink: 0,
             aliases_skipped: 0,
+            locked_skipped: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,

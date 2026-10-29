@@ -303,7 +303,7 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
         {
             Code::DestinationOutsideRoot
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) => Code::PlanStale,
+        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => Code::PlanStale,
         DestinationExists(_) | DestinationCollision(_) => Code::DestinationExists,
         DestinationIsSynced(_) | CannotCompareNames(_) => Code::UnsafeInput,
         Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Code::DestinationExists,
@@ -593,7 +593,20 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         }
     };
     if outcome.entries.is_empty() {
-        println!("Nothing to stash. {} is already clear.", path.display());
+        if outcome.locked_skipped > 0 {
+            println!(
+                "Nothing to stash. {} is NOT clear: {} locked {} (immutable flag) left in place.",
+                path.display(),
+                outcome.locked_skipped,
+                if outcome.locked_skipped == 1 {
+                    "item"
+                } else {
+                    "items"
+                }
+            );
+        } else {
+            println!("Nothing to stash. {} is already clear.", path.display());
+        }
         return ExitCode::from(1);
     }
 
@@ -694,7 +707,7 @@ fn execute_stash(
                 etude_cli_support::envelope::recovery_operation(&r.journal_id);
             }
             etude_cli_support::envelope::effect("items_moved", r.moved);
-            let clear = folder_is_clear(&r);
+            let clear = folder_is_clear(&r) && bound.locked_skipped == 0;
             if json {
                 use etude_core::json as j;
                 println!(
@@ -714,6 +727,8 @@ fn execute_stash(
                         ("clear", j::bool(clear)),
                         ("held_cross_volume", j::num(r.held_cross_volume)),
                         ("held_tagged", j::num(r.held_tagged)),
+                        ("held_locked", j::num(r.held_locked)),
+                        ("locked_skipped", j::num(bound.locked_skipped)),
                         ("tagged_not_returned", j::num(r.tagged_not_returned)),
                         ("holding", j::str(&bound.groups[0].name)),
                         ("binding", bound.binding_json()),
@@ -732,7 +747,8 @@ fn execute_stash(
             if clear {
                 println!("The selected folder is clear.\n");
             } else {
-                print_stash_holds(&r, true);
+                print_locked_skipped(bound.locked_skipped);
+                print_stash_holds(&r, true, bound.locked_skipped);
             }
             if sl.is_some() && r.moved > 0 {
                 println!(
@@ -870,6 +886,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
             etude_cli_support::envelope::recovery_operation(&report.journal_id);
             etude_cli_support::envelope::effect("items_moved", report.moved);
             let held = report.held_tagged
+                + report.held_locked
                 + report.held_cross_volume
                 + report.tagged_not_returned
                 + report.hold_record_failed;
@@ -883,6 +900,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                         ("moved", j::num(report.moved)),
                         ("held_cross_volume", j::num(report.held_cross_volume)),
                         ("held_tagged", j::num(report.held_tagged)),
+                        ("held_locked", j::num(report.held_locked)),
                         ("tagged_not_returned", j::num(report.tagged_not_returned)),
                         ("selected", j::num(prepared.sources.len())),
                         ("holding_root", j::str("<redacted>")),
@@ -902,7 +920,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     report.journal_id
                 );
                 if held > 0 {
-                    print_stash_holds(&report, false);
+                    print_stash_holds(&report, false, 0);
                 }
             }
             if held > 0 {
@@ -930,7 +948,18 @@ fn cmd_select(args: &[String]) -> ExitCode {
 
 /// What stash left in the folder, with the reason. Counts only: no names, no
 /// paths. A held item means the folder is not clear, and this says so.
-fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
+fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool, locked_skipped: usize) {
+    if r.held_locked > 0 {
+        println!(
+            "{} {} left in the folder because of the immutable flag.",
+            r.held_locked,
+            if r.held_locked == 1 {
+                "item was"
+            } else {
+                "items were"
+            }
+        );
+    }
     if r.held_cross_volume > 0 {
         println!(
             "{} Finder-tagged {} left in the folder: moving to another volume would drop the tag.",
@@ -969,7 +998,7 @@ fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
             "stash: the journal could not record a held item and stash stopped. `stash pop` reconciles from the filesystem."
         );
     }
-    if !folder_is_clear(r) {
+    if !folder_is_clear(r) || locked_skipped > 0 {
         if folder {
             println!("The selected folder is NOT clear.\n");
         } else {
@@ -978,10 +1007,31 @@ fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
     }
 }
 
+/// Locked items (immutable flag) the scan held: never selected, never moved.
+fn print_locked_skipped(locked_skipped: usize) {
+    if locked_skipped > 0 {
+        println!(
+            "{} locked {} (immutable flag) left in the folder; stash cannot move {}.",
+            locked_skipped,
+            if locked_skipped == 1 {
+                "item was"
+            } else {
+                "items were"
+            },
+            if locked_skipped == 1 { "it" } else { "them" }
+        );
+    }
+}
+
 /// The folder is clear only when apply left nothing behind and wrote a
 /// journal that agrees. Any held, stranded or unrecorded item says otherwise.
 fn folder_is_clear(r: &etude_core::apply::ApplyReport) -> bool {
-    r.held_tagged + r.held_cross_volume + r.tagged_not_returned + r.hold_record_failed == 0
+    r.held_tagged
+        + r.held_locked
+        + r.held_cross_volume
+        + r.tagged_not_returned
+        + r.hold_record_failed
+        == 0
 }
 
 /// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
@@ -992,6 +1042,7 @@ fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
         DestinationCollision(_) => "destination names collide",
         DestinationIsSynced(_) => "destination is synced",
         DestinationDirectoryChanged(_) => "destination folder identity changed or was unavailable",
+        DestinationLocked(_) => "a folder is locked by the immutable flag",
         CannotCompareNames(_) => "destination names cannot be compared",
         Io(_) => "I/O failure",
         Journal(_) => "journal failure",
@@ -1008,6 +1059,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         | DestinationCollision(_)
         | DestinationIsSynced(_)
         | DestinationDirectoryChanged(_)
+        | DestinationLocked(_)
         | CannotCompareNames(_) => refuse_preserving_status(apply_reason(e)),
         Io(_) | Journal(_) | Injected(_) => fail(apply_reason(e)),
     }

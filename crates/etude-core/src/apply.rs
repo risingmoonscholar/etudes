@@ -35,6 +35,9 @@ pub enum ApplyError {
     DestinationIsSynced(PathBuf),
     /// A folder was replaced or ceased to be a real directory after planning.
     DestinationDirectoryChanged(PathBuf),
+    /// The root or a destination folder carries the immutable flag, so no
+    /// entry can be renamed into or out of it. Refused before any move.
+    DestinationLocked(PathBuf),
     /// The OS could not tell us a filename's normalized form, so whether two
     /// destinations collide is unknown. Refusing is the only honest answer:
     /// guessing "they don't" is the guess that moves files.
@@ -114,6 +117,11 @@ impl std::fmt::Display for ApplyError {
                 "refused: destination {} is inside a cloud-synced folder",
                 crate::redact::path(p)
             ),
+            ApplyError::DestinationLocked(p) => write!(
+                f,
+                "refused: folder {} is locked (immutable flag); nothing moved",
+                crate::redact::path(p)
+            ),
             ApplyError::Injected(n) => write!(f, "injected failure at move {n}"),
         }
     }
@@ -129,6 +137,10 @@ pub struct ApplyReport {
     /// when checked at move time, or tagged during the move and moved back.
     /// A count only; no tag names and no paths.
     pub held_tagged: usize,
+    /// Items left at their origins because they carried the immutable flag
+    /// when checked just before their move. In a tag plan, files that were
+    /// locked when checked and so received no tag. A count only.
+    pub held_locked: usize,
     /// Tagged items that would have had to cross volumes, which would strip
     /// the tag. Left at their origins.
     pub held_cross_volume: usize,
@@ -509,10 +521,19 @@ fn apply_plan_with_structured_progress(
             })
             .map(|group| plan.root.join(&group.name))
             .collect();
+        // A locked folder refuses every rename into or out of it. Ask once
+        // per folder, before anything moves: one lstat each.
+        if crate::scan::is_locked_at(&plan.root).map_err(ApplyError::Io)? {
+            return Err(ApplyError::DestinationLocked(plan.root.clone()));
+        }
         for g in plan.groups.iter().filter(|g| g.accepted) {
             let dest_dir = plan.root.join(&g.name);
             if crate::scan::is_synced(&dest_dir) && !plan.allow_sync {
                 return Err(ApplyError::DestinationIsSynced(dest_dir));
+            }
+            if matches!(fs::symlink_metadata(&dest_dir), Ok(meta) if meta.is_dir() && crate::scan::is_locked(&meta))
+            {
+                return Err(ApplyError::DestinationLocked(dest_dir));
             }
             for src in &g.members {
                 let Some(name) = src.file_name() else {
@@ -586,6 +607,7 @@ fn apply_plan_with_structured_progress(
 
         let mut moved = 0usize;
         let mut held_tagged = 0usize;
+        let mut held_locked = 0usize;
         let mut held_cross_volume = 0usize;
         let mut tagged_not_returned = 0usize;
         let mut hold_record_failed = 0usize;
@@ -603,6 +625,17 @@ fn apply_plan_with_structured_progress(
             if !plan.include_tagged && crate::scan::has_finder_tag(&from).map_err(ApplyError::Io)? {
                 j.entries[i].state = EntryState::Held;
                 held_tagged += 1;
+                if let Some(sl) = sealer {
+                    j.record_held(i, sl).map_err(ApplyError::Journal)?;
+                }
+                continue;
+            }
+            // Move-time flag check, one lstat: an item locked after the scan
+            // is held and counted, whatever the plan's tag policy. The OS
+            // would refuse the rename anyway; this names the reason first.
+            if crate::scan::is_locked_at(&from).map_err(ApplyError::Io)? {
+                j.entries[i].state = EntryState::Held;
+                held_locked += 1;
                 if let Some(sl) = sealer {
                     j.record_held(i, sl).map_err(ApplyError::Journal)?;
                 }
@@ -741,6 +774,7 @@ fn apply_plan_with_structured_progress(
         Ok(ApplyReport {
             moved,
             held_tagged,
+            held_locked,
             held_cross_volume,
             tagged_not_returned,
             hold_record_failed,
@@ -876,6 +910,13 @@ fn apply_tags(
             .tag
             .clone()
             .expect("a tag plan only journals tag entries");
+        // A file locked since planning cannot take a tag; hold it and count it.
+        if crate::scan::is_locked_at(&path).map_err(ApplyError::Io)? {
+            j.entries[i].state = EntryState::Held;
+            report.held_locked += 1;
+            j.record_held(i, sl).map_err(ApplyError::Journal)?;
+            continue;
+        }
         // The file must still hold exactly what the journal says was found.
         let unchanged = crate::tags::read(&path).is_ok_and(|now| now == change.previous);
         if !unchanged {

@@ -315,6 +315,7 @@ class Probe:
                     "mixed holds must not promise waiting alone will release the folder")
             if sys.platform == "darwin":
                 self.finder_aliases()
+                self.locked_items()
         missing = self.directory / "does-not-exist"
         output = self.run(missing, "--json", codes=(2, 3))
         envelope = json.loads(output.stdout)
@@ -356,6 +357,30 @@ class Probe:
         require("1 Finder alias skipped by flag" in human,
                 "human summary must disclose the alias count")
         require(snapshot(tree) == before, "alias scan changed the fixture")
+
+    def locked_items(self):
+        tree = self.directory / "locked-tree"
+        tree.mkdir()
+        locked = tree / "locked.jpg"
+        locked.write_bytes(b"locked fixture")
+        for i in range(3):
+            (tree / f"ordinary-{i}.jpg").write_bytes(b"ordinary fixture")
+        subprocess.run(["chflags", "uchg", str(locked)], stdin=subprocess.DEVNULL, check=True)
+        try:
+            before = snapshot(tree)
+            for options in ((), ("--scheme", "tags", "--map", "jpg=Pictures")):
+                result = self.run(tree, *options, "--json", codes=(0, 1))
+                value = json.loads(result.stdout)
+                require(value["details"]["skipped"].get("locked_skipped") == 1,
+                        "locked items must have a separate skip count")
+                require(value["details"]["scanned"] == 3,
+                        "only unlocked files are candidates")
+            human = self.run(tree, codes=(0, 1)).stdout.decode()
+            require("1 locked item left alone by flag" in human,
+                    "human summary must disclose the locked count")
+            require(snapshot(tree) == before, "locked scan changed the fixture")
+        finally:
+            subprocess.run(["chflags", "nouchg", str(locked)], stdin=subprocess.DEVNULL, check=True)
 
     def read_category(self, result, name):
         categories = json.loads(result.stdout)["observations"]["categories"]
