@@ -31,6 +31,22 @@ Journal append reuses one handle per apply and writes each frame together; relea
 - **pack:** provides a version-1 capability declaration inside result envelope 4,
   opaque item ids, redacted paths, independent format probes and a help transcript.
 - **pack:** needs macOS; it calls the system `tar` and `xattr`.
+- **Verification:** `stress/scenarios/97-pack-refusal-matrix.sh` builds one tree
+  per pack fixture row and checks exit status, reason, an untouched source, no
+  staging file, no destination on refusal, the named in-flight entry, and no
+  sensitive name in any output.
+- **Verification:** `stress/scenarios/98-pack-kill-mid-write.sh` stops the writer
+  mid-write, changes a source file while it is stopped, and requires a refusal
+  with no destination; a SIGKILL mid-write publishes nothing and a retry matches
+  the source. A missed window reads unproven, never a pass.
+- **Verification:** `stress/scenarios/99-pack-then-unpack.sh` packs a mixed tree
+  for another recipient, unpacks it, and requires equal ordinary bytes, a complete
+  package and no sensitive name or Finder litter; sweep and stash then read the
+  result without moving anything. `stress/demos.txt` now lists pack.
+- **Verification:** `scripts/check-pack-refusal-mutation.sh` plants three faults
+  in pack's source (a changed in-flight code, an in-flight refusal with no
+  reason, a failed post-publication readback reported as done) and requires a
+  witness to catch each, then restores the source and verifies it with cmp.
 
 ### 0.5.4 candidate — sweep, stash and unpack
 
