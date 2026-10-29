@@ -1119,7 +1119,7 @@ fn folds_case(dir: &Path) -> bool {
 ///   Darwin. This falls back to the pre-fix plain-lowercase behavior. That
 ///   behavior is unchanged from before. It is not a regression, but also
 ///   not fixed there.
-fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
+pub fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
     let lossy = path.to_string_lossy();
     let cased = |s: String| if folds_case { s.to_lowercase() } else { s };
     #[cfg(target_os = "macos")]

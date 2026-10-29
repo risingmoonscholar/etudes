@@ -518,7 +518,7 @@ pub const IN_FLIGHT_SUFFIXES: &[&str] = &[
 /// unrelated video. The same holds for any format with external assets by
 /// configuration. Sweep protects managed layouts; it cannot protect an
 /// arrangement only the application knows about.
-const BUNDLE_MARKERS: &[&str] = &[".fcpbundle", ".band", ".logicx"];
+pub const BUNDLE_MARKERS: &[&str] = &[".fcpbundle", ".band", ".logicx"];
 
 /// A marker file that marks the project ROOT.
 ///
@@ -556,7 +556,7 @@ const DOCUMENT_MARKERS: &[&str] = &[
     ".c4d",
 ];
 
-fn name_matches(name: &str, list: &[&str]) -> bool {
+pub fn name_matches(name: &str, list: &[&str]) -> bool {
     let lower = name.to_ascii_lowercase();
     list.iter().any(|m| {
         if m.starts_with('.') {
@@ -1173,7 +1173,7 @@ pub fn is_synced(path: &Path) -> bool {
     SYNC_MARKERS.iter().any(|m| s.contains(m))
 }
 
-fn is_package(name: &str) -> bool {
+pub fn is_package(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     PACKAGE_SUFFIXES.iter().any(|s| lower.ends_with(s))
 }
@@ -1191,7 +1191,7 @@ fn is_package(name: &str) -> bool {
 /// list for this would fail open exactly where the user is least likely to
 /// notice: a video project on a machine without the editor.
 #[cfg(target_os = "macos")]
-fn os_says_package(path: &Path) -> bool {
+pub fn os_says_package(path: &Path) -> bool {
     use std::process::Command;
     Command::new("mdls")
         .args(["-name", "kMDItemContentTypeTree", "-raw"])
@@ -1203,7 +1203,7 @@ fn os_says_package(path: &Path) -> bool {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn os_says_package(_path: &Path) -> bool {
+pub fn os_says_package(_path: &Path) -> bool {
     false
 }
 
@@ -1211,7 +1211,7 @@ fn is_hidden(name: &str) -> bool {
     name.starts_with('.')
 }
 
-fn never_enter(name: &str) -> bool {
+pub fn never_enter(name: &str) -> bool {
     NEVER_ENTER.iter().any(|d| d.eq_ignore_ascii_case(name))
 }
 

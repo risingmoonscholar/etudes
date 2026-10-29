@@ -101,6 +101,7 @@ check_pin() {
 check_pin sweep-cli  crates/sweep-cli/Cargo.toml
 check_pin stash-cli  crates/stash-cli/Cargo.toml
 check_pin unpack-cli crates/unpack-cli/Cargo.toml
+check_pin pack-cli crates/pack-cli/Cargo.toml
 
 # The version the site shows, against the version the binaries report.
 # It was hardcoded in the page template as "v0.3" and stayed there through the
@@ -117,7 +118,7 @@ except Exception:
 # Per tool, against each tool's own manifest. One ambient version compared
 # against one manifest let the site show stash and unpack at a version they
 # are frozen below -- the freeze has to convey all the way to the page.
-for tool in sweep stash unpack; do
+for tool in sweep stash unpack pack; do
   panel_v=$(python3 -c "
 import json
 d=json.load(open('demo/transcripts.json'))
@@ -183,7 +184,7 @@ import json
 try:
     d = json.load(open("demo/transcripts.json"))
     have = {t["label"] for t in d["transcripts"]}
-    missing = [f"{t}-help" for t in ("sweep", "stash", "unpack") if f"{t}-help" not in have]
+    missing = [f"{t}-help" for t in ("sweep", "stash", "unpack", "pack") if f"{t}-help" not in have]
     print(",".join(missing) if missing else "ALL")
 except Exception as e:
     print("ERROR " + str(e))

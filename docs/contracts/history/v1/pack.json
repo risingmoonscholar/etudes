@@ -1,0 +1,311 @@
+{
+  "schema_version": 4,
+  "tool_version": "<manifest-version>",
+  "operation_id": "<per-invocation>",
+  "status": "done",
+  "scope": {
+    "tool": "pack",
+    "operation": "contract",
+    "domains": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "startup": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "evidence": "conditional declared domains; observations report actual instrumented reads"
+  },
+  "observations": {
+    "categories": [],
+    "scope": "instrumented operations on the command thread",
+    "unproven": [
+      "subprocess reads",
+      "environment access",
+      "operations outside instrumentation",
+      "absence of access when a counter is zero or missing"
+    ]
+  },
+  "effects": {
+    "outcome": "done",
+    "counters": [],
+    "unproven": [
+      "effects outside reported operation accounting; zero counters do not prove no effects"
+    ]
+  },
+  "verification": [
+    {
+      "claim": "command_completed",
+      "status": "pass"
+    },
+    {
+      "claim": "complete_read_coverage",
+      "status": "unproven"
+    },
+    {
+      "claim": "subprocess_network_absence",
+      "status": "unproven"
+    }
+  ],
+  "recovery": {
+    "mode": "no_operation_undo_needed",
+    "conditions": [],
+    "verification": "unproven; consult operation details and filesystem before retrying",
+    "operation": ""
+  },
+  "disclosure": {
+    "receipt_contains": "read categories and outcomes only; no contents, keys or environment values",
+    "zero_counters": "not evidence of no access",
+    "details": "may contain operation paths; treat as sensitive"
+  },
+  "details": {
+    "schema_version": 1,
+    "tool_version": "<manifest-version>",
+    "operation_id": "<per-invocation>",
+    "status": "done",
+    "tool": "pack",
+    "kind": "capability_contract",
+    "refusal_codes": [
+      {
+        "code": "invalid_arguments",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The arguments do not form a supported request."
+      },
+      {
+        "code": "unknown_option",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "An option is not recognized by this command."
+      },
+      {
+        "code": "missing_input",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The requested input is absent or no longer available; choose an existing input."
+      },
+      {
+        "code": "unsupported_format",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "This format is outside the tool's supported set."
+      },
+      {
+        "code": "insufficient_space",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input."
+      },
+      {
+        "code": "internal_error",
+        "retry": "never",
+        "subject_kind": null,
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The tool stopped on an internal failure; inspect its result and local state before choosing another action."
+      },
+      {
+        "code": "destination_exists",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The destination is occupied; choose or make a vacant destination before retrying."
+      },
+      {
+        "code": "download_in_flight",
+        "retry": "later",
+        "subject_kind": "download_in_flight",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
+        "code": "unsafe_input",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The input violates a safety rule; change the input before retrying."
+      },
+      {
+        "code": "permission_denied",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "The request lacks required access; change the relevant permissions before retrying."
+      },
+      {
+        "code": "operation_incomplete",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "pack"
+        ],
+        "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      }
+    ],
+    "contract_query": {
+      "operation": "contract",
+      "reads": [],
+      "writes": []
+    },
+    "observation_scope": {
+      "default_user_content": "included_source_file_bytes",
+      "content_exceptions": [
+        "source_xattr_bytes_keep_only",
+        "archive_readback_bytes"
+      ],
+      "symlinks": "refused",
+      "environment": [
+        "HOME"
+      ],
+      "subprocess_environment": "inherited_except_copyfile_disable_metadata_policy"
+    },
+    "mutation_scope": {
+      "operations": [
+        {
+          "operation": "list",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "destination_parent_metadata"
+          ],
+          "writes": []
+        },
+        {
+          "operation": "pack",
+          "reads": [
+            "selected_tree_metadata",
+            "ancestor_metadata",
+            "project_marker_names",
+            "os_random_bytes",
+            "source_file_bytes",
+            "source_xattr_bytes",
+            "destination_parent_metadata",
+            "volume_free_space",
+            "staging_archive_metadata",
+            "archive_readback_bytes"
+          ],
+          "writes": [
+            "private_staging_archive",
+            "new_destination_archive"
+          ]
+        }
+      ],
+      "startup": {
+        "operation": "startup_except_contract",
+        "reads": [],
+        "writes": []
+      }
+    },
+    "network": {
+      "policy": "none",
+      "runtime_enforcement": "none",
+      "subprocesses": [
+        "/usr/bin/tar",
+        "/bin/df",
+        "/usr/bin/xattr",
+        "/usr/bin/mdls"
+      ],
+      "subprocess_network_verified": false
+    },
+    "overwrite": {
+      "user_destinations": "refused",
+      "owned_state": "private_staging_only"
+    },
+    "deletion": {
+      "source_entries": "never",
+      "user_payloads": "never",
+      "owned_artifacts": [
+        "identified_private_staging_archive"
+      ]
+    },
+    "reversibility": {
+      "mode": "no_undo",
+      "conditions": [
+        "source_retained"
+      ],
+      "disabled_by": []
+    },
+    "persistent_state": {
+      "journal_store": "none",
+      "result_artifacts": [
+        "destination_archive"
+      ]
+    },
+    "formats": {
+      "archive_creation": {
+        "supported": [
+          ".tar.gz",
+          ".zip"
+        ],
+        "unsupported": [
+          "all_other_formats"
+        ],
+        "unlisted": "unsupported",
+        "matching": "case_insensitive_suffix"
+      },
+      "metadata": "tar.gz_keep_or_drop;zip_drop_only"
+    },
+    "policy": {
+      "recipient": [
+        "self",
+        "mac",
+        "other"
+      ],
+      "required": "--for",
+      "sensitive_names": "etude_core::classify::sensitive_omitted_and_counted",
+      "packages": "complete_or_refused",
+      "hidden": "included_except_metadata_drop_litter",
+      "publication": "exclusive_rename_or_refuse"
+    },
+    "limits": {
+      "platform": "macos",
+      "output_budget": "conservative_preflight_and_monitored_soft_limit_not_hard_cap"
+    },
+    "evidence": {
+      "kind": "declaration_not_receipt",
+      "access_verified": false,
+      "witness": "scripts/check-tool-contracts.py"
+    }
+  },
+  "reason": {
+    "code": "done",
+    "retry": "not_needed"
+  }
+}

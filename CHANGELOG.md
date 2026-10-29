@@ -13,6 +13,25 @@ reviewers were pointed at the tools before anyone else could be.
 Journal append reuses one handle per apply and writes each frame together; release runs on 10,000 small files (9,998 moves) measured apply 74.83/101.72 s before and 60.07/55.56 s after, undo 65.91/79.88 s before and 99.22/55.82 s after.
 - Apply re-checks member eligibility before any change and again before each move or tag write, and refuses invalid tag entries in exported plans. A member found ineligible before anything moved is a refusal; one found ineligible after a move stops the apply as incomplete, with the journal holding what moved for `sweep undo`.
 
+### 0.6.0 candidate — pack
+
+- **pack:** requires an explicit recipient class; self and mac default to tar.gz
+  with metadata kept, other to ZIP with metadata dropped.
+- **pack:** shares sweep's sensitive-name classifier, omits exclusions without
+  naming them, includes hidden entries, and includes packages complete or refuses.
+- **pack:** refuses symlinks, in-flight downloads, unsafe member paths and
+  extraction-name collisions; recent modification alone is eligible.
+- **pack:** makes metadata loss explicit, refuses ZIP with keep, computes a
+  conservative output bound and monitors private staging against the size limit.
+- **pack:** independently reads the archive and rechecks source identity before
+  exclusive publication; existing destinations are never replaced, including on
+  volumes without exclusive rename support.
+- **pack:** retains source entries and retains published output on a failed final
+  verification, reporting incomplete with exit 3.
+- **pack:** provides a version-1 capability declaration inside result envelope 4,
+  opaque item ids, redacted paths, independent format probes and a help transcript.
+- **pack:** needs macOS; it calls the system `tar` and `xattr`.
+
 ### 0.5.4 candidate — sweep, stash and unpack
 
 - Undo keeps empty created folders needed by another live journal, so stash can restore into them.

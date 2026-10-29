@@ -1,6 +1,6 @@
 # etudes
 
-Three small command-line tools that tidy a folder without reading your private files.
+Four small command-line tools for macOS: organise, hold, extract, and create archives.
 
 **macOS only.**
 ```console
@@ -40,6 +40,7 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 | **`sweep`** | Organises the obvious and leaves the private alone | v0.5.4 candidate |
 | **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.4 candidate |
 | **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.4 candidate |
+| **`pack`** | Creates a new archive under an explicit recipient policy | v0.6.0 candidate |
 
 ## Install
 
@@ -48,7 +49,7 @@ are the proposed release pins and will work only after those tags are published.
 For currently published versions, see [Releases](https://github.com/risingmoonscholar/etudes/releases).
 To try this candidate from a checkout, use
 `cargo install --path crates/sweep-cli --locked`
-(or `crates/stash-cli`, `crates/unpack-cli`).
+(or `crates/stash-cli`, `crates/unpack-cli`, `crates/pack-cli`).
 
 ```sh
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.4 sweep-cli
@@ -56,8 +57,15 @@ cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag s
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.4 unpack-cli
 ```
 
-The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
-`unpack`, in `~/.cargo/bin`.
+Pack is a source candidate. Install it with `cargo install --path crates/pack-cli --locked`.
+Its planned per-tool tag is `pack-v0.6.0`; it has not been published:
+
+```sh
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag pack-v0.6.0 pack-cli
+```
+
+The crates are named `*-cli`; the binaries they install are `sweep`, `stash`,
+`unpack` and `pack`, in `~/.cargo/bin`.
 
 `--tag` pins the install to a released version. Without it `cargo install` takes
 whatever `main` is at that moment, so two people running the same command on the
@@ -74,7 +82,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 600 tests
+cargo test --all                # 615 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -371,6 +379,9 @@ stash ~/Desktop --for 3d --json # what moved, and when it is due
 stash status --json             # what is held, and whether it is overdue
 unpack a.zip --list --json      # inspect an archive without extracting
 unpack a.zip --json             # what happened, or why it was refused
+pack ./selected --for other --list --json  # metadata preflight, no writes
+pack ./selected --for other --into ./delivery.zip --json
+pack contract --json
 ```
 
 **Unpack publishes an audited transaction.** Extraction happens in a private
@@ -563,6 +574,7 @@ crates/
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
   unpack-cli/    bin: unpack, dispatches to system tools, parses nothing
+  pack-cli/      bin: pack, manifest preflight and exclusive archive publication
   fixtures/      synthetic adversarial trees; no real file is read in testing
 ```
 
@@ -708,3 +720,48 @@ claim. Receipts continue to name uninstrumented access as unproven, and no zero
 counter proves absence of reads.
 
 Journalled stash operations return a persistent `stash_id`. Use `stash pop --id ID` for exact restoration, or `stash pop --latest` to explicitly select the latest live batch. Folder operations can coexist; ambiguous path-based restores refuse. Deadlines remain information until an explicit pop. See [independent stash batches](docs/stash-batches.md) for identity, legacy compatibility and disclosure semantics.
+
+
+## Pack a selected tree
+
+`pack SOURCE --for self|mac|other` creates a new archive beside SOURCE, or at
+`--into FILE`. The recipient class is required. `self` and `mac` default to
+`tar.gz` with metadata kept; `other` defaults to ZIP with metadata dropped.
+`--format tar.gz|zip` and `--metadata keep|drop` make those choices explicit.
+ZIP with `keep` is refused because this writer cannot retain the required Mac
+metadata streams in that format. `--list` does preflight without staging.
+
+The sensitive-name classifier is shared with sweep. Excluded sensitive entries
+are omitted and counted without printing their names. Credential and excluded
+directory names are omitted too. Hidden entries are included; `drop` omits
+AppleDouble files and `.DS_Store` and tells the system writer to discard xattrs,
+resource forks, ACLs and file flags. `keep` uses the system tar writer's Mac
+metadata support. Packages are complete or the operation is refused when an
+exclusion would split one. A package selected as SOURCE is refused because the
+relative manifest would omit its wrapper; select its parent tree to retain it.
+Recently modified files remain eligible.
+
+Pack refuses all symlinks, unsupported node types, in-flight downloads,
+case-insensitive and normalized-name collisions, reserved extraction names,
+absolute paths, traversal and paths its readback cannot represent safely.
+An in-flight refusal identifies the affected entry. Control characters and
+backslashes are refused. No source entry is renamed, deleted or rewritten.
+
+A conservative bound includes payload, per-member overhead and retained
+metadata lengths. `--max-size N[G|M]` defaults to 4 GiB. Available space is
+checked before writing, and staging size is checked every 100 ms and after the
+writer exits. The limit is soft: overshoot can occur between checks. Staging
+is a private mode-0600 file beside the output. A closed archive is independently
+read back, its manifest compared with the plan, and source identities checked
+before exclusive publication. Unicode member names are compared in NFC because
+the system writer can store canonically equivalent spellings. Existing outputs are never replaced. Volumes
+without exclusive rename support are refused. A post-publication verification
+failure retains the output and reports `incomplete` with exit 3.
+
+Source identity checks are metadata checks, not a filesystem lock or an
+application consistency snapshot. Ownership, hard-link topology and every
+application's metadata fidelity are not guaranteed. The system archive process
+reads included file bytes; this differs from sweep's metadata classification.
+Receipts contain opaque item ids and redacted paths, with subprocess reads
+explicitly outside complete instrumentation coverage. No pack animation is
+included; the site records its help output.

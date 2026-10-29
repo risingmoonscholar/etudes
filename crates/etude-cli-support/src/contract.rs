@@ -16,6 +16,7 @@ pub enum Tool {
     Sweep,
     Stash,
     Unpack,
+    Pack,
 }
 
 /// This table is also the unpack dispatch table. Aliases are real formats on
@@ -93,10 +94,13 @@ pub fn declaration(
     text_exts: &[&str],
     text_max_bytes: Option<usize>,
 ) -> String {
+    if matches!(tool, Tool::Pack) {
+        return pack_declaration(version);
+    }
     let name = match tool {
         Tool::Sweep => "sweep",
         Tool::Stash => "stash",
-        Tool::Unpack => "unpack",
+        Tool::Unpack | Tool::Pack => "unpack",
     };
     let custody = !matches!(tool, Tool::Unpack);
     let operations = operation_scopes(tool);
@@ -143,7 +147,7 @@ pub fn declaration(
             j::num(match tool {
                 Tool::Sweep => SCHEMA_VERSION + 7,
                 Tool::Stash => 10,
-                Tool::Unpack => SCHEMA_VERSION + 2,
+                Tool::Unpack | Tool::Pack => SCHEMA_VERSION + 2,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -177,7 +181,9 @@ pub fn declaration(
                             "journal_fingerprint_prefixes",
                             "explicit_selection_path_list_bytes",
                         ],
-                        Tool::Unpack => &["system_extractor_reads_private_archive_copy"],
+                        Tool::Unpack | Tool::Pack => {
+                            &["system_extractor_reads_private_archive_copy"]
+                        }
                     }),
                 ),
                 (
@@ -199,7 +205,7 @@ pub fn declaration(
                             "SWEEP_GRACE_SECS",
                         ],
                         Tool::Stash => &["HOME", "TMPDIR", "ETUDE_STATE_DIR", "ETUDE_JOURNAL_KEY"],
-                        Tool::Unpack => &["HOME", "TMPDIR"],
+                        Tool::Unpack | Tool::Pack => &["HOME", "TMPDIR"],
                     }),
                 ),
                 ("subprocess_environment", j::str("inherited")),
@@ -262,7 +268,7 @@ pub fn declaration(
                             "case_probe_files",
                         ],
                         Tool::Stash => &["empty_holding_directories", "case_probe_files"],
-                        Tool::Unpack => &[
+                        Tool::Unpack | Tool::Pack => &[
                             "private_archive_copy",
                             "failed_staging_tree",
                             "junk_members_in_staging",
@@ -343,7 +349,7 @@ pub fn declaration(
                     strings(match tool {
                         Tool::Sweep => &["group_directories"],
                         Tool::Stash => &["holding_directory_deadline_in_name"],
-                        Tool::Unpack => &["destination_tree"],
+                        Tool::Unpack | Tool::Pack => &["destination_tree"],
                     }),
                 ),
             ]),
@@ -358,7 +364,7 @@ pub fn declaration(
                         Tool::Stash => {
                             "visible_files_directories_packages_and_links_opaque_any_extension"
                         }
-                        Tool::Unpack => "archive_suffix_allowlist",
+                        Tool::Unpack | Tool::Pack => "archive_suffix_allowlist",
                     }),
                 ),
                 ("content_inspection", content_formats),
@@ -782,6 +788,34 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &["keychain_if_no_supplied_key"],
             ),
         ],
+        Tool::Pack => vec![
+            scope(
+                "list",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "destination_parent_metadata",
+                ],
+                &[],
+            ),
+            scope(
+                "pack",
+                &[
+                    "selected_tree_metadata",
+                    "ancestor_metadata",
+                    "project_marker_names",
+                    "os_random_bytes",
+                    "source_file_bytes",
+                    "source_xattr_bytes",
+                    "destination_parent_metadata",
+                    "volume_free_space",
+                    "staging_archive_metadata",
+                    "archive_readback_bytes",
+                ],
+                &["private_staging_archive", "new_destination_archive"],
+            ),
+        ],
         Tool::Unpack => vec![
             scope(
                 "list",
@@ -830,7 +864,7 @@ fn startup_scope(tool: Tool) -> String {
             &["legacy_state_metadata"],
             &["legacy_state_migration"],
         ),
-        Tool::Unpack => scope("startup_except_contract", &[], &[]),
+        Tool::Unpack | Tool::Pack => scope("startup_except_contract", &[], &[]),
     }
 }
 
@@ -847,6 +881,7 @@ pub fn invocation_scope(tool: Tool, operation: &str) -> String {
                 Tool::Sweep => "sweep",
                 Tool::Stash => "stash",
                 Tool::Unpack => "unpack",
+                Tool::Pack => "pack",
             }),
         ),
         ("operation", j::str(operation)),
@@ -862,6 +897,132 @@ pub fn invocation_scope(tool: Tool, operation: &str) -> String {
         (
             "evidence",
             j::str("conditional declared domains; observations report actual instrumented reads"),
+        ),
+    ])
+}
+
+fn pack_declaration(version: &str) -> String {
+    j::obj(&[
+        ("schema_version", j::num(1)),
+        ("tool_version", j::str(version)),
+        (
+            "operation_id",
+            j::str(&format!("contract-{}", crate::envelope::operation_id())),
+        ),
+        ("status", j::str("done")),
+        ("tool", j::str("pack")),
+        ("kind", j::str("capability_contract")),
+        ("refusal_codes", crate::reason::codes_json("pack")),
+        ("contract_query", scope("contract", &[], &[])),
+        (
+            "observation_scope",
+            j::obj(&[
+                ("default_user_content", j::str("included_source_file_bytes")),
+                (
+                    "content_exceptions",
+                    strings(&["source_xattr_bytes_keep_only", "archive_readback_bytes"]),
+                ),
+                ("symlinks", j::str("refused")),
+                ("environment", strings(&["HOME"])),
+                (
+                    "subprocess_environment",
+                    j::str("inherited_except_copyfile_disable_metadata_policy"),
+                ),
+            ]),
+        ),
+        (
+            "mutation_scope",
+            j::obj(&[
+                ("operations", j::arr(operation_scopes(Tool::Pack))),
+                ("startup", startup_scope(Tool::Pack)),
+            ]),
+        ),
+        (
+            "network",
+            j::obj(&[
+                ("policy", j::str("none")),
+                ("runtime_enforcement", j::str("none")),
+                (
+                    "subprocesses",
+                    strings(&["/usr/bin/tar", "/bin/df", "/usr/bin/xattr", "/usr/bin/mdls"]),
+                ),
+                ("subprocess_network_verified", j::bool(false)),
+            ]),
+        ),
+        (
+            "overwrite",
+            j::obj(&[
+                ("user_destinations", j::str("refused")),
+                ("owned_state", j::str("private_staging_only")),
+            ]),
+        ),
+        (
+            "deletion",
+            j::obj(&[
+                ("source_entries", j::str("never")),
+                ("user_payloads", j::str("never")),
+                (
+                    "owned_artifacts",
+                    strings(&["identified_private_staging_archive"]),
+                ),
+            ]),
+        ),
+        (
+            "reversibility",
+            j::obj(&[
+                ("mode", j::str("no_undo")),
+                ("conditions", strings(&["source_retained"])),
+                ("disabled_by", strings(&[])),
+            ]),
+        ),
+        (
+            "persistent_state",
+            j::obj(&[
+                ("journal_store", j::str("none")),
+                ("result_artifacts", strings(&["destination_archive"])),
+            ]),
+        ),
+        (
+            "formats",
+            j::obj(&[
+                (
+                    "archive_creation",
+                    formats(&[".tar.gz", ".zip"], &["all_other_formats"]),
+                ),
+                ("metadata", j::str("tar.gz_keep_or_drop;zip_drop_only")),
+            ]),
+        ),
+        (
+            "policy",
+            j::obj(&[
+                ("recipient", strings(&["self", "mac", "other"])),
+                ("required", j::str("--for")),
+                (
+                    "sensitive_names",
+                    j::str("etude_core::classify::sensitive_omitted_and_counted"),
+                ),
+                ("packages", j::str("complete_or_refused")),
+                ("hidden", j::str("included_except_metadata_drop_litter")),
+                ("publication", j::str("exclusive_rename_or_refuse")),
+            ]),
+        ),
+        (
+            "limits",
+            j::obj(&[
+                ("platform", j::str("macos")),
+                (
+                    "output_budget",
+                    j::str("conservative_preflight_and_monitored_soft_limit_not_hard_cap"),
+                ),
+            ]),
+        ),
+        (
+            "evidence",
+            j::obj(&[
+                ("kind", j::str("declaration_not_receipt")),
+                ("access_verified", j::bool(false)),
+                ("witness", j::str("scripts/check-tool-contracts.py")),
+            ]),
         ),
     ])
 }

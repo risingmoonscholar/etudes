@@ -114,7 +114,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "unsupported_format",
         retry: RetryClass::Never,
         subject_kind: None,
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "This format is outside the tool's supported set.",
     },
     CodeSpec {
@@ -122,7 +122,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "insufficient_space",
         retry: RetryClass::AfterChange,
         subject_kind: Some("destination"),
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input.",
     },
     CodeSpec {
@@ -147,6 +147,8 @@ pub const CODES: &[CodeSpec] = &[
         retry: RetryClass::AfterChange,
         subject_kind: Some("destination"),
         operations: &[
+            "pack:pack",
+            "pack:list",
             "sweep:apply",
             "sweep:propose",
             "sweep:undo",
@@ -185,7 +187,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["sweep:scan"],
+        operations: &["pack:pack", "pack:list", "sweep:scan"],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {
@@ -244,6 +246,8 @@ pub const CODES: &[CodeSpec] = &[
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
         operations: &[
+            "pack:pack",
+            "pack:list",
             "sweep:scan",
             "sweep:apply",
             "stash:stash",
@@ -266,6 +270,7 @@ pub const CODES: &[CodeSpec] = &[
         retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
         operations: &[
+            "pack:pack",
             "sweep:apply",
             "sweep:undo",
             "stash:stash",
@@ -447,6 +452,7 @@ pub fn codes_json(tool: &str) -> String {
             "apply_exported_plan",
         ],
         "unpack" => &["extract", "list"],
+        "pack" => &["pack", "list"],
         _ => &[],
     };
     j::arr(

@@ -18,7 +18,7 @@
 #   scripts/check-coverage.py fails when a surface has neither
 
 [surface.binaries]
-what = "what sweep, stash and unpack do to a user's files"
+what = "what sweep, stash, unpack and pack do to a user's files"
 watched_by = ["cargo test --all", "stress-ratchet.sh"]
 
 [surface.output-truthfulness]

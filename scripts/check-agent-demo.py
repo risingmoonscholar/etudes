@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SCEN = REPO / "stress" / "scenarios"
 DEMOS = REPO / "stress" / "demos.txt"
-TOOLS = {"sweep-cli": "$SWEEP", "stash-cli": "$STASH", "unpack-cli": "$UNPACK"}
+TOOLS = {"sweep-cli": "$SWEEP", "stash-cli": "$STASH", "unpack-cli": "$UNPACK", "pack-cli": "$PACK"}
 
 
 def sh(*a):
