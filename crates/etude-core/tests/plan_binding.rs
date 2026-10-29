@@ -501,3 +501,136 @@ fn move_time_classification_refuses_a_source_swapped_to_a_link() {
     );
     assert!(!fixture.root.join("Filed/ordinary.pdf").exists());
 }
+
+/// `ETUDE_STATE_DIR` is process-global: the sealed tests here take turns.
+fn state_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    L.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Not a cipher: it proves the journal plumbing, as the apply tests do.
+struct TestSeal;
+impl etude_core::journal::Sealer for TestSeal {
+    fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let mut v = b"TESTSEAL".to_vec();
+        v.extend(plaintext.iter().map(|b| b ^ 0x5a));
+        Ok(v)
+    }
+    fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let body = sealed
+            .strip_prefix(b"TESTSEAL".as_slice())
+            .ok_or("bad header")?;
+        Ok(body.iter().map(|b| b ^ 0x5a).collect())
+    }
+}
+
+/// A member that stops being eligible after another member has moved is not
+/// a refusal: a refusal changes nothing. The apply stops as incomplete, the
+/// journal keeps the move that happened, and undo reverses it.
+#[cfg(unix)]
+#[test]
+fn move_time_classification_after_a_move_stops_the_apply_as_incomplete() {
+    let _guard = state_lock();
+    let fixture = ForgedFixture::new();
+    let state = fixture.base.join("state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    for name in ["ordinary.pdf", "second.pdf"] {
+        std::fs::write(fixture.root.join(name), b"synthetic payload").unwrap();
+    }
+    let bound = fixture.plan("second.pdf", false);
+    let mut swap = |index: usize, path: &std::path::Path| {
+        if index == 1 {
+            std::fs::rename(path, fixture.base.join("saved.pdf")).unwrap();
+            std::os::unix::fs::symlink(fixture.base.join("saved.pdf"), path).unwrap();
+        }
+    };
+    let result = apply::apply_with_faults_for_tests(
+        &bound,
+        "sweep",
+        Some(&TestSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut swap),
+            ..Default::default()
+        },
+    );
+    let failure = result.expect_err("the apply must stop");
+    assert!(
+        !matches!(failure.error, ApplyError::StalePlan(_)),
+        "a stop after a move reported as a refusal: {:?}",
+        failure.error
+    );
+    assert!(
+        matches!(failure.error, ApplyError::Io(_)),
+        "{:?}",
+        failure.error
+    );
+    let id = failure.durable_journal_id.expect("the journal was durable");
+    assert!(fixture.root.join("Filed/ordinary.pdf").is_file());
+    assert!(!fixture.root.join("Filed/second.pdf").exists());
+    let mut journal = etude_core::journal::Journal::load_sealed("sweep", &id, &TestSeal).unwrap();
+    assert_eq!(
+        journal.summary().state,
+        etude_core::journal::JournalState::Interrupted
+    );
+    assert!(apply::has_undo_work(&journal, &TestSeal));
+    let undo = apply::undo(&mut journal, &TestSeal);
+    assert_eq!(undo.restored, 1, "{:?}", undo.error);
+    assert_eq!(
+        std::fs::read(fixture.root.join("ordinary.pdf")).unwrap(),
+        b"synthetic payload"
+    );
+    assert!(!fixture.root.join("Filed/ordinary.pdf").exists());
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
+}
+
+/// The same swap before the first move is still a refusal, and the record it
+/// leaves is a refusal's: no entries, nothing to undo.
+#[cfg(unix)]
+#[test]
+fn move_time_classification_before_any_move_leaves_a_refused_record() {
+    let _guard = state_lock();
+    let fixture = ForgedFixture::new();
+    let state = fixture.base.join("state");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    for name in ["ordinary.pdf", "second.pdf"] {
+        std::fs::write(fixture.root.join(name), b"synthetic payload").unwrap();
+    }
+    let bound = fixture.plan("second.pdf", false);
+    let mut swap = |index: usize, path: &std::path::Path| {
+        if index == 0 {
+            std::fs::rename(path, fixture.base.join("saved.pdf")).unwrap();
+            std::os::unix::fs::symlink(fixture.base.join("saved.pdf"), path).unwrap();
+        }
+    };
+    let failure = apply::apply_with_faults_for_tests(
+        &bound,
+        "sweep",
+        Some(&TestSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut swap),
+            ..Default::default()
+        },
+    )
+    .expect_err("the apply must refuse");
+    assert!(
+        matches!(failure.error, ApplyError::StalePlan(_)),
+        "{:?}",
+        failure.error
+    );
+    assert!(
+        !fixture.root.join("Filed").exists()
+            || std::fs::read_dir(fixture.root.join("Filed"))
+                .unwrap()
+                .count()
+                == 0
+    );
+    let id = failure.durable_journal_id.expect("the record was durable");
+    let journal = etude_core::journal::Journal::load_sealed("sweep", &id, &TestSeal).unwrap();
+    assert_eq!(
+        journal.summary().state,
+        etude_core::journal::JournalState::Refused
+    );
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
+}

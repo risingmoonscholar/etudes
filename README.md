@@ -75,10 +75,14 @@ commands you can run.
 
 ```sh
 <<<<<<< HEAD
+<<<<<<< HEAD
 cargo test --all                # 591 tests
 =======
 cargo test --all                # 592 tests
 >>>>>>> 082a451 (sync measured counts: 592 tests, 59 scenarios)
+=======
+cargo test --all                # 595 tests
+>>>>>>> bb0e3a0 (stop apply as incomplete when a member turns ineligible after a move)
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 

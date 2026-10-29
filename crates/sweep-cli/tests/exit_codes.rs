@@ -894,3 +894,85 @@ fn an_apply_that_stops_part_way_names_its_recovery_operation() {
     assert_eq!(code, Some(0), "{stdout}");
     assert!(stdout.contains(r#""state":"interrupted""#), "{stdout}");
 }
+
+/// A member that stops being eligible after the apply has moved another is
+/// not a refusal, because a refusal changes nothing. The apply stops as
+/// incomplete, names its journal, and `status` reports it interrupted.
+#[cfg(unix)]
+#[test]
+fn a_member_that_becomes_ineligible_after_a_move_stops_as_incomplete() {
+    use std::ffi::OsStr;
+    let root = unique_temp("ineligible-mid-apply");
+    let tree = root.join("tree");
+    let state = root.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let _root = TestDir(root.clone());
+    let names: Vec<String> = (1..=400)
+        .map(|n| format!("Screenshot 2025-01-01 at 1.00.00 PM ({n}).png"))
+        .collect();
+    for name in &names {
+        std::fs::write(tree.join(name), b"synthetic payload").unwrap();
+    }
+    // Members move in plan order, so the first file lands long before the
+    // last one is looked at: that gap is where the last one changes.
+    let (first, last) = (names.first().unwrap(), names.last().unwrap());
+    let child = sweep_bin()
+        .env("ETUDE_STATE_DIR", &state)
+        .env("ETUDE_JOURNAL_KEY", "ab".repeat(32))
+        .env("SWEEP_GRACE_SECS", "0")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .args([OsStr::new("apply"), tree.as_os_str(), OsStr::new("--yes")])
+        .arg("--json")
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    while !tree.join("Screenshots").join(first).is_file() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the first member never moved"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let saved = root.join("saved.png");
+    std::fs::rename(tree.join(last), &saved).expect("the last member was still at its origin");
+    std::os::unix::fs::symlink(&saved, tree.join(last)).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(3), "{stdout}");
+    assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
+    assert!(
+        stdout.contains(
+            r#""reason":{"code":"operation_incomplete","retry":"after_change","subject":{"kind":"journal"}}"#
+        ),
+        "{stdout}"
+    );
+    let journal = std::fs::read_dir(&state)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("sweep-") && name.ends_with(".journal"))
+        .expect("the stopped apply left its journal");
+    let id = journal
+        .strip_prefix("sweep-")
+        .and_then(|name| name.strip_suffix(".journal"))
+        .unwrap();
+    assert!(
+        stdout.contains(&format!(r#""operation":"{id}""#)),
+        "recovery.operation must be the journal id {id}: {stdout}"
+    );
+    let (code, stdout) = sweep_json(
+        &state,
+        &[OsStr::new("status"), OsStr::new("--id"), OsStr::new(id)],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+    assert!(stdout.contains(r#""state":"interrupted""#), "{stdout}");
+    assert!(!tree.join("Screenshots").join(last).exists());
+
+    let (code, stdout) = sweep_json(&state, &[OsStr::new("undo"), tree.as_os_str()]);
+    assert_eq!(code, Some(0), "{stdout}");
+    assert!(tree.join(first).is_file(), "undo put the first member back");
+    assert!(!tree.join("Screenshots").join(first).exists());
+}
