@@ -53,6 +53,19 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a planned tag entry, preserving Finder's optional colour suffix.
+pub(crate) fn validate_entry(entry: &str) -> Result<(), String> {
+    let (name, colour) = entry
+        .split_once('\n')
+        .map_or((entry, None), |(name, colour)| (name, Some(colour)));
+    validate_name(name)?;
+    if colour.is_some_and(|colour| !matches!(colour, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7"))
+    {
+        return Err("invalid Finder tag colour suffix".into());
+    }
+    Ok(())
+}
+
 /// The name part of a stored tag string: everything before the colour suffix.
 pub fn name_of(entry: &str) -> &str {
     entry.split('\n').next().unwrap_or(entry)

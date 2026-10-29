@@ -436,6 +436,20 @@ fn apply_plan_with_structured_progress(
     let mut durable_journal_id = None;
     let result = (|| {
         validate(&mut durable_journal_id)?;
+        let mut eligibility = crate::scan::MemberEligibility::default();
+        for group in &plan.groups {
+            if let crate::plan::Signal::Tagged { entry, .. } = &group.signal {
+                crate::tags::validate_entry(entry)
+                    .map_err(|error| ApplyError::StalePlan(io::Error::other(error)))?;
+            }
+            for source in &group.members {
+                if tool != "stash" || plan.applies_tags() {
+                    eligibility
+                        .check(&plan.root, source)
+                        .map_err(ApplyError::StalePlan)?;
+                }
+            }
+        }
         if plan.applies_tags() {
             return apply_tags(
                 plan,
@@ -618,6 +632,9 @@ fn apply_plan_with_structured_progress(
             }
             if let Some(hook) = faults.before_rename.as_mut() {
                 hook(i, &from);
+            }
+            if tool != "stash" {
+                crate::scan::eligible_member(&from).map_err(ApplyError::StalePlan)?;
             }
             let method = match move_one(&from, &to) {
                 Ok(method) => method,
@@ -852,6 +869,7 @@ fn apply_tags(
             j.record_held(i, sl).map_err(ApplyError::Journal)?;
             continue;
         }
+        crate::scan::eligible_member(&path).map_err(ApplyError::StalePlan)?;
         crate::tags::write(&path, &change.written).map_err(ApplyError::Io)?;
         let landed = crate::tags::read(&path)
             .map_err(ApplyError::Io)?

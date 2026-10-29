@@ -278,3 +278,226 @@ fn immediate_apply_still_refuses_replaced_sources_and_new_markers() {
         assert!(!fixture.0.join(&bound.groups[0].name).exists());
     }
 }
+
+struct ForgedFixture {
+    base: PathBuf,
+    root: PathBuf,
+}
+impl ForgedFixture {
+    fn new() -> Self {
+        let out = std::process::Command::new("mktemp")
+            .arg("-d")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let base = PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        let root = base.join("root");
+        std::fs::create_dir(&root).unwrap();
+        Self { base, root }
+    }
+    fn plan(&self, name: &str, tags: bool) -> BoundPlan {
+        let out = scan::scan(
+            &self.root,
+            &ScanConfig {
+                grace: None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut proposal = plan::Plan::with_groups(
+            &out,
+            vec![plan::Group {
+                name: "Filed".into(),
+                signal: if tags {
+                    plan::Signal::Tagged {
+                        ext: "pdf".into(),
+                        new: true,
+                        entry: "Filed".into(),
+                    }
+                } else {
+                    plan::Signal::Collected { count: 2 }
+                },
+                members: vec![self.root.join("ordinary.pdf"), self.root.join(name)],
+                accepted: true,
+            }],
+        );
+        proposal.adds_tags = tags;
+        BoundPlan::from_plan(proposal, Fixture::context()).unwrap()
+    }
+}
+impl Drop for ForgedFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+#[test]
+fn forged_personal_member_refuses_before_any_move() {
+    let fixture = ForgedFixture::new();
+    for name in ["ordinary.pdf", "passport.pdf"] {
+        std::fs::write(fixture.root.join(name), b"synthetic payload").unwrap();
+    }
+    let bound = fixture.plan("passport.pdf", false);
+    let file = fixture.base.join("forged.plan");
+    bound.export(&file).unwrap();
+    let loaded = BoundPlan::load(&file, bound.digest()).unwrap();
+    let result = apply::apply(&loaded, &Fixture::context(), None, None);
+    assert!(
+        matches!(result, Err(ApplyError::StalePlan(_))),
+        "forged member moved: {result:?}"
+    );
+    assert!(!fixture.root.join("Filed").exists());
+    for name in ["ordinary.pdf", "passport.pdf"] {
+        assert_eq!(
+            std::fs::read(fixture.root.join(name)).unwrap(),
+            b"synthetic payload"
+        );
+    }
+}
+
+#[test]
+fn forged_held_members_refuse_before_any_move() {
+    for name in [
+        ".hidden.pdf",
+        "movie.part",
+        "work.blend",
+        "opaque.app",
+        "project",
+        "link.pdf",
+    ] {
+        let fixture = ForgedFixture::new();
+        std::fs::write(fixture.root.join("ordinary.pdf"), b"ordinary payload").unwrap();
+        let source = fixture.root.join(name);
+        match name {
+            "opaque.app" | "project" => {
+                std::fs::create_dir(&source).unwrap();
+                if name == "project" {
+                    std::fs::write(source.join("Cargo.toml"), b"synthetic marker").unwrap();
+                }
+            }
+            "link.pdf" => {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(fixture.root.join("ordinary.pdf"), &source).unwrap();
+            }
+            _ => std::fs::write(&source, b"held payload").unwrap(),
+        }
+        let bound = fixture.plan(name, false);
+        let result = apply::apply(&bound, &Fixture::context(), None, None);
+        assert!(
+            matches!(result, Err(ApplyError::StalePlan(_))),
+            "{name}: {result:?}"
+        );
+        assert!(!fixture.root.join("Filed").exists());
+        assert!(std::fs::symlink_metadata(source).is_ok());
+        assert_eq!(
+            std::fs::read(fixture.root.join("ordinary.pdf")).unwrap(),
+            b"ordinary payload"
+        );
+    }
+}
+
+struct TagSeal;
+impl etude_core::journal::Sealer for TagSeal {
+    fn seal(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+        Ok(bytes.iter().map(|byte| byte ^ 0x5a).collect())
+    }
+    fn open(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+        self.seal(bytes)
+    }
+}
+
+fn invalid_tag_refuses(entry: &str) {
+    let fixture = ForgedFixture::new();
+    for name in ["ordinary.pdf", "second.pdf"] {
+        std::fs::write(fixture.root.join(name), b"synthetic payload").unwrap();
+    }
+    let mut bound = fixture.plan("second.pdf", true);
+    if let plan::Signal::Tagged { entry: tag, .. } = &mut bound.plan.groups[0].signal {
+        *tag = entry.into();
+    }
+    bound.finalize_choices().unwrap();
+    let file = fixture.base.join("forged.plan");
+    bound.export(&file).unwrap();
+    let result = BoundPlan::load(&file, bound.digest());
+    if let Ok(loaded) = &result {
+        // Keep the refusal check observable through execution as well as load.
+        let previous = std::env::var_os("ETUDE_STATE_DIR");
+        unsafe {
+            std::env::set_var("ETUDE_STATE_DIR", fixture.base.join("state"));
+        }
+        let applied = apply::apply(loaded, &Fixture::context(), Some(&TagSeal), None);
+        unsafe {
+            if let Some(previous) = previous {
+                std::env::set_var("ETUDE_STATE_DIR", previous);
+            } else {
+                std::env::remove_var("ETUDE_STATE_DIR");
+            }
+        }
+        assert!(
+            applied.is_err(),
+            "invalid tag entry {entry:?} was written: {applied:?}"
+        );
+    }
+    assert!(result.is_err(), "invalid tag entry loaded: {entry:?}");
+    for source in &bound.plan.groups[0].members {
+        assert_eq!(std::fs::read(source).unwrap(), b"synthetic payload");
+        #[cfg(target_os = "macos")]
+        assert_eq!(etude_core::tags::read(source).unwrap(), None);
+    }
+}
+
+#[test]
+fn forged_invalid_tag_name_refuses_on_load() {
+    invalid_tag_refuses("bad/name");
+}
+#[test]
+fn forged_control_tag_name_refuses_on_load() {
+    invalid_tag_refuses("bad\u{7}name");
+}
+#[test]
+fn forged_colour_suffix_refuses_on_load() {
+    invalid_tag_refuses("Filed\n6\nextra");
+}
+
+#[test]
+fn move_time_classification_refuses_a_source_swapped_to_a_link() {
+    let fixture = ForgedFixture::new();
+    for name in ["ordinary.pdf", "second.pdf"] {
+        std::fs::write(fixture.root.join(name), b"synthetic payload").unwrap();
+    }
+    let bound = fixture.plan("second.pdf", false);
+    let mut swap = |_: usize, path: &std::path::Path| {
+        std::fs::rename(path, fixture.base.join("saved.pdf")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(fixture.root.join("second.pdf"), path).unwrap();
+    };
+    let result = apply::apply_with_faults_for_tests(
+        &bound,
+        "sweep",
+        None,
+        apply::ApplyFaults {
+            before_rename: Some(&mut swap),
+            ..Default::default()
+        },
+    );
+    assert!(
+        matches!(
+            result,
+            Err(apply::ApplyFailure {
+                error: ApplyError::StalePlan(_),
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(
+        std::fs::read(fixture.base.join("saved.pdf")).unwrap(),
+        b"synthetic payload"
+    );
+    assert_eq!(
+        std::fs::read(fixture.root.join("second.pdf")).unwrap(),
+        b"synthetic payload"
+    );
+    assert!(!fixture.root.join("Filed/ordinary.pdf").exists());
+}

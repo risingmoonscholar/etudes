@@ -18,7 +18,7 @@ The eligible set of a plan is every file the plan already proposes to move, plus
 
 The eligible set is frozen when the plan is exported and is bound to the plan digest. A proposal that cites a different digest is refused as stale.
 
-This closes a gap found in review: binding a plan checks identity and uniqueness, not permission. A caller that edits a plan's groups before binding can currently get a personal-looking file moved. A proposal cannot do that, because eligibility is derived below the proposal layer, not read from it.
+Binding checks identity and uniqueness. Applying a sweep plan also independently re-checks filename and filesystem eligibility before changing anything. A proposal additionally requires a frozen eligible item id, so its caller cannot supply eligibility by editing a group.
 
 ## The interface
 

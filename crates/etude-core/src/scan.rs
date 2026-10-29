@@ -747,6 +747,33 @@ fn document_scope(root: &Path, dir: &Path) -> DocumentScope {
     }
 }
 
+fn member_document_scope(root: &Path, dir: &Path) -> DocumentScope {
+    let mut scope = document_scope(root, dir);
+    let Ok(entries) = observe_read("directory_enumeration", fs::read_dir(dir)) else {
+        scope.unreadable = true;
+        return scope;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            scope.unreadable = true;
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_hidden(&name)
+            && !never_enter(&name)
+            && entry.file_type().map(|kind| kind.is_dir()).unwrap_or(true)
+            && !is_package(&name)
+            && !name_matches(&name, BUNDLE_MARKERS)
+            && !IN_FLIGHT_SUFFIXES
+                .iter()
+                .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
+        {
+            scope.merge(document_scope(root, &entry.path()));
+        }
+    }
+    scope
+}
+
 fn reference_file(e: &Entry) -> bool {
     !crate::classify::is_screenshot(e)
         && crate::classify::type_family(&e.ext)
@@ -1037,13 +1064,110 @@ pub struct ScanOutcome {
     pub allow_sync: bool,
 }
 
-/// True when any component of `path` looks like a cloud-sync root.
+/// Recheck a member using the filename detectors and current object metadata.
+pub(crate) fn eligible_member(path: &Path) -> io::Result<Entry> {
+    let refused = || io::Error::other("plan member is no longer eligible; replan required");
+    let meta = observe_read("metadata", fs::symlink_metadata(path))?;
+    let name = path
+        .file_name()
+        .ok_or_else(refused)?
+        .to_string_lossy()
+        .into_owned();
+    let e = Entry {
+        path: path.to_path_buf(),
+        name,
+        ext: path
+            .extension()
+            .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default(),
+        size: meta.len(),
+        modified: meta.modified().ok(),
+        is_dir: meta.is_dir(),
+        is_package: meta.is_dir() && is_package(&path.file_name().unwrap().to_string_lossy()),
+    };
+    if is_hidden(&e.name)
+        || never_enter(&e.name)
+        || is_refused_system_location(path)
+        || crate::classify::sensitive(&e).is_some()
+        || IN_FLIGHT_SUFFIXES
+            .iter()
+            .any(|suffix| e.name.to_ascii_lowercase().ends_with(suffix))
+        || (!e.is_dir && is_document_marker(&e.name))
+        || !meta.is_file()
+        || (e.is_dir && !matches!(project_marker_in(path), Ok(None)))
+    {
+        return Err(refused());
+    }
+    Ok(e)
+}
+
+/// Cache directory policy probes for one preflight, independent of plan claims.
+#[derive(Default)]
+pub(crate) struct MemberEligibility {
+    directories: std::collections::HashMap<PathBuf, bool>,
+    scopes: std::collections::HashMap<PathBuf, DocumentScope>,
+}
+impl MemberEligibility {
+    pub(crate) fn check(&mut self, root: &Path, path: &Path) -> io::Result<()> {
+        let e = eligible_member(path)?;
+        // Explicit selections can originate outside the holding root.
+        let boundary = if path.starts_with(root) {
+            root
+        } else {
+            path.parent().unwrap_or(root)
+        };
+        for dir in path.ancestors().skip(1) {
+            let safe = *self
+                .directories
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| {
+                    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+                    let structural = fs::symlink_metadata(dir)
+                        .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+                        && !is_hidden(&name)
+                        && !never_enter(&name)
+                        && !is_package(&name)
+                        && !name_matches(&name, BUNDLE_MARKERS)
+                        && !IN_FLIGHT_SUFFIXES
+                            .iter()
+                            .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
+                        && !os_says_package(dir);
+                    structural && matches!(root_marker_in(dir), Ok(None))
+                });
+            if !safe {
+                return Err(io::Error::other(
+                    "plan member is inside a held directory; replan required",
+                ));
+            }
+            let scope = self
+                .scopes
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| member_document_scope(boundary, dir));
+            if (scope.marker.is_some() || scope.unreadable)
+                && (path.parent() != Some(dir)
+                    || e.is_dir
+                    || reference_file(&e)
+                    || is_document_marker(&e.name))
+            {
+                return Err(io::Error::other(
+                    "plan member is held by a project document; replan required",
+                ));
+            }
+            if dir == boundary {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Is this filename a project DOCUMENT marker? Used by the plan to hold a
 /// loose document and its reference surface rather than refusing the sweep.
 pub fn is_document_marker(name: &str) -> bool {
     name_matches(name, DOCUMENT_MARKERS)
 }
 
+/// True when any component of `path` looks like a cloud-sync root.
 pub fn is_synced(path: &Path) -> bool {
     let s = path.to_string_lossy();
     SYNC_MARKERS.iter().any(|m| s.contains(m))
