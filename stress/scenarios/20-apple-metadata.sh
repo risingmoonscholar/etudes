@@ -6,12 +6,19 @@
 # convention). None of this is the user's data; none of it should be
 # grouped, moved as if meaningful, or allowed to corrupt output formatting.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+exec </dev/null
+
+json_get() {
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"
+}
 
 if ! require python3 "writes the literal Icon<CR> filename unambiguously"; then
   exit 0
 fi
 
 W=$(workdir); trap 'rm -rf "$W"' EXIT
+export ETUDE_STATE_DIR="$W/state"
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
 D="$W/Desktop"
 mkdir -p "$D"
 
@@ -90,3 +97,54 @@ import os
 print(open(os.path.join('$S','Icon\r'),'rb').read().decode())
 ")
 assert_eq "ICONBYTES" "$popped_content" "content survived the round trip untouched"
+
+# Extract a synthetic image, then make a Finder alias to it in a separate
+# sweep tree. No alias target needs to be opened by sweep to skip the alias.
+python3 -c 'import stat,sys,zipfile; info=zipfile.ZipInfo("picture.jpg"); info.create_system=3; info.external_attr=(stat.S_IFREG | 0o600) << 16; z=zipfile.ZipFile(sys.argv[1], "w"); z.writestr(info, b"synthetic image bytes"); z.close()' "$W/images.zip"
+assert_exit 0 "unpack publishes the synthetic alias target" -- "$UNPACK" "$W/images.zip" --into "$W/extracted"
+A="$W/Aliases"
+mkdir -p "$A"
+python3 - "$W/extracted/picture.jpg" "$A" <<'PY'
+import pathlib, subprocess, sys
+target, tree = map(pathlib.Path, sys.argv[1:])
+script = '''on run argv
+tell application "Finder"
+make new alias file at (POSIX file (item 2 of argv) as alias) to (POSIX file (item 1 of argv) as alias) with properties {name:"image-alias.jpg"}
+end tell
+end run'''
+try:
+    result = subprocess.run(["osascript", "-e", script, str(target), str(tree)],
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    print("    fixture  Finder created a real alias")
+except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+    print(f"    fixture  Finder unavailable ({error}); writing kIsAlias in FinderInfo")
+    alias = tree / "image-alias.jpg"
+    alias.write_bytes(b"synthetic opaque alias")
+    flags = bytearray(32)
+    flags[8:10] = (0x8000).to_bytes(2, "big")
+    subprocess.run(["xattr", "-wx", "com.apple.FinderInfo", flags.hex(), str(alias)],
+                   stdin=subprocess.DEVNULL, check=True)
+for i in range(3):
+    (tree / f"ordinary-{i}.jpg").write_bytes(b"ordinary fixture")
+(tree / "image-link.jpg").symlink_to(target)
+PY
+snapshot_tree "$A" "$W/aliases-before.json"
+snapshot_tree "$W/extracted" "$W/target-before.json"
+"$SWEEP" "$A" --json >"$W/aliases.json"
+assert_eq 1 "$(json_get "$W/aliases.json" 'd["details"]["skipped"]["aliases_skipped"]')" "Finder alias has its own skip count"
+assert_eq 1 "$(json_get "$W/aliases.json" 'd["details"]["skipped"]["symlinks"]')" "symlink count stays separate"
+assert_eq 3 "$(json_get "$W/aliases.json" 'd["details"]["scanned"]')" "only ordinary images become candidates"
+"$SWEEP" "$A" >"$W/aliases-human.txt"
+if grep -q '1 Finder alias skipped by flag' "$W/aliases-human.txt"; then
+  pass "human summary discloses the Finder alias count"
+else
+  fail "human summary omitted the Finder alias count"
+fi
+assert_exit 0 "apply organises ordinary images beside the alias" -- "$SWEEP" apply "$A" --yes
+assert_exit 0 "undo restores those images" -- "$SWEEP" undo "$A"
+snapshot_tree "$A" "$W/aliases-after.json"
+snapshot_tree "$W/extracted" "$W/target-after.json"
+assert_snapshot_eq "$W/aliases-before.json" "$W/aliases-after.json" "alias, symlink and ordinary images survive apply and undo"
+assert_snapshot_eq "$W/target-before.json" "$W/target-after.json" "the alias target stays unchanged"

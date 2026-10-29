@@ -140,6 +140,7 @@ pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
 
 /// A tag plan that tags no file.
 pub fn nothing_to_tag(p: &Plan) {
+    super::print_aliases_skipped(p);
     println!(
         "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
         p.scanned,

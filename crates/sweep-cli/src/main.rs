@@ -1597,6 +1597,7 @@ fn print_refused_by_policy_note(p: &plan::Plan) {
 /// its reason: separating them caused a real user to attach a large count to
 /// the wrong explanation.
 fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
+    print_aliases_skipped(p);
     let counts = p.sensitive_counts();
     let personal: usize = counts.values().sum();
     let recent = p.too_recent();
@@ -1710,6 +1711,21 @@ fn include_tagged_warning() {
          Their tags stay on them. A tagged item that would have to cross volumes is\n       \
          left in place, because the copy would drop its tag."
     );
+}
+
+/// Finder aliases have separate accounting from symlinks.
+fn print_aliases_skipped(p: &plan::Plan) {
+    if p.aliases_skipped > 0 {
+        println!(
+            "  {} Finder {} skipped by flag",
+            p.aliases_skipped,
+            if p.aliases_skipped == 1 {
+                "alias"
+            } else {
+                "aliases"
+            }
+        );
+    }
 }
 
 /// What to do about the items a scan held back, one sentence per cause.

@@ -1010,6 +1010,8 @@ pub struct ScanOutcome {
     /// Paths refused during the walk, for the "what was inspected" report.
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    /// Finder alias files held by the FinderInfo kIsAlias flag, without resolution.
+    pub aliases_skipped: usize,
     /// Entries refused by POLICY: a credential/noise directory by name
     /// (`.ssh`, `node_modules`, ...) or an absolute system location
     /// (`/System`, `~/Library`, ...). sweep could have looked and chose not
@@ -1438,6 +1440,7 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
         project_holds: Vec::new(),
         skipped_hidden: 0,
         skipped_symlink: 0,
+        aliases_skipped: 0,
         skipped_system: 0,
         skipped_project: 0,
         skipped_in_flight: 0,
@@ -1581,6 +1584,20 @@ fn walk(
             out.skipped_system += 1;
             continue;
         }
+        if !cfg.whole_units && meta.is_file() {
+            match is_finder_alias(&path) {
+                Ok(true) => {
+                    out.aliases_skipped += 1;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    out.skipped_unreadable += 1;
+                    continue;
+                }
+            }
+        }
+
         if is_refused_system_location(&path) {
             out.skipped_system += 1;
             continue;
@@ -1720,6 +1737,49 @@ fn hold_for_tag_probe(probe: io::Result<bool>, out: &mut ScanOutcome) -> bool {
             true
         }
     }
+}
+
+/// Read only FinderInfo, never the alias payload or its target. Finder's
+/// kIsAlias is bit 15 of the big-endian flags word at byte offset 8.
+#[cfg(target_os = "macos")]
+fn is_finder_alias(path: &Path) -> io::Result<bool> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    let mut info = [0u8; 32];
+    // SAFETY: valid C strings and a writable 32-byte buffer; no link following.
+    let result = unsafe {
+        getxattr(
+            path.as_ptr(),
+            c"com.apple.FinderInfo".as_ptr(),
+            info.as_mut_ptr().cast(),
+            info.len(),
+            0,
+            XATTR_NOFOLLOW,
+        )
+    };
+    let outcome = if result == info.len() as isize {
+        Ok(u16::from_be_bytes([info[8], info[9]]) & 0x8000 != 0)
+    } else if result >= 0 {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid FinderInfo length",
+        ))
+    } else {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(ENOATTR) | Some(ENOTSUP) => Ok(false),
+            _ => Err(error),
+        }
+    };
+    observe_read("metadata", outcome)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_finder_alias(_: &Path) -> io::Result<bool> {
+    Ok(false)
 }
 
 /// Whether Finder attached at least one tag to this directory entry.

@@ -25,7 +25,7 @@ Scope domains resolve as follows:
 
 | Domain | Meaning |
 | --- | --- |
-| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The read is counted in the `finder_tag_presence` observation category |
+| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules. Sweep also reads the 32-byte `com.apple.FinderInfo` attribute of visible regular files to skip Finder aliases by the `kIsAlias` flag; this is counted in the `metadata` observation category. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The tag presence read is counted in the `finder_tag_presence` observation category |
 | `finder_tag_names` | `sweep --scheme tags` only: the tag attribute of files sweep may tag, read in full to learn which tags exist in the folder, which files already carry the tag asked for, and what to put back on undo. Nothing else is read from the attribute list, Finder comments are never queried, and file contents are not read. The read is counted in the `finder_tag_names` observation category |
 | `selected_tree_finder_tags` | `sweep --scheme tags` only: the tag attribute of planned files, replaced by the old tag list plus one tag on apply of an exported plan, and by the recorded old bytes on undo. No file is moved, renamed, created or deleted |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
@@ -164,6 +164,16 @@ No refusal code is added: a refused request is `invalid_arguments`,
 and `v1/` mirrors it; stash stays at version 10 and unpack at version 6. The
 witness drives a tag plan end to end on a synthetic folder.
 
+**Declaration version 12 (sweep)** declares the FinderInfo alias flag read in
+`selected_tree_metadata` and the separate `skipped.aliases_skipped` plan count.
+Finder aliases are skipped without reading their contents or resolving their
+targets. An unreadable attribute holds the file and makes the scan incomplete.
+`v12/sweep.json` pins this declaration and `v1/sweep.json` mirrors it; earlier
+pins remain unchanged. The binary probe checks flagged and unflagged files,
+separate symlink accounting, the human summary and unchanged fixture bytes.
+Plan artifacts append optional section 4 for a nonzero alias count; older plans
+load with zero and plans without aliases retain their earlier encoding.
+
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
 conditional path (including keychain, EXDEV, review and crash recovery). Those
@@ -179,7 +189,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v11/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
+contract envelopes (`v12/sweep.json`, `v10/stash.json` and `v6/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
