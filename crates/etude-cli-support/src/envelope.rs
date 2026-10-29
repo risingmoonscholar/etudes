@@ -47,10 +47,11 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
             "apply" | "undo" | "forget" | "verify" | "lesson" | "review" | "status" | "propose",
         ) if tool == "sweep" => first.unwrap(),
         Some("pop" | "status") if tool == "stash" => first.unwrap(),
-        _ if tool == "unpack" && args.iter().any(|arg| arg == "--list") => "list",
+        _ if matches!(tool, "unpack" | "pack") && args.iter().any(|arg| arg == "--list") => "list",
         _ => match tool {
             "sweep" => "scan",
             "stash" => "stash",
+            "pack" => "pack",
             _ => "extract",
         },
     }
@@ -74,6 +75,7 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
     let tool_kind = match tool {
         "sweep" => crate::contract::Tool::Sweep,
         "stash" => crate::contract::Tool::Stash,
+        "pack" => crate::contract::Tool::Pack,
         _ => crate::contract::Tool::Unpack,
     };
     let scope = crate::contract::invocation_scope(tool_kind, &operation);
@@ -193,6 +195,7 @@ pub fn finish(code: ExitCode) {
             "undo" | "pop" => "retry_remaining_journal_entries_after_resolving_refusals",
             "export_plan" => "explicit_plan_artifact_owner_managed",
             "extract" => "source_archive_retained_no_undo",
+            "pack" => "source_retained_no_undo",
             _ => "no_operation_undo_needed",
         };
         let claim = |name: &str, verdict: &str| j::obj(&[("claim", j::str(name)), ("status", j::str(verdict))]);
