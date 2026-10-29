@@ -28,8 +28,7 @@ pub const DECISION_PRECEDENCE: &[DecisionClass] = &[
     DecisionClass::AgentMapping,
 ];
 
-/// Stable scheme names used by the roadmap. Only `folders` is implemented by
-/// this version; declaring a name does not make its behavior available.
+/// Stable names for the implemented folders, existing-folder and Finder-tag schemes.
 pub const DECLARED_SCHEMES: &[&str] = &["folders", "existing", "tags"];
 
 /// Filesystem states the sweep contract must account for by name. These are
