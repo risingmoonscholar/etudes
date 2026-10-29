@@ -197,6 +197,10 @@ pub struct ApplyFaults<'a> {
     pub before_rename: Option<FaultHook<'a>>,
     /// Runs after the rename and before the destination's tag is re-read.
     pub after_rename: Option<FaultHook<'a>>,
+    /// Force the link/unlink fallback even on a volume with atomic rename.
+    pub force_link_unlink: bool,
+    /// Runs after hard_link succeeds and before the source is removed.
+    pub after_hard_link: Option<FaultHook<'a>>,
 }
 
 /// `apply` for an unbound plan with fault-injection points.
@@ -638,7 +642,16 @@ fn apply_plan_with_structured_progress(
             {
                 return Err(ineligible_member(error, &mut j, sealer));
             }
-            let method = match move_one(&from, &to) {
+            let result = if faults.force_link_unlink {
+                move_one_link_unlink_with(&from, &to, || {
+                    if let Some(hook) = faults.after_hard_link.as_mut() {
+                        hook(i, &to);
+                    }
+                })
+            } else {
+                move_one(&from, &to)
+            };
+            let method = match result {
                 Ok(method) => method,
                 // A tagged item that would have to cross volumes stays put.
                 // Nothing was copied, or the copy was removed.
@@ -1382,12 +1395,21 @@ thread_local! {
 /// them leaves one file under two names; undo's successor-entry recovery is
 /// what makes that survivable.
 fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
+    move_one_link_unlink_with(from, to, || {})
+}
+
+fn move_one_link_unlink_with(
+    from: &Path,
+    to: &Path,
+    after_hard_link: impl FnOnce(),
+) -> io::Result<Method> {
     if crate::scan::observe_read("metadata", fs::symlink_metadata(from))?
         .file_type()
         .is_file()
     {
         match fs::hard_link(from, to) {
             Ok(()) => {
+                after_hard_link();
                 fs::remove_file(from)?;
                 return Ok(Method::Rename);
             }
@@ -2276,6 +2298,154 @@ mod macos_unicode {
 
 #[cfg(test)]
 mod tests {
+    /// A real process dies at the fallback seam, leaving the successor of a
+    /// durable move under two names. Recovery must collapse only that entry.
+    #[cfg(unix)]
+    #[test]
+    fn killed_link_unlink_successor_recovers_one_copy() {
+        use std::os::unix::process::ExitStatusExt;
+        use std::process::{Command, Stdio};
+
+        struct TestSeal;
+        impl Sealer for TestSeal {
+            fn seal(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(bytes.to_vec())
+            }
+            fn open(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+                Ok(bytes.to_vec())
+            }
+        }
+        if let Ok(mode) = std::env::var("ETUDE_LINK_SEAM_CHILD") {
+            let root = PathBuf::from(std::env::var_os("ETUDE_LINK_SEAM_ROOT").unwrap());
+            if mode == "apply" {
+                let scan = crate::scan::scan(
+                    &root,
+                    &crate::scan::ScanConfig {
+                        grace: None,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let plan = Plan::with_groups(
+                    &scan,
+                    vec![crate::plan::Group {
+                        name: "Collected".into(),
+                        signal: crate::plan::Signal::Collected { count: 3 },
+                        members: (0..3).map(|i| root.join(format!("file-{i}.txt"))).collect(),
+                        accepted: true,
+                    }],
+                );
+                let mut kill = |index: usize, destination: &Path| {
+                    assert!(destination.is_file());
+                    if index == 1 {
+                        unsafe extern "C" {
+                            fn kill(pid: i32, signal: i32) -> i32;
+                        }
+                        // SAFETY: sends SIGKILL to this disposable test process.
+                        assert_eq!(unsafe { kill(std::process::id() as i32, 9) }, 0);
+                        unreachable!("SIGKILL returned");
+                    }
+                };
+                let _ = apply_with_faults_for_tests(
+                    &plan,
+                    "seam-test",
+                    Some(&TestSeal),
+                    ApplyFaults {
+                        force_link_unlink: true,
+                        after_hard_link: Some(&mut kill),
+                        ..Default::default()
+                    },
+                );
+                panic!("the link/unlink seam was not reached");
+            }
+            let mut journal = crate::journal::candidates_by_recency("seam-test")
+                .unwrap()
+                .remove(0)
+                .load("seam-test", &TestSeal)
+                .unwrap();
+            assert_eq!(journal.entries[0].state, EntryState::Moved);
+            assert_eq!(journal.entries[1].state, EntryState::Planned);
+            assert_eq!(journal.entries[2].state, EntryState::Planned);
+            assert!(!root.join("file-0.txt").exists());
+            assert!(same_file(
+                &root.join("file-1.txt"),
+                &root.join("Collected/file-1.txt")
+            ));
+            assert!(!root.join("Collected/file-2.txt").exists());
+            let report = undo(&mut journal, &TestSeal);
+            assert!(report.error.is_none(), "{:?}", report.error);
+            assert_eq!(report.restored, 1);
+            assert_eq!(report.healed, vec![root.join("Collected/file-1.txt")]);
+            for i in 0..3 {
+                assert_eq!(
+                    fs::read(root.join(format!("file-{i}.txt"))).unwrap(),
+                    format!("bytes-{i}").as_bytes()
+                );
+            }
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 3);
+            let again = undo(&mut journal, &TestSeal);
+            assert!(again.error.is_none());
+            assert_eq!(again.restored, 0);
+            assert!(again.healed.is_empty());
+            return;
+        }
+
+        let output = Command::new("mktemp")
+            .args(["-d", "-t", "etudes-link-seam.XXXXXX"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let fixture = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+            .canonicalize()
+            .unwrap();
+        let root = fixture.join("Desktop");
+        fs::create_dir(&root).unwrap();
+        for i in 0..3 {
+            fs::write(root.join(format!("file-{i}.txt")), format!("bytes-{i}")).unwrap();
+        }
+        let key = Command::new("python3")
+            .args(["-c", "import secrets;print(secrets.token_hex(32))"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(key.status.success());
+        for mode in ["apply", "recover"] {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "apply::tests::killed_link_unlink_successor_recovers_one_copy",
+                    "--nocapture",
+                ])
+                .env("ETUDE_LINK_SEAM_CHILD", mode)
+                .env("ETUDE_LINK_SEAM_ROOT", &root)
+                .env("ETUDE_STATE_DIR", fixture.join("state"))
+                .env(
+                    "ETUDE_JOURNAL_KEY",
+                    String::from_utf8(key.stdout.clone()).unwrap().trim(),
+                )
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            if mode == "apply" {
+                assert_eq!(
+                    output.status.signal(),
+                    Some(9),
+                    "{}",
+                    String::from_utf8_lossy(&output.stdout)
+                );
+            } else {
+                assert!(
+                    output.status.success(),
+                    "{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
     /// Two claims at once, because the fix for one could break the other.
     ///
     /// An io error must render what the OS said, not Rust's internal
