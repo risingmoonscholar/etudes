@@ -416,7 +416,16 @@ impl Journal {
     /// Serialise. Line-oriented so a truncated write loses at most one entry.
     pub fn encode(&self) -> String {
         let mut s = String::new();
-        if self.tool == "stash" {
+        if self.entries.iter().any(|entry| {
+            entry.method == Method::Tag
+                || matches!(
+                    entry.state,
+                    EntryState::Held | EntryState::Returned | EntryState::Stranded
+                )
+        }) {
+            s.push_str("sweep-journal 3\n");
+            s.push_str(&format!("identity\t{}\t{}\n", self.tool, self.id));
+        } else if self.tool == "stash" {
             s.push_str("sweep-journal 2\n");
             s.push_str(&format!("identity\t{}\t{}\n", self.tool, self.id));
         } else {
@@ -471,8 +480,8 @@ impl Journal {
                 }
             ));
             // Tag entries append two fields. Journals without tag entries are
-            // encoded exactly as before, and a reader that ignores trailing
-            // fields sees the same nine.
+            // encoded exactly as before. Tag methods require header 3 so
+            // readers without tag support refuse before reading entries.
             if let Some(change) = &e.tag {
                 s.pop();
                 s.push_str(&format!(
@@ -490,7 +499,7 @@ impl Journal {
         let mut lines = text.lines();
         match lines.next() {
             Some("sweep-journal 1") => {}
-            Some("sweep-journal 2") => {
+            Some("sweep-journal 2" | "sweep-journal 3") => {
                 let fields: Vec<_> = lines
                     .next()
                     .ok_or(JournalError::Malformed("missing journal identity"))?
@@ -975,13 +984,13 @@ impl Journal {
                     // stream is inconsistent — replayed out of order, or two
                     // undone frames for one entry — and a review asked for it
                     // to be caught rather than absorbed.
-                    // A tag entry whose write landed but whose done frame was
-                    // lost is still Planned here; undo restores it by reading
-                    // the file, so its reversal frame is legitimate.
+                    // A Planned tag entry is settled without changing tags:
+                    // without a done record, ownership of its bytes is unknown.
+                    // Its reversal frame records that safe settlement.
                     let entry = &self.entries[index];
-                    let unrecorded_tag_write =
+                    let settled_tag_plan =
                         entry.tag.is_some() && entry.state == EntryState::Planned;
-                    if !entry.is_moved() && !unrecorded_tag_write {
+                    if !entry.is_moved() && !settled_tag_plan {
                         return Err(JournalError::Malformed(
                             "journal damaged: a reversal for an entry that was not moved",
                         ));
@@ -1205,6 +1214,39 @@ pub fn candidates_unordered(tool: &str) -> Result<Vec<JournalCandidate>, Journal
         .collect())
 }
 
+/// Inventory journals across tool namespaces without relying on recency.
+pub fn all_candidates_unordered() -> Result<Vec<(String, JournalCandidate)>, JournalError> {
+    let entries = crate::scan::observe_read("directory_enumeration", fs::read_dir(state_dir()))
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                JournalError::NotFound
+            } else {
+                JournalError::Io(error)
+            }
+        })?;
+    let mut tools = std::collections::BTreeSet::new();
+    for entry in entries {
+        let entry = entry.map_err(JournalError::Io)?;
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or(JournalError::Malformed("invalid journal filename"))?;
+        if let Some(stem) = name.strip_suffix(".journal") {
+            let (tool, _) = stem
+                .split_once('-')
+                .ok_or(JournalError::Malformed("invalid journal filename"))?;
+            tools.insert(tool.to_string());
+        }
+    }
+    let mut result = Vec::new();
+    for tool in tools {
+        for candidate in candidates_unordered(&tool)? {
+            result.push((tool.clone(), candidate));
+        }
+    }
+    Ok(result)
+}
+
 fn candidates_with_times(tool: &str) -> Result<Vec<(SystemTime, JournalCandidate)>, JournalError> {
     let prefix = format!("{tool}-");
     let dir = state_dir();
@@ -1396,11 +1438,11 @@ mod tests {
         }
     }
 
-    /// Journals that move files encode exactly as they did before tag entries
-    /// existed. The digests were taken from the encoding of the previous
-    /// release for the same journal.
+    /// Historical bytes retain their decoded states. Basic move journals keep
+    /// their original encoding; newer states require a refusing header.
+    /// The historical digests also pin every original field and separator.
     #[test]
-    fn journals_without_tag_entries_keep_their_earlier_encoding_byte_for_byte() {
+    fn historical_journals_load_and_basic_journals_keep_their_bytes() {
         for (tool, length, digest) in [
             (
                 "sweep",
@@ -1413,7 +1455,19 @@ mod tests {
                 "4ea85b2760ddf885700c375fe7a3917b3132a2d5328e553bc0832324b18e6b4e",
             ),
         ] {
-            let text = golden_journal(tool).encode();
+            let mut journal = golden_journal(tool);
+            let mut text = if tool == "stash" {
+                "sweep-journal 2\nidentity\tstash\tgolden-id\n".to_string()
+            } else {
+                "sweep-journal 1\n".to_string()
+            };
+            text.push_str(
+                "root\t/golden/root\ndir\t/golden/root/Group\t5\t6\nguard\t/golden/root\t5\t4\n",
+            );
+            for i in 0..6 {
+                text.push_str(&format!("mv\t/golden/root/f{i}.txt\t/golden/root/Group/f{i}.txt\t{}\t{}\t{}\t{}\t{}\t{i}\n",
+                    if i % 2 == 0 { "rename" } else { "copy" }, 10+i, 1000+i, 77+i, 9000+i));
+            }
             assert_eq!(text.len(), length, "{tool}");
             assert_eq!(
                 crate::plan::binding_digest(text.as_bytes()),
@@ -1424,8 +1478,35 @@ mod tests {
             let loaded = Journal::decode(&text).expect("an earlier journal loads");
             assert_eq!(loaded.entries.len(), 6);
             assert!(loaded.entries.iter().all(|e| e.tag.is_none()));
-            assert_eq!(loaded.encode(), text);
+            assert!(loaded.encode().starts_with("sweep-journal 3\n"));
+            journal.entries.truncate(3);
+            let basic = text
+                .lines()
+                .take(text.lines().count() - 3)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            assert_eq!(journal.encode(), basic);
+            assert_eq!(Journal::decode(&basic).unwrap().encode(), basic);
         }
+    }
+
+    #[test]
+    fn new_base_features_require_a_header_older_readers_refuse() {
+        for state in [EntryState::Held, EntryState::Returned, EntryState::Stranded] {
+            let mut journal = golden_journal("sweep");
+            journal.entries.truncate(1);
+            journal.entries[0].state = state;
+            assert!(journal.encode().starts_with("sweep-journal 3\n"));
+        }
+        let mut journal = golden_journal("sweep");
+        journal.entries.truncate(1);
+        journal.entries[0].method = Method::Tag;
+        journal.entries[0].tag = Some(TagChange {
+            previous: None,
+            written: vec![1],
+        });
+        assert!(journal.encode().starts_with("sweep-journal 3\n"));
     }
 
     #[test]

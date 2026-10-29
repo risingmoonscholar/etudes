@@ -636,3 +636,28 @@ fn the_default_holds_tagged_items_and_only_stash_overrides_it() {
         "every stash scan must set include_tagged explicitly"
     );
 }
+
+#[test]
+fn a_single_item_tagged_during_rename_leaves_no_empty_group() {
+    let _g = lock();
+    let s = scene("late_single", &["a.txt"]);
+    let plan = plan_of(&s, false);
+    let mut tag_it = |_: usize, from: &Path| tag(from);
+    let report = apply::apply_with_faults_for_tests(
+        &plan,
+        "test",
+        Some(&TestSeal),
+        ApplyFaults {
+            before_rename: Some(&mut tag_it),
+            after_rename: None,
+        },
+    )
+    .unwrap();
+    assert_eq!((report.moved, report.held_tagged), (0, 1));
+    assert!(s.files[0].exists());
+    assert!(read_tag(&s.files[0]).is_some());
+    assert!(
+        !s.root.join("Collected").exists(),
+        "empty group remains after return"
+    );
+}

@@ -321,7 +321,7 @@ fn second_undo_removes_the_created_folder_when_every_file_is_already_back() {
     let _g = lock();
     let (root, folder, state, mut journal) = journal_with_every_file_reversed("second_undo");
     assert!(
-        apply::has_undo_work(&journal),
+        apply::has_undo_work(&journal, &TestSeal),
         "undo reports nothing to do while the folder it must remove is still there"
     );
     let report = apply::undo(&mut journal, &TestSeal);
@@ -329,7 +329,7 @@ fn second_undo_removes_the_created_folder_when_every_file_is_already_back() {
     assert!(!folder.exists(), "second undo left the created folder");
     assert_eq!(fs::read(root.join("file.qoi")).unwrap(), b"fixture");
     assert!(
-        !apply::has_undo_work(&journal),
+        !apply::has_undo_work(&journal, &TestSeal),
         "undo still has work after the folder is gone"
     );
     cleanup(&root);
@@ -343,7 +343,7 @@ fn second_undo_leaves_a_created_folder_that_is_not_empty() {
     let (root, folder, state, mut journal) = journal_with_every_file_reversed("not_empty");
     fs::write(folder.join("user-file"), b"theirs").expect("user adds a file");
     assert!(
-        !apply::has_undo_work(&journal),
+        !apply::has_undo_work(&journal, &TestSeal),
         "a folder that cannot be removed must not count as undo work"
     );
     let report = apply::undo(&mut journal, &TestSeal);
@@ -359,7 +359,7 @@ fn second_undo_leaves_a_folder_the_journal_does_not_record_as_created() {
     let _g = lock();
     let (root, folder, state, mut journal) = journal_with_every_file_reversed("not_recorded");
     journal.created_directories.clear();
-    assert!(!apply::has_undo_work(&journal));
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
     let report = apply::undo(&mut journal, &TestSeal);
     assert!(report.error.is_none(), "undo error: {:?}", report.error);
     assert!(folder.is_dir(), "undo removed a folder it did not create");
@@ -376,7 +376,7 @@ fn second_undo_leaves_a_created_folder_that_was_swapped_for_another() {
     fs::create_dir(&reserved).expect("reserve a distinct directory");
     fs::remove_dir(&folder).expect("remove original");
     fs::rename(&reserved, &folder).expect("install replacement");
-    assert!(!apply::has_undo_work(&journal));
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
     let report = apply::undo(&mut journal, &TestSeal);
     assert!(report.error.is_none(), "undo error: {:?}", report.error);
     assert!(folder.is_dir(), "undo removed a replacement folder");
@@ -393,7 +393,7 @@ fn second_undo_leaves_a_created_folder_that_was_swapped_for_a_link() {
     fs::create_dir(&elsewhere).expect("create link target");
     fs::remove_dir(&folder).expect("remove original");
     std::os::unix::fs::symlink(&elsewhere, &folder).expect("install link");
-    assert!(!apply::has_undo_work(&journal));
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
     let report = apply::undo(&mut journal, &TestSeal);
     assert!(report.error.is_none(), "undo error: {:?}", report.error);
     assert!(
@@ -2078,7 +2078,10 @@ fn a_journal_missing_several_records_restores_nothing() {
     let mut j = Journal::load_sealed("test", &rep.journal_id, &TestSeal).expect("still loads");
     let before: Vec<PathBuf> = j.entries.iter().map(|e| e.to.clone()).collect();
 
-    assert_eq!(apply::next_undo_journal(std::slice::from_ref(&j)), Some(0));
+    assert_eq!(
+        apply::next_undo_journal(std::slice::from_ref(&j), &TestSeal),
+        Some(0)
+    );
     let report = apply::undo(&mut j, &TestSeal);
 
     assert!(
@@ -2272,7 +2275,7 @@ fn newest_stopped_apply_does_not_block_the_journal_that_finished_its_files() {
     let (root, mut journals) = contended_journals("recovery", 5);
     assert_eq!(apply::unrecorded_moves(&journals[0]), 4);
     for _ in 0..2 {
-        let index = apply::next_undo_journal(&journals).unwrap();
+        let index = apply::next_undo_journal(&journals, &TestSeal).unwrap();
         let report = apply::undo(&mut journals[index], &TestSeal);
         assert_eq!(
             report.unrecorded_moves, 0,
@@ -2282,7 +2285,7 @@ fn newest_stopped_apply_does_not_block_the_journal_that_finished_its_files() {
         assert!(report.skipped_changed.is_empty());
         journals[index] = Journal::load_sealed("test", &journals[index].id, &TestSeal).unwrap();
     }
-    assert!(apply::next_undo_journal(&journals).is_none());
+    assert!(apply::next_undo_journal(&journals, &TestSeal).is_none());
     for i in 0..5 {
         assert_eq!(
             fs::read(root.join(format!("file-{i}"))).unwrap(),
@@ -2320,10 +2323,10 @@ fn a_single_contended_destination_is_restored_by_its_recorded_owner() {
             );
             journals[1].save_sealed(&TestSeal).unwrap();
         }
-        assert_eq!(apply::next_undo_journal(&journals), Some(1));
+        assert_eq!(apply::next_undo_journal(&journals, &TestSeal), Some(1));
         let report = apply::undo(&mut journals[1], &TestSeal);
         assert_eq!(report.restored, 1);
-        assert_eq!(apply::next_undo_journal(&journals), Some(0));
+        assert_eq!(apply::next_undo_journal(&journals, &TestSeal), Some(0));
         assert_eq!(apply::undo(&mut journals[0], &TestSeal).restored, 1);
         for i in 0..2 {
             assert_eq!(
@@ -2341,19 +2344,19 @@ fn unjournalled_moves_and_unproven_owners_still_refuse() {
     let (root, mut journals) = contended_journals("unproven", 5);
     let before = fs::read(journals[0].path()).unwrap();
     // The files exist, but the process that moved them left no journal.
-    assert_eq!(apply::next_undo_journal(&journals[..1]), Some(0));
+    assert_eq!(apply::next_undo_journal(&journals[..1], &TestSeal), Some(0));
     assert_eq!(apply::undo(&mut journals[0], &TestSeal).unrecorded_moves, 4);
     // A journal that merely planned the same paths proves no completed move.
     for entry in &mut journals[1].entries {
         entry.state = etude_core::journal::EntryState::Planned;
     }
-    assert_eq!(apply::next_undo_journal(&journals), Some(0));
+    assert_eq!(apply::next_undo_journal(&journals, &TestSeal), Some(0));
     // A Moved record with the wrong fingerprint is also not an owner.
     for entry in &mut journals[1].entries {
         entry.state = etude_core::journal::EntryState::Moved;
         entry.edge_hash ^= 1;
     }
-    assert_eq!(apply::next_undo_journal(&journals), Some(0));
+    assert_eq!(apply::next_undo_journal(&journals, &TestSeal), Some(0));
     assert_eq!(apply::undo(&mut journals[0], &TestSeal).unrecorded_moves, 4);
     assert_eq!(fs::read(journals[0].path()).unwrap(), before);
     for i in 0..5 {
@@ -2364,4 +2367,44 @@ fn unjournalled_moves_and_unproven_owners_still_refuse() {
         );
     }
     cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn another_live_journal_keeps_its_origin_directory() {
+    let _g = lock();
+    let (root, folder, state, mut journal) = journal_with_every_file_reversed("live_origin");
+    let mut other = Journal {
+        id: "live-origin".into(),
+        tool: "stash".into(),
+        root: root.clone(),
+        validated_directories: vec![directory_guard(&folder)],
+        ..Default::default()
+    };
+    let file = folder.join("held.txt");
+    fs::write(&file, b"held bytes").unwrap();
+    let held = root.join("holding.txt");
+    let (size, mtime_secs, inode, edge_hash) = etude_core::journal::fingerprint(&file).unwrap();
+    fs::rename(&file, &held).unwrap();
+    other.entries.push(Entry {
+        from: file.clone(),
+        to: held,
+        method: Method::Rename,
+        size,
+        mtime_secs,
+        inode,
+        edge_hash,
+        state: etude_core::journal::EntryState::Moved,
+        tag: None,
+    });
+    other.save_sealed(&TestSeal).unwrap();
+    let report = apply::undo(&mut journal, &TestSeal);
+    assert!(report.error.is_none());
+    assert!(folder.is_dir(), "live origin folder must remain");
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
+    let restored = apply::undo(&mut other, &TestSeal);
+    assert_eq!(restored.restored, 1);
+    assert_eq!(fs::read(file).unwrap(), b"held bytes");
+    cleanup(&root);
+    let _ = fs::remove_dir_all(state);
 }

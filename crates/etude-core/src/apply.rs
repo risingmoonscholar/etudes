@@ -685,6 +685,18 @@ fn apply_plan_with_structured_progress(
             progress(event);
         }
 
+        if held_tagged > 0 || held_cross_volume > 0 {
+            let mut directories = j.created_directories.clone();
+            directories
+                .sort_by_key(|directory| std::cmp::Reverse(directory.path.components().count()));
+            for directory in directories {
+                if created_directory_is_removable(&j, &directory)
+                    && sealer.is_none_or(|sl| !created_directory_is_needed(&j, &directory, sl))
+                {
+                    let _ = fs::remove_dir(directory.path);
+                }
+            }
+        }
         Ok(ApplyReport {
             moved,
             held_tagged,
@@ -784,13 +796,17 @@ fn apply_tags(
                 report.tag_skipped_unreadable += 1;
                 continue;
             };
+            let Ok((size, mtime_secs, inode)) = tag_file_identity(source) else {
+                report.tag_skipped_unreadable += 1;
+                continue;
+            };
             j.entries.push(Entry {
                 from: source.clone(),
                 to: source.clone(),
                 method: Method::Tag,
-                size: 0,
-                mtime_secs: 0,
-                inode: 0,
+                size,
+                mtime_secs,
+                inode,
                 edge_hash: 0,
                 state: EntryState::Planned,
                 tag: Some(TagChange { previous, written }),
@@ -1373,6 +1389,8 @@ pub struct UndoReport {
     pub unrecorded_moves: usize,
     /// Tag journals: files whose previous tags were put back.
     pub tags_restored: usize,
+    /// Empty created folders retained for another live or unreadable journal.
+    pub directories_left_for_journals: usize,
     /// Tag journals: files undo left alone, each with the reason. A file whose
     /// tags are not what apply wrote is never overwritten.
     pub tags_refused: Vec<(PathBuf, TagRefusal)>,
@@ -1447,15 +1465,10 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
     j.entries
         .iter()
         .filter(|e| {
-            // A tag entry writes in place, so there is no second path to look
-            // at. A write whose record was lost leaves the file holding exactly
-            // the bytes the journal says apply was about to write.
-            if let Some(change) = &e.tag {
-                return e.state == EntryState::Planned
-                    && crate::tags::read(&e.from)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|now| now == change.written);
+            // A tag entry writes in place. Equal bytes cannot prove ownership
+            // of a write, so a missing done record is never a recoverable move.
+            if e.tag.is_some() {
+                return false;
             }
             // symlink_metadata, not exists(): exists() follows the last
             // component, so a symlink at the destination reports on whatever
@@ -1478,13 +1491,17 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
 /// this a second undo said "nothing to undo" and never finished. A folder
 /// that holds something, was replaced, or was never recorded as created is
 /// not work: undo leaves it, so counting it would make undo unfinishable.
-pub fn has_undo_work(j: &Journal) -> bool {
+pub fn has_undo_work(j: &Journal, sealer: &dyn Sealer) -> bool {
     j.progress_tail_damaged
         || j.entries.iter().any(Entry::is_moved)
         || unrecorded_moves(j) > 0
-        || j.created_directories
+        || j.entries
             .iter()
-            .any(|directory| created_directory_is_removable(j, directory))
+            .any(|entry| entry.method == Method::Tag && entry.state == EntryState::Planned)
+        || j.created_directories.iter().any(|directory| {
+            created_directory_is_removable(j, directory)
+                && !created_directory_is_needed(j, directory, sealer)
+        })
 }
 
 /// Whether undo may remove this folder: the journal records that apply
@@ -1513,14 +1530,54 @@ fn created_directory_is_removable(j: &Journal, directory: &CreatedDirectory) -> 
         && fs::read_dir(&directory.path).is_ok_and(|mut entries| entries.next().is_none())
 }
 
+/// Retain directories needed by another live operation. Unreadable history
+/// cannot establish that removing a directory is safe.
+fn created_directory_is_needed(
+    j: &Journal,
+    directory: &CreatedDirectory,
+    sealer: &dyn Sealer,
+) -> bool {
+    let histories = match crate::journal::all_candidates_unordered() {
+        Ok(histories) => histories,
+        Err(crate::journal::JournalError::NotFound) => return false,
+        Err(_) => return true,
+    };
+    for (tool, candidate) in histories {
+        if tool == j.tool && candidate.id == j.id {
+            continue;
+        }
+        let other = match candidate.load(&tool, sealer) {
+            Ok(other) => other,
+            Err(_) => return true,
+        };
+        if other
+            .entries
+            .iter()
+            .any(|entry| entry.is_moved() || entry.state == EntryState::Planned)
+            && (other.validated_directories.iter().any(|guard| {
+                (guard.device == directory.device && guard.inode == directory.inode)
+                    || guard.path.starts_with(&directory.path)
+                    || fs::canonicalize(&guard.path)
+                        .is_ok_and(|path| path.starts_with(&directory.path))
+            }) || other.entries.iter().any(|entry| {
+                entry.from.starts_with(&directory.path)
+                    && (entry.is_moved() || entry.state == EntryState::Planned)
+            }))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Select from newest-first journals, restoring a recorded owner before a
 /// contending plan that would otherwise mistake its files for lost records.
 /// This only changes order: undo's missing-record and fingerprint checks still
 /// run unchanged. Every apparent unrecorded move must have a matching live
 /// Moved record before we bypass the newest journal. Partial evidence, stale
 /// records, different paths, and dependency cycles preserve the original order.
-pub fn next_undo_journal(journals: &[Journal]) -> Option<usize> {
-    let first = journals.iter().position(has_undo_work)?;
+pub fn next_undo_journal(journals: &[Journal], sealer: &dyn Sealer) -> Option<usize> {
+    let first = journals.iter().position(|j| has_undo_work(j, sealer))?;
     let mut current = first;
     let mut visited = HashSet::new();
     while visited.insert(current) {
@@ -1653,7 +1710,7 @@ fn undo_selected_with_progress(
         }
         let e = j.entries[i].clone();
         if e.tag.is_some() {
-            undo_tag_entry(j, i, &e, first_planned == Some(i), sealer, &mut r);
+            undo_tag_entry(j, i, &e, sealer, &mut r);
             if r.error.is_some() {
                 break;
             }
@@ -1864,25 +1921,47 @@ fn undo_selected_with_progress(
     dirs.sort_by_key(|directory| std::cmp::Reverse(directory.path.components().count()));
     for directory in dirs {
         if created_directory_is_removable(j, &directory) {
-            let _ = fs::remove_dir(&directory.path);
+            if created_directory_is_needed(j, &directory, sealer) {
+                r.directories_left_for_journals += 1;
+            } else {
+                let _ = fs::remove_dir(&directory.path);
+            }
         }
     }
 
     r
 }
 
+fn tag_file_identity(path: &Path) -> io::Result<(u64, i64, u64)> {
+    let metadata = crate::scan::observe_read("metadata", fs::symlink_metadata(path))?;
+    if !metadata.is_file() {
+        return Err(io::Error::other("tag target is not a regular file"));
+    }
+    let mtime = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs() as i64;
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt;
+        metadata.ino()
+    };
+    #[cfg(not(unix))]
+    let inode = 0;
+    Ok((metadata.len(), mtime, inode))
+}
+
 /// Put one file's previous tags back, only if its tags are still what apply
 /// wrote.
 ///
 /// A file whose tags were changed by someone else since is left alone and
-/// reported: restoring would overwrite their change. A tag write whose record
-/// was lost (the entry still reads Planned) is recovered only for the first
-/// Planned entry, the one apply was working on when it stopped.
+/// reported: restoring would overwrite their change. Without a completed
+/// write record, tags are retained because equal bytes do not prove ownership.
 fn undo_tag_entry(
     j: &mut Journal,
     index: usize,
     entry: &Entry,
-    first_planned: bool,
     sealer: &dyn Sealer,
     report: &mut UndoReport,
 ) {
@@ -1896,8 +1975,25 @@ fn undo_tag_entry(
             report.already_reversed += 1;
             return;
         }
-        EntryState::Planned if !first_planned => return,
+        EntryState::Planned => {
+            // Equal bytes cannot distinguish apply from a later manual tag.
+            report.skipped_changed.push(entry.from.clone());
+            j.entries[index].state = EntryState::Reversed;
+            if let Err(error) = j.record_undone(index, sealer) {
+                report.error = Some(ApplyError::Journal(error));
+            }
+            return;
+        }
         _ => {}
+    }
+    // Zero identity fields identify older tag journals, which retain their
+    // original byte-comparison behavior.
+    if (entry.inode != 0 || entry.size != 0 || entry.mtime_secs != 0 || entry.edge_hash != 0)
+        && !tag_file_identity(&entry.from)
+            .is_ok_and(|identity| identity == (entry.size, entry.mtime_secs, entry.inode))
+    {
+        report.skipped_changed.push(entry.from.clone());
+        return;
     }
     let current = match crate::tags::read(&entry.from) {
         Ok(current) => current,

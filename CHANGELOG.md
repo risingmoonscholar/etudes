@@ -12,6 +12,12 @@ reviewers were pointed at the tools before anyone else could be.
 
 ### 0.5.4 candidate — sweep, stash and unpack
 
+- Undo keeps empty created folders needed by another live journal, so stash can restore into them.
+- Undo leaves tags without a completed write record because matching bytes cannot prove who added them.
+- Tag undo checks file identity and leaves replacement files alone; older tag journals retain their original behavior.
+- Journals with tag methods or newer base entry states use a header that older readers refuse.
+- Apply removes empty created folders after a late tag causes the only item to stay at its origin.
+
 - **sweep:** sweep holds Finder-tagged items by default and reports a count, not
   names or paths. The promise now reads: sweep decides from filesystem and
   Finder organization metadata only, never reads file contents to decide, and

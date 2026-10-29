@@ -438,7 +438,10 @@ fn undo_puts_back_the_exact_previous_attribute() {
         None,
         "a file with no attribute has none again"
     );
-    assert!(!apply::has_undo_work(&journal), "nothing is left to undo");
+    assert!(
+        !apply::has_undo_work(&journal, &TestSeal),
+        "nothing is left to undo"
+    );
 }
 
 #[test]
@@ -519,11 +522,10 @@ fn an_apply_stopped_part_way_is_undone_from_the_journal() {
 }
 
 #[test]
-fn a_tag_written_but_not_recorded_is_still_undone() {
+fn a_tag_written_without_a_done_record_is_retained_without_guessing() {
     let _g = lock();
     let s = scene("unrecorded", &["a.pdf", "b.pdf"]);
     set_tags(&s.file("a.pdf"), &["Old"]);
-    let before_a = raw(&s.file("a.pdf"));
     let plan = plan_tags(&s, &[spec("pdf", "Work")]);
     // The write lands, then the record of it cannot be written.
     let failure = apply::apply_with_structured_progress_outcome(
@@ -537,13 +539,21 @@ fn a_tag_written_but_not_recorded_is_still_undone() {
     let id = failure.durable_journal_id.expect("journal id");
     let mut journal = Journal::load_sealed("test", &id, &TestSeal).unwrap();
     assert_eq!(journal.entries[0].state, EntryState::Planned);
-    assert_eq!(apply::unrecorded_moves(&journal), 1);
-    assert!(apply::has_undo_work(&journal));
+    assert_eq!(apply::unrecorded_moves(&journal), 0);
+    assert!(apply::has_undo_work(&journal, &TestSeal));
+    let written = raw(&s.file("a.pdf"));
+    assert!(written.is_some());
     let undone = apply::undo(&mut journal, &TestSeal);
     assert!(undone.error.is_none());
-    assert_eq!(undone.tags_restored, 1);
-    assert_eq!(raw(&s.file("a.pdf")), before_a);
+    assert_eq!(undone.tags_restored, 0);
+    assert_eq!(undone.skipped_changed.len(), 2);
+    assert_eq!(raw(&s.file("a.pdf")), written);
     assert_eq!(raw(&s.file("b.pdf")), None);
+    let mut journal = Journal::load_sealed("test", &id, &TestSeal).unwrap();
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
+    let again = apply::undo(&mut journal, &TestSeal);
+    assert!(again.skipped_changed.is_empty());
+    assert_eq!(raw(&s.file("a.pdf")), written);
 }
 
 #[test]
@@ -699,4 +709,70 @@ fn adding_tags_without_a_journal_is_refused() {
         .expect_err("refused");
     assert!(matches!(error, apply::ApplyError::Io(_)));
     assert_eq!(raw(&s.file("a.pdf")), None, "nothing was written");
+}
+
+#[test]
+fn planned_tag_never_removes_an_identical_manual_tag() {
+    let _g = lock();
+    let s = scene("manual_planned", &["a.pdf"]);
+    let failure = apply::apply_with_structured_progress_outcome(
+        &plan_tags(&s, &[spec("pdf", "Work")]),
+        "test",
+        Some(&TestSeal),
+        Some(0),
+        |_| {},
+    )
+    .expect_err("stopped before writing tags");
+    let mut journal =
+        Journal::load_sealed("test", &failure.durable_journal_id.unwrap(), &TestSeal).unwrap();
+    let written = journal.entries[0].tag.as_ref().unwrap().written.clone();
+    set_raw(&s.file("a.pdf"), &written);
+    let undone = apply::undo(&mut journal, &TestSeal);
+    assert_eq!(raw(&s.file("a.pdf")), Some(written));
+    assert_eq!(undone.skipped_changed, vec![s.file("a.pdf")]);
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
+}
+
+#[test]
+fn undo_preserves_a_replacement_files_identical_tags() {
+    let _g = lock();
+    let s = scene("replaced_identity", &["a.pdf"]);
+    let report = apply_plan(&plan_tags(&s, &[spec("pdf", "Work")]));
+    let mut journal = reload(&report);
+    let written = raw(&s.file("a.pdf")).unwrap();
+    fs::rename(s.file("a.pdf"), s.file("original")).unwrap();
+    fs::write(s.file("a.pdf"), b"replacement file").unwrap();
+    set_raw(&s.file("a.pdf"), &written);
+    let undone = apply::undo(&mut journal, &TestSeal);
+    assert_eq!(raw(&s.file("a.pdf")), Some(written));
+    assert_eq!(undone.skipped_changed, vec![s.file("a.pdf")]);
+}
+
+#[test]
+fn older_tag_journals_with_zero_identity_restore_unchanged_tags() {
+    let _g = lock();
+    let s = scene("legacy_zero_identity", &["a.pdf"]);
+    let report = apply_plan(&plan_tags(&s, &[spec("pdf", "Work")]));
+    let mut journal = reload(&report);
+    for entry in &mut journal.entries {
+        entry.size = 0;
+        entry.mtime_secs = 0;
+        entry.inode = 0;
+        entry.edge_hash = 0;
+    }
+    let legacy = "sweep-journal 1\n".to_string()
+        + &journal
+            .encode()
+            .lines()
+            .skip(2)
+            .collect::<Vec<_>>()
+            .join("\n")
+        + "\n";
+    let mut legacy = Journal::decode(&legacy).unwrap();
+    legacy.id = journal.id;
+    legacy.tool = journal.tool;
+    let undone = apply::undo(&mut legacy, &TestSeal);
+    assert!(undone.error.is_none());
+    assert_eq!(undone.tags_restored, 1);
+    assert_eq!(raw(&s.file("a.pdf")), None);
 }

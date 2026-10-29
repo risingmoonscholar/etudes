@@ -2152,8 +2152,8 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
 ///
 /// When the tail is damaged the answer is no, so undo runs and its
 /// successor-entry recovery checks the filesystem instead of the journal.
-fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
-    !etude_core::apply::has_undo_work(j)
+fn journal_is_fully_undone(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> bool {
+    !etude_core::apply::has_undo_work(j, sl)
 }
 
 /// Shared tail of `apply` and `review`.
@@ -2668,7 +2668,7 @@ fn sweep_journal_matching(
         // Never use a different history to bypass a journal we cannot read.
         let j = id.load("sweep", sl)?;
         if matches(&j) {
-            if journals.is_empty() && !journal_is_fully_undone(&j) {
+            if journals.is_empty() && !journal_is_fully_undone(&j, sl) {
                 // Ordinary undo needs no older context. Contention is visible
                 // as planned destinations occupied while their origins are gone.
                 if etude_core::apply::unrecorded_moves(&j) == 0 {
@@ -2680,7 +2680,7 @@ fn sweep_journal_matching(
             }
         }
     }
-    if let Some(index) = etude_core::apply::next_undo_journal(&journals) {
+    if let Some(index) = etude_core::apply::next_undo_journal(&journals, sl) {
         return Ok(Some(journals.remove(index)));
     }
     Ok(None)
@@ -2787,7 +2787,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
             );
         }
     };
-    if journal_is_fully_undone(&j) {
+    if journal_is_fully_undone(&j, &sl) {
         // Say which operation this is about. The newest journal being already
         // restored is a fact about an earlier run, and a user who just applied
         // something reads it as a fact about that. If they used --no-journal
@@ -2857,11 +2857,21 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     }
     // Report what actually happened before anything about the outcome: this
     // count is real even when `r.error` is set below.
+    if r.directories_left_for_journals > 0 {
+        println!(
+            "Left {} empty folders needed by another live or unreadable journal.",
+            r.directories_left_for_journals
+        );
+    }
     if tag_journal {
         tag_output::undo_detail(&r);
     } else {
         etude_cli_support::envelope::detail(etude_core::json::obj(&[
             ("restored", etude_core::json::num(r.restored)),
+            (
+                "directories_left_for_journals",
+                etude_core::json::num(r.directories_left_for_journals),
+            ),
             (
                 "skipped_changed",
                 etude_core::json::num(r.skipped_changed.len()),
@@ -2886,10 +2896,17 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
         println!("\nRestored {} files.", r.restored);
     }
     if !r.skipped_changed.is_empty() {
-        println!(
-            "  {} changed since apply and were left alone:",
-            r.skipped_changed.len()
-        );
+        if tag_journal {
+            println!(
+                "  {} tag files were left because identity or write ownership could not be verified:",
+                r.skipped_changed.len()
+            );
+        } else {
+            println!(
+                "  {} changed since apply and were left alone:",
+                r.skipped_changed.len()
+            );
+        }
         for p in &r.skipped_changed {
             println!("    {}", etude_core::redact::path(p));
         }
@@ -3534,6 +3551,16 @@ mod tests {
         }
     }
 
+    struct TestSeal;
+    impl etude_core::journal::Sealer for TestSeal {
+        fn seal(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(bytes.to_vec())
+        }
+        fn open(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(bytes.to_vec())
+        }
+    }
+
     #[test]
     fn journal_is_fully_undone_when_no_entry_is_done() {
         let undone = etude_core::Journal {
@@ -3545,7 +3572,7 @@ mod tests {
             validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
-        assert!(journal_is_fully_undone(&undone));
+        assert!(journal_is_fully_undone(&undone, &TestSeal));
 
         let pending = etude_core::Journal {
             id: "t".into(),
@@ -3556,7 +3583,7 @@ mod tests {
             validated_directories: Vec::new(),
             progress_tail_damaged: false,
         };
-        assert!(!journal_is_fully_undone(&pending));
+        assert!(!journal_is_fully_undone(&pending, &TestSeal));
     }
 
     #[test]
