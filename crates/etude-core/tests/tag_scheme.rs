@@ -608,6 +608,7 @@ fn tags_that_change_after_the_journal_is_written_are_left_as_found() {
             after_journal: None,
             before_rename: Some(&mut change),
             after_rename: None,
+            ..Default::default()
         },
     )
     .expect("apply");

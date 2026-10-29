@@ -5010,6 +5010,7 @@ mod tag_report_tests {
                 after_journal: None,
                 before_rename: Some(&mut tag_it),
                 after_rename: Some(&mut occupy),
+                ..Default::default()
             },
         )
         .expect("apply reports instead of failing");

@@ -282,6 +282,7 @@ fn an_item_tagged_between_the_check_and_the_rename_is_returned_and_counted() {
             after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
+            ..Default::default()
         },
     )
     .expect("apply");
@@ -335,6 +336,7 @@ fn an_item_that_cannot_be_returned_stays_counted_and_journaled() {
             after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: Some(&mut occupy),
+            ..Default::default()
         },
     )
     .expect("apply returns a report, not an error");
@@ -398,6 +400,7 @@ fn a_failed_journal_write_during_the_return_leaves_the_item_home_and_reported_he
             after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
+            ..Default::default()
         },
     )
     .expect("a report, not an error");
@@ -443,6 +446,7 @@ fn a_failed_journal_write_after_a_stranded_item_is_reported() {
             after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: Some(&mut occupy),
+            ..Default::default()
         },
     )
     .expect("a report");
@@ -468,6 +472,7 @@ fn without_a_journal_the_return_still_happens() {
             after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
+            ..Default::default()
         },
     )
     .expect("apply");
@@ -491,6 +496,7 @@ fn a_tagged_item_in_a_plan_that_included_tagged_items_is_not_returned() {
             after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
+            ..Default::default()
         },
     )
     .expect("apply");
