@@ -670,7 +670,7 @@ fn a_single_item_tagged_during_rename_leaves_no_empty_group() {
             after_validate: None,
             after_journal: None,
             before_rename: Some(&mut tag_it),
-            after_rename: None,
+            ..Default::default()
         },
     )
     .unwrap();
