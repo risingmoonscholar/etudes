@@ -375,11 +375,13 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
             },
             5 => Signal::Collected { count: r.count()? },
             6 => Signal::Proposed { count: r.count()? },
-            7 => Signal::Tagged {
-                ext: r.text()?,
-                new: r.boolean()?,
-                entry: r.text()?,
-            },
+            7 => {
+                let ext = r.text()?;
+                let new = r.boolean()?;
+                let entry = r.text()?;
+                crate::tags::validate_entry(&entry).map_err(|_| invalid())?;
+                Signal::Tagged { ext, new, entry }
+            }
             _ => return Err(invalid()),
         };
         let count = r.count()?;

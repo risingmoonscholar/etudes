@@ -436,6 +436,20 @@ fn apply_plan_with_structured_progress(
     let mut durable_journal_id = None;
     let result = (|| {
         validate(&mut durable_journal_id)?;
+        let mut eligibility = crate::scan::MemberEligibility::default();
+        for group in &plan.groups {
+            if let crate::plan::Signal::Tagged { entry, .. } = &group.signal {
+                crate::tags::validate_entry(entry)
+                    .map_err(|error| ApplyError::StalePlan(io::Error::other(error)))?;
+            }
+            for source in &group.members {
+                if tool != "stash" || plan.applies_tags() {
+                    eligibility
+                        .check(&plan.root, source)
+                        .map_err(ApplyError::StalePlan)?;
+                }
+            }
+        }
         if plan.applies_tags() {
             return apply_tags(
                 plan,
@@ -618,6 +632,11 @@ fn apply_plan_with_structured_progress(
             }
             if let Some(hook) = faults.before_rename.as_mut() {
                 hook(i, &from);
+            }
+            if tool != "stash"
+                && let Err(error) = crate::scan::eligible_member(&from)
+            {
+                return Err(ineligible_member(error, &mut j, sealer));
             }
             let method = match move_one(&from, &to) {
                 Ok(method) => method,
@@ -852,6 +871,9 @@ fn apply_tags(
             j.record_held(i, sl).map_err(ApplyError::Journal)?;
             continue;
         }
+        if let Err(error) = crate::scan::eligible_member(&path) {
+            return Err(ineligible_member(error, &mut j, Some(sl)));
+        }
         crate::tags::write(&path, &change.written).map_err(ApplyError::Io)?;
         let landed = crate::tags::read(&path)
             .map_err(ApplyError::Io)?
@@ -876,6 +898,42 @@ fn apply_tags(
     }
     report.journal_path = Some(j.path());
     Ok(report)
+}
+
+/// A member that stopped being eligible while the apply was running.
+///
+/// Before anything changed, this is still a refusal: no entry has left
+/// `Planned`, and the folders this apply created for the first move are
+/// still empty and come away again, as they do for a held item. The saved
+/// journal is rewritten as the zero-entry record a refusal leaves, and the
+/// caller replans. After the first move or tag write, or when a created
+/// folder cannot be removed, it is not a refusal: the journal keeps what
+/// happened, the error takes the path every other mid-apply failure takes,
+/// and undo reverses the entries that moved.
+fn ineligible_member(error: io::Error, j: &mut Journal, sealer: Option<&dyn Sealer>) -> ApplyError {
+    if j.entries
+        .iter()
+        .any(|entry| entry.state != EntryState::Planned)
+    {
+        return ApplyError::Io(error);
+    }
+    let mut directories = j.created_directories.clone();
+    directories.sort_by_key(|directory| std::cmp::Reverse(directory.path.components().count()));
+    for directory in &directories {
+        let removable = created_directory_is_removable(j, directory)
+            && sealer.is_none_or(|sl| !created_directory_is_needed(j, directory, sl));
+        if !removable || fs::remove_dir(&directory.path).is_err() {
+            return ApplyError::Io(error);
+        }
+    }
+    j.created_directories.clear();
+    if let Some(sl) = sealer {
+        j.entries.clear();
+        if let Err(error) = j.save_sealed(sl) {
+            return ApplyError::Journal(error);
+        }
+    }
+    ApplyError::StalePlan(error)
 }
 
 fn destination_outside_root() -> ApplyError {
