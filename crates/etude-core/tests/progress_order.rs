@@ -332,3 +332,40 @@ fn preflight_refusal_reports_terminal_error_without_claiming_moves() {
             .all(|path| path.exists())
     );
 }
+
+#[test]
+fn every_next_rename_observes_the_previous_complete_frame() {
+    let _guard = lock();
+    let fixture = Fixture::new(4);
+    let seal = TestSeal::new(None);
+    let mut renames = Vec::new();
+    let mut before = |index: usize, _path: &std::path::Path| {
+        let id = journal::latest_id(TOOL).unwrap();
+        let j = Journal::load_sealed(TOOL, &id, &seal).unwrap();
+        assert!(!j.progress_tail_damaged);
+        assert!(
+            j.entries[..index]
+                .iter()
+                .all(|e| e.state == EntryState::Moved)
+        );
+        assert!(
+            j.entries[index..]
+                .iter()
+                .all(|e| e.state == EntryState::Planned)
+        );
+        assert!(j.entries[index].from.exists());
+        assert!(!j.entries[index].to.exists());
+        renames.push(index);
+    };
+    apply::apply_with_faults_for_tests(
+        &fixture.plan.plan,
+        TOOL,
+        Some(&seal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut before),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(renames, [0, 1, 2, 3]);
+}

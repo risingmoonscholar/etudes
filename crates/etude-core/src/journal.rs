@@ -390,22 +390,56 @@ fn valid_component(value: &str, limit: usize) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+/// An existing journal opened once for a sequence of progress records.
+/// Each call seals one frame, writes its prefix and body together, and syncs
+/// before returning. Never buffer records across filesystem operations.
+pub(crate) struct ProgressWriter<W = fs::File> {
+    file: W,
+}
+
+pub(crate) trait DurableWrite: Write {
+    fn sync_all(&mut self) -> io::Result<()>;
+}
+
+impl DurableWrite for fs::File {
+    fn sync_all(&mut self) -> io::Result<()> {
+        fs::File::sync_all(self)
+    }
+}
+
+impl<W: DurableWrite> ProgressWriter<W> {
+    fn append(&mut self, payload: &[u8], sealer: &dyn Sealer) -> Result<(), JournalError> {
+        let sealed = sealer.seal(payload).map_err(JournalError::Seal)?;
+        let len = u32::try_from(sealed.len())
+            .map_err(|_| JournalError::Malformed("progress record too large"))?;
+        let mut frame = Vec::with_capacity(4 + sealed.len());
+        frame.extend_from_slice(&len.to_le_bytes());
+        frame.extend_from_slice(&sealed);
+        self.file.write_all(&frame).map_err(JournalError::Io)?;
+        // The base save already synced the directory entry. Each progress
+        // frame must be durable before the caller starts its next move.
+        self.file.sync_all().map_err(JournalError::Io)
+    }
+
+    pub(crate) fn record_done(
+        &mut self,
+        index: usize,
+        method: Method,
+        sealer: &dyn Sealer,
+    ) -> Result<(), JournalError> {
+        self.append(
+            format!("done\t{index}\t{}\n", method.tag()).as_bytes(),
+            sealer,
+        )
+    }
+}
+
 fn append_progress(
     journal: &Journal,
     payload: &[u8],
     sealer: &dyn Sealer,
 ) -> Result<(), JournalError> {
-    let sealed = sealer.seal(payload).map_err(JournalError::Seal)?;
-    let len = u32::try_from(sealed.len())
-        .map_err(|_| JournalError::Malformed("progress record too large"))?;
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(journal.path())
-        .map_err(JournalError::Io)?;
-    file.write_all(&len.to_le_bytes())
-        .map_err(JournalError::Io)?;
-    file.write_all(&sealed).map_err(JournalError::Io)?;
-    file.sync_all().map_err(JournalError::Io)
+    journal.progress_writer()?.append(payload, sealer)
 }
 
 impl Journal {
@@ -613,25 +647,17 @@ impl Journal {
         method: Method,
         sealer: &dyn Sealer,
     ) -> Result<(), JournalError> {
-        let payload = format!("done\t{index}\t{}\n", method.tag());
-        let sealed = sealer
-            .seal(payload.as_bytes())
-            .map_err(JournalError::Seal)?;
-        let len = u32::try_from(sealed.len())
-            .map_err(|_| JournalError::Malformed("progress record too large"))?;
-        // No create(true): the base frame must already exist from save_sealed.
-        // Opening a missing journal here would paper over a real caller bug.
-        let mut f = fs::OpenOptions::new()
+        self.progress_writer()?.record_done(index, method, sealer)
+    }
+
+    /// Open only an existing base journal; never create a missing journal.
+    /// The caller must drop this handle before replacing the journal by save.
+    pub(crate) fn progress_writer(&self) -> Result<ProgressWriter, JournalError> {
+        let file = fs::OpenOptions::new()
             .append(true)
             .open(self.path())
             .map_err(JournalError::Io)?;
-        f.write_all(&len.to_le_bytes()).map_err(JournalError::Io)?;
-        f.write_all(&sealed).map_err(JournalError::Io)?;
-        // Append to an existing file creates no new directory entry, so the
-        // directory fsync from write_bytes already covers the name. sync_all
-        // on the file is enough. That's why this is O(1).
-        f.sync_all().map_err(JournalError::Io)?;
-        Ok(())
+        Ok(ProgressWriter { file })
     }
 
     /// Append one sealed "entry i was held and never moved" frame. It takes
@@ -703,22 +729,7 @@ impl Journal {
     /// walks them all again and the journal never converges to "nothing left
     /// to undo".
     pub fn record_undone(&self, index: usize, sealer: &dyn Sealer) -> Result<(), JournalError> {
-        let payload = format!("undone\t{index}\n");
-        let sealed = sealer
-            .seal(payload.as_bytes())
-            .map_err(JournalError::Seal)?;
-        let len = u32::try_from(sealed.len())
-            .map_err(|_| JournalError::Malformed("progress record too large"))?;
-        // Same append-only, no-create discipline as record_done: the base
-        // frame must already be there.
-        let mut f = fs::OpenOptions::new()
-            .append(true)
-            .open(self.path())
-            .map_err(JournalError::Io)?;
-        f.write_all(&len.to_le_bytes()).map_err(JournalError::Io)?;
-        f.write_all(&sealed).map_err(JournalError::Io)?;
-        f.sync_all().map_err(JournalError::Io)?;
-        Ok(())
+        append_progress(self, format!("undone\t{index}\n").as_bytes(), sealer)
     }
 
     /// Load and unseal. `id` is the bare id; `tool` selects the namespace.
@@ -1392,6 +1403,187 @@ pub fn edge_hash(p: &Path, size: u64) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Default)]
+    struct AppendProbe {
+        bytes: Vec<u8>,
+        events: Vec<&'static str>,
+        fail_write: bool,
+        fail_sync: bool,
+    }
+    impl Write for AppendProbe {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.events.push("write");
+            if self.fail_write {
+                return Err(io::Error::other("injected write failure"));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            panic!("progress must sync, not flush")
+        }
+    }
+    impl DurableWrite for AppendProbe {
+        fn sync_all(&mut self) -> io::Result<()> {
+            self.events.push("sync");
+            if self.fail_sync {
+                return Err(io::Error::other("injected sync failure"));
+            }
+            Ok(())
+        }
+    }
+    struct FrameSeal;
+    impl FrameSeal {
+        fn tag(plain: &[u8]) -> [u8; 8] {
+            plain
+                .iter()
+                .fold(0x746573742d6b6579u64, |tag, byte| {
+                    tag.rotate_left(5).wrapping_add(u64::from(*byte))
+                })
+                .to_le_bytes()
+        }
+    }
+    impl Sealer for FrameSeal {
+        fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, &'static str> {
+            let mut sealed = Self::tag(plain).to_vec();
+            sealed.extend_from_slice(plain);
+            Ok(sealed)
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            let plain = sealed.get(8..).ok_or("short frame")?;
+            if sealed[..8] != Self::tag(plain) {
+                return Err("changed frame");
+            }
+            Ok(plain.to_vec())
+        }
+    }
+
+    #[test]
+    fn append_writes_one_frame_then_syncs_before_returning() {
+        let mut writer = ProgressWriter {
+            file: AppendProbe::default(),
+        };
+        for i in 0..3 {
+            writer.record_done(i, Method::Rename, &FrameSeal).unwrap();
+            // Returning permits the next rename; sync must already be over.
+            writer.file.events.push("next move");
+        }
+        assert_eq!(writer.file.events, ["write", "sync", "next move"].repeat(3));
+    }
+
+    #[test]
+    fn append_propagates_write_and_sync_errors() {
+        for (fail_write, fail_sync, events) in [
+            (true, false, vec!["write"]),
+            (false, true, vec!["write", "sync"]),
+        ] {
+            let mut writer = ProgressWriter {
+                file: AppendProbe {
+                    fail_write,
+                    fail_sync,
+                    ..Default::default()
+                },
+            };
+            assert!(matches!(
+                writer.record_done(0, Method::Rename, &FrameSeal),
+                Err(JournalError::Io(_))
+            ));
+            assert_eq!(writer.file.events, events);
+        }
+    }
+
+    #[test]
+    fn append_handle_matches_old_two_write_bytes_on_disk() {
+        let dir = std::env::temp_dir().join(format!("etude-append-golden-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let old_path = dir.join("old");
+        let new_path = dir.join("new");
+        let mut j = golden_journal("sweep");
+        for entry in &mut j.entries {
+            entry.state = EntryState::Planned;
+        }
+        let base = FrameSeal.seal(j.encode().as_bytes()).unwrap();
+        let mut initial = (base.len() as u32).to_le_bytes().to_vec();
+        initial.extend(base);
+        for path in [&old_path, &new_path] {
+            fs::write(path, &initial).unwrap();
+        }
+        let mut writer = ProgressWriter {
+            file: fs::OpenOptions::new().append(true).open(&new_path).unwrap(),
+        };
+        // Freeze the former path here, independently of the new helper.
+        for (i, method) in [
+            (0, Method::Rename),
+            (1, Method::CopyUnlink),
+            (2, Method::Tag),
+        ] {
+            let sealed = FrameSeal
+                .seal(format!("done\t{i}\t{}\n", method.tag()).as_bytes())
+                .unwrap();
+            let mut old = fs::OpenOptions::new().append(true).open(&old_path).unwrap();
+            old.write_all(&(sealed.len() as u32).to_le_bytes()).unwrap();
+            old.write_all(&sealed).unwrap();
+            old.sync_all().unwrap();
+            writer.record_done(i, method, &FrameSeal).unwrap();
+        }
+        drop(writer);
+        assert_eq!(fs::read(old_path).unwrap(), fs::read(new_path).unwrap());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn append_handle_frames_authenticate_individually_and_reject_reordering() {
+        let mut writer = ProgressWriter {
+            file: AppendProbe::default(),
+        };
+        for i in 0..3 {
+            writer.record_done(i, Method::Rename, &FrameSeal).unwrap();
+        }
+        let raw = writer.file.bytes;
+        let mut frames = Vec::new();
+        let mut offset = 0;
+        while offset < raw.len() {
+            let len = u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap()) as usize;
+            frames.push(raw[offset..offset + 4 + len].to_vec());
+            offset += 4 + len;
+        }
+        let planned = || {
+            let mut j = golden_journal("sweep");
+            for entry in &mut j.entries {
+                entry.state = EntryState::Planned;
+            }
+            j
+        };
+        let mut j = planned();
+        j.apply_progress(&raw, &FrameSeal).unwrap();
+        assert!(j.entries[..3].iter().all(Entry::is_moved));
+        for frame in &frames {
+            FrameSeal.open(&frame[4..]).unwrap();
+        }
+        for index in 0..frames.len() {
+            let mut corrupt = frames.clone();
+            corrupt[index][4] ^= 1;
+            assert!(
+                planned()
+                    .apply_progress(&corrupt.concat(), &FrameSeal)
+                    .is_err()
+            );
+        }
+        for order in [[1, 0, 2], [0, 0, 2], [0, 2, 1]] {
+            let reordered: Vec<_> = order.iter().flat_map(|&i| frames[i].clone()).collect();
+            assert!(planned().apply_progress(&reordered, &FrameSeal).is_err());
+        }
+        // Both a partial prefix and a partial sealed body retain the prefix.
+        for missing in [1, frames[2].len() - 2] {
+            let mut j = planned();
+            j.apply_progress(&raw[..raw.len() - missing], &FrameSeal)
+                .unwrap();
+            assert!(j.progress_tail_damaged);
+            assert!(j.entries[..2].iter().all(Entry::is_moved));
+            assert_eq!(j.entries[2].state, EntryState::Planned);
+        }
+    }
+
     fn golden_journal(tool: &str) -> Journal {
         let states = [
             EntryState::Planned,
