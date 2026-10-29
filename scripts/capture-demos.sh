@@ -54,7 +54,7 @@ capture() {
 capture sweep-plan    'sweep ~/Desktop'                "$bin/sweep" "$home/Desktop"
 capture sweep-explain 'sweep ~/Desktop --explain'      "$bin/sweep" "$home/Desktop" --explain
 capture sweep-json    'sweep ~/Desktop --json'         "$bin/sweep" "$home/Desktop" --json
-# The three helps are captured, not restated. The page used to carry a
+# The four helps are captured, not restated. The page used to carry a
 # hand-written table of usage and flags beside these, and it drifted exactly
 # the way a second copy always does: it omitted --since and --max-size, said
 # `forget` destroys all journals and the key, and said stash moves EVERYTHING
@@ -63,6 +63,7 @@ capture sweep-json    'sweep ~/Desktop --json'         "$bin/sweep" "$home/Deskt
 capture sweep-help    'sweep help'                     "$bin/sweep" help
 capture stash-help    'stash help'                     "$bin/stash" help
 capture unpack-help   'unpack help'                    "$bin/unpack" help
+capture pack-help     'pack help'                      "$bin/pack" help
 
 # stash mutates the tree, so it runs last against its own copy.
 cp -R "$home/Desktop" "$home/Stashable"
@@ -82,7 +83,7 @@ caps, home, work, out = sys.argv[1:5]
 # below -- the tools version separately now, and the page has to say what
 # each binary says, not what the workspace happens to be.
 versions = {}
-for tool in ("sweep", "stash", "unpack"):
+for tool in ("sweep", "stash", "unpack", "pack"):
     versions[tool] = subprocess.run([os.path.join(sys.argv[5], tool), "--version"],
                                     capture_output=True, text=True).stdout.strip().split()[-1]
 version = versions["sweep"]  # legacy field; per-tool is authoritative
