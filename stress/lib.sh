@@ -39,7 +39,7 @@ FAIL_LINES=(); UNPROVEN_LINES=()
 # The binaries under test. Built by run.sh; never resolved from PATH, so a
 # stale copy elsewhere cannot be tested by accident.
 BIN="${BIN:?BIN must point at target/release}"
-SWEEP="$BIN/sweep"; STASH="$BIN/stash"; UNPACK="$BIN/unpack"; MKFX="$BIN/mkfx"
+SWEEP="$BIN/sweep"; STASH="$BIN/stash"; UNPACK="$BIN/unpack"; PACK="$BIN/pack"; MKFX="$BIN/mkfx"
 
 # Most scenarios are about filesystem behaviour, not whether this machine's
 # login keychain is unlocked. Exercise real sealed journals with one ephemeral

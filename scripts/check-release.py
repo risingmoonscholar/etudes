@@ -18,7 +18,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "https://github.com/risingmoonscholar/etudes"
-TOOLS = ("sweep", "stash", "unpack")
+TOOLS = ("sweep", "stash", "unpack", "pack")
 
 
 def require(condition, message):
@@ -45,7 +45,7 @@ def check_tags(expected, listing):
 
 def run(argv, env=None, expected=0):
     result = subprocess.run([str(a) for a in argv], cwd=ROOT, env=env,
-                            text=True, capture_output=True)
+                            text=True, capture_output=True, stdin=subprocess.DEVNULL)
     require(result.returncode == expected,
             f"{argv[0]} exited {result.returncode}, expected {expected}\n"
             + result.stdout + result.stderr)
@@ -73,6 +73,14 @@ def smoke(tool, binary, work, env, version):
         require(not any((folder / name).exists() for name in originals),
                 "stash reported success without holding the fixture")
         run([binary, "pop", folder], env)
+    elif tool == "pack":
+        import zipfile
+        destination = work / "packed.zip"
+        run([binary, folder, "--for", "other", "--into", destination], env)
+        with zipfile.ZipFile(destination) as archive:
+            require({name: archive.read(name).decode() for name in originals} == originals,
+                    "packed bytes differ")
+        run([binary, folder, "--for", "other", "--into", destination], env, expected=2)
     else:
         archive = folder / "fixture.zip"
         member = folder / "ordinary.txt"

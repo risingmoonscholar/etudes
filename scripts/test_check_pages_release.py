@@ -17,8 +17,9 @@ def release_row(tag_name, draft=False, prerelease=False):
     return {"tag_name": tag_name, "draft": draft, "prerelease": prerelease}
 
 
-def tags(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
+def tags(sweep="0.5.2", stash="0.5.2", unpack="0.5.1", pack="0.6.0"):
     entries = [
+        release_row(f"pack-v{pack}"),
         release_row(f"sweep-v{sweep}"),
         release_row(f"stash-v{stash}"),
         release_row("v0.4.0"),
@@ -30,9 +31,9 @@ def tags(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
     return entries
 
 
-def page(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
+def page(sweep="0.5.2", stash="0.5.2", unpack="0.5.1", pack="0.6.0"):
     return {"version": sweep,
-            "versions": {"sweep": sweep, "stash": stash, "unpack": unpack}}
+            "versions": {"sweep": sweep, "stash": stash, "unpack": unpack, "pack": pack}}
 
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/pages.yml"
@@ -66,12 +67,17 @@ def step_containing(steps, marker):
 class PagesReleaseGateTests(unittest.TestCase):
     def test_all_latest_published_versions_are_allowed(self):
         found = release.check_page(page(), tags())
-        self.assertEqual(found, {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"})
+        self.assertEqual(found, {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1", "pack": "0.6.0"})
+
+    def test_pack_requires_its_own_stable_release(self):
+        listing = [row for row in tags() if not row["tag_name"].startswith("pack-")]
+        with self.assertRaisesRegex(ValueError, "no stable published release.*pack"):
+            release.check_page(page(), listing)
 
     def test_shared_monorepo_tag_supplies_unpack_version(self):
         self.assertEqual(
             release.latest_published_versions(tags()),
-            {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"},
+            {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1", "pack": "0.6.0"},
         )
 
     def test_newer_shared_monorepo_tag_does_not_advance_any_tool(self):
@@ -80,7 +86,7 @@ class PagesReleaseGateTests(unittest.TestCase):
                 listing = tags() + [release_row(f"v{newer_shared}")]
                 self.assertEqual(
                     release.latest_published_versions(listing),
-                    {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"},
+                    {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1", "pack": "0.6.0"},
                 )
                 with self.assertRaisesRegex(ValueError, "latest stable tool versions"):
                     release.check_page(
@@ -112,7 +118,7 @@ class PagesReleaseGateTests(unittest.TestCase):
         ]
         self.assertEqual(
             release.latest_published_versions(listing),
-            {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"},
+            {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1", "pack": "0.6.0"},
         )
 
     def test_release_without_explicit_stable_flags_is_ignored(self):

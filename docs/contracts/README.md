@@ -412,3 +412,26 @@ Stderr names every folder removed and every folder with the exact name left in
 place. The result's `effects.counters` add `leftover_folders_removed` and
 `leftover_folders_kept`, present only when not zero. See
 [staging recovery evidence](../release-evidence/unpack-staging-recovery.md).
+
+## Pack declaration (version 1)
+
+`pack contract --json` declares archive creation, separately from the other
+tools. `v1/pack.json` is its canonical envelope pin;
+`history/v1/pack.json` retains the initial bytes and their checked SHA-256.
+Existing tools' pins remain unchanged. The result envelope stays at version 4.
+
+| Domain | Meaning |
+| --- | --- |
+| source_file_bytes | Included file bytes read by the system archive writer |
+| source_xattr_bytes | Retained metadata bytes read by the writer with keep |
+| staging_archive_metadata | Size and identity of the private output |
+| archive_readback_bytes | Closed archive headers and payload read independently |
+| private_staging_archive | New private mode-0600 sibling of the destination |
+| new_destination_archive | New archive published with exclusive rename |
+
+`list` declares source and destination metadata preflight only and no writes. `pack` additionally
+declares destination metadata, volume free space, randomness, archive reads and
+the two archive writes. Metadata byte reads depend on keep. The system xattr utility lists attribute
+names for length queries; the system tar writer reads retained values. Source entries are
+retained and no journal is created. A declaration is not evidence of complete
+read coverage; the receipt explicitly leaves subprocess reads unproven.

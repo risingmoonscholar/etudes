@@ -9,8 +9,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASES_API = "https://api.github.com/repos/risingmoonscholar/etudes/releases"
-TOOLS = ("sweep", "stash", "unpack")
-TAG = re.compile(r"^refs/tags/(?:(sweep|stash|unpack)-v|v)(\d+)\.(\d+)\.(\d+)$")
+TOOLS = ("sweep", "stash", "unpack", "pack")
+TAG = re.compile(r"^refs/tags/(?:(sweep|stash|unpack|pack)-v|v)(\d+)\.(\d+)\.(\d+)$")
 # v0.5.1 is the last confirmed shared workspace release. Later releases use
 # per-tool tags; a new generic tag must not silently advance a tool that was
 # omitted from that release.
@@ -40,7 +40,8 @@ def latest_published_versions(releases):
                 # Historical monorepo release tags apply to every workspace
                 # tool only through the confirmed transition point.
                 for release_tool in TOOLS:
-                    versions[release_tool].append(entry)
+                    if release_tool != "pack":
+                        versions[release_tool].append(entry)
             elif tool is not None:
                 versions[tool].append(entry)
     missing = [tool for tool in TOOLS if not versions[tool]]
