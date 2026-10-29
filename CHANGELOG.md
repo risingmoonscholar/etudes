@@ -30,6 +30,7 @@ Journal append reuses one handle per apply and writes each frame together; relea
   verification, reporting incomplete with exit 3.
 - **pack:** provides a version-1 capability declaration inside result envelope 4,
   opaque item ids, redacted paths, independent format probes and a help transcript.
+- **pack:** needs macOS; it calls the system `tar` and `xattr`.
 
 ### 0.5.4 candidate — sweep, stash and unpack
 

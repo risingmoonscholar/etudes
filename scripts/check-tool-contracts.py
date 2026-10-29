@@ -1122,6 +1122,9 @@ def main():
     parser.add_argument("--bin", type=Path)
     parser.add_argument("--negative-controls", action="store_true")
     arguments = parser.parse_args()
+    if arguments.tool == "pack" and sys.platform != "darwin":
+        print("pack: skipped, needs macOS tar and xattr")
+        return
     if arguments.tool is None:
         require(arguments.bin is None, "--bin requires --tool")
         for tool in ("sweep", "stash", "unpack", "pack"):
