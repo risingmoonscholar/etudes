@@ -74,15 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-<<<<<<< HEAD
-<<<<<<< HEAD
-cargo test --all                # 591 tests
-=======
-cargo test --all                # 592 tests
->>>>>>> 082a451 (sync measured counts: 592 tests, 59 scenarios)
-=======
-cargo test --all                # 595 tests
->>>>>>> bb0e3a0 (stop apply as incomplete when a member turns ineligible after a move)
+cargo test --all                # 600 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -522,13 +514,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 59 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 60 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 59 scenarios
+bash stress/run.sh        # 60 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
