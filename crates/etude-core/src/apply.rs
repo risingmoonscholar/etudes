@@ -561,6 +561,11 @@ fn apply_plan_with_structured_progress(
             durable_journal_id = Some(id.clone());
         }
 
+        let mut progress_writer = sealer
+            .map(|_| j.progress_writer())
+            .transpose()
+            .map_err(ApplyError::Journal)?;
+
         let mut moved = 0usize;
         let mut held_tagged = 0usize;
         let mut held_cross_volume = 0usize;
@@ -635,7 +640,11 @@ fn apply_plan_with_structured_progress(
             // Append a sealed done-record (index + corrected method). The base
             // journal was written before the loop; rewriting it here was O(n²).
             if let Some(sl) = sealer {
-                j.record_done(i, method, sl).map_err(ApplyError::Journal)?;
+                progress_writer
+                    .as_mut()
+                    .expect("a sealed journal has an append handle")
+                    .record_done(i, method, sl)
+                    .map_err(ApplyError::Journal)?;
                 event.journalled += 1;
             }
             if let Some(hook) = faults.after_rename.as_mut() {
@@ -822,6 +831,7 @@ fn apply_tags(
     // Journal first. Nothing has been written yet.
     j.save_sealed(sl).map_err(ApplyError::Journal)?;
     *durable_journal_id = Some(id);
+    let mut progress_writer = j.progress_writer().map_err(ApplyError::Journal)?;
     for i in 0..j.entries.len() {
         if fail_at == Some(i) {
             return Err(ApplyError::Injected(i));
@@ -854,7 +864,8 @@ fn apply_tags(
         j.entries[i].state = EntryState::Moved;
         report.tagged += 1;
         event.completed = report.tagged;
-        j.record_done(i, Method::Tag, sl)
+        progress_writer
+            .record_done(i, Method::Tag, sl)
             .map_err(ApplyError::Journal)?;
         event.journalled += 1;
         if let Some(hook) = faults.after_rename.as_mut() {
