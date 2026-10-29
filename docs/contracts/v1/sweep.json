@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 12,
+    "schema_version": 13,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -637,6 +637,14 @@
       "limit_bytes": 67108864,
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
+    },
+    "finder_aliases": {
+      "attribute": "com.apple.FinderInfo",
+      "read_scope": "selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category",
+      "handling": "skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload",
+      "counter": "plan.skipped.aliases_skipped",
+      "unreadable": "hold_and_count_unreadable;_scan_incomplete",
+      "platform": "macos_only"
     },
     "structured_progress": {
       "flag": "--progress-json",

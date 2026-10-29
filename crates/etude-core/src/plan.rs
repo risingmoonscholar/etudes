@@ -46,7 +46,7 @@ pub const SCAN_STATE_ACCOUNTING: &[(&str, &str)] = &[
     ("invisible", "hidden entries are skipped and counted"),
     (
         "alias",
-        "symlink aliases are skipped; selected-path aliases are normalized for overlap checks",
+        "Finder aliases are skipped by the FinderInfo kIsAlias flag without resolution; symlinks are skipped",
     ),
     (
         "iCloud placeholder",
@@ -179,6 +179,7 @@ pub struct Plan {
     pub scanned: usize,
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    pub aliases_skipped: usize,
     /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
@@ -256,6 +257,7 @@ impl Plan {
             scanned: 0,
             skipped_hidden: 0,
             skipped_symlink: 0,
+            aliases_skipped: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -288,6 +290,7 @@ impl Plan {
             scanned: scan.entries.len(),
             skipped_hidden: scan.skipped_hidden,
             skipped_symlink: scan.skipped_symlink,
+            aliases_skipped: scan.aliases_skipped,
             skipped_system: scan.skipped_system,
             skipped_project: scan.skipped_project,
             skipped_in_flight: scan.skipped_in_flight,
@@ -334,6 +337,7 @@ impl Plan {
             && self.unclaimed.is_empty()
             && self.skipped_hidden
                 + self.skipped_symlink
+                + self.aliases_skipped
                 + self.skipped_system
                 + self.skipped_project
                 + self.skipped_in_flight
@@ -592,6 +596,7 @@ impl Plan {
                 j::obj(&[
                     ("hidden", j::num(self.skipped_hidden)),
                     ("symlinks", j::num(self.skipped_symlink)),
+                    ("aliases_skipped", j::num(self.aliases_skipped)),
                     // A deliberate refusal: sweep could have entered these
                     // and chose not to (credential/noise names, or a system
                     // location like /Library).
@@ -1152,6 +1157,7 @@ fn build_with_policy(
         scanned: scan.entries.len(),
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
+        aliases_skipped: scan.aliases_skipped,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
@@ -1463,6 +1469,7 @@ mod tests {
             project_holds: Vec::new(),
             skipped_hidden: 0,
             skipped_symlink: 0,
+            aliases_skipped: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
