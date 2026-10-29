@@ -341,6 +341,14 @@ impl Reason {
         }
     }
 
+    pub fn nothing_to_do_later(subject: Subject) -> Self {
+        Self {
+            code: Code::NothingToDo,
+            retry: RetryClass::Later,
+            subject: Some(subject),
+        }
+    }
+
     pub fn refusal(code: Code, subject: Option<Subject>) -> Self {
         let spec = CODES
             .iter()

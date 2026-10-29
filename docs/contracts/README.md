@@ -204,7 +204,9 @@ result version changes.
 **Result envelope version 3:** version 3 is version 2 plus the top-level
 `reason` field. A reason has a stable code and retry class; refusals that need
 the caller to change something or wait include a typed subject. A successful
-result uses `done` or `nothing_to_do` with `retry: "not_needed"`. Adding this
+result uses `done` or `nothing_to_do` with `retry: "not_needed"`. A sweep scan
+held only by the grace window uses `nothing_to_do` with `retry: "later"` and
+subject kind `input`; empty folders and other holds keep `not_needed`. Adding this
 field is breaking for parsers that require exactly schema version 2.
 
 **Result envelope version 4:** version 4 is version 3 plus

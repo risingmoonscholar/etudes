@@ -322,6 +322,26 @@ impl Plan {
             .count()
     }
 
+    /// Waiting alone can release every candidate in this otherwise empty plan.
+    /// Other holds and skipped entries make that promise unsafe.
+    pub fn only_too_recent(&self) -> bool {
+        let recent = self.too_recent();
+        recent > 0
+            && recent == self.scanned
+            && recent == self.untouched.len()
+            && self.groups.is_empty()
+            && self.unclaimed.is_empty()
+            && self.skipped_hidden
+                + self.skipped_symlink
+                + self.skipped_system
+                + self.skipped_project
+                + self.skipped_in_flight
+                + self.skipped_package
+                + self.skipped_unreadable
+                + self.skipped_tagged
+                == 0
+    }
+
     /// Downloads still in flight.
     pub fn in_flight(&self) -> usize {
         self.untouched

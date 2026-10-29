@@ -479,9 +479,6 @@ unreadable history also keeps the folder. Undo reports how many empty folders
 it retained for journals. A folder with anything inside it, or one that was
 replaced, is left alone. Undo never deletes or overwrites a file.
 
-Known gap: a folder that holds only recent files reports `nothing_to_do`, with
-no code that says "try again later".
-
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:
 

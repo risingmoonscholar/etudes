@@ -280,7 +280,11 @@ class Probe:
         else:
             require(code not in ("done", "nothing_to_do"),
                     f"a result with status {status} carries the success reason {code}")
-        require((reason["retry"] == "not_needed") == (code in ("done", "nothing_to_do")),
+        waiting_plan = (self.tool == "sweep" and status == "nothing_to_do" and
+                        code == "nothing_to_do" and reason["retry"] == "later" and
+                        reason.get("subject", {}).get("kind") == "input")
+        require(waiting_plan or
+                (reason["retry"] == "not_needed") == (code in ("done", "nothing_to_do")),
                 f"reason {code} has retry class {reason['retry']}")
 
     def result_probes(self):
@@ -291,7 +295,24 @@ class Probe:
         empty.mkdir()
         if self.tool != "unpack":
             result = self.run(empty, "--json", codes=(1,))
-            require(json.loads(result.stdout)["status"] == "nothing_to_do", "empty operation is not reported")
+            value = json.loads(result.stdout)
+            require(value["status"] == "nothing_to_do", "empty operation is not reported")
+            require(value["reason"] == {"code": "nothing_to_do", "retry": "not_needed"},
+                    "empty operation must not ask the caller to wait")
+        if self.tool == "sweep":
+            recent = self.directory / "recent-tree"
+            recent.mkdir()
+            (recent / "photo.jpg").write_bytes(b"recent fixture")
+            result = self.run(recent, "--since", "3600", "--json", codes=(1,))
+            value = json.loads(result.stdout)
+            require(value["reason"]["retry"] == "later",
+                    "a folder held only by the grace window must say retry later")
+            require(value["reason"]["subject"]["kind"] == "input",
+                    "retry later must identify the input")
+            (recent / "tax_return.pdf").write_bytes(b"held for another reason")
+            result = self.run(recent, "--since", "3600", "--json", codes=(1,))
+            require(json.loads(result.stdout)["reason"]["retry"] == "not_needed",
+                    "mixed holds must not promise waiting alone will release the folder")
         missing = self.directory / "does-not-exist"
         output = self.run(missing, "--json", codes=(2, 3))
         envelope = json.loads(output.stdout)

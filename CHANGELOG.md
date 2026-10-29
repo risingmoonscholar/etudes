@@ -12,6 +12,7 @@ reviewers were pointed at the tools before anyone else could be.
 
 Journal append reuses one handle per apply and writes each frame together; release runs on 10,000 small files (9,998 moves) measured apply 74.83/101.72 s before and 60.07/55.56 s after, undo 65.91/79.88 s before and 99.22/55.82 s after.
 - Apply re-checks member eligibility before any change and again before each move or tag write, and refuses invalid tag entries in exported plans. A member found ineligible before anything moved is a refusal; one found ineligible after a move stops the apply as incomplete, with the journal holding what moved for `sweep undo`.
+- sweep reports `nothing_to_do` with retry `later` when only the grace window holds every candidate; an empty folder keeps retry `not_needed`.
 
 ### 0.5.4 candidate — sweep, stash and unpack
 
@@ -191,11 +192,8 @@ Journal append reuses one handle per apply and writes each frame together; relea
   declarations are now version 11 (sweep), 10 (stash) and 6 (unpack).
 - **Known gaps in `reason`:** the contract check proves 16 of sweep's 18 listed
   codes, 11 of stash's 15 and 9 of unpack's 10, and names the rest as unproven:
-  `internal_error` for all three, `journal_key_unavailable` for sweep and stash,
-  and `destination_exists` and `destination_outside_root` for stash. A folder
-  that holds only recent files reports `nothing_to_do`; a "try again later"
-  code for it is a possible later
-  addition. Two `sweep apply` runs on one folder at once are not held apart,
+  `internal_error`, `journal_key_unavailable`, `destination_outside_root` and,
+  for stash, `destination_exists`. Two `sweep apply` runs on one folder at once are not held apart,
   and the one that loses ends in one of two ways. Either it is refused before
   it moves anything (exit 2, `plan_stale`; plan again), or it stops part-way
   (exit 3, `operation_incomplete`, with a `recovery.operation` id that status
