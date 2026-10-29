@@ -74,7 +74,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 600 tests
+cargo test --all                # 602 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -478,9 +478,6 @@ in it. A folder needed as an origin or guard by another live journal is kept;
 unreadable history also keeps the folder. Undo reports how many empty folders
 it retained for journals. A folder with anything inside it, or one that was
 replaced, is left alone. Undo never deletes or overwrites a file.
-
-Known gap: a folder that holds only recent files reports `nothing_to_do`, with
-no code that says "try again later".
 
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:

@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 11,
+    "schema_version": 12,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -660,6 +660,14 @@
       "journal": "records_each_file's_previous_and_written_tag_bytes_before_the_first_write;_no_journal_refused",
       "undo": "restores_the_recorded_previous_bytes_only_while_the_file_still_holds_what_apply_wrote;_a_changed_file_is_left_and_named",
       "status_counts": "moved_counts_files_tagged_for_a_tag_operation"
+    },
+    "finder_aliases": {
+      "attribute": "com.apple.FinderInfo",
+      "read_scope": "selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category",
+      "handling": "skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload",
+      "counter": "plan.skipped.aliases_skipped",
+      "unreadable": "hold_and_count_unreadable;_scan_incomplete",
+      "platform": "macos_only"
     }
   },
   "reason": {

@@ -1449,6 +1449,13 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         }
         json
     };
+    if plan.only_too_recent() {
+        etude_cli_support::envelope::reason(
+            etude_cli_support::reason::Reason::nothing_to_do_later(
+                etude_cli_support::reason::Subject::wait("input", None),
+            ),
+        );
+    }
     if plan.skipped_unreadable > 0 {
         // The plan below is real but partial. Its reason must say so: a
         // caller reading only `reason` would otherwise see `done`.
@@ -1590,6 +1597,7 @@ fn print_refused_by_policy_note(p: &plan::Plan) {
 /// its reason: separating them caused a real user to attach a large count to
 /// the wrong explanation.
 fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
+    print_aliases_skipped(p);
     let counts = p.sensitive_counts();
     let personal: usize = counts.values().sum();
     let recent = p.too_recent();
@@ -1703,6 +1711,21 @@ fn include_tagged_warning() {
          Their tags stay on them. A tagged item that would have to cross volumes is\n       \
          left in place, because the copy would drop its tag."
     );
+}
+
+/// Finder aliases have separate accounting from symlinks.
+fn print_aliases_skipped(p: &plan::Plan) {
+    if p.aliases_skipped > 0 {
+        println!(
+            "  {} Finder {} skipped by flag",
+            p.aliases_skipped,
+            if p.aliases_skipped == 1 {
+                "alias"
+            } else {
+                "aliases"
+            }
+        );
+    }
 }
 
 /// What to do about the items a scan held back, one sentence per cause.
@@ -3958,6 +3981,7 @@ mod tag_report_tests {
             ApplyFaults {
                 before_rename: Some(&mut tag_it),
                 after_rename: Some(&mut occupy),
+                ..Default::default()
             },
         )
         .expect("apply reports instead of failing");

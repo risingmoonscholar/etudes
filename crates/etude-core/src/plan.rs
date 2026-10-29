@@ -28,8 +28,7 @@ pub const DECISION_PRECEDENCE: &[DecisionClass] = &[
     DecisionClass::AgentMapping,
 ];
 
-/// Stable scheme names used by the roadmap. Only `folders` is implemented by
-/// this version; declaring a name does not make its behavior available.
+/// Stable names for the implemented folders, existing-folder and Finder-tag schemes.
 pub const DECLARED_SCHEMES: &[&str] = &["folders", "existing", "tags"];
 
 /// Filesystem states the sweep contract must account for by name. These are
@@ -47,7 +46,7 @@ pub const SCAN_STATE_ACCOUNTING: &[(&str, &str)] = &[
     ("invisible", "hidden entries are skipped and counted"),
     (
         "alias",
-        "symlink aliases are skipped; selected-path aliases are normalized for overlap checks",
+        "Finder aliases are skipped by the FinderInfo kIsAlias flag without resolution; symlinks are skipped",
     ),
     (
         "iCloud placeholder",
@@ -178,6 +177,7 @@ pub struct Plan {
     pub scanned: usize,
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    pub aliases_skipped: usize,
     /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
@@ -255,6 +255,7 @@ impl Plan {
             scanned: 0,
             skipped_hidden: 0,
             skipped_symlink: 0,
+            aliases_skipped: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -287,6 +288,7 @@ impl Plan {
             scanned: scan.entries.len(),
             skipped_hidden: scan.skipped_hidden,
             skipped_symlink: scan.skipped_symlink,
+            aliases_skipped: scan.aliases_skipped,
             skipped_system: scan.skipped_system,
             skipped_project: scan.skipped_project,
             skipped_in_flight: scan.skipped_in_flight,
@@ -320,6 +322,27 @@ impl Plan {
             .iter()
             .filter(|(_, u)| *u == Untouched::TooRecent)
             .count()
+    }
+
+    /// Waiting alone can release every candidate in this otherwise empty plan.
+    /// Other holds and skipped entries make that promise unsafe.
+    pub fn only_too_recent(&self) -> bool {
+        let recent = self.too_recent();
+        recent > 0
+            && recent == self.scanned
+            && recent == self.untouched.len()
+            && self.groups.is_empty()
+            && self.unclaimed.is_empty()
+            && self.skipped_hidden
+                + self.skipped_symlink
+                + self.aliases_skipped
+                + self.skipped_system
+                + self.skipped_project
+                + self.skipped_in_flight
+                + self.skipped_package
+                + self.skipped_unreadable
+                + self.skipped_tagged
+                == 0
     }
 
     /// Downloads still in flight.
@@ -571,6 +594,7 @@ impl Plan {
                 j::obj(&[
                     ("hidden", j::num(self.skipped_hidden)),
                     ("symlinks", j::num(self.skipped_symlink)),
+                    ("aliases_skipped", j::num(self.aliases_skipped)),
                     // A deliberate refusal: sweep could have entered these
                     // and chose not to (credential/noise names, or a system
                     // location like /Library).
@@ -1131,6 +1155,7 @@ fn build_with_policy(
         scanned: scan.entries.len(),
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
+        aliases_skipped: scan.aliases_skipped,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
@@ -1431,6 +1456,7 @@ mod tests {
             project_holds: Vec::new(),
             skipped_hidden: 0,
             skipped_symlink: 0,
+            aliases_skipped: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,

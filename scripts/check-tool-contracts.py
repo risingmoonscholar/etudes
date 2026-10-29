@@ -280,7 +280,11 @@ class Probe:
         else:
             require(code not in ("done", "nothing_to_do"),
                     f"a result with status {status} carries the success reason {code}")
-        require((reason["retry"] == "not_needed") == (code in ("done", "nothing_to_do")),
+        waiting_plan = (self.tool == "sweep" and status == "nothing_to_do" and
+                        code == "nothing_to_do" and reason["retry"] == "later" and
+                        reason.get("subject", {}).get("kind") == "input")
+        require(waiting_plan or
+                (reason["retry"] == "not_needed") == (code in ("done", "nothing_to_do")),
                 f"reason {code} has retry class {reason['retry']}")
 
     def result_probes(self):
@@ -291,7 +295,26 @@ class Probe:
         empty.mkdir()
         if self.tool != "unpack":
             result = self.run(empty, "--json", codes=(1,))
-            require(json.loads(result.stdout)["status"] == "nothing_to_do", "empty operation is not reported")
+            value = json.loads(result.stdout)
+            require(value["status"] == "nothing_to_do", "empty operation is not reported")
+            require(value["reason"] == {"code": "nothing_to_do", "retry": "not_needed"},
+                    "empty operation must not ask the caller to wait")
+        if self.tool == "sweep":
+            recent = self.directory / "recent-tree"
+            recent.mkdir()
+            (recent / "photo.jpg").write_bytes(b"recent fixture")
+            result = self.run(recent, "--since", "3600", "--json", codes=(1,))
+            value = json.loads(result.stdout)
+            require(value["reason"]["retry"] == "later",
+                    "a folder held only by the grace window must say retry later")
+            require(value["reason"]["subject"]["kind"] == "input",
+                    "retry later must identify the input")
+            (recent / "tax_return.pdf").write_bytes(b"held for another reason")
+            result = self.run(recent, "--since", "3600", "--json", codes=(1,))
+            require(json.loads(result.stdout)["reason"]["retry"] == "not_needed",
+                    "mixed holds must not promise waiting alone will release the folder")
+            if sys.platform == "darwin":
+                self.finder_aliases()
         missing = self.directory / "does-not-exist"
         output = self.run(missing, "--json", codes=(2, 3))
         envelope = json.loads(output.stdout)
@@ -299,6 +322,40 @@ class Probe:
         require(envelope["status"] in ("refused", "error"), "error result claims success")
         invalid = self.run("--unknown", "--json", codes=(2,))
         self.envelope(json.loads(invalid.stdout))
+
+    def finder_aliases(self):
+        tree = self.directory / "alias-tree"
+        tree.mkdir()
+        alias = tree / "photo-alias.jpg"
+        alias.write_bytes(b"opaque alias data must not be read or resolved")
+        flags = bytearray(32)
+        flags[8:10] = (0x8000).to_bytes(2, "big")
+        subprocess.run(["xattr", "-wx", "com.apple.FinderInfo", flags.hex(), str(alias)],
+                       stdin=subprocess.DEVNULL, check=True, capture_output=True)
+        ordinary = tree / "ordinary.jpg"
+        ordinary.write_bytes(b"ordinary fixture")
+        flags[8:10] = (0x4000).to_bytes(2, "big")
+        subprocess.run(["xattr", "-wx", "com.apple.FinderInfo", flags.hex(), str(ordinary)],
+                       stdin=subprocess.DEVNULL, check=True, capture_output=True)
+        (tree / "link.jpg").symlink_to(alias)
+        before = snapshot(tree)
+        for options in ((), ("--include-tagged",), ("--scheme", "tags", "--map", "jpg=Pictures")):
+            result = self.run(tree, *options, "--json", codes=(0, 1))
+            value = json.loads(result.stdout)
+            require(value["details"]["skipped"].get("aliases_skipped") == 1,
+                    "Finder aliases must have a separate skip count")
+            require(value["details"]["skipped"]["symlinks"] == 1,
+                    "Finder aliases must not inflate the symlink count")
+            require(value["details"]["scanned"] == 1,
+                    "only the unflagged ordinary file is a candidate")
+            for row in value["observations"]["categories"]:
+                if row["category"] == "fingerprint_bytes":
+                    require(row["observed"] == 0,
+                            "alias scan read fingerprint bytes")
+        human = self.run(tree, codes=(1,)).stdout.decode()
+        require("1 Finder alias skipped by flag" in human,
+                "human summary must disclose the alias count")
+        require(snapshot(tree) == before, "alias scan changed the fixture")
 
     def read_category(self, result, name):
         categories = json.loads(result.stdout)["observations"]["categories"]

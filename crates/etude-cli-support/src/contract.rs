@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 7,
+                Tool::Sweep => SCHEMA_VERSION + 8,
                 Tool::Stash => 10,
                 Tool::Unpack => SCHEMA_VERSION + 2,
             }),
@@ -453,6 +453,14 @@ pub fn declaration(
         ));
     }
     if matches!(tool, Tool::Sweep) {
+        fields.push(("finder_aliases", j::obj(&[
+            ("attribute", j::str("com.apple.FinderInfo")),
+            ("read_scope", j::str("selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category")),
+            ("handling", j::str("skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload")),
+            ("counter", j::str("plan.skipped.aliases_skipped")),
+            ("unreadable", j::str("hold_and_count_unreadable;_scan_incomplete")),
+            ("platform", j::str("macos_only")),
+        ])));
         fields.push(("structured_progress", j::obj(&[
             ("flag", j::str("--progress-json")),
             ("stream", j::str("stderr_ndjson_alongside_diagnostics")),
