@@ -74,7 +74,11 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
+<<<<<<< HEAD
 cargo test --all                # 591 tests
+=======
+cargo test --all                # 592 tests
+>>>>>>> 082a451 (sync measured counts: 592 tests, 59 scenarios)
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
