@@ -1598,6 +1598,7 @@ fn print_refused_by_policy_note(p: &plan::Plan) {
 /// the wrong explanation.
 fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     print_aliases_skipped(p);
+    print_locked_skipped(p);
     let counts = p.sensitive_counts();
     let personal: usize = counts.values().sum();
     let recent = p.too_recent();
@@ -1723,6 +1724,21 @@ fn print_aliases_skipped(p: &plan::Plan) {
                 "alias"
             } else {
                 "aliases"
+            }
+        );
+    }
+}
+
+/// Locked items (immutable flag) are held by the scan, never moved or tagged.
+fn print_locked_skipped(p: &plan::Plan) {
+    if p.locked_skipped > 0 {
+        println!(
+            "  {} locked {} left alone by flag",
+            p.locked_skipped,
+            if p.locked_skipped == 1 {
+                "item"
+            } else {
+                "items"
             }
         );
     }
@@ -2142,7 +2158,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
                 Some(Subject::wait("destination", None)),
             )
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) => {
+        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => {
             refusal(Code::PlanStale, Some(Subject::wait("plan", None)))
         }
         DestinationExists(_) | DestinationCollision(_) => refusal(
@@ -2265,6 +2281,7 @@ fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str, adds_tags: bo
     etude_cli_support::envelope::detail(etude_core::json::obj(&[
         ("moved", etude_core::json::num(r.moved)),
         ("held_tagged", etude_core::json::num(r.held_tagged)),
+        ("held_locked", etude_core::json::num(r.held_locked)),
         (
             "held_cross_volume",
             etude_core::json::num(r.held_cross_volume),
@@ -2305,7 +2322,7 @@ fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str, adds_tags: bo
             Some(etude_cli_support::reason::Subject::wait("journal", None)),
         );
     }
-    if r.moved == 0 && r.held_tagged + r.held_cross_volume > 0 {
+    if r.moved == 0 && r.held_tagged + r.held_locked + r.held_cross_volume > 0 {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
@@ -2327,6 +2344,13 @@ fn print_apply_holds(r: &etude_core::apply::ApplyReport) {
             "{} Finder-tagged {} left in place: moving to another volume would drop the tag.",
             r.held_cross_volume,
             items(r.held_cross_volume)
+        );
+    }
+    if r.held_locked > 0 {
+        println!(
+            "{} locked {} left in place (immutable flag set after the scan).",
+            r.held_locked,
+            items(r.held_locked)
         );
     }
     if r.tagged_not_returned > 0 {

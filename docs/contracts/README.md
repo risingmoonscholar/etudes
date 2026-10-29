@@ -25,7 +25,7 @@ Scope domains resolve as follows:
 
 | Domain | Meaning |
 | --- | --- |
-| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices and inodes under the requested root, within the tool's scan depth and skip rules. Sweep also reads the 32-byte `com.apple.FinderInfo` attribute of visible regular files to skip Finder aliases by the `kIsAlias` flag; this is counted in the `metadata` observation category. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The tag presence read is counted in the `finder_tag_presence` observation category |
+| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices, inodes and `st_flags` (the immutable flag) under the requested root, within the tool's scan depth and skip rules. Sweep also reads the 32-byte `com.apple.FinderInfo` attribute of visible regular files to skip Finder aliases by the `kIsAlias` flag; this is counted in the `metadata` observation category. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The tag presence read is counted in the `finder_tag_presence` observation category |
 | `finder_tag_names` | `sweep --scheme tags` only: the tag attribute of files sweep may tag, read in full to learn which tags exist in the folder, which files already carry the tag asked for, and what to put back on undo. Nothing else is read from the attribute list, Finder comments are never queried, and file contents are not read. The read is counted in the `finder_tag_names` observation category |
 | `selected_tree_finder_tags` | `sweep --scheme tags` only: the tag attribute of planned files, replaced by the old tag list plus one tag on apply of an exported plan, and by the recorded old bytes on undo. No file is moved, renamed, created or deleted |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
@@ -173,6 +173,14 @@ pins remain unchanged. The binary probe checks flagged and unflagged files,
 separate symlink accounting, the human summary and unchanged fixture bytes.
 Plan artifacts append optional section 4 for a nonzero alias count; older plans
 load with zero and plans without aliases retain their earlier encoding.
+The same version also declares `locked_items`: the immutable flag is read from
+the `st_flags` of the per-entry `lstat` the scan already takes (no further
+read), locked files and folders are held and counted under
+`skipped.locked_skipped`, apply takes one `lstat` per item before its move and
+holds a newly locked item (`held_locked`), and a locked root or destination
+folder refuses the plan before any move. Plan artifacts append optional
+section 5 for a nonzero locked count. Added to v12 while that pin was still
+unpublished, so no new version was cut.
 
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every

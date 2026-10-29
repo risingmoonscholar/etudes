@@ -335,6 +335,11 @@ pub(super) fn encode(
         w.byte(4);
         w.n(plan.aliases_skipped as u64);
     }
+    // Optional locked accounting, same shape: absent when zero.
+    if plan.locked_skipped > 0 {
+        w.byte(5);
+        w.n(plan.locked_skipped as u64);
+    }
     if w.0.len() > MAX_BYTES {
         return Err(invalid());
     }
@@ -441,6 +446,7 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         skipped_hidden: r.usize()?,
         skipped_symlink: r.usize()?,
         aliases_skipped: 0,
+        locked_skipped: 0,
         skipped_system: r.usize()?,
         skipped_project: r.usize()?,
         skipped_in_flight: r.usize()?,
@@ -495,6 +501,13 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         r.byte()?;
         plan.aliases_skipped = r.usize()?;
         if plan.aliases_skipped == 0 {
+            return Err(invalid());
+        }
+    }
+    if r.at != data.len() && data[r.at] == 5 {
+        r.byte()?;
+        plan.locked_skipped = r.usize()?;
+        if plan.locked_skipped == 0 {
             return Err(invalid());
         }
     }
@@ -651,6 +664,7 @@ mod tests {
             skipped_hidden: 1,
             skipped_symlink: 2,
             aliases_skipped: 0,
+            locked_skipped: 0,
             skipped_system: 3,
             skipped_project: 4,
             skipped_in_flight: 5,
@@ -724,6 +738,20 @@ mod tests {
         assert_eq!(decoded.aliases_skipped, 2);
         assert_eq!(encode(&decoded, &snapshot, &context).unwrap(), bytes);
         assert!(decoded.to_json().contains("\"aliases_skipped\":2"));
+    }
+
+    #[test]
+    fn locked_accounting_appends_and_old_plans_default_to_zero() {
+        let (mut plan, snapshot, context) = fixture();
+        let old = encode(&plan, &snapshot, &context).unwrap();
+        assert_eq!(decode(&old).unwrap().0.locked_skipped, 0);
+        plan.locked_skipped = 3;
+        let bytes = encode(&plan, &snapshot, &context).unwrap();
+        assert!(bytes.starts_with(&old));
+        let decoded = decode(&bytes).unwrap().0;
+        assert_eq!(decoded.locked_skipped, 3);
+        assert_eq!(encode(&decoded, &snapshot, &context).unwrap(), bytes);
+        assert!(decoded.to_json().contains("\"locked_skipped\":3"));
     }
 
     fn tag_fixture() -> (Plan, TreeSnapshot, BindingContext) {
