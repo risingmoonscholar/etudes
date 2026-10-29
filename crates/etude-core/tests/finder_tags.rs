@@ -655,7 +655,7 @@ fn a_single_item_tagged_during_rename_leaves_no_empty_group() {
         Some(&TestSeal),
         ApplyFaults {
             before_rename: Some(&mut tag_it),
-            after_rename: None,
+            ..Default::default()
         },
     )
     .unwrap();
