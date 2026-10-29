@@ -1,8 +1,11 @@
 # Stress-suite release account
 
-**Release status: the local candidate checks pass; tag-based verification and
-publication are pending.** This account records the unpublished 0.5.3 candidate.
-No 0.5.3 tag or release has been created.
+**Release status (updated 2026-10-22): the 0.5.3 tags exist**, with tag commit
+dates of 2026-09-26 (`sweep-v0.5.3`, `stash-v0.5.3`, `unpack-v0.5.3`).
+The sections below record the candidate as it stood on 2026-09-24 and 2026-09-25;
+their statements that no 0.5.3 tag exists were true on those dates and are kept
+as history. The stress catalog now lists 57 scenarios; the latest full run
+(2026-10-16) was 1063 passed, 0 failed, 5 unproven.
 
 ## Candidate changes
 
@@ -14,9 +17,9 @@ stdout clean. Small operations remain quiet. The 9,999-file case records the
 actual cost and verifies that progress reaches completion; it does not claim a
 performance optimization.
 
-## Current evidence
+## Candidate evidence (2026-09-24 and 2026-09-25)
 
-The latest full stress run completed on Apple Silicon macOS at candidate commit
+The 2026-09-24 full stress run completed on Apple Silicon macOS at candidate commit
 `67363b3dc3eb4038d772c0139ec601f855f33961` (run
 `20260924T095419Z-86516`). Its per-scenario summary is retained in
 [`release-evidence/0.5.3-stress-20260924.json`](release-evidence/0.5.3-stress-20260924.json).
@@ -101,9 +104,9 @@ separation or the output bound. The scenario now checks each stream and the
 ten-line limit; the follow-up review found these corrections sound. The review record is
 [`../release-evidence/0.5.3-independent-review-85d1946-20260925.json`](../release-evidence/0.5.3-independent-review-85d1946-20260925.json).
 
-The 0.5.3 tags remain unpublished. Their installation and behavior cannot be
-verified until those tags exist. The Sep. 24 tag check and subsequent
-independent rechecks both found them absent; no release was made in this work.
+The 0.5.3 tags were absent during these September 24–25 checks, so those checks
+could not verify installation or behavior from the tags. The tags now exist
+with commit dates of 2026-09-26; these candidate checks do not verify them.
 
 The seven unproven platform cases are case-sensitive collision, cross-device
 copy and mtime, cross-volume EXDEV, exFAT fallback, full volume, read-only
@@ -132,16 +135,15 @@ dispatch. The earlier live-state review is retained in
 The current code and evidence review is retained in
 [`../release-evidence/0.5.3-independent-review-85d1946-20260925.json`](../release-evidence/0.5.3-independent-review-85d1946-20260925.json).
 
-## Current local rerun
+## Local rerun (2026-09-25)
 
 At product checkout `85d1946f3d566f3e89985e4be99c6065a958b023`, all three tools
 were installed locally and passed version, synthetic operation, and
 recovery/refusal checks. The claims check and all seven transcript
 reproductions passed. The exact results are retained in
 [`../release-evidence/0.5.3-candidate-checks-85d1946-20260925.json`](../release-evidence/0.5.3-candidate-checks-85d1946-20260925.json).
-These are local candidate builds, not installs from release tags. Public
-0.5.3 tags are absent, so tag-based installs remain impossible until the user
-publishes them. No publication was performed.
+These were local candidate builds. The 0.5.3 tags were absent on 2026-09-25,
+so these checks did not install from them.
 
 After review found that the 9,999-file scenario combined stdout and stderr, I
 changed it to assert that apply and undo progress stays on stderr, is bounded

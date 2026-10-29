@@ -74,8 +74,10 @@ must treat declarations separately from observed or independently verified acces
 
 The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
-pins the preceding version-3 declarations. `v4/` pins the current version-4 sweep declaration and the preceding stash declaration;
-`v5/` pins the current stash declaration. Unpack remains at declaration version 3.
+pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
+`v5/` pins version-5 declarations of all three tools. Later directories pin each
+later declaration: `v11/sweep.json`, `v10/stash.json` and `v6/unpack.json` are the
+current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
 links; trust `schema_version`, not a fixture directory name. Only the per-run
@@ -134,7 +136,8 @@ record is written only when an apply is turned away before it moves anything,
 because the folder changed under its plan; an apply with nothing to move writes
 no journal. Its counts are all zero and it has no recovery command. It was
 previously reported as `completed`. `v9/sweep.json` and `v10/stash.json` pin
-these declarations and `v1/` mirrors them; unpack stays at version 6.
+these declarations; unpack stays at version 6. The `v1/` fixtures mirror the
+current declarations listed above.
 
 **Declaration version 10 (sweep)** adds the `propose` operation and two refusal
 codes, `unknown_item` and `item_assigned_twice`, both retry `never` with subject
@@ -142,7 +145,8 @@ kind `item`. `propose` reads the exported plan and the proposal file, checks
 destination folders by metadata, and writes one new plan file; it moves nothing.
 `destination_outside_root`, `destination_exists`, `plan_stale` and
 `profile_missing` also apply to it. `v10/sweep.json` pins this declaration and
-`v1/` mirrors it; stash stays at version 10 and unpack at version 6.
+the `v1/` fixture now mirrors version 11; stash stays at version 10 and unpack
+at version 6.
 
 **Declaration version 11 (sweep)** adds `--scheme tags`. The domains
 `finder_tag_names` (read) and `selected_tree_finder_tags` (write) are declared on
@@ -168,8 +172,8 @@ exercise some of those paths separately.
 
 ## Result envelopes and read receipts
 
-**Breaking in 0.5.4:** schema version 2 wraps every `--json` response, including
-parser refusals,
+**Breaking in 0.5.4:** the result envelope (introduced as schema version 2;
+version 4 is current) wraps every `--json` response, including parser refusals,
 operational errors and recovered panics. Plain `contract` also returns this
 envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
@@ -238,9 +242,9 @@ Queries and scans need no operation undo; their declared startup effects still
 apply. Restore failures require resolving refusals before retrying remaining
 journal entries. Recovery verification remains unproven by the envelope. Unpack retains its source archive and has no undo command.
 
-## Unpack quarantine declaration version 3
+## Unpack quarantine declaration (introduced in version 3)
 
-Unpack's capability declaration under `details.schema_version` is version 3;
+Unpack's capability declaration under `details.schema_version` is version 6;
 its surrounding result envelope is version 4. `v6/unpack.json` pins the
 current declaration and `v1/unpack.json` mirrors that current fixture. Earlier
 unpack pins stay unchanged. Sweep and stash use their own declaration
@@ -266,7 +270,7 @@ later and names the in-flight download as its subject. Earlier versioned
 declarations remain unchanged.
 
 Stash's capability version 3 and sweep's preceding version 3 declare explicit
-plan exports and replay. The result envelope remains version 2; the separate
+plan exports and replay. The result envelope was still version 2 at that point; the separate
 bounded plan artifact is version 1. Existing versioned pins remain immutable. A plan holds metadata
 observations and selected paths, with private held-name commitments. Replay uses
 the original digest and current tool/profile/observation contract, refusing stale

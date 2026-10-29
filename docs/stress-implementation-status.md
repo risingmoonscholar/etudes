@@ -14,13 +14,17 @@ from this branch, not a release certification or independent-review result.
 | Same-root contention | Two live applies on one root produce one winner and one resumable loser; every payload remains present and one undo restores the exact original tree. |
 | Races | Source deletion, destination collision, symlink replacement, growing writers, directory blockers, and permission changes record an independent intervention witness before judging the result. |
 | Cost | The fixed 1.5 GiB cross-volume payload, 50k duplicate cap fixture, 1,450-file group fixture, and repeated signal timing guesses were replaced by contract-sized or bounded probes. |
-| Scheduling | The catalog assigns all 46 scenarios to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline, and every scenario runs in an owned process group with a configurable five-minute default deadline; timeout evidence records the reaped group. A tiered result names every catalogued contract it did not run. The CI scope rule self-tests that documentation-only pull requests visibly skip, while source changes and scheduled/manual events execute the suite. |
+| Scheduling | The catalog assigns all 57 scenarios to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline, and every scenario runs in an owned process group with a configurable five-minute default deadline; timeout evidence records the reaped group. A tiered result names every catalogued contract it did not run. The CI scope rule self-tests that documentation-only pull requests visibly skip, while source changes and scheduled/manual events execute the suite. |
 | Evidence | Failure-only transcripts, assertion records, process records, and generated filesystem manifests are retained; CI uploads them with the generated result bundle. |
 
 ## Local evidence
 
-The current fast-tier run at `ce1572c` completed on this host with **627
-passed, 0 failed, 1 unproven**; its retained result bundle is
+The latest recorded full run, on 2026-10-16, covered 57 scenarios:
+**1063 passed, 0 failed, 5 unproven**.
+
+The earlier fast-tier run on 2026-09-24 at `ce1572c` (46 scenarios then)
+completed on this host with **627 passed, 0 failed, 1 unproven**; its retained
+result bundle is
 `20260924T080630Z-77995`. The unproven assertion was the NFC/NFD cross-device
 copy fallback, which this host could not exercise. The result explicitly named
 the 9 load and 8 platform contracts as not run.
@@ -46,7 +50,7 @@ cross-device interruption. Its retained result bundle is
 
 | Guide stage | Evidence in this branch |
 | --- | --- |
-| Inventory | `stress/catalog.json` has one disposition, tier, capability, and contract for each of the 46 tracked scenarios. `scripts/check-stress-catalog.py` rejects missing, duplicate, or invalid rows. |
+| Inventory | `stress/catalog.json` has one disposition, tier, capability, and contract for each of the 57 tracked scenarios. `scripts/check-stress-catalog.py` rejects missing, duplicate, or invalid rows. |
 | Reporting | `stress/lib.sh` records pass, fail, unproven, and completion separately. `85-scenario-exit-status.sh` falsifies hidden failures, aborted cases, signal death, and all-unproven cases. |
 | Shared helpers | `snapshot.py` records paths, kinds, modes, payload digests, and link targets. `bounded.py` owns and reaps a process group. Failed cases retain their transcript, assertions, process record, and snapshots. |
 | Movement and recovery | Desktop and interrupted-undo scenarios assert real changes, protected paths, and exact recovery. Local no-op, dropped-movement, and false-recovery mutants are rejected. |
@@ -58,10 +62,11 @@ cross-device interruption. Its retained result bundle is
 
 ## Coverage that remains host-dependent
 
-Seven platform scenarios still need a host that can create real disk images:
+In the earlier 2026-09-24 run, seven platform scenarios needed a host that
+could create real disk images:
 case-sensitive collision, cross-device copy and rename fallback, exFAT
 fallback, full-volume behavior, read-only media, and undo recovery on a volume
-hazard. The separate fast-tier NFC/NFD cross-device copy fallback is likewise
+hazard. The separate fast-tier NFC/NFD cross-device copy fallback was likewise
 unproven. `hdiutil create` failed with “Device not configured,” and `diskutil`
 reported that its DiskManagement framework is unavailable on this host, so the
 seven disk-image cases were recorded as `unproven`. The descriptor-limit

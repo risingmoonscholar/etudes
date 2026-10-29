@@ -217,10 +217,12 @@ you may be using, so sweep leaves it where it is and says how many
 (`1 Finder-tagged item was left alone`). It asks only whether a tag is
 present: it never reads the tag names (only `--scheme tags` does, to add to
 them), never reads Finder comments, and gives a caller a count, not names or
-paths. `--include-tagged` organises tagged items
-anyway; it prints a warning on stderr every time, and the tag stays on the
-item through a move on the same volume. A tagged item that would have to cross
-volumes stays where it is, because a cross-volume copy does not carry the tag.
+paths. Held tagged items are not counted in the "Scanned N items" total; the
+JSON plan reports them separately as `tagged_skipped`. `--include-tagged`
+organises tagged items anyway; it prints a warning on stderr every time, and
+the tag stays on the item through a move on the same volume. A tagged item that
+would have to cross volumes stays where it is, because a cross-volume copy does
+not carry the tag.
 `sweep apply` checks each item's tag again just before it moves the item and
 again just after, so a tag added at the last moment holds the item or moves it
 back. `stash` exists to clear a folder, so it takes tagged items too, and says
@@ -652,9 +654,9 @@ Sources: Apple's [getxattr(2)](https://developer.apple.com/library/archive/docum
 and [fsetxattr(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsetxattr.2.html)
 document descriptor access, absent attributes, and unsupported storage. Extractor
 propagation and exFAT storage are measured behavior, rather than promises inferred
-from these manuals. The unpack capability declaration is version 3; the result
-envelope remains version 2. `docs/contracts/v3/unpack.json` is the canonical pin,
-`v1/unpack.json` mirrors it, and `v2/unpack.json` remains the prior immutable pin.
+from these manuals. The unpack capability declaration is version 6 and the result
+envelope is version 4. `docs/contracts/v6/unpack.json` is the canonical pin and
+`v1/unpack.json` mirrors it; earlier pins stay immutable.
 
 Opt in to versioned stderr progress with `sweep apply PATH --yes --progress-json` (also available during review). Records distinguish planned entries, successful moves, and durable journal acknowledgements; `--json` stdout remains one result envelope. See [structured progress](docs/sweep-progress.md) for the schema and failure counts. Journal persistence is unchanged; no speed improvement is claimed.
 

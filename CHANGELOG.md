@@ -42,8 +42,8 @@ reviewers were pointed at the tools before anyone else could be.
   attribute cannot be read or parsed is listed and given nothing. The journal
   records each file's tag attribute before the first write, `sweep undo` writes
   those exact bytes back, a file whose tags changed since apply is left and
-  named, and `sweep status` reports the operation. The sweep contract is
-  version 11: it adds the domains `finder_tag_names` and
+  named, and `sweep status` reports the operation. Sweep contract
+  version 11 adds the domains `finder_tag_names` and
   `selected_tree_finder_tags` and a `tag_scheme` section. Plan files gain an
   optional trailing section and a group kind, and journals gain a `tag` entry
   method with two trailing fields; plans and journals that move files encode
@@ -68,8 +68,8 @@ reviewers were pointed at the tools before anyone else could be.
   Propose moves nothing and reads no file contents. Personal-looking, recent,
   in-flight, project, package, link and hidden files are not listed and cannot be
   named. One bad decision refuses the whole proposal. Limits: 1 MiB, 5,000
-  decisions. The sweep contract is version 10: it adds the `propose` operation
-  and the refusal codes `unknown_item` and `item_assigned_twice` (retry `never`,
+  decisions. The current sweep contract, version 11, includes the `propose`
+  operation and the refusal codes `unknown_item` and `item_assigned_twice` (retry `never`,
   subject `item`). The plan file now also records the real paths of files no
   group claimed, and covers them in the plan digest.
 - **Verification:** a stress scenario applies a `sweep propose` plan and kills the
@@ -179,12 +179,13 @@ reviewers were pointed at the tools before anyone else could be.
 - **Contracts:** each tool's `refusal_codes` lists only codes that tool can
   return. `folder_busy`, `recent_files`, `empty_selection` and `user_cancelled`
   are removed, and `download_in_flight` is removed from unpack. The capability
-  declarations are now version 9 (sweep), 10 (stash) and 6 (unpack).
-- **Known gaps in `reason`:** the contract check proves 13 of sweep's 16 listed
+  declarations are now version 11 (sweep), 10 (stash) and 6 (unpack).
+- **Known gaps in `reason`:** the contract check proves 16 of sweep's 18 listed
   codes, 11 of stash's 15 and 9 of unpack's 10, and names the rest as unproven:
-  `internal_error`, `journal_key_unavailable`, `destination_outside_root` and,
-  for stash, `destination_exists`. A folder that holds only recent files
-  reports `nothing_to_do`; a "try again later" code for it is a possible later
+  `internal_error` for all three, `journal_key_unavailable` for sweep and stash,
+  and `destination_exists` and `destination_outside_root` for stash. A folder
+  that holds only recent files reports `nothing_to_do`; a "try again later"
+  code for it is a possible later
   addition. Two `sweep apply` runs on one folder at once are not held apart,
   and the one that loses ends in one of two ways. Either it is refused before
   it moves anything (exit 2, `plan_stale`; plan again), or it stops part-way
@@ -197,7 +198,9 @@ reviewers were pointed at the tools before anyone else could be.
   records is still refused without touching files.
   `unpack` reports a `.part` or `.download` name as `unsupported_format`.
 
-### 0.5.3 published — sweep, stash and unpack
+## [0.5.3] - 2026-09-26
+
+sweep, stash and unpack.
 
 The sweep, stash and unpack 0.5.3 tags and releases are published. The earlier
 unpack 0.5.2 entry below was source-only and was never published.
@@ -230,7 +233,7 @@ partial requested destination. Complete structured mutation receipts are not
 part of the 0.5.3 candidates. Existing journal encryption and the 0/1/2/3
 exit-code convention remain unchanged.
 
-### unpack 0.5.2 source changes — not published
+## [unpack 0.5.2 source changes] - 2026-08-23 (not published)
 
 The earlier entry was dated 2026-08-23, but no `unpack-v0.5.2` tag or release
 was published. Its changes were included in the 0.5.3 release above.
