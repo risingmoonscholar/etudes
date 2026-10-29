@@ -322,7 +322,7 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
         {
             Code::DestinationOutsideRoot
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) => Code::PlanStale,
+        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => Code::PlanStale,
         DestinationExists(_) | DestinationCollision(_) => Code::DestinationExists,
         DestinationIsSynced(_) | CannotCompareNames(_) => Code::UnsafeInput,
         DestinationBlocked(_) => Code::DestinationExists,
@@ -723,12 +723,33 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             };
         }
     };
-    if outcome.entries.is_empty() && outcome.skipped_unreadable > 0 {
-        // Nothing could be moved, and what could not be read is still there.
+    if outcome.entries.is_empty() && outcome.skipped_unreadable + outcome.locked_skipped > 0 {
+        // Nothing could be moved, and what could not be read or is locked is
+        // still there.
+        let mut held = Vec::new();
+        if outcome.locked_skipped > 0 {
+            held.push(etude_cli_support::problems::locked_note(
+                outcome.locked_skipped,
+            ));
+        }
+        if outcome.skipped_unreadable > 0 {
+            held.push(unreadable_note(outcome.skipped_unreadable));
+        }
         eprintln!(
             "stash: {}. Nothing was moved. The folder is NOT clear.",
-            unreadable_note(outcome.skipped_unreadable)
+            held.join(". ")
         );
+        if outcome.locked_skipped > 0 {
+            eprintln!("       {}", etude_cli_support::problems::unlock_step(path));
+            etude_cli_support::envelope::detail(etude_core::json::obj(&[
+                ("clear", etude_core::json::bool(false)),
+                ("moved", etude_core::json::num(0)),
+                (
+                    "locked_skipped",
+                    etude_core::json::num(outcome.locked_skipped),
+                ),
+            ]));
+        }
         etude_cli_support::envelope::status("incomplete");
         return fail(etude_cli_support::reason::Code::PermissionDenied);
     }
@@ -871,7 +892,8 @@ fn execute_stash(
                 etude_cli_support::envelope::recovery_operation(&r.journal_id);
             }
             etude_cli_support::envelope::effect("items_moved", r.moved);
-            let clear = folder_is_clear(&r) && bound.skipped_unreadable == 0;
+            let clear =
+                folder_is_clear(&r) && bound.skipped_unreadable == 0 && bound.locked_skipped == 0;
             if json {
                 use etude_core::json as j;
                 println!(
@@ -891,6 +913,8 @@ fn execute_stash(
                         ("clear", j::bool(clear)),
                         ("held_cross_volume", j::num(r.held_cross_volume)),
                         ("held_tagged", j::num(r.held_tagged)),
+                        ("held_locked", j::num(r.held_locked)),
+                        ("locked_skipped", j::num(bound.locked_skipped)),
                         ("tagged_not_returned", j::num(r.tagged_not_returned)),
                         ("holding", j::str(&bound.groups[0].name)),
                         ("binding", bound.binding_json()),
@@ -913,7 +937,8 @@ fn execute_stash(
             if clear {
                 println!("The selected folder is clear.\n");
             } else {
-                print_stash_holds(&r, true);
+                print_locked_skipped(bound.locked_skipped, &bound.root);
+                print_stash_holds(&r, true, bound.locked_skipped, &bound.root);
                 if bound.skipped_unreadable > 0 {
                     println!(
                         "{}. The selected folder is NOT clear.\n",
@@ -1078,6 +1103,10 @@ fn print_stash_failure(
                 "       Free some space or fix that folder, or set ETUDE_STATE_DIR to another one."
             );
         }
+        E::DestinationLocked(path) => eprintln!(
+            "{}",
+            etude_cli_support::problems::locked_folder_message("stash", path)
+        ),
         other => eprintln!("stash: {doing}: {}", apply_error_reason(other)),
     }
 }
@@ -1136,9 +1165,12 @@ fn cmd_select(args: &[String]) -> ExitCode {
     drop(progress);
     match result {
         Ok(report) => {
-            etude_cli_support::envelope::recovery_operation(&report.journal_id);
+            if report.moved > 0 {
+                etude_cli_support::envelope::recovery_operation(&report.journal_id);
+            }
             etude_cli_support::envelope::effect("items_moved", report.moved);
             let held = report.held_tagged
+                + report.held_locked
                 + report.held_cross_volume
                 + report.tagged_not_returned
                 + report.hold_record_failed;
@@ -1152,6 +1184,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                         ("moved", j::num(report.moved)),
                         ("held_cross_volume", j::num(report.held_cross_volume)),
                         ("held_tagged", j::num(report.held_tagged)),
+                        ("held_locked", j::num(report.held_locked)),
                         ("tagged_not_returned", j::num(report.tagged_not_returned)),
                         ("selected", j::num(prepared.sources.len())),
                         ("holding_root", j::str("<redacted>")),
@@ -1159,15 +1192,19 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     ])
                 );
             } else {
-                println!(
-                    "Stashed {} selected {}. Operation id: {}. Restore with: stash pop --id {}",
-                    report.moved,
-                    if report.moved == 1 { "item" } else { "items" },
-                    report.journal_id,
-                    report.journal_id
-                );
+                if report.moved == 0 {
+                    println!("Nothing was moved, so there is nothing to restore.");
+                } else {
+                    println!(
+                        "Stashed {} selected {}. Operation id: {}. Restore with: stash pop --id {}",
+                        report.moved,
+                        if report.moved == 1 { "item" } else { "items" },
+                        report.journal_id,
+                        report.journal_id
+                    );
+                }
                 if held > 0 {
-                    print_stash_holds(&report, false);
+                    print_stash_holds(&report, false, 0, &prepared.parent);
                 }
             }
             print_downloads_note(downloads);
@@ -1226,7 +1263,20 @@ fn cmd_select(args: &[String]) -> ExitCode {
 
 /// What stash left in the folder, with the reason. Counts only: no names, no
 /// paths. A held item means the folder is not clear, and this says so.
-fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
+fn print_stash_holds(
+    r: &etude_core::apply::ApplyReport,
+    folder: bool,
+    locked_skipped: usize,
+    within: &Path,
+) {
+    if r.held_locked > 0 {
+        println!(
+            "{} locked and {} in place. {}",
+            etude_cli_support::counted(r.held_locked, "item is", "items are"),
+            if r.held_locked == 1 { "stays" } else { "stay" },
+            etude_cli_support::problems::unlock_step(within),
+        );
+    }
     if r.held_cross_volume > 0 {
         println!(
             "{} Finder-tagged {} left in the folder: moving to another volume would drop the tag.",
@@ -1266,7 +1316,7 @@ fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
             r.journal_id
         );
     }
-    if !folder_is_clear(r) {
+    if !folder_is_clear(r) || locked_skipped > 0 {
         if folder {
             println!("The selected folder is NOT clear.\n");
         } else {
@@ -1283,10 +1333,26 @@ fn unreadable_note(count: usize) -> String {
     }
 }
 
+/// Locked items the scan held: never selected, never moved.
+fn print_locked_skipped(locked_skipped: usize, folder: &Path) {
+    if locked_skipped > 0 {
+        println!(
+            "{}. {}",
+            etude_cli_support::problems::locked_note(locked_skipped),
+            etude_cli_support::problems::unlock_step(folder)
+        );
+    }
+}
+
 /// The folder is clear only when apply left nothing behind and wrote a
 /// journal that agrees. Any held, stranded or unrecorded item says otherwise.
 fn folder_is_clear(r: &etude_core::apply::ApplyReport) -> bool {
-    r.held_tagged + r.held_cross_volume + r.tagged_not_returned + r.hold_record_failed == 0
+    r.held_tagged
+        + r.held_locked
+        + r.held_cross_volume
+        + r.tagged_not_returned
+        + r.hold_record_failed
+        == 0
 }
 
 /// Destination* variants are safety refusals (2); Io/Journal/Injected are failures (3).
@@ -1298,6 +1364,7 @@ fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
         DestinationIsSynced(_) => "destination is synced",
         DestinationBlocked(_) => "a file holds the name of the holding folder",
         DestinationDirectoryChanged(_) => "destination folder identity changed or was unavailable",
+        DestinationLocked(_) => "a folder is locked",
         CannotCompareNames(_) => "destination names cannot be compared",
         Io(_) => "I/O failure",
         Journal(_) => "journal failure",
@@ -1315,6 +1382,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         | DestinationIsSynced(_)
         | DestinationBlocked(_)
         | DestinationDirectoryChanged(_)
+        | DestinationLocked(_)
         | CannotCompareNames(_) => refuse_preserving_status(apply_reason(e)),
         Io(_) | Journal(_) | Injected(_) => fail(apply_reason(e)),
     }

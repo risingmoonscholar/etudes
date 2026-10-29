@@ -267,8 +267,6 @@ pub fn move_denied_advice(
         .collect();
     locked.sort();
     locked.dedup();
-    const UNLOCK: &str =
-        "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the item.";
     let Some(first) = locked.first() else {
         return Some(format!(
             "A file may be locked. {UNLOCK}\n       See which with: find {} -flags +uchg\n       If none is locked, macOS may be blocking the app running this command. Check System Settings > Privacy & Security > Files & Folders for that app.",
@@ -282,11 +280,56 @@ pub fn move_denied_advice(
     } else {
         first.parent().unwrap_or(first)
     };
-    Some(format!(
-        "{} locked, and a locked item cannot be moved. {UNLOCK}\n       See which with: find {} -flags +uchg",
-        crate::counted(locked.len(), "item is", "items are"),
-        crate::quoted_path(folder),
-    ))
+    let system = locked.iter().any(|path| scan::has_system_lock_flag(path));
+    Some(locked_move_advice(locked.len(), folder, system))
+}
+
+fn locked_move_advice(count: usize, folder: &Path, system: bool) -> String {
+    let items = crate::counted(count, "item is", "items are");
+    if system {
+        return format!(
+            "{items} locked by a system flag, and a locked item cannot be moved. An administrator can clear it with sudo chflags noschg on the item.\n       See which with: find {} -flags +schg",
+            crate::quoted_path(folder),
+        );
+    }
+    format!(
+        "{items} locked, and a locked item cannot be moved. {}",
+        unlock_step(folder)
+    )
+}
+
+pub const UNLOCK: &str =
+    "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the item.";
+pub const UNLOCK_FOLDER: &str =
+    "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the folder.";
+
+/// How to clear a lock. Scans count locked items without naming them, so the
+/// step also finds them.
+pub fn unlock_step(folder: &Path) -> String {
+    format!(
+        "{UNLOCK}\n       See which with: find {} -flags +uchg",
+        crate::quoted_path(folder)
+    )
+}
+
+/// One wording for items a scan held because of a lock, in every tool. Sweep
+/// also holds a group whose existing folder is locked, so the item itself may
+/// not carry the flag.
+pub fn locked_note(count: usize) -> String {
+    if count == 1 {
+        "1 item is locked or headed for a locked folder, and stays in place".into()
+    } else {
+        format!("{count} items are locked or headed for a locked folder, and stay in place")
+    }
+}
+
+/// A folder the plan needs is locked. Nothing can move into or out of it. The
+/// line after this one says what became of the files.
+pub fn locked_folder_message(tool: &str, folder: &Path) -> String {
+    format!(
+        "{tool}: {} is locked, so nothing can move into or out of it.\n       {UNLOCK_FOLDER} Then run this again.",
+        crate::shown(folder)
+    )
 }
 
 /// A folder named on the command line that cannot be opened. One condition, one
@@ -466,6 +509,16 @@ mod tests {
         assert!(!modes.contains("locked"), "{modes}");
         let enoent = std::io::Error::from_raw_os_error(2);
         assert!(move_denied_advice(&enoent, &[], Path::new("/nowhere")).is_none());
+        let plain = locked_move_advice(2, Path::new("/nowhere"), false);
+        assert!(plain.starts_with("2 items are locked"), "{plain}");
+        assert!(plain.contains("chflags nouchg"), "{plain}");
+        assert!(plain.contains("-flags +uchg"), "{plain}");
+        // Finder and nouchg cannot clear the system flag, and +uchg cannot find it.
+        let system = locked_move_advice(1, Path::new("/nowhere"), true);
+        assert!(system.contains("sudo chflags noschg"), "{system}");
+        assert!(system.contains("-flags +schg"), "{system}");
+        assert!(!system.contains("nouchg"), "{system}");
+        assert!(!system.contains("+uchg"), "{system}");
     }
 
     use super::*;

@@ -253,7 +253,9 @@ OUT4=$(export ETUDE_STATE_DIR="$PSTATE"; run_step "$STEP" 2>&1 </dev/null); RC=$
 assert_eq 0 "$RC" "moved-folder step, pop: exit"
 assert_eq 3 "$(ls "$G" | grep -c '^Screenshot 2026')" "moved-folder step, pop: items are home"
 
-# --- a locked file: the failed move says so, and the printed steps work -------
+# --- a locked file: held and said, or the failed move says so, and the printed
+# steps work. Sweep and stash hold a locked item before any move; undo and pop
+# meet a lock only when it is set after the item moved. -------------------------
 LOCKED="Screenshot 2026-01-02 at 10.00.00.png"
 PRIVACY="Privacy & Security"
 locked_words() {  # locked_words LABEL OUT FOLDER: the cause, then a step that finds it
@@ -279,13 +281,11 @@ assert_exit 0 "locked, stash: run again after unlocking" -- "$STASH" "$D"
 
 D="$W/lock-apply"; fresh_lock "$D"
 OUT=$("$SWEEP" apply "$D" --yes 2>&1 </dev/null); RC=$?
-assert_eq 3 "$RC" "locked, apply: exit"
+# Two files left do not group by themselves, so nothing moves and nothing needs undoing.
+assert_eq 1 "$RC" "locked, apply: exit"
 locked_words "locked, apply" "$OUT" "$D"
 chflags nouchg "$D/$LOCKED"
-# Two files left would not group by themselves, so the way on is back, then again.
-STEP=$(step_after 'To put it back: ' "$OUT")
-OUT2=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
-assert_eq 0 "$RC" "locked, apply: the printed undo step works"
+hasnt "locked, apply: no undo step, because nothing moved" "$OUT" "To put it back"
 assert_exit 0 "locked, apply: apply works after unlocking" -- "$SWEEP" apply "$D" --yes
 assert_eq 3 "$(ls "$D/Screenshots" | wc -l | tr -d ' ')" "locked, apply: every file moved"
 
@@ -294,7 +294,7 @@ OUT=$("$STASH" select "$D/Screenshot 2026-01-01 at 10.00.00.png" "$D/$LOCKED" 2>
 assert_eq 3 "$RC" "locked, select: exit"
 locked_words "locked, select" "$OUT" "$D"
 chflags nouchg "$D/$LOCKED"
-STEP=$(step_after 'To put it back: ' "$OUT")
+STEP=$(step_after 'Restore with: ' "$OUT")
 OUT2=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
 assert_eq 0 "$RC" "locked, select: the printed step works"
 assert_exit 0 "locked, select: select works after unlocking" -- "$STASH" select "$D/Screenshot 2026-01-01 at 10.00.00.png" "$D/$LOCKED"

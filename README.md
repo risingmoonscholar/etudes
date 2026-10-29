@@ -199,9 +199,9 @@ exported plan, and refuses replay if the profile changes.
 | State | Current behavior |
 |---|---|
 | locked | An unreadable subtree is counted and the scan reports incomplete; visible siblings remain usable. A selected folder that cannot be read at all is an error (exit 3, `permission_denied`) that names the folder and what to do next. |
-| immutable | Sweep does not preflight the immutable flag. If the operating system refuses a move, apply reports the failure and leaves recovery to the journal; sweep does not claim it detected the flag. |
+| immutable | A file or folder with the locked flag (Finder's Locked box, `chflags uchg` or `schg`) is left in place and counted, and the summary says how to clear it. A folder with the flag is not entered. Apply checks again before each move. A locked root or destination folder refuses the plan before any move. Sweep reads the flag from the metadata it already has. |
 | invisible | Hidden entries are skipped and counted. Unreadable entries are separately reported as incomplete. |
-| alias | Symlinks are skipped during scans; selected parent aliases are resolved for overlap checks. |
+| alias | Finder aliases are skipped by the kIsAlias flag in FinderInfo, without resolving them or reading their contents. Symlinks are skipped during scans; selected parent aliases are resolved for overlap checks. |
 | iCloud placeholder | Dot-prefixed `.icloud` stubs are skipped as hidden entries, not grouped as their missing original file. |
 | coordinated write | Recognized in-flight filename suffixes and recent modification times are held. Sweep does not query File Provider coordination, so those checks do not prove that no coordinated write is active. |
 

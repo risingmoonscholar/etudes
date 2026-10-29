@@ -72,5 +72,6 @@
   "108-stash-messages": 560,
   "109-unpack-messages": 668,
   "110-final-message-consistency": 438,
-  "111-sweep-undo-id": 303
+  "111-sweep-undo-id": 303,
+  "112-locked-items": 46
 }
