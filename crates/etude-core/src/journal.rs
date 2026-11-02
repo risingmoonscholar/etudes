@@ -422,10 +422,36 @@ pub(crate) struct ProgressWriter<W = fs::File> {
 
 pub(crate) trait DurableWrite: Write {
     fn sync_all(&mut self) -> io::Result<()>;
+
+    /// Order everything written so far before anything written after, without
+    /// forcing it to stable storage. Recovery needs order, not durability, per
+    /// frame: a power cut may lose the newest records, but never a record
+    /// whose move survived, so at most the move in flight lacks its record.
+    fn barrier(&mut self) -> io::Result<()> {
+        self.sync_all()
+    }
 }
 
 impl DurableWrite for fs::File {
     fn sync_all(&mut self) -> io::Result<()> {
+        fs::File::sync_all(self)
+    }
+
+    /// `sync_all` is F_FULLFSYNC on macOS, which flushes the drive cache:
+    /// about 4 ms per frame, measured at 10,000 files as most of a minute
+    /// (issue #12). F_BARRIERFSYNC orders the same writes for about 0.5 ms.
+    #[cfg(target_os = "macos")]
+    fn barrier(&mut self) -> io::Result<()> {
+        use std::os::fd::AsRawFd;
+        const F_BARRIERFSYNC: std::ffi::c_int = 85;
+        unsafe extern "C" {
+            fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
+        }
+        if unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
+            return Ok(());
+        }
+        // A filesystem without barriers (SMB, some FUSE mounts) refuses the
+        // call. The full sync it falls back to is slower and still correct.
         fs::File::sync_all(self)
     }
 }
@@ -440,7 +466,13 @@ impl<W: DurableWrite> ProgressWriter<W> {
         frame.extend_from_slice(&sealed);
         self.file.write_all(&frame).map_err(JournalError::Io)?;
         // The base save already synced the directory entry. Each progress
-        // frame must be durable before the caller starts its next move.
+        // frame must be ordered before the caller starts its next move.
+        self.file.barrier().map_err(JournalError::Io)
+    }
+
+    /// Make every frame written so far durable. A run calls this once, before
+    /// it reports success, so a finished run survives a power cut.
+    pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
         self.file.sync_all().map_err(JournalError::Io)
     }
 
@@ -681,6 +713,12 @@ impl Journal {
             .open(self.path())
             .map_err(JournalError::Io)?;
         Ok(ProgressWriter { file })
+    }
+
+    /// Make the progress frames appended by one-off writers durable. Undo calls
+    /// this once when it finishes, as apply calls [`ProgressWriter::finish`].
+    pub fn sync_progress(&self) -> Result<(), JournalError> {
+        self.progress_writer()?.finish()
     }
 
     /// Append one sealed "entry i was held and never moved" frame. It takes
@@ -1454,6 +1492,13 @@ mod tests {
             }
             Ok(())
         }
+        fn barrier(&mut self) -> io::Result<()> {
+            self.events.push("barrier");
+            if self.fail_sync {
+                return Err(io::Error::other("injected barrier failure"));
+            }
+            Ok(())
+        }
     }
     struct FrameSeal;
     impl FrameSeal {
@@ -1482,23 +1527,26 @@ mod tests {
     }
 
     #[test]
-    fn append_writes_one_frame_then_syncs_before_returning() {
+    fn append_writes_one_frame_then_orders_it_before_returning() {
         let mut writer = ProgressWriter {
             file: AppendProbe::default(),
         };
         for i in 0..3 {
             writer.record_done(i, Method::Rename, &FrameSeal).unwrap();
-            // Returning permits the next rename; sync must already be over.
+            // Returning permits the next rename; the barrier must already be over.
             writer.file.events.push("next move");
         }
-        assert_eq!(writer.file.events, ["write", "sync", "next move"].repeat(3));
+        writer.finish().unwrap();
+        let mut expected = ["write", "barrier", "next move"].repeat(3);
+        expected.push("sync");
+        assert_eq!(writer.file.events, expected);
     }
 
     #[test]
     fn append_propagates_write_and_sync_errors() {
         for (fail_write, fail_sync, events) in [
             (true, false, vec!["write"]),
-            (false, true, vec!["write", "sync"]),
+            (false, true, vec!["write", "barrier"]),
         ] {
             let mut writer = ProgressWriter {
                 file: AppendProbe {
