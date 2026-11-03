@@ -59,5 +59,7 @@
   {"id":"93-sweep-undo-stash-origin","tier":"fast","capability":"filesystem","contract":"Sweep undo retains a folder needed by a live stash; pop and repeated undo restore every original path and byte, and unpack extracts exact archive bytes.","disposition":"keep"},
   {"id":"94-forged-plan-eligibility","tier":"fast","capability":"filesystem","contract":"A forged personal member refuses despite a recomputed plan digest, ordinary sweep applies and undoes, stash restores its file, and unpack preserves archive bytes.","disposition":"keep"},
   {"id":"95-journal-append-failure","tier":"fast","capability":"filesystem","contract":"A failed journal append stops before the next move, undo restores the durable prefix plus one in-flight entry, stash round-trips and unpack preserves history.","disposition":"keep"},
+  {"id":"96-unpack-large-tar-renames","tier":"fast","capability":"filesystem","contract":"A 5,000-file tar extracts completely on every run while the size check races the renames macOS tar makes.","disposition":"keep"},
+  {"id":"97-unpack-killed-leaves-no-copy","tier":"fast","capability":"signals","contract":"SIGKILL during zip, tar and tar.gz extraction leaves no archive copy in the temporary folder.","disposition":"keep"},
   {"id":"98-unpack-parallel-zip","tier":"fast","capability":"filesystem","contract":"Many unpack runs at the same time each extract a safe zip, so one run never refuses because another run is using the same descriptor number.","disposition":"keep"}
 ]
