@@ -1225,14 +1225,39 @@ fn cleanup_destination_with(
 /// Total logical bytes observed under `dir`, without following links.
 /// An unreadable entry makes the measurement fail, never silently smaller.
 fn written(dir: &Path) -> Result<u64, String> {
-    let rd = etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
-        .map_err(|e| tree_error(dir, e))?;
+    measure(dir, dir, false)
+}
+
+/// One walk of staging. While an extractor is running, a name can vanish
+/// between being listed and being examined: macOS tar writes each file under a
+/// temporary name and renames it into place. That is a member moving, seen again
+/// on the next poll, and not an unreadable entry. With no writer running, every
+/// failure stays a failure, so the final measurement is never silently smaller.
+fn measure(dir: &Path, root: &Path, writer_running: bool) -> Result<u64, String> {
+    let rd =
+        match etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir)) {
+            Ok(rd) => rd,
+            Err(error)
+                if writer_running
+                    && dir != root
+                    && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(0);
+            }
+            Err(error) => return Err(tree_error(dir, error)),
+        };
     let mut total = 0_u64;
     for entry in rd {
         let path = entry.map_err(|e| tree_error(dir, e))?.path();
-        let md = path.symlink_metadata().map_err(|e| tree_error(&path, e))?;
+        let md = match path.symlink_metadata() {
+            Ok(md) => md,
+            Err(error) if writer_running && error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) => return Err(tree_error(&path, error)),
+        };
         let bytes = if md.is_dir() {
-            written(&path)?
+            measure(&path, root, writer_running)?
         } else {
             md.len()
         };
@@ -1343,7 +1368,7 @@ fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), 
                 return Err("stopped after SIGTERM".into());
             }
             let status = child.try_wait().map_err(|e| e.to_string())?;
-            let total = written(dest)?;
+            let total = measure(dest, dest, status.is_none())?;
             if total > budget {
                 if status.is_none() {
                     child
@@ -1586,6 +1611,13 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn a_missing_root_fails_whether_or_not_a_writer_is_running() {
+        let missing = std::env::temp_dir().join(format!("unpack-absent-{}", std::process::id()));
+        assert!(measure(&missing, &missing, true).is_err());
+        assert!(measure(&missing, &missing, false).is_err());
+    }
 
     #[test]
     fn the_longest_suffix_wins_so_tar_gz_is_not_gz() {
