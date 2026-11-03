@@ -48,6 +48,24 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The agent demo check compares against a base and needs its history.
+          fetch-depth: 0
+      # A pull request is judged against its base. Anything else is judged
+      # against the last release, so the base is never the commit under test.
+      - name: Every tool change arrives with a scenario that drives it
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            base="$PR_BASE"
+          else
+            base=$(git describe --tags --abbrev=0 --match 'sweep-v*' HEAD^)
+          fi
+          python3 scripts/check-agent-demo.py --base "$base"
+      - name: The agent demo check rejects a change it cannot prove
+        run: python3 -m unittest discover -s scripts -p 'test_check_agent_demo.py' -v
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
