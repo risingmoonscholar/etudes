@@ -21,7 +21,10 @@ mod quarantine;
 mod safety;
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{BufRead, Read, Seek, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 #[cfg(unix)]
@@ -98,13 +101,27 @@ and while stopping. Refusals report the final measured bytes and overshoot.
 
 /// A private byte-for-byte copy of the archive we judged.
 ///
-/// The callers below must use this name rather than the pathname supplied on
+/// The callers below must use this copy rather than the pathname supplied on
 /// the command line. Copying the caller's file once binds the listings and
 /// extractor to private bytes even if somebody replaces the original pathname
 /// or rewrites the original inode after preflight.
+///
+/// The copy has no name on disk. It is unlinked before its bytes are written,
+/// so a SIGKILL at any later point cannot strand it, and the kernel frees it
+/// when the last descriptor closes. Children read it through `/dev/fd/N`.
+///
+/// App Sandbox refuses that open for a file the sandboxed process created,
+/// measured on macOS 27.0.1. There the copy keeps its private name, as it did
+/// before, and `Drop` removes it; a SIGKILL can strand that one.
 struct ArchiveAnchor {
-    dir: PathBuf,
+    /// Read-only. Never handed to a child except through `prepare`.
+    file: std::fs::File,
     path: PathBuf,
+    /// The name kept on disk, only where `/dev/fd/N` cannot be opened.
+    kept: Option<PathBuf>,
+    /// The original basename, which names a bare .gz's output. `path` must
+    /// never supply a name or reach the user.
+    name: PathBuf,
     quarantine: Option<Vec<u8>>,
 }
 
@@ -141,16 +158,62 @@ impl From<&str> for ArchiveAnchorError {
 
 #[cfg(test)]
 thread_local! {
+    static DESCRIPTOR_PATH_REFUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static AFTER_ANCHOR_COPY: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 
 impl ArchiveAnchor {
     fn create(archive: &Path) -> Result<Self, ArchiveAnchorError> {
+        // Copy rather than hard-link: a link pins an inode, but an attacker
+        // holding a writable descriptor can still truncate and rewrite that
+        // inode after both preflights. The private copy is the one immutable
+        // input all later operations consume.
+        match etude_core::scan::observe_read("archive_metadata", std::fs::symlink_metadata(archive))
+        {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err("the archive path is a symlink".into());
+            }
+            Ok(_) => {}
+            Err(error) => return Err(error.into()),
+        }
+        let mut source = quarantine::open_archive(archive)?;
+        let mark = quarantine::capture(&source)?;
+        let (mut output, file, kept) = Self::create_private()?;
+        let anchor = Self {
+            path: kept
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(format!("/dev/fd/{}", file.as_raw_fd()))),
+            file,
+            kept,
+            name: PathBuf::from(
+                archive
+                    .file_name()
+                    .unwrap_or(std::ffi::OsStr::new("archive")),
+            ),
+            quarantine: mark.clone(),
+        };
+        etude_core::scan::observe_read("archive_bytes", std::io::copy(&mut source, &mut output))?;
+        #[cfg(test)]
+        AFTER_ANCHOR_COPY.with(|hook| {
+            if let Some(action) = hook.borrow_mut().take() {
+                action();
+            }
+        });
+        if quarantine::capture(&source)? != mark {
+            return Err(ArchiveAnchorError::QuarantineChanged);
+        }
+        Ok(anchor)
+    }
+
+    /// Return a write handle and a read-only handle to a new file, and the
+    /// file's name if it had to keep one.
+    fn create_private()
+    -> Result<(std::fs::File, std::fs::File, Option<PathBuf>), ArchiveAnchorError> {
         for _ in 0..128 {
             // A counter plus PID is visible to any process and makes this
             // supposedly private filename predictable.  Read enough bytes
             // from the kernel CSPRNG that another process cannot derive the
-            // anchor pathname and replace the copy after preflight.
+            // pathname and replace the file before it is opened again.
             let mut nonce = [0_u8; 16];
             etude_core::scan::observe_read(
                 "os_random_bytes",
@@ -158,87 +221,53 @@ impl ArchiveAnchor {
                     .and_then(|mut random| random.read_exact(&mut nonce)),
             )
             .map_err(|error| format!("could not generate private anchor name: {error}"))?;
-            let dir = std::env::temp_dir().join(format!(
+            let path = std::env::temp_dir().join(format!(
                 "unpack-{}",
                 nonce
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>()
             ));
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
+            let output = match std::fs::File::options()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
             {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&dir) {
-                Ok(()) => {
-                    // `stem` supplies the output name for a bare .gz, so the
-                    // anchored file keeps the original basename while its
-                    // containing directory supplies the privacy boundary.
-                    let path = dir.join(
-                        archive
-                            .file_name()
-                            .unwrap_or(std::ffi::OsStr::new("archive")),
-                    );
-                    // Copy rather than hard-link: a link pins an inode, but
-                    // an attacker holding a writable descriptor can still
-                    // truncate and rewrite that inode after both preflights.
-                    // The private copy is the one immutable input all later
-                    // operations consume.
-                    match etude_core::scan::observe_read(
-                        "archive_metadata",
-                        std::fs::symlink_metadata(archive),
-                    ) {
-                        Ok(metadata) if metadata.file_type().is_symlink() => {
-                            let _ = std::fs::remove_dir_all(&dir);
-                            return Err("the archive path is a symlink".into());
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            let _ = std::fs::remove_dir_all(&dir);
-                            return Err(error.into());
-                        }
-                    }
-                    let secured = (|| -> Result<Option<Vec<u8>>, ArchiveAnchorError> {
-                        let mut source = quarantine::open_archive(archive)?;
-                        let mark = quarantine::capture(&source)?;
-                        let mut output = std::fs::File::options()
-                            .write(true)
-                            .create_new(true)
-                            .open(&path)?;
-                        etude_core::scan::observe_read(
-                            "archive_bytes",
-                            std::io::copy(&mut source, &mut output),
-                        )?;
-                        #[cfg(test)]
-                        AFTER_ANCHOR_COPY.with(|hook| {
-                            if let Some(action) = hook.borrow_mut().take() {
-                                action();
-                            }
-                        });
-                        if quarantine::capture(&source)? != mark {
-                            return Err(ArchiveAnchorError::QuarantineChanged);
-                        }
-                        Ok(mark)
-                    })();
-                    match secured {
-                        Ok(quarantine) => {
-                            return Ok(Self {
-                                dir,
-                                path,
-                                quarantine,
-                            });
-                        }
-                        Err(error) => {
-                            let _ = std::fs::remove_dir_all(&dir);
-                            return Err(error);
-                        }
-                    }
-                }
+                Ok(output) => output,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error.into()),
-            }
+            };
+            // The name exists only across these calls, and the file is still
+            // empty. Nothing else may run here: a kill in this window is the
+            // one way to leave it behind.
+            let reader = std::fs::File::open(&path);
+            let reachable = reader.as_ref().is_ok_and(descriptor_path_opens);
+            let unlinked = if reachable {
+                std::fs::remove_file(&path)
+            } else {
+                Ok(())
+            };
+            let checked = (|| -> Result<std::fs::File, ArchiveAnchorError> {
+                let reader = reader?;
+                unlinked?;
+                let (written, read) = (output.metadata()?, reader.metadata()?);
+                if (written.dev(), written.ino()) != (read.dev(), read.ino()) {
+                    return Err("the private archive copy was replaced".into());
+                }
+                Ok(reader)
+            })();
+            return match checked {
+                Ok(reader) => Ok((
+                    output,
+                    own_descriptor_number(reader),
+                    (!reachable).then_some(path),
+                )),
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    Err(error)
+                }
+            };
         }
         Err("could not create a private archive anchor".into())
     }
@@ -246,12 +275,79 @@ impl ArchiveAnchor {
     fn path(&self) -> &Path {
         &self.path
     }
+
+    fn name(&self) -> &Path {
+        &self.name
+    }
+
+    /// Give one child the copy, at its start.
+    ///
+    /// `/dev/fd/N` shares the descriptor's offset on macOS, so each child
+    /// needs a rewind. The descriptor stays close-on-exec in this process, so
+    /// only a command prepared here inherits it.
+    fn prepare(&self, command: &mut Command) -> Result<(), String> {
+        if self.kept.is_some() {
+            return Ok(());
+        }
+        (&self.file)
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(|error| error.to_string())?;
+        let fd = self.file.as_raw_fd();
+        // SAFETY: `fcntl` is async-signal-safe, and the closure touches only
+        // the copied integer and the error number between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                if fcntl(fd, F_SETFD, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Drop for ArchiveAnchor {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if let Some(kept) = &self.kept {
+            let _ = std::fs::remove_file(kept);
+        }
     }
+}
+
+/// Move the descriptor to a number that other runs are unlikely to hold.
+///
+/// Observed on macOS 27.0.1: `stat` on `/dev/fd/N` can fail with EBADF while
+/// another process uses the same N, and `unzip` calls `stat` first. A run that
+/// cannot move keeps the number it has, because that number still works
+/// almost every time. Every number here is below the default limit of 256.
+fn own_descriptor_number(file: std::fs::File) -> std::fs::File {
+    let wanted = 64 + (std::process::id() % 192) as i32;
+    // SAFETY: `fcntl` reads only its integer arguments, and a returned
+    // descriptor is new, so this function alone owns it.
+    unsafe {
+        let moved = fcntl(file.as_raw_fd(), F_DUPFD_CLOEXEC, wanted);
+        if moved == -1 {
+            return file;
+        }
+        std::os::fd::FromRawFd::from_raw_fd(moved)
+    }
+}
+
+fn descriptor_path_opens(file: &std::fs::File) -> bool {
+    #[cfg(test)]
+    if DESCRIPTOR_PATH_REFUSED.with(|refused| refused.get()) {
+        return false;
+    }
+    std::fs::File::open(format!("/dev/fd/{}", file.as_raw_fd())).is_ok()
+}
+
+// Source: fcntl(2), and F_SETFD in the SDK's sys/fcntl.h.
+const F_SETFD: i32 = 2;
+// Source: F_DUPFD_CLOEXEC in the SDK's sys/fcntl.h.
+const F_DUPFD_CLOEXEC: i32 = 67;
+unsafe extern "C" {
+    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
 
 // This seam exists only to make the pathname-replacement regression
@@ -559,7 +655,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     };
 
     // --- 1. list -----------------------------------------------------------
-    let entries = match list(pinned.path(), fmt) {
+    let entries = match list(&pinned, fmt) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("unpack: could not read the archive ({e})");
@@ -585,7 +681,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // TYPE, from the verbose listing's mode string -- symlink, hard link,
     // device node, setuid. A member is refused if either says so.
     let mut blocked: Vec<Unsafe> = entries.iter().filter_map(|p| safety::judge(p)).collect();
-    let members = match list_members(pinned.path(), fmt) {
+    let members = match list_members(&pinned, fmt) {
         Ok(members) => {
             if let Err(missing) = typed_rows_cover_entries(&entries, &members) {
                 eprintln!(
@@ -762,7 +858,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             return failure(ReasonCode::InternalError, None);
         }
     };
-    match extract(pinned.path(), fmt, &staging, budget) {
+    match extract(&pinned, fmt, &staging, budget) {
         Err(e) => {
             let cleanup = cleanup_destination(&staging);
             if e == "stopped after SIGTERM" {
@@ -939,16 +1035,16 @@ fn typed_rows_cover_entries(entries: &[String], members: &[Member]) -> Result<()
 /// member was a symlink, so `unpack` printed "Checked 2 paths before writing
 /// anything" and then landed `shortcut -> /etc/passwd` in the target.
 /// Measured on both formats before this existed.
-fn list_members(archive: &Path, fmt: Format) -> Result<Vec<Member>, String> {
+fn list_members(anchor: &ArchiveAnchor, fmt: Format) -> Result<Vec<Member>, String> {
     if fmt == Format::Gz {
         return Ok(vec![Member {
             mode: None,
-            path: stem(archive),
+            path: stem(anchor.name()),
         }]);
     }
-    let out = listing_command(fmt, archive, true)?
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut command = listing_command(fmt, anchor.path(), true)?;
+    anchor.prepare(&mut command)?;
+    let out = command.output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err("listing failed".into());
     }
@@ -1079,13 +1175,13 @@ fn after_first_time_column(rest: &str) -> Option<&str> {
     None
 }
 
-fn list(archive: &Path, fmt: Format) -> Result<Vec<String>, String> {
+fn list(anchor: &ArchiveAnchor, fmt: Format) -> Result<Vec<String>, String> {
     if fmt == Format::Gz {
-        return Ok(vec![stem(archive)]);
+        return Ok(vec![stem(anchor.name())]);
     }
-    let out = listing_command(fmt, archive, false)?
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut command = listing_command(fmt, anchor.path(), false)?;
+    anchor.prepare(&mut command)?;
+    let out = command.output().map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err("listing failed".into());
     }
@@ -1225,14 +1321,39 @@ fn cleanup_destination_with(
 /// Total logical bytes observed under `dir`, without following links.
 /// An unreadable entry makes the measurement fail, never silently smaller.
 fn written(dir: &Path) -> Result<u64, String> {
-    let rd = etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir))
-        .map_err(|e| tree_error(dir, e))?;
+    measure(dir, dir, false)
+}
+
+/// One walk of staging. While an extractor is running, a name can vanish
+/// between being listed and being examined: macOS tar writes each file under a
+/// temporary name and renames it into place. That is a member moving, seen again
+/// on the next poll, and not an unreadable entry. With no writer running, every
+/// failure stays a failure, so the final measurement is never silently smaller.
+fn measure(dir: &Path, root: &Path, writer_running: bool) -> Result<u64, String> {
+    let rd =
+        match etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir)) {
+            Ok(rd) => rd,
+            Err(error)
+                if writer_running
+                    && dir != root
+                    && error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(0);
+            }
+            Err(error) => return Err(tree_error(dir, error)),
+        };
     let mut total = 0_u64;
     for entry in rd {
         let path = entry.map_err(|e| tree_error(dir, e))?.path();
-        let md = path.symlink_metadata().map_err(|e| tree_error(&path, e))?;
+        let md = match path.symlink_metadata() {
+            Ok(md) => md,
+            Err(error) if writer_running && error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) => return Err(tree_error(&path, error)),
+        };
         let bytes = if md.is_dir() {
-            written(&path)?
+            measure(&path, root, writer_running)?
         } else {
             md.len()
         };
@@ -1326,8 +1447,71 @@ pub enum Breach {
 /// System extractors write directly. Poll every 100 ms and after exit; this
 /// monitors a soft limit, with no fixed maximum overshoot. After killing and
 /// reaping the extractor, recount to include writes made while stopping.
-fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), Breach>, String> {
+/// Copy one extractor stream to ours, naming the archive as the user knows it.
+///
+/// The extractor only knows `/dev/fd/N`, and that must never reach the user.
+fn relay_output(
+    mut reader: impl BufRead + Send + 'static,
+    mut writer: impl Write + Send + 'static,
+    anchor: &ArchiveAnchor,
+) -> std::thread::JoinHandle<()> {
+    let path = anchor.path().as_os_str().as_encoded_bytes().to_vec();
+    let name = anchor.name().as_os_str().as_encoded_bytes().to_vec();
+    std::thread::spawn(move || {
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            // Member names reach these lines, so bound what one line can hold.
+            match reader.by_ref().take(64 * 1024).read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    // Keep draining if the write fails: the extractor must not
+                    // block on a full pipe because our own stream closed.
+                    let _ = writer.write_all(&replace_bytes(&line, &path, &name));
+                    let _ = writer.flush();
+                }
+            }
+        }
+    })
+}
+
+fn replace_bytes(line: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(line.len());
+    let mut rest = line;
+    while !rest.is_empty() {
+        if rest.starts_with(from) {
+            out.extend_from_slice(to);
+            rest = &rest[from.len()..];
+        } else {
+            out.push(rest[0]);
+            rest = &rest[1..];
+        }
+    }
+    out
+}
+
+fn run_bounded(
+    mut cmd: Command,
+    anchor: &ArchiveAnchor,
+    dest: &Path,
+    budget: u64,
+) -> Result<Result<(), Breach>, String> {
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let mut relays = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        relays.push(relay_output(
+            std::io::BufReader::new(stdout),
+            std::io::stdout(),
+            anchor,
+        ));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        relays.push(relay_output(
+            std::io::BufReader::new(stderr),
+            std::io::stderr(),
+            anchor,
+        ));
+    }
     let result = (|| {
         loop {
             #[cfg(unix)]
@@ -1343,7 +1527,7 @@ fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), 
                 return Err("stopped after SIGTERM".into());
             }
             let status = child.try_wait().map_err(|e| e.to_string())?;
-            let total = written(dest)?;
+            let total = measure(dest, dest, status.is_none())?;
             if total > budget {
                 if status.is_none() {
                     child
@@ -1370,22 +1554,32 @@ fn run_bounded(mut cmd: Command, dest: &Path, budget: u64) -> Result<Result<(), 
         let _ = child.kill();
         let _ = child.wait();
     }
+    // Print what the extractor said before our verdict. A grandchild can hold
+    // a pipe open after the extractor exits, so this wait has a limit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while relays.iter().any(|relay| !relay.is_finished()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     result
 }
 
 fn extract(
-    archive: &Path,
+    anchor: &ArchiveAnchor,
     fmt: Format,
     dest: &Path,
     budget: u64,
 ) -> Result<Result<(), Breach>, String> {
-    let mut cmd = extractor_command(fmt, archive, dest);
+    let mut cmd = extractor_command(fmt, anchor.path(), dest);
+    anchor.prepare(&mut cmd)?;
+    cmd.stderr(Stdio::piped());
     if fmt == Format::Gz {
-        let out_path = dest.join(stem(archive));
+        let out_path = dest.join(stem(anchor.name()));
         let f = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
         cmd.stdout(f);
+    } else {
+        cmd.stdout(Stdio::piped());
     }
-    run_bounded(cmd, dest, budget)
+    run_bounded(cmd, anchor, dest, budget)
 }
 
 fn publish_staging(staging: &Path, dest: &Path) -> Result<(), String> {
@@ -1588,6 +1782,13 @@ mod tests {
     use std::ffi::OsStr;
 
     #[test]
+    fn a_missing_root_fails_whether_or_not_a_writer_is_running() {
+        let missing = std::env::temp_dir().join(format!("unpack-absent-{}", std::process::id()));
+        assert!(measure(&missing, &missing, true).is_err());
+        assert!(measure(&missing, &missing, false).is_err());
+    }
+
+    #[test]
     fn the_longest_suffix_wins_so_tar_gz_is_not_gz() {
         assert_eq!(detect(Path::new("a.tar.gz")), Some(Format::TarGz));
         assert_eq!(detect(Path::new("a.tgz")), Some(Format::TarGz));
@@ -1771,6 +1972,82 @@ mod tests {
         );
         drop(anchor);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn archive_anchor_has_no_name_on_disk_and_stays_read_only() {
+        let root = std::env::temp_dir().join(format!("unpack-anchor-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).expect("create test directory");
+        let archive = root.join("input.tar.gz");
+        std::fs::write(&archive, b"checked bytes").expect("write archive");
+
+        let anchor = ArchiveAnchor::create(&archive).expect("copy archive");
+        assert_eq!(anchor.file.metadata().unwrap().nlink(), 0);
+        assert_eq!(anchor.file.metadata().unwrap().mode() & 0o777, 0o600);
+        assert_eq!(anchor.name(), Path::new("input.tar.gz"));
+        assert!((&anchor.file).write_all(b"x").is_err());
+        drop(anchor);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_a_prepared_command_inherits_the_copy_and_each_starts_at_its_beginning() {
+        let root = std::env::temp_dir().join(format!("unpack-anchor-fd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).expect("create test directory");
+        let archive = root.join("input.zip");
+        std::fs::write(&archive, b"checked bytes").expect("write archive");
+        let anchor = ArchiveAnchor::create(&archive).expect("copy archive");
+
+        let cat = || {
+            let mut command = Command::new("/bin/cat");
+            command.arg(anchor.path()).stderr(Stdio::null());
+            command
+        };
+        assert!(!cat().output().unwrap().status.success());
+        for _ in 0..2 {
+            let mut command = cat();
+            anchor.prepare(&mut command).unwrap();
+            assert_eq!(command.output().unwrap().stdout, b"checked bytes");
+        }
+        assert!(!cat().output().unwrap().status.success());
+        drop(anchor);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_refused_descriptor_path_keeps_a_private_name_until_drop() {
+        let root = std::env::temp_dir().join(format!("unpack-anchor-kept-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).expect("create test directory");
+        let archive = root.join("input.zip");
+        std::fs::write(&archive, b"checked bytes").expect("write archive");
+
+        DESCRIPTOR_PATH_REFUSED.with(|refused| refused.set(true));
+        let anchor = ArchiveAnchor::create(&archive);
+        DESCRIPTOR_PATH_REFUSED.with(|refused| refused.set(false));
+        let anchor = anchor.expect("copy archive");
+
+        let kept = anchor.path().to_path_buf();
+        assert_eq!(anchor.kept.as_ref(), Some(&kept));
+        assert_eq!(std::fs::read(&kept).unwrap(), b"checked bytes");
+        assert_eq!(std::fs::metadata(&kept).unwrap().mode() & 0o777, 0o600);
+        drop(anchor);
+        assert!(!kept.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn replace_bytes_replaces_every_copy_of_the_descriptor_path() {
+        assert_eq!(
+            replace_bytes(b"gzip: /dev/fd/5: bad /dev/fd/5\n", b"/dev/fd/5", b"a.gz"),
+            b"gzip: a.gz: bad a.gz\n"
+        );
+        assert_eq!(
+            replace_bytes(b"/dev/fd/\n", b"/dev/fd/5", b"a"),
+            b"/dev/fd/\n"
+        );
     }
 
     #[test]

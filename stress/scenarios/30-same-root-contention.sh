@@ -45,3 +45,25 @@ TERMINAL="$W/terminal.json"; snapshot_tree "$D" "$TERMINAL"
 assert_exit 1 "same-root second undo reports no remaining work" -- "$SWEEP" undo "$D"
 AFTER_TERMINAL="$W/after-terminal.json"; snapshot_tree "$D" "$AFTER_TERMINAL"
 assert_snapshot_eq "$TERMINAL" "$AFTER_TERMINAL" "same-root terminal undo changes no path or payload"
+
+# One overlap can miss the short window between one attempt's plan check and
+# its journal. Repeat with fresh folders, so that a loser beaten in that window
+# is seen: it must still explain itself and keep its own record.
+for round in $(seq 1 15); do
+  R="$W/round-$round"; mkdir -p "$R/Desktop" "$R/state"
+  for i in $(seq 1 200); do
+    printf 'same-root payload %s\n' "$i" > "$R/Desktop/Screenshot 2026-01-01 at 10.00.00 AM ($i).png"
+  done
+  ETUDE_STATE_DIR="$R/state" "$SWEEP" apply "$R/Desktop" --yes >"$R/first.out" 2>&1 & FIRST=$!
+  ETUDE_STATE_DIR="$R/state" "$SWEEP" apply "$R/Desktop" --yes >"$R/second.out" 2>&1 & SECOND=$!
+  wait "$FIRST"; FIRST_STATUS=$?
+  wait "$SECOND"; SECOND_STATUS=$?
+  LOSER_OUT="$R/first.out"
+  [ "$FIRST_STATUS" -eq 0 ] && LOSER_OUT="$R/second.out"
+  grep -qiE 'could not move|resumable|conflict|already exists' "$LOSER_OUT" \
+    && pass "round $round: the loser explains itself" \
+    || fail "round $round: the loser gave no explanation: $(cat "$LOSER_OUT")"
+  JOURNALS=$(find "$R/state" -maxdepth 1 -name 'sweep-*.journal' | wc -l | tr -d ' ')
+  assert_eq 2 "$JOURNALS" "round $round: both attempts keep a journal record"
+  assert_intact "$R/Desktop" 200 "round $round: every payload is still in the folder"
+done

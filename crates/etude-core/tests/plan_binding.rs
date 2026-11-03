@@ -634,3 +634,82 @@ fn move_time_classification_before_any_move_leaves_a_refused_record() {
     );
     assert!(!apply::has_undo_work(&journal, &TestSeal));
 }
+
+/// Plan a live apply, let `contender` change the folder after the plan check
+/// and before the journal exists, and return how the apply ended.
+#[cfg(unix)]
+fn beaten_after_validate(
+    contender: impl Fn(&BoundPlan, &std::path::Path),
+) -> (apply::ApplyFailure, usize) {
+    let fixture = Fixture::new();
+    let out = scan::scan(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let mut hook = |_: usize, root: &std::path::Path| contender(&bound, root);
+    let failure = apply::apply_bound_with_faults_for_tests(
+        &bound,
+        &Fixture::context(),
+        Some(&TagSeal),
+        apply::ApplyFaults {
+            after_validate: Some(&mut hook),
+            ..Default::default()
+        },
+    )
+    .expect_err("the beaten apply must not succeed");
+    let entries = std::fs::read_dir(&fixture.0).unwrap().count();
+    (failure, entries)
+}
+
+#[cfg(unix)]
+fn assert_recorded_conflict(failure: apply::ApplyFailure) {
+    assert!(
+        matches!(&failure.error, ApplyError::StalePlan(e) if e.to_string().contains("conflict")),
+        "{:?}",
+        failure.error
+    );
+    let id = failure.durable_journal_id.expect("the record was durable");
+    let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
+    assert_eq!(
+        journal.summary().state,
+        etude_core::journal::JournalState::Refused
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn source_taken_after_the_plan_check_is_a_recorded_conflict() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-src-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let (failure, entries) = beaten_after_validate(|bound, root| {
+        let source = &bound.groups[0].members[0];
+        std::fs::rename(source, root.join("taken.png")).unwrap();
+    });
+    assert_recorded_conflict(failure);
+    assert_eq!(entries, 4, "the loser moved nothing");
+}
+
+#[cfg(unix)]
+#[test]
+fn destination_taken_after_the_plan_check_is_a_recorded_conflict() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-dst-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let (failure, _) = beaten_after_validate(|bound, root| {
+        let destination = root.join(&bound.groups[0].name);
+        std::fs::create_dir(&destination).unwrap();
+        let name = bound.groups[0].members[0].file_name().unwrap();
+        std::fs::write(destination.join(name), b"the winner's copy").unwrap();
+    });
+    assert_recorded_conflict(failure);
+}
