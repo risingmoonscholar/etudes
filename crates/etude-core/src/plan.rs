@@ -1768,6 +1768,11 @@ impl BoundPlan {
         self.live
     }
 
+    /// Whether the planned folder's contents changed since planning.
+    pub fn contents_changed(&self) -> bool {
+        self.snapshot.contents_changed()
+    }
+
     fn validate_observations(&self) -> std::io::Result<()> {
         if self.live {
             self.snapshot.validate_live()

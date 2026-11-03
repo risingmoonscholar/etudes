@@ -371,6 +371,22 @@ impl TreeSnapshot {
 
     /// Immediate rename planning binds identities and layout, not an open writer's byte count.
     pub fn validate_live(&self) -> io::Result<()> {
+        if self.live_capture_differs(false)? {
+            return Err(io::Error::other(
+                "selected identities or layout changed since planning",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the folder's contents changed since planning. The root's own
+    /// times are ignored, because apply's case-folding probe changes them. A
+    /// folder that cannot be read counts as changed.
+    pub fn contents_changed(&self) -> bool {
+        self.live_capture_differs(true).unwrap_or(true)
+    }
+
+    fn live_capture_differs(&self, ignore_root_times: bool) -> io::Result<bool> {
         let mut current = Self::capture_for_config(
             &self.root,
             &ScanConfig {
@@ -381,6 +397,14 @@ impl TreeSnapshot {
         )?;
         let mut original = self.clone();
         for snapshot in [&mut current, &mut original] {
+            if ignore_root_times {
+                let root = &mut snapshot.root_identity;
+                root.size = 0;
+                root.mtime_sec = 0;
+                root.mtime_nsec = 0;
+                root.ctime_sec = 0;
+                root.ctime_nsec = 0;
+            }
             for entry in &mut snapshot.entries {
                 if entry.identity.kind == 1 {
                     entry.identity.size = 0;
@@ -391,12 +415,7 @@ impl TreeSnapshot {
                 }
             }
         }
-        if current != original {
-            return Err(io::Error::other(
-                "selected identities or layout changed since planning",
-            ));
-        }
-        Ok(())
+        Ok(current != original)
     }
 
     /// Refuse changed identities, entries, permissions or timestamps before effects.
