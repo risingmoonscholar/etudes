@@ -3956,6 +3956,7 @@ mod tag_report_tests {
             "sweep",
             None,
             ApplyFaults {
+                after_validate: None,
                 before_rename: Some(&mut tag_it),
                 after_rename: Some(&mut occupy),
             },
