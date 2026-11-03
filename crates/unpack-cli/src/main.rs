@@ -258,7 +258,11 @@ impl ArchiveAnchor {
                 Ok(reader)
             })();
             return match checked {
-                Ok(reader) => Ok((output, reader, (!reachable).then_some(path))),
+                Ok(reader) => Ok((
+                    output,
+                    own_descriptor_number(reader),
+                    (!reachable).then_some(path),
+                )),
                 Err(error) => {
                     let _ = std::fs::remove_file(&path);
                     Err(error)
@@ -311,6 +315,25 @@ impl Drop for ArchiveAnchor {
     }
 }
 
+/// Move the descriptor to a number that other runs are unlikely to hold.
+///
+/// Observed on macOS 27.0.1: `stat` on `/dev/fd/N` can fail with EBADF while
+/// another process uses the same N, and `unzip` calls `stat` first. A run that
+/// cannot move keeps the number it has, because that number still works
+/// almost every time. Every number here is below the default limit of 256.
+fn own_descriptor_number(file: std::fs::File) -> std::fs::File {
+    let wanted = 64 + (std::process::id() % 192) as i32;
+    // SAFETY: `fcntl` reads only its integer arguments, and a returned
+    // descriptor is new, so this function alone owns it.
+    unsafe {
+        let moved = fcntl(file.as_raw_fd(), F_DUPFD_CLOEXEC, wanted);
+        if moved == -1 {
+            return file;
+        }
+        std::os::fd::FromRawFd::from_raw_fd(moved)
+    }
+}
+
 fn descriptor_path_opens(file: &std::fs::File) -> bool {
     #[cfg(test)]
     if DESCRIPTOR_PATH_REFUSED.with(|refused| refused.get()) {
@@ -321,6 +344,8 @@ fn descriptor_path_opens(file: &std::fs::File) -> bool {
 
 // Source: fcntl(2), and F_SETFD in the SDK's sys/fcntl.h.
 const F_SETFD: i32 = 2;
+// Source: F_DUPFD_CLOEXEC in the SDK's sys/fcntl.h.
+const F_DUPFD_CLOEXEC: i32 = 67;
 unsafe extern "C" {
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
 }
