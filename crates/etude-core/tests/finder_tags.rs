@@ -278,6 +278,7 @@ fn an_item_tagged_between_the_check_and_the_rename_is_returned_and_counted() {
         "test",
         Some(&TestSeal),
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -329,6 +330,7 @@ fn an_item_that_cannot_be_returned_stays_counted_and_journaled() {
         "test",
         Some(&TestSeal),
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: Some(&mut occupy),
         },
@@ -389,6 +391,7 @@ fn a_failed_journal_write_during_the_return_leaves_the_item_home_and_reported_he
             prefix: b"returned",
         }),
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -432,6 +435,7 @@ fn a_failed_journal_write_after_a_stranded_item_is_reported() {
             prefix: b"stranded",
         }),
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: Some(&mut occupy),
         },
@@ -455,6 +459,7 @@ fn without_a_journal_the_return_still_happens() {
         "test",
         None,
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -476,6 +481,7 @@ fn a_tagged_item_in_a_plan_that_included_tagged_items_is_not_returned() {
         "test",
         Some(&TestSeal),
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -648,6 +654,7 @@ fn a_single_item_tagged_during_rename_leaves_no_empty_group() {
         "test",
         Some(&TestSeal),
         ApplyFaults {
+            after_validate: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },

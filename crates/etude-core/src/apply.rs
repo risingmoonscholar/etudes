@@ -193,6 +193,8 @@ pub type FaultHook<'a> = &'a mut dyn FnMut(usize, &Path);
 #[doc(hidden)]
 #[derive(Default)]
 pub struct ApplyFaults<'a> {
+    /// Runs after the plan check and before this attempt's journal exists.
+    pub after_validate: Option<FaultHook<'a>>,
     /// Runs after the move-time tag check and immediately before the rename.
     pub before_rename: Option<FaultHook<'a>>,
     /// Runs after the rename and before the destination's tag is re-read.
@@ -320,42 +322,110 @@ pub fn apply_bound_with_structured_progress_outcome(
     fail_at: FailAt,
     progress: impl FnMut(StructuredProgress),
 ) -> Result<ApplyReport, ApplyFailure> {
-    apply_plan_with_structured_progress(
+    apply_bound_with_faults(
+        bound,
+        context,
+        sealer,
+        fail_at,
+        progress,
+        &mut ApplyFaults::default(),
+    )
+}
+
+/// `apply_bound_with_structured_progress_outcome` with fault-injection points.
+#[doc(hidden)]
+pub fn apply_bound_with_faults_for_tests(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    mut faults: ApplyFaults<'_>,
+) -> Result<ApplyReport, ApplyFailure> {
+    apply_bound_with_faults(bound, context, sealer, None, |_| {}, &mut faults)
+}
+
+fn apply_bound_with_faults(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    fail_at: FailAt,
+    progress: impl FnMut(StructuredProgress),
+    faults: &mut ApplyFaults<'_>,
+) -> Result<ApplyReport, ApplyFailure> {
+    let result = apply_plan_with_structured_progress(
         &bound.plan,
         &context.tool,
         sealer,
         fail_at,
         progress,
-        &mut ApplyFaults::default(),
+        faults,
         |durable_journal_id| {
             if let Err(error) = bound.validate(context) {
                 if bound.is_live() {
-                    if let Some(sl) = sealer {
-                        let id = journal_id(&bound.plan);
-                        let journal = Journal {
-                            id: id.clone(),
-                            tool: context.tool.clone(),
-                            root: bound.root.clone(),
-                            entries: Vec::new(),
-                            created_directories: Vec::new(),
-                            validated_directories: Vec::new(),
-                            progress_tail_damaged: false,
-                        };
-                        journal.save_sealed(sl).map_err(ApplyError::Journal)?;
-                        *durable_journal_id = Some(id);
-                    }
-                    return Err(ApplyError::StalePlan(io::Error::other(format!(
-                        "conflict: {error}; no moves from this attempt, existing journals remain recoverable"
-                    ))));
+                    return Err(live_conflict(
+                        bound,
+                        context,
+                        sealer,
+                        error,
+                        durable_journal_id,
+                    ));
                 }
                 return Err(ApplyError::StalePlan(error));
             }
             Ok(())
         },
-    )
+    );
+    // A contender can change the folder after the check above and before this
+    // attempt's journal exists. Look again, so that the loser of that race ends
+    // the same way as one the check above caught. Unchanged contents keep the
+    // original error, because the folder did not cause it.
+    match result {
+        Err(mut failure)
+            if bound.is_live()
+                && failure.durable_journal_id.is_none()
+                && bound.contents_changed() =>
+        {
+            failure.error = live_conflict(
+                bound,
+                context,
+                sealer,
+                io::Error::other("planned tree changed; replan required"),
+                &mut failure.durable_journal_id,
+            );
+            Err(failure)
+        }
+        other => other,
+    }
 }
 
-/// Retain a sealed empty record when an immediate attempt loses its planning race.
+/// Record a live attempt that a contender beat before it moved anything.
+fn live_conflict(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    error: io::Error,
+    durable_journal_id: &mut Option<String>,
+) -> ApplyError {
+    if let Some(sl) = sealer {
+        let id = journal_id(&bound.plan);
+        let journal = Journal {
+            id: id.clone(),
+            tool: context.tool.clone(),
+            root: bound.root.clone(),
+            entries: Vec::new(),
+            created_directories: Vec::new(),
+            validated_directories: Vec::new(),
+            progress_tail_damaged: false,
+        };
+        if let Err(error) = journal.save_sealed(sl) {
+            return ApplyError::Journal(error);
+        }
+        *durable_journal_id = Some(id);
+    }
+    ApplyError::StalePlan(io::Error::other(format!(
+        "conflict: {error}; no moves from this attempt, existing journals remain recoverable"
+    )))
+}
+
 pub fn record_refused_plan(
     plan: &Plan,
     context: &BindingContext,
@@ -436,6 +506,9 @@ fn apply_plan_with_structured_progress(
     let mut durable_journal_id = None;
     let result = (|| {
         validate(&mut durable_journal_id)?;
+        if let Some(hook) = faults.after_validate.as_mut() {
+            hook(0, &plan.root);
+        }
         let mut eligibility = crate::scan::MemberEligibility::default();
         for group in &plan.groups {
             if let crate::plan::Signal::Tagged { entry, .. } = &group.signal {
