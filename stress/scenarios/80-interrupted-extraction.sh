@@ -20,7 +20,9 @@ wait_for_partial_staging() {
   for _ in $(seq 1 1000); do
     stage=$(find "$W" -type d -name '.out.unpack-*.partial' -print -quit)
     n=0
-    [ -n "$stage" ] && n=$(find "$stage" -type f | wc -l | tr -d ' ')
+    # Count the archive's payload, so an internal ownership lock cannot
+    # masquerade as the first extracted member.
+    [ -n "$stage" ] && n=$(find "$stage" -type f -name 'chunk_*.bin' | wc -l | tr -d ' ')
     if [ "$n" -gt 0 ] && [ "$n" -lt "$TOTAL" ] && kill -0 "$pid" 2>/dev/null; then
       printf '%s\t%s\n' "$stage" "$n"; return 0
     fi
@@ -32,7 +34,7 @@ wait_for_partial_staging() {
 wait_for_staging_completion() {
   local stage="$1" n
   for _ in $(seq 1 1000); do
-    n=$(find "$stage" -type f 2>/dev/null | wc -l | tr -d ' ')
+    n=$(find "$stage" -type f -name 'chunk_*.bin' 2>/dev/null | wc -l | tr -d ' ')
     [ "$n" -eq "$TOTAL" ] && return 0
     sleep 0.01
   done

@@ -39,15 +39,43 @@ for name in input.zip input.tar input.tar.gz; do
 
   STARTED=0
   for _ in $(seq 6000); do
-    if compgen -G "$OUT/.*.partial" >/dev/null; then STARTED=1; break; fi
+    # Staging and its ownership lock exist before spawn. A fixture member,
+    # rather than the directory alone, witnesses a running extractor.
+    if [ -n "$(find "$OUT" -type f -name '*.txt' -print -quit 2>/dev/null)" ]; then STARTED=1; break; fi
     kill -0 "$PID" 2>/dev/null || break
     sleep 0.01
   done
+  # Freeze the supervisor after real payload exists so it cannot spawn a
+  # writer between enumerating its children and killing it.
+  kill -STOP "$PID" 2>/dev/null
   KIDS=$(pgrep -P "$PID" || true)
   kill -KILL "$PID" 2>/dev/null
   CODE=0; wait "$PID" 2>/dev/null || CODE=$?
   # The system extractor survives the kill. Stop it so the folder can go.
   for kid in $KIDS; do kill -KILL "$kid" 2>/dev/null; done
+
+  # kill returns before descriptor release. Do not race rm against a writer
+  # still exiting; the new inherited lock is a direct shutdown witness.
+  if python3 - "$OUT" <<'PYTHON'
+import fcntl
+from pathlib import Path
+import sys
+import time
+locks = list(Path(sys.argv[1]).glob(".*.partial/.unpack-*.lock"))
+assert len(locks) == 1, "the killed staging must have exactly one ownership lock"
+with locks[0].open("rb") as lock:
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise AssertionError("the extractor retained its lock after SIGKILL")
+            time.sleep(0.01)
+PYTHON
+  then pass "$name: extractor released its lock before fixture teardown"
+  else fail "$name: extractor shutdown was not verified"; fi
 
   assert_eq 1 "$STARTED" "$name: the kill came during extraction"
   assert_eq 137 "$CODE" "$name: SIGKILL ended unpack"

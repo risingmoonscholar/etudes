@@ -19,6 +19,7 @@
 
 mod quarantine;
 mod safety;
+mod staging;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Seek};
@@ -1264,8 +1265,9 @@ fn unpack_checked(
     // SIGKILL cannot run cleanup and may leave the system extractor alive;
     // staging keeps that orphan's partial tree out of the requested path so a
     // retry is never refused because a half-extraction already exists.
-    let staging = match staging_destination(&dest) {
-        Ok(path) => path,
+    staging::recover(&dest);
+    let staged = match staging::Staging::reserve(&dest, &entries) {
+        Ok(staged) => staged,
         Err(e) => {
             let folder = folder_of(&dest);
             if let Some(advice) = etude_core::scan::permission_advice(&e) {
@@ -1305,6 +1307,7 @@ fn unpack_checked(
             return failure(ReasonCode::MissingInput, input_subject(&dest));
         }
     };
+    let staging = &staged.path;
     // The judged listing is the plan. Nothing was validated until this point,
     // so the count stays indeterminate until now.
     let planned = PlannedMembers::from_listing(&entries);
@@ -1315,19 +1318,25 @@ fn unpack_checked(
         phase,
     };
     progress.update(event(ProgressPhase::Planning, 0));
-    let extracted = extract(&pinned, fmt, &staging, budget, &planned, |completed| {
-        progress.update(event(ProgressPhase::Advancing, completed))
-    });
+    let extracted = extract(
+        &pinned,
+        fmt,
+        staging,
+        &staged.lock,
+        budget,
+        &planned,
+        |completed| progress.update(event(ProgressPhase::Advancing, completed)),
+    );
     progress.settle();
     match extracted {
         Err(ExtractError::Stopped) => {
-            let cleanup = cleanup_destination(&staging);
+            let cleanup = cleanup_destination(staging);
             etude_cli_support::envelope::status("refused");
             eprintln!("unpack: stopped after SIGTERM. {}", cleanup.message());
             return refusal(ReasonCode::ExtractionStopped, input_subject(archive));
         }
         Err(ExtractError::ToolFailed(output)) => {
-            let cleanup = cleanup_destination(&staging);
+            let cleanup = cleanup_destination(staging);
             if output.disk_full {
                 eprintln!(
                     "unpack: the disk ran out of room while extracting {}. {} \
@@ -1365,7 +1374,7 @@ fn unpack_checked(
             // Remove what landed before the soft limit was observed. A partial extraction
             // left behind is the mess this tool exists to avoid, and it is
             // worse here than usual: the user did not choose to start it.
-            let cleanup = cleanup_destination(&staging);
+            let cleanup = cleanup_destination(staging);
             let Breach::Total(n) = breach;
             // The limit was not the problem if the disk could not have held
             // that much anyway: a larger limit would not help.
@@ -1399,18 +1408,22 @@ fn unpack_checked(
     }
 
     // Audit before tidying, so discarded metadata cannot hide unsafe members.
-    if let Err(error) = audit_staging(&staging) {
-        return audit_refusal(&staging, &dest, archive, &error);
+    if let Err(error) = audit_staging(staging) {
+        return audit_refusal(staging, &dest, archive, &error);
     }
 
     // --- 5. tidy -----------------------------------------------------------
-    let removed = remove_junk(&staging);
+    let removed = remove_junk(staging);
     let flattened = match safety::wrapper_dir(&entries) {
-        Some(w) => flatten(&staging, &w),
+        Some(w) => flatten(staging, &w),
         None => false,
     };
     // Preserve the captured source state after flattening and junk removal, before publication.
-    let quarantined = match quarantine::preserve(&staging, pinned.quarantine.as_deref()) {
+    let quarantined = match quarantine::preserve(
+        staging,
+        pinned.quarantine.as_deref(),
+        staging::lock_path(staging).as_deref(),
+    ) {
         Ok(count) => count,
         Err(error) => {
             etude_cli_support::envelope::status("refused");
@@ -1419,7 +1432,7 @@ fn unpack_checked(
                 quarantine_failed_message(
                     &error,
                     &dest,
-                    &cleanup_destination(&staging).message(),
+                    &cleanup_destination(staging).message(),
                     &by_hand(fmt, archive, &dest),
                 )
             );
@@ -1432,12 +1445,24 @@ fn unpack_checked(
     };
     etude_cli_support::envelope::effect("quarantine_paths_verified", quarantined);
     // Audit the final tree as well: this is the tree the rename publishes.
-    let audited = match audit_staging(&staging) {
-        Ok(count) => count,
-        Err(error) => return audit_refusal(&staging, &dest, archive, &error),
+    let audited = match audit_staging(staging) {
+        Ok(count) => match count.checked_sub(1) {
+            // The internal lock is not published.
+            Some(count) => count,
+            None => return audit_refusal(staging, &dest, archive, "staging lock is missing"),
+        },
+        Err(error) => return audit_refusal(staging, &dest, archive, &error),
     };
-    if let Err(error) = publish_staging(&staging, &dest) {
-        let cleanup = cleanup_destination(&staging);
+    if let Err(error) = staged.remove_lock() {
+        return audit_refusal(
+            staging,
+            &dest,
+            archive,
+            &format!("could not remove staging lock: {error}"),
+        );
+    }
+    if let Err(error) = publish_staging(staging, &dest) {
+        let cleanup = cleanup_destination(staging);
         etude_cli_support::envelope::status("refused");
         if dest.symlink_metadata().is_ok() {
             eprintln!(
@@ -1989,6 +2014,9 @@ fn measure(
         };
         for entry in rd {
             let path = entry.map_err(|e| tree_error(dir, e))?.path();
+            if dir == root && staging::lock_path(root).as_deref() == Some(path.as_path()) {
+                continue; // Internal ownership bytes are not extracted payload.
+            }
             let md = match path.symlink_metadata() {
                 Ok(md) => md,
                 Err(error) if writer_running && error.kind() == std::io::ErrorKind::NotFound => {
@@ -2333,12 +2361,14 @@ fn extract(
     anchor: &ArchiveAnchor,
     fmt: Format,
     dest: &Path,
+    lock: &etude_cli_support::lock::ExclusiveLock,
     budget: u64,
     planned: &PlannedMembers,
     on_poll: impl FnMut(usize),
 ) -> Result<Result<(), Breach>, ExtractError> {
     let mut cmd = extractor_command(fmt, anchor.path(), dest);
     anchor.prepare(&mut cmd)?;
+    lock.inherit(&mut cmd);
     cmd.stderr(Stdio::piped());
     if fmt == Format::Gz {
         let out_path = dest.join(stem(anchor.name()));

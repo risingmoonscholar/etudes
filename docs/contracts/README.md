@@ -95,7 +95,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v13/sweep.json`, `v12/stash.json` and `v7/unpack.json` are the
+later declaration: `v14/sweep.json`, `v13/stash.json` and `v8/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -306,8 +306,8 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 
 ## Unpack quarantine declaration (introduced in version 3)
 
-Unpack's capability declaration under `details.schema_version` is version 7;
-its surrounding result envelope is version 4. `v7/unpack.json` pins the
+Unpack's capability declaration under `details.schema_version` is version 8;
+its surrounding result envelope is version 4. `v8/unpack.json` pins the
 current declaration and `v1/unpack.json` mirrors that current fixture. Earlier
 unpack pins stay unchanged. Sweep and stash use their own declaration
 versions, while the shared result envelope uses version 4.
@@ -399,3 +399,13 @@ Stash declaration version 8 adds `not_due_yet` to the refusal catalog for an
 explicit `pop --if-due` whose journal deadline is still ahead. It is retryable
 later with the same request and identifies the journal as its subject. Earlier
 versioned declarations remain unchanged.
+
+## Unpack staging recovery, declaration version 8
+
+`staging_recovery_metadata_and_lock_marker` covers enumeration of matching
+sibling staging candidates, ownership and identity checks, and the initialized
+lock marker. `verified_abandoned_staging_for_same_destination` is a write scope
+and an owned artifact that may be deleted. Recovery does not read archived
+payloads to decide whether a candidate is abandoned. `v8/unpack.json` pins this
+declaration and `v1/unpack.json` mirrors it; `v7/unpack.json` remains retained.
+Recovery diagnostics name candidate paths, including those left in place.

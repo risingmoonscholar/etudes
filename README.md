@@ -381,6 +381,15 @@ refuse publication. The requested destination appears with one rename after
 the final audit. Failed runs remove staging; if removal fails, the diagnostic
 names the remaining staging path or explicitly says its state is unverified.
 
+SIGKILL itself still leaves staging until a later extraction into the same destination under the same
+parent. That run removes a candidate only when its name is exactly
+`.{name}.unpack-{32 lowercase hex digits}.partial`, it is a real directory
+owned by this user, and its initialized lock file can be locked exclusively.
+The extractor inherits the lock, so a surviving writer also prevents cleanup.
+Live, linked, older lockless and otherwise unverified candidates remain; stderr
+names each candidate by path. A failed cleanup is reported and does not block
+the new extraction. See [staging recovery evidence](docs/release-evidence/unpack-staging-recovery.md).
+
 **Unpack's size budget is a monitored soft limit.** `--max-size N[G|M]` replaces
 the default of half the target volume's free space. System extractors write
 directly, so unpack measures logical file bytes every 100 ms and after exit,

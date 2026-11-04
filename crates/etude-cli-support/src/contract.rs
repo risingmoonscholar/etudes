@@ -265,6 +265,7 @@ pub fn declaration(
                         Tool::Unpack => &[
                             "private_archive_copy",
                             "failed_staging_tree",
+                            "verified_abandoned_staging_for_same_destination",
                             "junk_members_in_staging",
                         ],
                     }),
@@ -902,6 +903,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "archive_quarantine_metadata",
                     "private_archive_copy",
                     "destination_parent_metadata",
+                    "staging_recovery_metadata_and_lock_marker",
                     "volume_free_space",
                     "staging_tree_metadata",
                     "staging_quarantine_metadata",
@@ -910,6 +912,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &[
                     "private_archive_copy",
                     "private_staging_tree",
+                    "verified_abandoned_staging_for_same_destination",
                     "staging_quarantine_attributes",
                     "new_destination_tree",
                 ],

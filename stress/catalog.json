@@ -1,4 +1,5 @@
 [
+  {"id":"114-unpack-staging-recovery","tier":"fast","capability":"signals","contract":"A real SIGKILL leaves private staging until retry; locked writers and unprovable candidates stay, dead staging is removed, and competing retries preserve exact extraction bytes.","disposition":"keep"},
   {"id":"10-desktop-mid-project","tier":"fast","capability":"filesystem","contract":"A mixed Desktop moves ordinary groups, preserves private records, and undoes exactly.","disposition":"keep"},
   {"id":"15-agent-mappings","tier":"fast","capability":"filesystem","contract":"Agent mappings move only eligible files, require journaling, and undo exactly.","disposition":"split"},
   {"id":"15-document-scopes","tier":"fast","capability":"filesystem","contract":"Document reference surfaces stay protected while unrelated files remain movable and recoverable.","disposition":"split"},
