@@ -168,7 +168,17 @@ pub fn prepare(options: &Options) -> Result<Prepared, Error> {
                     }
                     _ => etude_cli_support::reason::Code::InternalError,
                 };
-                Error::Io("could not inspect a selected object", reason)
+                let denied = reason == etude_cli_support::reason::Code::PermissionDenied;
+                Error::Io(
+                    if denied {
+                        "permission denied while reading a selected object. Nothing was changed. \
+                         Check its folder's permissions, or System Settings > Privacy & Security \
+                         > Files & Folders for the app running this command."
+                    } else {
+                        "could not inspect a selected object"
+                    },
+                    reason,
+                )
             }
         })?;
         if metadata.file_type().is_symlink() {

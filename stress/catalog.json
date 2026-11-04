@@ -65,5 +65,6 @@
   {"id":"101-cli-flags-and-next-steps","tier":"fast","capability":"filesystem","contract":"A mistyped flag moves nothing, help answers from any position, a printed next command acts on the files shown, and a pop with two batches names both.","disposition":"keep"},
   {"id":"102-sweep-existing","tier":"fast","capability":"filesystem","contract":"Existing-folder routes preserve safety holds, require valid destinations and profiles, count in-place files, and bind exported plans to profile bytes.","disposition":"keep"},
   {"id":"103-stash-item-restore","tier":"fast","capability":"filesystem","contract":"Opaque item ids restore exactly one held item, reject unknown items, report the remaining held count, and restore all remaining bytes.","disposition":"keep"},
-  {"id":"104-sweep-progress-json","tier":"fast","capability":"filesystem","contract":"Sweep apply emits versioned stderr progress with exact durable counts and one JSON stdout envelope; unsupported commands refuse the flag.","disposition":"keep"}
+  {"id":"104-sweep-progress-json","tier":"fast","capability":"filesystem","contract":"Sweep apply emits versioned stderr progress with exact durable counts and one JSON stdout envelope; unsupported commands refuse the flag.","disposition":"keep"},
+  {"id":"105-permission-denied-messages","tier":"fast","capability":"permissions","contract":"A folder or archive the tool may not read gets an error that names it and the next step, and is never reported as clear or as having no work.","disposition":"keep"}
 ]

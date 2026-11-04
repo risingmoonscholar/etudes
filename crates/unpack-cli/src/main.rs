@@ -125,6 +125,19 @@ struct ArchiveAnchor {
     quarantine: Option<Vec<u8>>,
 }
 
+/// These errors reach here as text, so the errno is read back from what the
+/// standard library printed.
+fn permission_advice_for(message: &str) -> Option<&'static str> {
+    let code = if message.contains("(os error 1)") {
+        1
+    } else if message.contains("(os error 13)") {
+        13
+    } else {
+        return None;
+    };
+    etude_core::scan::permission_advice(&std::io::Error::from_raw_os_error(code))
+}
+
 #[derive(Debug)]
 enum ArchiveAnchorError {
     Io(String),
@@ -649,6 +662,9 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("unpack: could not secure the archive for checking ({e})");
+            if let Some(advice) = permission_advice_for(&e.to_string()) {
+                eprintln!("{advice}");
+            }
             return match e {
                 ArchiveAnchorError::Io(message) if message == "the archive path is a symlink" => {
                     failure(ReasonCode::UnsafeInput, input_subject(archive))
@@ -859,6 +875,10 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(path) => path,
         Err(e) => {
             eprintln!("unpack: cannot prepare the target ({e})");
+            if let Some(advice) = permission_advice_for(&e) {
+                eprintln!("{advice}");
+                return failure(ReasonCode::PermissionDenied, None);
+            }
             return failure(ReasonCode::InternalError, None);
         }
     };

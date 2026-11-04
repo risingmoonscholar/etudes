@@ -295,6 +295,7 @@ fn scan_reason(error: &scan::ScanError) -> etude_cli_support::reason::Code {
     match error {
         scan::ScanError::RefusedProjectRoot { .. } => Code::ProjectFolder,
         scan::ScanError::NotADirectory(_) => Code::MissingInput,
+        scan::ScanError::RootDenied { .. } => Code::PermissionDenied,
         scan::ScanError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             Code::PermissionDenied
         }
@@ -592,7 +593,7 @@ fn replay_stash(args: &[String], file: &str) -> ExitCode {
     let bound = match etude_core::plan::BoundPlan::load(Path::new(file), &digest) {
         Ok(plan) => plan,
         Err(error) => {
-            eprintln!("stash: {error}; replan required");
+            eprintln!("stash: {}", etude_core::plan::replan_message(&error));
             return refuse(etude_cli_support::reason::Code::PlanStale);
         }
     };
@@ -650,6 +651,15 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             };
         }
     };
+    if outcome.entries.is_empty() && outcome.skipped_unreadable > 0 {
+        // Nothing could be moved, and what could not be read is still there.
+        eprintln!(
+            "stash: {}. Nothing was moved. The folder is NOT clear.",
+            unreadable_note(outcome.skipped_unreadable)
+        );
+        etude_cli_support::envelope::status("incomplete");
+        return fail(etude_cli_support::reason::Code::PermissionDenied);
+    }
     if outcome.entries.is_empty() {
         println!("Nothing to stash. {} is already clear.", path.display());
         return ExitCode::from(1);
@@ -687,7 +697,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     let bound = match etude_core::plan::BoundPlan::from_plan(proposal, context.clone()) {
         Ok(plan) => plan,
         Err(error) => {
-            eprintln!("stash: {error}; replan required");
+            eprintln!("stash: {}", etude_core::plan::replan_message(&error));
             return refuse(etude_cli_support::reason::Code::PlanStale);
         }
     };
@@ -718,7 +728,7 @@ fn execute_stash(
     args: &[String],
 ) -> ExitCode {
     if let Err(error) = bound.validate(&context) {
-        eprintln!("stash: {error}; replan required");
+        eprintln!("stash: {}", etude_core::plan::replan_message(&error));
         return refuse(etude_cli_support::reason::Code::PlanStale);
     }
     let count = bound.moves();
@@ -752,7 +762,7 @@ fn execute_stash(
                 etude_cli_support::envelope::recovery_operation(&r.journal_id);
             }
             etude_cli_support::envelope::effect("items_moved", r.moved);
-            let clear = folder_is_clear(&r);
+            let clear = folder_is_clear(&r) && bound.skipped_unreadable == 0;
             if json {
                 use etude_core::json as j;
                 println!(
@@ -791,6 +801,12 @@ fn execute_stash(
                 println!("The selected folder is clear.\n");
             } else {
                 print_stash_holds(&r, true);
+                if bound.skipped_unreadable > 0 {
+                    println!(
+                        "{}. The selected folder is NOT clear.\n",
+                        unreadable_note(bound.skipped_unreadable)
+                    );
+                }
             }
             if sl.is_some() && r.moved > 0 {
                 println!(
@@ -841,6 +857,12 @@ fn execute_stash(
                 "stash: operation could not finish ({})",
                 apply_error_reason(&e)
             );
+            if let etude_core::apply::ApplyError::Io(source) = &e {
+                eprintln!("       {source}");
+                if let Some(advice) = scan::permission_advice(source) {
+                    eprintln!("       {advice}");
+                }
+            }
             if sl.is_some() {
                 eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
             } else {
@@ -1033,6 +1055,14 @@ fn print_stash_holds(r: &etude_core::apply::ApplyReport, folder: bool) {
         } else {
             println!("Not every selected object was stashed.");
         }
+    }
+}
+
+fn unreadable_note(count: usize) -> String {
+    if count == 1 {
+        "1 item could not be read and stays in place".into()
+    } else {
+        format!("{count} items could not be read and stay in place")
     }
 }
 

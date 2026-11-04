@@ -1376,6 +1376,22 @@ fn civil_date(secs: i64) -> (i64, String) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn replan_message_gives_the_next_step_once() {
+        assert_eq!(
+            replan_message(&"digest changed; replan required"),
+            "digest changed; replan required"
+        );
+        assert_eq!(
+            replan_message(&"not saved; run the scan again"),
+            "not saved; run the scan again"
+        );
+        assert_eq!(
+            replan_message(&"profile moved"),
+            "profile moved; replan required"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1745,6 +1761,17 @@ impl BindingContext {
     }
 }
 
+/// A plan error with its next step, said once. Most binding errors already end
+/// in the instruction, and callers used to add it again.
+pub fn replan_message(error: &impl std::fmt::Display) -> String {
+    let text = error.to_string();
+    if text.ends_with("replan required") || text.ends_with("run the scan again") {
+        text
+    } else {
+        format!("{text}; replan required")
+    }
+}
+
 #[derive(Debug)]
 pub struct BoundPlan {
     pub plan: Plan,
@@ -1783,7 +1810,9 @@ impl BoundPlan {
 
     fn bind(plan: Plan, context: BindingContext, live: bool) -> std::io::Result<Self> {
         let snapshot = plan.observations.clone().ok_or_else(|| {
-            std::io::Error::other("plan has incomplete observations; replan required")
+            std::io::Error::other(
+                "the folder could not be read completely, so no plan was saved; run the scan again",
+            )
         })?;
         let allowed_sources = plan
             .groups

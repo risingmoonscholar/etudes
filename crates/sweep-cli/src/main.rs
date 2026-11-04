@@ -251,6 +251,9 @@ fn cmd_status(args: &[String]) -> ExitCode {
             if let Some(id) = id_arg {
                 return status_unknown(&id);
             }
+            if !json {
+                println!("No apply of that folder is on record.");
+            }
             etude_cli_support::envelope::reason(Reason::nothing_to_do());
             etude_cli_support::envelope::status("nothing_to_do");
             etude_cli_support::envelope::detail(etude_core::json::arr([]));
@@ -309,6 +312,9 @@ fn cmd_status(args: &[String]) -> ExitCode {
     if summaries.is_empty() {
         if let Some(id) = id_arg {
             return status_unknown(&id);
+        }
+        if !json {
+            println!("No apply of that folder is on record.");
         }
         etude_cli_support::envelope::reason(Reason::nothing_to_do());
         etude_cli_support::envelope::status("nothing_to_do");
@@ -1146,7 +1152,7 @@ fn bound_or_refuse(
     context: plan::BindingContext,
 ) -> Result<plan::BoundPlan, ExitCode> {
     plan::BoundPlan::from_plan(p, context).map_err(|error| {
-        eprintln!("sweep: {error}; replan required");
+        eprintln!("sweep: {}", etude_core::plan::replan_message(&error));
         etude_cli_support::envelope::status("refused");
         refusal(
             etude_cli_support::reason::Code::PlanStale,
@@ -1185,7 +1191,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
     let mut bound = match plan::BoundPlan::load(Path::new(file), &digest) {
         Ok(plan) => plan,
         Err(error) => {
-            eprintln!("sweep: {error}; replan required");
+            eprintln!("sweep: {}", etude_core::plan::replan_message(&error));
             if error.kind() == std::io::ErrorKind::NotFound {
                 return failure(
                     etude_cli_support::reason::Code::MissingInput,
@@ -1244,7 +1250,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         group.accepted = only.as_ref().is_none_or(|name| name == &group.name);
     }
     if let Err(error) = bound.finalize_choices() {
-        eprintln!("sweep: {error}; replan required");
+        eprintln!("sweep: {}", etude_core::plan::replan_message(&error));
         return refusal(
             etude_cli_support::reason::Code::PlanStale,
             Some(etude_cli_support::reason::Subject::wait("plan", None)),
@@ -2108,7 +2114,12 @@ fn refuse_scan(e: &etude_core::scan::ScanError) {
 fn refuse_apply(e: &etude_core::apply::ApplyError) {
     use etude_core::apply::ApplyError as E;
     match e {
-        E::Io(_) => refuse("could not move the files", e),
+        E::Io(source) => {
+            refuse("could not move the files", e);
+            if let Some(advice) = etude_core::scan::permission_advice(source) {
+                eprintln!("       {advice}");
+            }
+        }
         // Journal is NOT wrapped, and the reason is worth keeping: it is
         // raised from record_done/record_undone/save_sealed, which run
         // AFTER a move or restore has already succeeded. "could not move
@@ -2143,6 +2154,7 @@ fn scan_exit_code(e: &etude_core::scan::ScanError) -> ExitCode {
             refusal(Code::UnsafeInput, Some(Subject::wait("input", None)))
         }
         E::NotADirectory(_) => failure(Code::MissingInput, Some(Subject::wait("input", None))),
+        E::RootDenied { .. } => failure(Code::PermissionDenied, Some(Subject::wait("input", None))),
         E::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             failure(Code::PermissionDenied, Some(Subject::wait("input", None)))
         }
@@ -2579,7 +2591,7 @@ fn cmd_propose(args: &[String]) -> ExitCode {
     let bound = match plan::BoundPlan::load(Path::new(&file), &digest) {
         Ok(plan) => plan,
         Err(error) => {
-            eprintln!("sweep: {error}; replan required");
+            eprintln!("sweep: {}", etude_core::plan::replan_message(&error));
             return match error.kind() {
                 std::io::ErrorKind::NotFound => {
                     failure(Code::MissingInput, Some(Subject::wait("input", None)))

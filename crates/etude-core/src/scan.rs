@@ -929,7 +929,28 @@ pub enum ScanError {
         found: usize,
         cap: usize,
     },
+    /// The folder exists and the system refused to list it. Without this the
+    /// walk counted one unreadable item and found nothing, so stash called the
+    /// folder clear and review said it needed no organising.
+    RootDenied {
+        root: PathBuf,
+        source: io::Error,
+    },
     Io(io::Error),
+}
+
+/// What a person can do about a denied read or write, by the errno that denied
+/// it. macOS privacy protection gives EPERM, and file modes give EACCES. The
+/// settings path is from Apple's "Control access to files and folders on Mac".
+pub fn permission_advice(error: &io::Error) -> Option<&'static str> {
+    match error.raw_os_error() {
+        Some(1) => Some(
+            "macOS may be blocking the app running this command. Check System Settings > \
+             Privacy & Security > Files & Folders for that app, then run this again.",
+        ),
+        Some(13) => Some("Check the owner and permissions with `ls -ld`, then run this again."),
+        _ => None,
+    }
 }
 
 impl ScanError {
@@ -952,9 +973,22 @@ impl ScanError {
 
 impl std::fmt::Display for ScanError {
     /// Paths are redacted here. Full paths appear only under `--explain`,
-    /// which formats them deliberately. See THREAT-MODEL § T3.
+    /// which formats them deliberately. See THREAT-MODEL § T3. `RootDenied` is
+    /// the exception: it names the folder the caller typed, because the fix
+    /// depends on which folder was denied.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ScanError::RootDenied { root, source } => {
+                write!(
+                    f,
+                    "cannot read {}: permission denied. Nothing was changed.",
+                    root.display()
+                )?;
+                if let Some(advice) = permission_advice(source) {
+                    write!(f, "\n{advice}")?;
+                }
+                Ok(())
+            }
             ScanError::NotADirectory(p) => {
                 write!(f, "not a directory: {}", crate::redact::path(p))
             }
@@ -1443,6 +1477,12 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
         return Err(ScanError::RefusedSyncRoot(root.clone()));
     }
 
+    if let Err(source) = observe_read("directory_enumeration", fs::read_dir(&root)) {
+        if source.kind() == io::ErrorKind::PermissionDenied {
+            return Err(ScanError::RootDenied { root, source });
+        }
+    }
+
     let snapshot = match TreeSnapshot::capture_for_config(&root, cfg) {
         Ok(snapshot) => Some(snapshot),
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => None,
@@ -1815,6 +1855,27 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn permission_advice_depends_on_which_errno_denied_it() {
+        let privacy = permission_advice(&io::Error::from_raw_os_error(1)).unwrap();
+        assert!(privacy.contains("Files & Folders"));
+        let modes = permission_advice(&io::Error::from_raw_os_error(13)).unwrap();
+        assert!(modes.contains("ls -ld"));
+        assert!(permission_advice(&io::Error::from_raw_os_error(2)).is_none());
+    }
+
+    #[test]
+    fn a_denied_root_names_the_folder_it_was_given() {
+        let error = ScanError::RootDenied {
+            root: PathBuf::from("/fixture/Desktop"),
+            source: io::Error::from_raw_os_error(1),
+        };
+        let message = error.to_string();
+        assert!(message.contains("/fixture/Desktop"));
+        assert!(message.contains("Nothing was changed"));
+        assert!(!error.is_refusal());
+    }
+
     use super::*;
 
     #[test]
