@@ -36,8 +36,8 @@
       "result": "PASS",
       "log_sha256": "b468da89b204cdeb5d86192de8713ed91b49783830cf9b625cab9e43c53d8d28",
       "stdout": [
-        "    Checking etude-core v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/etude-core)",
-        "    Checking fixtures v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/fixtures)",
+        "    Checking etude-core v0.5.4 (<checkout>/crates/etude-core)",
+        "    Checking fixtures v0.5.4 (<checkout>/crates/fixtures)",
         "   Compiling libc v0.2.189",
         "   Compiling version_check v0.9.5",
         "    Checking cfg-if v1.0.4",
@@ -46,9 +46,9 @@
         "    Checking zeroize v1.9.0"
       ],
       "tail": [
-        "    Checking sweep-cli v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/sweep-cli)",
-        "    Checking stash-cli v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/stash-cli)",
-        "    Checking journal-dump v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/journal-dump)",
+        "    Checking sweep-cli v0.5.4 (<checkout>/crates/sweep-cli)",
+        "    Checking stash-cli v0.5.4 (<checkout>/crates/stash-cli)",
+        "    Checking journal-dump v0.5.4 (<checkout>/crates/journal-dump)",
         "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s"
       ]
     },
@@ -61,14 +61,14 @@
       "result": "PASS",
       "log_sha256": "d528bb7cb34914a009f3eb8566774603399d0941c70cd11b6402253ba0f0c095",
       "stdout": [
-        "   Compiling etude-core v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/etude-core)",
-        "   Compiling fixtures v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/fixtures)",
+        "   Compiling etude-core v0.5.4 (<checkout>/crates/etude-core)",
+        "   Compiling fixtures v0.5.4 (<checkout>/crates/fixtures)",
         "   Compiling cfg-if v1.0.4",
         "   Compiling typenum v1.20.1",
         "   Compiling subtle v2.6.1",
         "   Compiling zeroize v1.9.0",
         "   Compiling opaque-debug v0.3.1",
-        "   Compiling etude-read v0.5.4 (/Users/festus/Documents/dev-projects/etudes-wt/rel-054-c586dfe/crates/etude-read)"
+        "   Compiling etude-read v0.5.4 (<checkout>/crates/etude-read)"
       ],
       "tail": [
         "running 0 tests",
