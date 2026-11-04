@@ -86,3 +86,28 @@ for args in "$W/locked.zip" "$W/a.zip --into $W/readonly/out"; do
     *) fail "unpack said: ${OUT%%$'\n'*}" ;;
   esac
 done
+
+# --- unpack names the archive and destination it was given ---
+OUT=$("$UNPACK" "$W/missing-archive.zip" 2>&1 </dev/null)
+case "$OUT" in
+  *"no such file"*"missing-archive.zip"*) pass "unpack names a missing archive" ;;
+  *) fail "unpack said: ${OUT%%$'\n'*}" ;;
+esac
+OUT=$("$UNPACK" "$W/locked.zip" 2>&1 </dev/null)
+case "$OUT" in
+  *"not a file"*) fail "unpack called an existing archive not a file: ${OUT%%$'\n'*}" ;;
+  *) pass "unpack does not call a denied archive not a file" ;;
+esac
+chmod 644 "$W/locked.zip"; chmod 755 "$W/readonly"
+mkdir -p "$W/taken"
+OUT=$("$UNPACK" "$W/a.zip" --into "$W/taken" 2>&1 </dev/null)
+case "$OUT" in
+  *"taken already exists"*) pass "unpack names the destination that exists" ;;
+  *) fail "unpack said: ${OUT%%$'\n'*}" ;;
+esac
+HOSTILE="$W/esc"$'\033'"[31m.zip"
+OUT=$("$UNPACK" "$HOSTILE" 2>&1 </dev/null)
+case "$OUT" in
+  *$'\033'*) fail "unpack printed an escape code from a filename" ;;
+  *) pass "unpack replaces control characters in a name it prints" ;;
+esac

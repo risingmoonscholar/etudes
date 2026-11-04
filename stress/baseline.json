@@ -66,5 +66,5 @@
   "96-unpack-large-tar-renames": 11,
   "97-unpack-killed-leaves-no-copy": 16,
   "98-unpack-parallel-zip": 1,
-  "105-permission-denied-messages": 27
+  "105-permission-denied-messages": 31
 }

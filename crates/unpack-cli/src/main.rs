@@ -125,6 +125,17 @@ struct ArchiveAnchor {
     quarantine: Option<Vec<u8>>,
 }
 
+/// A path the caller named, for an error message. It is their own input, so the
+/// name stays; names from inside an archive stay redacted. Control characters are
+/// replaced so a hostile filename cannot send escape codes to the terminal.
+fn shown(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 /// These errors reach here as text, so the errno is read back from what the
 /// standard library printed.
 fn permission_advice_for(message: &str) -> Option<&'static str> {
@@ -584,7 +595,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     match etude_core::scan::observe_read("archive_metadata", std::fs::metadata(archive)) {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => {
-            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            eprintln!("unpack: not a file: {}", shown(archive));
             return failure(ReasonCode::UnsafeInput, input_subject(archive));
         }
         // "Not a directory" is a path that runs through a regular file: it
@@ -595,15 +606,18 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            eprintln!("unpack: no such file: {}", shown(archive));
             return failure(ReasonCode::MissingInput, input_subject(archive));
         }
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+            eprintln!("unpack: cannot read {}: permission denied.", shown(archive));
+            if let Some(advice) = etude_core::scan::permission_advice(&error) {
+                eprintln!("{advice}");
+            }
             return failure(ReasonCode::PermissionDenied, input_subject(archive));
         }
-        Err(_) => {
-            eprintln!("unpack: not a file: {}", etude_core::redact::path(archive));
+        Err(error) => {
+            eprintln!("unpack: cannot read {}: {error}", shown(archive));
             return failure(ReasonCode::InternalError, None);
         }
     }
@@ -832,7 +846,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     if dest.exists() {
         eprintln!(
             "unpack: {} already exists. Pass --into DIR to choose another.",
-            etude_core::redact::path(&dest)
+            shown(&dest)
         );
         return refusal(ReasonCode::DestinationExists, destination_subject(&dest));
     }
@@ -1624,7 +1638,7 @@ fn publish_staging_with(
         Err(error) => {
             return Err(format!(
                 "{error}; destination {} was not replaced",
-                etude_core::redact::path(dest)
+                shown(dest)
             ));
         }
     }
@@ -1633,7 +1647,7 @@ fn publish_staging_with(
     std::fs::create_dir(dest).map_err(|error| {
         format!(
             "could not claim destination ({error}); destination {} was not replaced",
-            etude_core::redact::path(dest)
+            shown(dest)
         )
     })?;
     after_claim();
@@ -1641,7 +1655,7 @@ fn publish_staging_with(
     // folder. Never clean this folder up: its contents belong to that writer.
     std::fs::rename(staging, dest).map_err(|error| format!(
         "{error}; the claimed destination remains at {} and any files added there were left intact",
-        etude_core::redact::path(dest)
+        shown(dest)
     ))
 }
 
@@ -2351,7 +2365,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("claimed destination remains"));
-        assert!(error.contains(&etude_core::redact::path(&dest)));
+        assert!(error.contains(&shown(&dest)));
         assert_eq!(
             std::fs::read(dest.join("their-file")).unwrap(),
             b"untouched"
