@@ -66,9 +66,13 @@ SHALLOW_FIRST=""
 for off in 0 1 4 8 50; do
   [ "$off" -ge "$FULL_SIZE" ] && continue
   head -c "$off" "$BACKUP" > "$JF" 2>/dev/null
+  snapshot_tree "$D" "$(dirname "$D")/shallow-before.json"
   out=$("$SWEEP" undo 2>&1)
   code=$?
-  moved_any=$(find "$D" -mindepth 2 -type f 2>/dev/null | wc -l | tr -d ' ')
+  snapshot_tree "$D" "$(dirname "$D")/shallow-after.json"
+  assert_snapshot_eq "$(dirname "$D")/shallow-before.json" "$(dirname "$D")/shallow-after.json" \
+    "shallow cut at $off bytes leaves the exact tree untouched"
+  assert_intact "$D" "$BEFORE_N" "shallow cut at $off bytes preserves every file"
   # A shallow cut must be REFUSED outright: nonzero exit, and it must not
   # have silently "succeeded" its way into moving anything.
   if [ "$code" = "0" ]; then
@@ -117,10 +121,19 @@ print(struct.unpack('<I', raw[0:4])[0])" "$BACKUP") ))
   fi
   head -c "$cutoff" "$BACKUP" > "$JF"
 
+  snapshot_tree "$D" "$(dirname "$D")/deep-before.json"
   out=$("$SWEEP" undo 2>&1)
   code=$?
   after_set=$(find "$D" -maxdepth 1 -type f -exec basename {} \; | sort)
   stranded=$(find "$D" -mindepth 2 -type f 2>/dev/null | wc -l | tr -d ' ')
+  assert_intact "$D" "$BEFORE_N" "deep cut at $pct preserves every file"
+  if [ "$code" != "0" ] && [ "$code" != "1" ]; then
+    snapshot_tree "$D" "$(dirname "$D")/deep-after.json"
+    assert_snapshot_eq "$(dirname "$D")/deep-before.json" "$(dirname "$D")/deep-after.json" \
+      "deep cut at $pct refuses without changing the tree"
+  else
+    assert_eq "$BEFORE_SET" "$after_set" "deep cut at $pct restores every original top-level name"
+  fi
 
   # Two acceptable outcomes for a damaged journal: (a) refuse outright
   # (nonzero exit, nothing touched), or (b) fully succeed with every file
@@ -135,10 +148,11 @@ print(struct.unpack('<I', raw[0:4])[0])" "$BACKUP") ))
   # scenario passed the whole time.
   #
   # Exit 3 with files stranded is fine: that is a refusal saying so.
-  if { [ "$code" = "0" ] || [ "$code" = "1" ]; } && [ "$stranded" != "0" ]; then
+  if { [ "$code" = "0" ] || [ "$code" = "1" ]; } && \
+      { [ "$stranded" != "0" ] || [ "$after_set" != "$BEFORE_SET" ]; }; then
     DEEP_BAD=$((DEEP_BAD + 1))
     if [ -z "$DEEP_FIRST" ]; then
-      DEEP_FIRST="offset=${pct}% ($cutoff/$full bytes): exit 0 (\"success\") but $stranded file(s) left stranded at their destination, unrestored and unmentioned.
+      DEEP_FIRST="offset=${pct}% ($cutoff/$full bytes): exit $code but the original top-level names were not fully restored; $stranded file(s) remain at their destination.
   sweep undo said: $out
   origin has $(echo "$after_set" | grep -c .)/$BEFORE_N files; stranded: $(find "$D" -mindepth 2 -type f -exec basename {} \; 2>/dev/null | tr '\n' ',')"
     fi
@@ -148,7 +162,7 @@ done
 if [ "$DEEP_BAD" -eq 0 ]; then
   pass "journal truncated past its base frame (trailing progress cut, as a real crash would leave it) is either refused or fully honoured. Never a silent partial success"
 else
-  fail "journal truncated past its base frame reports no problem in $DEEP_BAD/6 cases: sweep undo exits 0 or 1, so a caller reads success or nothing-to-do, while files sit stranded at their destination unmentioned and never retried. This is the exact 'half-load is worse than fail-to-load' failure the brief warns about. First reproduction:
+  fail "journal truncated past its base frame exits 0 or 1 without restoring every original top-level name in $DEEP_BAD/6 cases. First reproduction:
 $DEEP_FIRST"
 fi
 

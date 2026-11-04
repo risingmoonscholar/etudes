@@ -7,6 +7,28 @@ pub mod reason;
 
 use std::io::{self, IsTerminal, Write};
 
+/// Whether help was asked for anywhere before a `--`. `sweep apply --help` is a
+/// question, so it is answered instead of being refused as an unknown option.
+pub fn wants_help(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--help" || arg == "-h")
+}
+
+/// `text` in a form a shell reads back as one word, for commands the tools print
+/// for someone to run next. None when it cannot be pasted safely: a control
+/// character must not reach the terminal through a suggested command.
+pub fn shell_word(text: &str) -> Option<String> {
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return None;
+    }
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_./~=:,@%+-".contains(c);
+    if text.chars().all(plain) && !text.starts_with('-') && !text.starts_with('~') {
+        return Some(text.to_owned());
+    }
+    Some(format!("'{}'", text.replace('\'', "'\\''")))
+}
+
 const MIN_ITEMS_FOR_PROGRESS: usize = 100;
 const REPORTS_PER_OPERATION: usize = 10;
 

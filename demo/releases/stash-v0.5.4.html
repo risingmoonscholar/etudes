@@ -27,6 +27,7 @@
           <li><code>stash inspect --id ID</code> lists opaque item ids; <code>stash pop --id ID --item ITEM</code> restores one item and records progress for later restoration.</li>
           <li>Folder pop requires one live matching batch and authenticates all stash journals first. An unreadable older completed or live journal, even from another folder, blocks a newer folder restore with exit 3 and an unreadable-journal/cannot-restore diagnostic. Files and journal bytes remain unchanged. Exact <code>--id</code> restoration uses only the chosen journal and its original key.</li>
           <li>Stash clears Finder-tagged items too. It reports the folder as clear only when it is: a tagged item that would cross volumes is left in place, the result says the folder is not clear, and the run ends incomplete (exit 3).</li>
+          <li>An unknown flag or a second folder after the folder is refused with exit 2, and nothing moves. A folder pop that matches several batches exits 2 and lists their ids.</li>
           <li>Keep different journal keys in separate <code>ETUDE_STATE_DIR</code> stores. Deadlines remain informational until you explicitly request pop.</li>
         </ul>
         <p><strong>JSON migration:</strong> this release uses result envelope

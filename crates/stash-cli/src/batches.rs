@@ -135,6 +135,16 @@ pub fn inventory(sealer: &dyn Sealer) -> Result<Vec<Journal>, JournalError> {
     }
     Ok(output)
 }
+/// What `select` reports when a folder pop matches more than one live batch.
+pub const AMBIGUOUS: &str = "multiple live batches match; use an id or --latest";
+/// The ids of the live batches stashed from `root`, newest first.
+pub fn live_ids_for(root: &Path, sealer: &dyn Sealer) -> Result<Vec<String>, JournalError> {
+    let root = root.canonicalize().map_err(JournalError::Io)?;
+    let mut matching = inventory(sealer)?;
+    matching.retain(|journal| matches_root(journal, &root));
+    matching.sort_by_key(|journal| std::cmp::Reverse(creation(&journal.id)));
+    Ok(matching.into_iter().map(|journal| journal.id).collect())
+}
 pub fn matches_root(journal: &Journal, root: &Path) -> bool {
     journal.root.canonicalize().is_ok_and(|path| path == root)
 }
@@ -177,9 +187,7 @@ pub fn select(selector: Selector, sealer: &dyn Sealer) -> Result<Option<Journal>
     }
     if !latest {
         if values.len() > 1 {
-            return Err(JournalError::Malformed(
-                "multiple live batches match; use an id or --latest",
-            ));
+            return Err(JournalError::Malformed(AMBIGUOUS));
         }
         return Ok(values.pop());
     }
