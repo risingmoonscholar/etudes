@@ -218,6 +218,9 @@ jobs:
       - name: Stress CI scope still distinguishes code from documentation
         run: bash scripts/stress-ci-scope.sh --self-test
 
+      - name: The stress baseline rejects assertion and scenario loss
+        run: python3 -m unittest discover -s scripts -p 'test_check_stress_baseline.py' -v
+
       - uses: dtolnay/rust-toolchain@stable
         if: steps.scope.outputs.run == 'yes'
       - uses: Swatinem/rust-cache@v2
@@ -228,6 +231,7 @@ jobs:
           # Somewhere the upload step can reach. The default is the runner's
           # temp dir, which is destroyed with the runner.
           ETUDES_EVIDENCE_DIR: ${{ github.workspace }}/stress-evidence
+          STRESS_BASE_REF: ${{ github.event.pull_request.base.sha || 'HEAD^' }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             STRESS_TIER=fast bash scripts/stress-ratchet.sh
