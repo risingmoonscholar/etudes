@@ -33,6 +33,7 @@
           <li><code>--scheme tags --map EXT=TAG</code> adds Finder tags and moves nothing (macOS only). Every tag name comes from the caller. Tags are written only when you apply an exported plan, a tag is only added, and <code>sweep undo</code> restores each file's previous tag attribute while its tags still match what apply wrote.</li>
           <li><code>sweep propose</code> places individual files: it checks a proposal file against an exported plan and writes a new bound plan. It moves nothing and reads no file contents.</li>
           <li>Opt in to versioned progress records on stderr with <code>--progress-json</code>; <code>--json</code> stdout remains one result envelope. No speed improvement is claimed.</li>
+          <li>When two applies overlap on one folder, the loser records a refused attempt and reports a conflict, even if it fails before its journal exists.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
           <code>schema_version: 4</code>. This is a breaking change for scripts and agents. Consumers must check that version and
