@@ -29,6 +29,9 @@
           <li>Unpack refuses invalid arguments, such as a mistyped flag, a missing value or a bad <code>--max-size</code>, with exit 2, before it reads the archive or creates anything.</li>
           <li>On SIGTERM, unpack stops its extractor, removes its staging folder and exits 2.</li>
           <li>Unpack refuses to replace a destination folder that appears during extraction, even when it is empty.</li>
+          <li>A killed extraction no longer leaves a copy of the archive in the temporary folder. A kill in the roughly 80 microseconds around creation can leave an empty file. A full copy can remain under App Sandbox, and the staging folder beside the destination stays after SIGKILL.</li>
+          <li>A large tar no longer fails while the size check races the renames macOS tar makes.</li>
+          <li>Several extractions at the same time no longer refuse each other's safe zip files. Two runs can still get the same descriptor number, so this failure is rare, not impossible; it ends in a refusal with an error.</li>
           <li>The extraction budget remains a monitored soft limit, not a hard write-time cap.</li>
         </ul>
         <p><strong>JSON migration:</strong> this candidate uses result envelope
