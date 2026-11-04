@@ -322,7 +322,7 @@ if [ -f "$UNP/fifo.tar" ]; then
   CODE=0; "$UNPACK" "$UNP/fifo.tar" --into "$UNP/out-fifo" >/dev/null 2>&1 || CODE=$?
   assert_eq 2 "$CODE" "an archive carrying a FIFO is refused"
 else
-  unproven "could not build a FIFO archive on this host"
+  unproven "archive carrying a FIFO is refused" "could not build a FIFO archive on this host"
 fi
 
 # and the ordinary case still works, or the guard has eaten the tool
