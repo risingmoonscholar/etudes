@@ -60,7 +60,16 @@ for layout in siblings same-child external-link unreadable-folder unreadable-mar
   # Fresh movable files force a real journalled stash and pop, even after sweep.
   for n in 1 2 3; do printf 'invoice' > "$P/fresh_$n.pdf"; done
   CODE=0; STASHED=$("$STASH" "$P" --json 2>&1) || CODE=$?
-  assert_eq 0 "$CODE" "$layout: real stash succeeds"
+  # An item stash could not read stays in the folder, so the folder is not clear.
+  case "$layout" in
+    unreadable-*)
+      assert_eq 3 "$CODE" "$layout: stash moves what it can and reports incomplete"
+      grep -qE '"clear"[[:space:]]*:[[:space:]]*false' <<<"$STASHED" \
+        && pass "$layout: stash says the folder is not clear" \
+        || fail "$layout: stash called the folder clear: $STASHED"
+      ;;
+    *) assert_eq 0 "$CODE" "$layout: real stash succeeds" ;;
+  esac
   chmod u+rx "$P/scenes" 2>/dev/null || true
   [ -f "$DOCS/a.blend" ] && [ -f "$DOCS/b.blend" ] && [ -f "$P/textures/tex_1.png" ] \
     && pass "$layout: stash retained documents and textures" \

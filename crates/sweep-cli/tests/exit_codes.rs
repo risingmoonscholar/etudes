@@ -812,16 +812,47 @@ fn a_scan_that_could_not_read_everything_does_not_say_done() {
     std::fs::create_dir_all(root.join("state")).unwrap();
     std::fs::create_dir_all(&tree).unwrap();
     let _root = TestDir(root.clone());
-    std::fs::write(tree.join("note.txt"), b"synthetic payload").unwrap();
-    std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let locked = tree.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("note.txt"), b"synthetic payload").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
     let (code, stdout) = sweep_json(&root.join("state"), &[tree.as_os_str()]);
-    std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     assert_eq!(code, Some(1), "exit code is unchanged: {stdout}");
     assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
     for success in SUCCESS_REASONS {
         assert!(!stdout.contains(success), "{stdout}");
     }
+    assert!(
+        stdout.contains(
+            r#""reason":{"code":"permission_denied","retry":"after_change","subject":{"kind":"input"}}"#
+        ),
+        "{stdout}"
+    );
+}
+
+/// A folder that cannot be listed at all is an error. There is no plan to report.
+#[test]
+#[cfg(unix)]
+fn a_scan_denied_the_whole_folder_is_an_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let uid = Command::new("id").arg("-u").output().unwrap();
+    if String::from_utf8_lossy(&uid.stdout).trim() == "0" {
+        return; // mode bits do not deny the superuser
+    }
+    let root = unique_temp("scan-denied");
+    let tree = root.join("tree");
+    std::fs::create_dir_all(root.join("state")).unwrap();
+    std::fs::create_dir_all(&tree).unwrap();
+    let _root = TestDir(root.clone());
+    std::fs::write(tree.join("note.txt"), b"synthetic payload").unwrap();
+    std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (code, stdout) = sweep_json(&root.join("state"), &[tree.as_os_str()]);
+    std::fs::set_permissions(&tree, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert_eq!(code, Some(3), "{stdout}");
+    assert!(stdout.contains(r#""status":"error""#), "{stdout}");
     assert!(
         stdout.contains(
             r#""reason":{"code":"permission_denied","retry":"after_change","subject":{"kind":"input"}}"#

@@ -1477,10 +1477,10 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
         return Err(ScanError::RefusedSyncRoot(root.clone()));
     }
 
-    if let Err(source) = observe_read("directory_enumeration", fs::read_dir(&root)) {
-        if source.kind() == io::ErrorKind::PermissionDenied {
-            return Err(ScanError::RootDenied { root, source });
-        }
+    if let Err(source) = observe_read("directory_enumeration", fs::read_dir(&root))
+        && source.kind() == io::ErrorKind::PermissionDenied
+    {
+        return Err(ScanError::RootDenied { root, source });
     }
 
     let snapshot = match TreeSnapshot::capture_for_config(&root, cfg) {
