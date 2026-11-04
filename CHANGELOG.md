@@ -15,7 +15,7 @@ reviewers were pointed at the tools before anyone else could be.
 sweep, stash and unpack.
 
 Journal append reuses one handle per apply and writes each frame together; release runs on 10,000 small files (9,998 moves) measured apply 74.83/101.72 s before and 60.07/55.56 s after, undo 65.91/79.88 s before and 99.22/55.82 s after.
-- **sweep, stash:** a folder the system will not let the tool read now exits 3 with `permission_denied`, names the folder, and says what to do next: macOS privacy settings or file permissions, depending on the error. Before this, `stash` said the folder was already clear, `sweep review` said it needed no organising, and `sweep --export-plan` said "plan has incomplete observations; replan required; replan required".
+- **sweep, stash:** a folder the system will not let the tool read now exits 3 with `permission_denied`, names the folder, and says what to do next: macOS privacy settings or file permissions, depending on the error. Before this, `stash` said the folder was already clear, `sweep review` said it needed no organising, and `sweep --export-plan` said "plan has incomplete observations; replan required; replan required". For scripts and agents: a scan of a folder that cannot be read at all used to exit 1 with status `incomplete`, and now exits 3 with status `error`. The reason stays `permission_denied`.
 - **stash:** a folder is no longer called clear when an item in it could not be read. Stash says the item stayed and exits 3.
 - **sweep:** `sweep status PATH` with no history now says so. It used to print nothing.
 - **sweep, stash, unpack:** a permission failure while moving files or preparing a target says what to do next. A plan error no longer repeats "replan required".

@@ -637,16 +637,16 @@ def restore_onto_occupied_path(probe):
 
 
 def sweep_unreadable_scan(probe):
-    """A folder the scan cannot read yields a partial plan, not a finished one."""
+    """A folder the scan cannot read at all is an error, not a plan with nothing in it."""
     needs_denied_permissions()
     tree = screenshots(probe.directory / "tree")
     tree.chmod(0)
     try:
-        result = probe.run(tree, "--json", codes=(1,))
+        result = probe.run(tree, "--json", codes=(3,))
     finally:
         tree.chmod(0o700)
-    require(json.loads(result.stdout)["status"] == "incomplete",
-            "a scan that could not read its folder is not reported as incomplete")
+    require(json.loads(result.stdout)["status"] == "error",
+            "a scan that could not read its folder is not reported as an error")
     return result
 
 
