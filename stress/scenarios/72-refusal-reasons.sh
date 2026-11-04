@@ -83,6 +83,25 @@ PY
 DUMP="$(dirname "$SWEEP")/journal-dump"
 STATUS_OUTPUTS=()
 
+# A completed apply has no move waiting for a journal record. Its status must
+# match the disk exactly, even on a host that misses every kill window.
+D="$W/completed/Desktop"
+export ETUDE_STATE_DIR="$W/state-completed"
+mkdir -p "$D" "$ETUDE_STATE_DIR"
+for i in 1 2 3 4 5 6; do
+  printf 'synthetic completed payload %s\n' "$i" \
+    > "$D/Screenshot 2026-01-01 at 10.00.00 AM ($MARK completed $i).png"
+done
+"$SWEEP" apply "$D" --yes >"$W/completed-apply.out" 2>"$W/completed-apply.err"; CODE=$?
+assert_eq 0 "$CODE" "completed: uninterrupted apply succeeds"
+COMPLETED_ON_DISK=$(find "$D" -mindepth 2 -type f | wc -l | tr -d ' ')
+assert_eq 6 "$COMPLETED_ON_DISK" "completed: apply moved all six files"
+S="$W/status-completed"; STATUS_OUTPUTS+=("$S.json" "$S.err")
+"$SWEEP" status "$D" --json >"$S.json" 2>"$S.err"; CODE=$?
+assert_eq 0 "$CODE" "completed: status finds the uninterrupted apply"
+assert_eq "$COMPLETED_ON_DISK" "$(json_get "$S.json" 'd["details"]["counts"]["moved"]')" \
+  "completed: status moved count exactly equals the files moved"
+
 # --- 1. an apply killed part-way ----------------------------------------
 KILLED=0
 if [ ! -x "$DUMP" ]; then

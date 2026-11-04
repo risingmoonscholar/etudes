@@ -122,17 +122,17 @@ if __name__ == "__main__":
         print(counts["same"], counts["added"], counts["other"])
 PY
 
-# make_tree DIR: 600 pdfs with a mix of existing tag lists, plus three kinds of
-# file that must never be tagged.
+# make_tree DIR [COUNT]: by default 600 pdfs with a mix of existing tag lists,
+# plus three kinds of file that must never be tagged.
 make_tree() {
-  python3 - "$1" "$W/tagtool.py" <<'PY'
+  python3 - "$1" "$W/tagtool.py" "${2:-600}" <<'PY'
 import importlib.util, os, pathlib, sys
 spec = importlib.util.spec_from_file_location("tagtool", sys.argv[2])
 tagtool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tagtool)
 d = pathlib.Path(sys.argv[1])
 d.mkdir(parents=True)
 lists = [None, ["Old"], None, ["Red\n6", "Old"], None, None, ["Receipts\n4"], ["a", "b", "c"]]
-for i in range(600):
+for i in range(int(sys.argv[3])):
     path = d / f"t-{i:04d}.pdf"
     path.write_text(f"synthetic payload {i}\n")
     tags = lists[i % len(lists)]
@@ -166,6 +166,30 @@ flush_deferred() {
   done
   DEFERRED=()
 }
+
+# Controls must keep their own verdict: an unwitnessed kill is all-unproven.
+if [ -z "$CONTROL" ]; then
+  # A completed tag apply has no write waiting for a journal record. Compare
+  # status with independently read tag bytes before trying any kill window.
+  D="$W/completed/Desktop"
+  export ETUDE_STATE_DIR="$W/state-completed"
+  mkdir -p "$ETUDE_STATE_DIR"
+  make_tree "$D" 6
+  python3 "$W/tagtool.py" dump "$D" "$W/completed-before-tags.json"
+  "$SWEEP" "$D" --scheme tags --map pdf=Filed --export-plan "$W/completed-plan" --json \
+    >"$W/completed-plan.json" 2>"$W/completed-plan.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: exports the small tag fixture"
+  DIGEST=$(json_get "$W/completed-plan.json" 'd["details"]["binding"]["plan_digest"]')
+  "$SWEEP" apply --plan "$W/completed-plan" --plan-digest "$DIGEST" --yes --json \
+    >"$W/completed-apply.json" 2>"$W/completed-apply.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: uninterrupted tag apply succeeds"
+  read -r _ COMPLETED_ON_DISK COMPLETED_OTHER <<< "$(python3 "$W/tagtool.py" classify "$D" "$W/completed-before-tags.json")"
+  assert_eq "6 0" "$COMPLETED_ON_DISK $COMPLETED_OTHER" "completed: all six files have exactly their old tags plus Filed"
+  "$SWEEP" status "$D" --json >"$W/completed-status.json" 2>"$W/completed-status.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: status finds the uninterrupted tag apply"
+  assert_eq "$COMPLETED_ON_DISK" "$(json_get "$W/completed-status.json" 'd["details"]["counts"]["moved"]')" \
+    "completed: status written count exactly equals the files tagged"
+fi
 
 N=600
 PROVEN=0
@@ -312,7 +336,7 @@ assert_eq "$N" "$(( ${STATUS_MOVED:-0} + ${STATUS_PLANNED:-0} ))" "status: writt
 read -r _ TAGGED_NOW _ <<< "$(python3 "$W/tagtool.py" classify "$D" "$W/before-tags.json")"
 if [ "$STATUS_MOVED" = "$TAGGED_NOW" ] || [ "$CONTROL" = --control-changed ]; then
   pass "status: counts $STATUS_MOVED written, the number of files actually tagged"
-elif [ "${STATUS_MOVED:-x}" = "$((TAGGED_NOW + 1))" ] || [ "${STATUS_MOVED:-x}" = "$((TAGGED_NOW - 1))" ]; then
+elif [ "${STATUS_MOVED:-x}" = "$((TAGGED_NOW - 1))" ]; then
   unproven "status: written count equals the files actually tagged" \
     "apply died between a write and its record: $TAGGED_NOW on disk, $STATUS_MOVED journalled"
 else

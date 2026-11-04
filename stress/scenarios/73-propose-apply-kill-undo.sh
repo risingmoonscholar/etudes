@@ -52,15 +52,15 @@ if [ ! -x "$DUMP" ]; then
   exit 0
 fi
 
-# 300 screenshot-named files make one group; 300 others have no group. Both
-# are eligible. The three ineligible files and the two existing destination
-# folders sit beside them.
+# By default, 300 screenshot-named files make one group; 300 others have no
+# group. Both are eligible. A smaller count drives the uninterrupted check.
+# Three ineligible files and two existing destination folders sit beside them.
 make_tree() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "${2:-300}" <<'PY'
 import os, pathlib, sys
 d = pathlib.Path(sys.argv[1])
 d.mkdir(parents=True)
-for i in range(300):
+for i in range(int(sys.argv[2])):
     (d / f"Screenshot 2026-01-01 at 10.00.00 AM (pfix {i}).png").write_text(f"synthetic screenshot payload {i}\n")
     (d / f"pfix-note-{i}.xyz").write_text(f"synthetic note payload {i}\n")
 (d / "tax return 2024.pdf").write_text("synthetic personal payload\n")
@@ -186,6 +186,33 @@ flush_deferred() {
   done
   DEFERRED=()
 }
+
+# Controls must keep their own verdict: an unwitnessed kill is all-unproven.
+if [ -z "$CONTROL" ]; then
+  # A completed proposal apply has no unrecorded move. Check its count exactly
+  # before trying any kill window, with eight moves from twelve eligible files.
+  D="$W/completed/Desktop"
+  export ETUDE_STATE_DIR="$W/state-completed"
+  mkdir -p "$ETUDE_STATE_DIR"
+  make_tree "$D" 6
+  "$SWEEP" "$D" --since 0 --export-plan "$W/completed-plan" --json >"$W/completed-plan.json" 2>"$W/completed-plan.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: exports the small proposal fixture"
+  DIGEST=$(json_get "$W/completed-plan.json" 'd["details"]["binding"]["plan_digest"]')
+  make_proposal "$W/completed-plan.json" "$D" "$W/completed-proposal.json" "$W/completed-roles.json" "$W/completed-victim.txt" >"$W/completed-proposal.out"
+  "$SWEEP" propose --plan "$W/completed-plan" --plan-digest "$DIGEST" --proposal "$W/completed-proposal.json" \
+    --export-plan "$W/completed-out" --json >"$W/completed-propose.json" 2>"$W/completed-propose.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: accepts the small proposal"
+  OUT_DIGEST=$(json_get "$W/completed-propose.json" 'd["details"]["binding"]["plan_digest"]')
+  "$SWEEP" apply --plan "$W/completed-out" --plan-digest "$OUT_DIGEST" --yes --json \
+    >"$W/completed-apply.json" 2>"$W/completed-apply.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: uninterrupted proposal apply succeeds"
+  COMPLETED_ON_DISK=$(find "$D/Reading" "$D/Archive" -type f | wc -l | tr -d ' ')
+  assert_eq 8 "$COMPLETED_ON_DISK" "completed: proposal moved all eight selected files"
+  "$SWEEP" status "$D" --json >"$W/completed-status.json" 2>"$W/completed-status.err"; CODE=$?
+  assert_eq 0 "$CODE" "completed: status finds the uninterrupted proposal apply"
+  assert_eq "$COMPLETED_ON_DISK" "$(json_get "$W/completed-status.json" 'd["details"]["counts"]["moved"]')" \
+    "completed: status moved count exactly equals the files moved"
+fi
 
 N=600
 MOVES=400
@@ -329,7 +356,7 @@ STATUS_PLANNED=$(json_get "$W/status.json" 'd["details"]["counts"]["planned"]')
 assert_eq "$MOVES" "$(( ${STATUS_MOVED:-0} + ${STATUS_PLANNED:-0} ))" "status: moved and still-planned counts add up to the proposal's moves"
 if [ "$STATUS_MOVED" = "$MOVED_ON_DISK" ]; then
   pass "status: counts $STATUS_MOVED moved, the number of files actually moved"
-elif [ "${STATUS_MOVED:-x}" = "$((MOVED_ON_DISK + 1))" ] || [ "${STATUS_MOVED:-x}" = "$((MOVED_ON_DISK - 1))" ]; then
+elif [ "${STATUS_MOVED:-x}" = "$((MOVED_ON_DISK - 1))" ]; then
   unproven "status: moved count equals the files actually moved" \
     "apply died between a move and its record: $MOVED_ON_DISK on disk, $STATUS_MOVED journalled"
 else
