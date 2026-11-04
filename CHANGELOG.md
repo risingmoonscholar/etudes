@@ -10,6 +10,10 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-04
+
+sweep, stash and unpack.
+
 Journal append reuses one handle per apply and writes each frame together; release runs on 10,000 small files (9,998 moves) measured apply 74.83/101.72 s before and 60.07/55.56 s after, undo 65.91/79.88 s before and 99.22/55.82 s after.
 - **stash:** an unknown flag or a second folder after the folder is now refused with exit 2. `stash FOLDER --dry-run` used to ignore the flag and move everything. Only a flag before the folder was checked.
 - **stash:** `stash pop FOLDER` with more than one batch now exits 2 with `invalid_arguments` and lists the batch ids. It used to exit 3 with `journal_unreadable` and call a healthy journal malformed.
@@ -21,7 +25,7 @@ Journal append reuses one handle per apply and writes each frame together; relea
 - **sweep:** when two applies overlap on one folder, the loser now records a refused attempt and reports a conflict, even if it fails after the plan check and before its journal exists. Before this fix, that loser left no record and could print a bare error. The check that every file is still present passed in the failed runs.
 - Apply re-checks member eligibility before any change and again before each move or tag write, and refuses invalid tag entries in exported plans. A member found ineligible before anything moved is a refusal; one found ineligible after a move stops the apply as incomplete, with the journal holding what moved for `sweep undo`.
 
-### 0.5.4 candidate — sweep, stash and unpack
+### Changes since 0.5.3
 
 - Undo keeps empty created folders needed by another live journal, so stash can restore into them.
 - Undo leaves tags without a completed write record because matching bytes cannot prove who added them.

@@ -38,18 +38,14 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 
 | Tool | Does | Status |
 |---|---|---|
-| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.4 candidate |
-| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.4 candidate |
-| **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.4 candidate |
+| **`sweep`** | Organises the obvious and leaves the private alone | v0.5.4 |
+| **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.4 |
+| **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.4 |
 
 ## Install
 
-**0.5.4 is a release candidate, not a published release.** The commands below
-are the proposed release pins and will work only after those tags are published.
-For currently published versions, see [Releases](https://github.com/risingmoonscholar/etudes/releases).
-To try this candidate from a checkout, use
-`cargo install --path crates/sweep-cli --locked`
-(or `crates/stash-cli`, `crates/unpack-cli`).
+Install the published 0.5.4 releases. See
+[Releases](https://github.com/risingmoonscholar/etudes/releases) for the notes.
 
 ```sh
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.4 sweep-cli
@@ -278,8 +274,8 @@ pass `--inspect-content` and consent, or when a move crosses volumes and the
 file has to be copied.
 
 A project *document* -- a `.blend`, an `.flp`, an `.als` -- references its
-assets relative to itself and freely upward, out of its own folder. In this
-candidate, a document found during the scan also holds related asset families
+assets relative to itself and freely upward, out of its own folder. Since
+0.5.4, a document found during the scan also holds related asset families
 beside it: a `.blend` in `scenes/` keeps sibling textures in place. Unrelated
 documents and screenshots can still be organized. This protection follows
 filesystem names and layout; it does not parse the project's references or
