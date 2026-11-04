@@ -1,0 +1,274 @@
+{
+  "checked_at": "2026-11-04T02:04:01.554782+00:00",
+  "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+  "candidate": "0.5.4",
+  "machine": {
+    "os": "macOS",
+    "product_version": "27.0.1",
+    "build_version": "26A434",
+    "arch": "arm64"
+  },
+  "revision_scope": "The revision identifies the committed code, documentation and demo assets tested. This file is added in an evidence-only commit on a branch, so it does not claim its own containing commit SHA.",
+  "build_environment": "Every command ran with DEVELOPER_DIR=/Library/Developer/CommandLineTools, set per command. Without it, linking fails on this machine because Xcode 26.4's linker cannot read the macOS 27 SDK from the Command Line Tools. No system setting was changed.",
+  "agent_demo_base": "sweep-v0.5.3. An earlier record used --base origin/main on main, which compared a commit with itself and so checked nothing.",
+  "run_notes": [
+    "Every command ran once on this revision, in one pass. No other stress run was active."
+  ],
+  "commands": {
+    "fmt": {
+      "command": "cargo fmt --all --check",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:44:40.812234+00:00",
+      "completed_at": "2026-11-04T01:44:41.195476+00:00",
+      "result": "PASS",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": [],
+      "tail": []
+    },
+    "clippy": {
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:44:41.195753+00:00",
+      "completed_at": "2026-11-04T01:44:41.471051+00:00",
+      "result": "PASS",
+      "log_sha256": "2bc683fb4e4f4f21ee9ee39e2b8ecce2efe20d3b1be57bda5316aa519ab3d30a",
+      "stdout": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s"
+      ],
+      "tail": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.21s"
+      ]
+    },
+    "tests": {
+      "command": "cargo test --all",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:44:41.471276+00:00",
+      "completed_at": "2026-11-04T01:48:04.186508+00:00",
+      "result": "PASS",
+      "log_sha256": "1148ef876431b0f105df34a58e5a934ff24792394f03a084626c13fbc2e8bee4",
+      "stdout": [
+        "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s",
+        "     Running unittests src/lib.rs (target/debug/deps/etude_cli_support-3fd71461674dbf4d)",
+        "",
+        "running 13 tests",
+        "test envelope::tests::an_unset_refusal_reason_is_an_error_instead_of_a_default_code ... ok",
+        "test envelope::tests::schema_fields_require_a_version_bump ... ok",
+        "test progress::tests::no_op_records_are_versioned_and_not_silently_suppressed ... ok",
+        "test reason::tests::retry_classes_and_subjects_are_typed_and_stable ... ok"
+      ],
+      "tail": [
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        ""
+      ]
+    },
+    "candidate_install": {
+      "command": "python3 scripts/check-release.py --candidate",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:48:04.186715+00:00",
+      "completed_at": "2026-11-04T01:48:05.974047+00:00",
+      "result": "PASS",
+      "log_sha256": "56d9bc7234abb9d81aa5eb44a5c63d4780629873346bc16c6b00131ba10854ea",
+      "stdout": [
+        "mode=candidate checkout=b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+        "installing sweep 0.5.4",
+        "PASS sweep: install, version, synthetic operation and recovery/refusal",
+        "installing stash 0.5.4",
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.4",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ],
+      "tail": [
+        "PASS stash: install, version, synthetic operation and recovery/refusal",
+        "installing unpack 0.5.4",
+        "PASS unpack: install, version, synthetic operation and recovery/refusal",
+        "PASS installation checks; independent review not assessed"
+      ]
+    },
+    "claims": {
+      "command": "bash scripts/check-claims.sh",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:48:05.974286+00:00",
+      "completed_at": "2026-11-04T01:51:21.339279+00:00",
+      "result": "PASS",
+      "log_sha256": "4ac4b12acba8317b2ced17a5eafdd6b30f41b4a3146fba23305000f5bc4fdbb1",
+      "stdout": [
+        "ok   README.md claims 620 tests, and 620 is what runs",
+        "ok   demo/index.html claims 620 tests, and 620 is what runs",
+        "ok   README.md claims 63 scenarios, and 63 is what runs",
+        "ok   demo/index.html claims 63 scenarios, and 63 is what runs",
+        "ok   CHANGELOG.md claims 30 TTL days, and 30 is what runs",
+        "ok   README.md pin for sweep-cli matches manifest v0.5.4 (publication not checked)",
+        "ok   README.md pin for stash-cli matches manifest v0.5.4 (publication not checked)",
+        "ok   README.md pin for unpack-cli matches manifest v0.5.4 (publication not checked)"
+      ],
+      "tail": [
+        "ok   the site shows v0.5.4, which is what the binaries report",
+        "ok   etude-core declares zero dependencies in its manifest",
+        "ok   the page's inline transcripts are byte-identical to demo/transcripts.json",
+        "ok   the site's API panels are each a captured --help, not a table written beside it"
+      ]
+    },
+    "transcripts": {
+      "command": "bash scripts/check-transcripts-reproduce.sh",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:51:21.339571+00:00",
+      "completed_at": "2026-11-04T01:51:23.256173+00:00",
+      "result": "PASS",
+      "log_sha256": "2414438ffac39ed4e139e3af7caa7b34f174c741399d2345f9f02668fb5ef113",
+      "stdout": [
+        "regenerating transcripts from the current tree...",
+        "ok   all 7 transcripts still reproduce from this tree"
+      ],
+      "tail": [
+        "regenerating transcripts from the current tree...",
+        "ok   all 7 transcripts still reproduce from this tree"
+      ]
+    },
+    "no_network": {
+      "command": "bash scripts/no-network-test.sh",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:51:23.256387+00:00",
+      "completed_at": "2026-11-04T01:54:37.903332+00:00",
+      "result": "PASS",
+      "log_sha256": "1a7e34f9e8b36fc93b00d3e76be93106692da0bdcb9779f9204d3e42ed521a67",
+      "stdout": [
+        "==> proving the sandbox actually denies network",
+        "    ok: control probe connects unsandboxed, is denied under the profile",
+        "==> building (outside the sandbox; the claim is about runtime)",
+        "==> running the suite with networking denied (excluding process-control witness)",
+        "",
+        "running 13 tests",
+        ".............",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "tail": [
+        "",
+        "",
+        "PASS: all other tests completed with socket access denied by the OS.",
+        "      The process-control test ran outside denial; it makes no network calls."
+      ]
+    },
+    "tool_contracts": {
+      "command": "python3 scripts/check-tool-contracts.py",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:54:37.903575+00:00",
+      "completed_at": "2026-11-04T01:54:52.897059+00:00",
+      "result": "PASS",
+      "log_sha256": "3570f81497d025a5dddd1487d539ec3934268a27f2edb0fcb1bc77ede2332384",
+      "stdout": [
+        "refusal codes sweep: 16 proven, 2 unproven, 0 mismatched, of 18 listed",
+        "  proven: invalid_arguments, unknown_option, missing_input, project_folder, destination_exists, destination_outside_root, plan_stale, profile_missing, download_in_flight, journal_unreadable, unknown_operation, unsafe_input, permission_denied, operation_incomplete, unknown_item, item_assigned_twice",
+        "  unproven: internal_error (needs a panic or a failed terminal read; no input reaches it on purpose)",
+        "  unproven: journal_key_unavailable (needs the login keychain; every probe supplies a throwaway key)",
+        "ok sweep: contract pin, scope, formats, overwrite, custody and state probes",
+        "unproven: absence of file reads, subprocess networking, and unexercised paths; no zero counter is access evidence",
+        "refusal codes stash: 11 proven, 4 unproven, 0 mismatched, of 15 listed",
+        "  proven: invalid_arguments, unknown_option, missing_input, project_folder, plan_stale, not_due_yet, journal_unreadable, unknown_operation, unsafe_input, permission_denied, operation_incomplete"
+      ],
+      "tail": [
+        "  proven: invalid_arguments, unknown_option, missing_input, unsupported_format, insufficient_space, destination_exists, unsafe_input, permission_denied, operation_incomplete",
+        "  unproven: internal_error (needs a panic or a failed terminal read; no input reaches it on purpose)",
+        "ok unpack: contract pin, scope, formats, overwrite, custody and state probes",
+        "unproven: absence of file reads, subprocess networking, and unexercised paths; no zero counter is access evidence"
+      ]
+    },
+    "agent_demo": {
+      "command": "python3 scripts/check-agent-demo.py --base sweep-v0.5.3",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:54:52.897347+00:00",
+      "completed_at": "2026-11-04T01:54:52.987634+00:00",
+      "result": "PASS",
+      "log_sha256": "7ef3859f506b8dca5a2457bfd099695821fa803ab5b2324a398c5317fe4e072e",
+      "stdout": [
+        "ok   $STASH: a scenario added or changed in this change drives it",
+        "ok   $SWEEP: a scenario added or changed in this change drives it",
+        "ok   $UNPACK: a scenario added or changed in this change drives it"
+      ],
+      "tail": [
+        "ok   $STASH: a scenario added or changed in this change drives it",
+        "ok   $SWEEP: a scenario added or changed in this change drives it",
+        "ok   $UNPACK: a scenario added or changed in this change drives it"
+      ]
+    },
+    "full_stress": {
+      "command": "bash scripts/stress-ratchet.sh",
+      "revision": "b3fc6fab20098ce8a5f9eeb4cb25de25ae6e56cc",
+      "exit_code": 0,
+      "started_at": "2026-11-04T01:54:52.987850+00:00",
+      "completed_at": "2026-11-04T02:04:01.554782+00:00",
+      "result": "PASS",
+      "log_sha256": "6cf45441fd3a58f18348e34a4dad6c1522d01414f28be0d03bb35e28bcbdf14a",
+      "stdout": [
+        "ok stress catalog: 63 scenarios; fast=44 load=9 platform=10",
+        "building release binaries",
+        "",
+        "\u2500\u2500 10-desktop-mid-project",
+        "    ok       planning a busy Desktop succeeds (exit 0)",
+        "    ok       planning changed no path, payload, symlink, or directory",
+        "    ok       applying the busy Desktop succeeds (exit 0)",
+        "    ok       apply changed the Desktop layout"
+      ],
+      "tail": [
+        "",
+        "  runner exit     0",
+        "  assertions      1163 passed, 5 unproven",
+        "  every executed assertion passed."
+      ]
+    }
+  },
+  "test_totals": {
+    "passed": 620,
+    "failed": 0,
+    "result_lines": 60
+  },
+  "stress_summary": [
+    "runner exit     0",
+    "assertions      1163 passed, 5 unproven"
+  ],
+  "stress_unproven": [
+    "unproven host keychain unavailable control (this host did not refuse keychain access; deterministic source test covers bypass)",
+    "unproven link/unlink fallback seam (normal same-volume macOS rename is atomic; this fixture does not exercise fallback)",
+    "unproven: internal_error (needs a panic or a failed terminal read; no input reaches it on purpose)",
+    "unproven: journal_key_unavailable (needs the login keychain; every probe supplies a throwaway key)",
+    "unproven: absence of file reads, subprocess networking, and unexercised paths; no zero counter is access evidence",
+    "unproven sweep absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)",
+    "unproven: destination_exists (needs a destination to appear inside stash's private holding folder mid-move)",
+    "unproven: destination_outside_root (needs a plan whose destination leaves its root; argument and digest checks refuse one first)",
+    "unproven stash absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)",
+    "unproven unpack absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)",
+    "unproven 5"
+  ],
+  "scope": "Local candidate installation, committed documentation and assets, required host checks and the full stress suite on disposable fixtures only.",
+  "not_assessed": [
+    "The stress assertions listed as unproven are not counted as passes.",
+    "Installation of published 0.5.4 tags was not assessed; no such tag exists.",
+    "Tagging, releases and Pages publication were not performed.",
+    "The real Finder helper was not tested with the unpack fixes.",
+    "A power cut was not tested.",
+    "The fix for parallel zip refusals makes the failure rare and does not rule it out."
+  ],
+  "independent_review": {
+    "status": "assessed",
+    "date": "2026-10-22",
+    "verdict": "GO-WITH-CONDITIONS",
+    "conditions_resolved_in": [
+      "#160",
+      "#161",
+      "#162"
+    ],
+    "note": "The review ran the binaries against the README, help text, CHANGELOG and contracts on disposable fixtures. It came before #170, #171, #174 and #175, so it does not cover those changes."
+  },
+  "publication": "not performed"
+}
