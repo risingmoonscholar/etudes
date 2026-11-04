@@ -456,6 +456,10 @@ fn run_main() -> ExitCode {
         }
         return code;
     }
+    if etude_cli_support::wants_help(&args) {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     if let Err(input) = validate_args(&args) {
         eprintln!("unpack: refused invalid input {input}");
         return refusal(

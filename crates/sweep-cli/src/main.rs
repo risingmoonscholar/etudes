@@ -111,6 +111,11 @@ fn run_main() -> ExitCode {
         );
     }
 
+    if etude_cli_support::wants_help(&args) {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+
     // Status is a strictly read-only journal query. It must run before legacy
     // migration and expiry pruning, both of which can modify journal state.
     if args.first().is_some_and(|arg| arg == "status") {
@@ -1408,6 +1413,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
 
     let mut export_binding = None;
     let mut export_items = None;
+    let mut exported = None;
     if let Some(file) = value(args, "--export-plan") {
         let context = current_binding_context(&planning_profile(args, stats.is_some(), &scheme));
         let bound = match bound_or_refuse(plan.clone(), context) {
@@ -1427,6 +1433,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
                 bound.digest()
             );
         }
+        exported = Some((file, bound.digest().to_string()));
         export_binding = Some(bound.binding_json());
         // The files a later `sweep propose` may name, in the plan's own
         // order, bound to this plan's digest.
@@ -1530,7 +1537,8 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     if plan.adds_tags {
         tag_output::render(&plan, quiet, explain, stats.is_some());
     } else {
-        render(&plan, quiet, explain, stats.is_some());
+        let next = next_commands(args, quiet, exported.as_ref());
+        render(&plan, quiet, explain, stats.is_some(), &next);
     }
     if let Some(st) = stats {
         inspect::report(&st);
@@ -1758,7 +1766,54 @@ fn print_agent_named_note(p: &plan::Plan) {
     }
 }
 
-fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
+/// The commands to run after this scan, exactly as they must be typed. Apply
+/// plans again from its own flags, so a footer that dropped `--depth 2` offered
+/// a different set of files from the one on screen. Under --quiet the path stays
+/// a placeholder, because --quiet promises not to print names.
+fn next_commands(args: &[String], quiet: bool, exported: Option<&(String, String)>) -> Vec<String> {
+    use etude_cli_support::shell_word;
+    let word = |text: &str, placeholder: &str| {
+        if quiet {
+            placeholder.to_owned()
+        } else {
+            shell_word(text).unwrap_or_else(|| placeholder.to_owned())
+        }
+    };
+    if let Some((file, digest)) = exported {
+        return vec![format!(
+            "Apply this plan: sweep apply --plan {} --plan-digest {digest} --yes",
+            word(file, "<file>")
+        )];
+    }
+    let path = match path_arg("", args) {
+        Ok(Some(path)) => word(&path.to_string_lossy(), "<path>"),
+        _ => ".".to_owned(),
+    };
+    let mut carried = String::new();
+    let mut i = 0;
+    while i < args.len() && args[i] != "--" {
+        match args[i].as_str() {
+            "--depth" | "--since" | "--scheme" | "--map" => {
+                let value = args.get(i + 1).map_or("", String::as_str);
+                let value = shell_word(value).unwrap_or_else(|| "<value>".to_owned());
+                carried.push_str(&format!(" {} {value}", args[i]));
+                i += 1;
+            }
+            "--allow-sync" | "--include-tagged" => carried.push_str(&format!(" {}", args[i])),
+            _ => {}
+        }
+        i += 1;
+    }
+    let mut next = Vec::new();
+    // Review takes no --map, so it cannot offer the plan a mapped scan showed.
+    if !has(args, "--map") {
+        next.push(format!("Review: sweep review {path}{carried}"));
+    }
+    next.push(format!("Apply:  sweep apply {path}{carried} --yes"));
+    next
+}
+
+fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next: &[String]) {
     // This line must never claim more restraint than actually happened.
     let basis = if read_contents {
         "filesystem and Finder organization metadata, and the contents of some text files"
@@ -1828,7 +1883,9 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool) {
     if !quiet {
         println!("Note: this listing is in your terminal scrollback.");
     }
-    println!("Review: sweep review <path>     Apply: sweep apply <path> --yes");
+    for command in next {
+        println!("{command}");
+    }
     // The scan read no contents; an apply does. Say so before the yes.
     println!(
         "Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed."

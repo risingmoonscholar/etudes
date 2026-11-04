@@ -109,6 +109,11 @@ fn run_main() -> ExitCode {
         );
     }
 
+    if etude_cli_support::wants_help(&args) {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+
     // The operation lookup must not run the legacy migration used by normal
     // commands: it is a strictly read-only query against the named journal.
     if args
@@ -189,13 +194,30 @@ fn run_main() -> ExitCode {
                 let path = positional_path(&args)
                     .map(|s| PathBuf::from(expand_tilde(s)))
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                cmd_stash(&path, &args)
+                stash_checked(&path, &args)
             } else {
                 eprintln!("stash: unknown option {p}. Run `stash help`.");
                 refuse(etude_cli_support::reason::Code::UnknownOption)
             }
         }
-        Some(p) => cmd_stash(&PathBuf::from(expand_tilde(p)), &args),
+        Some(p) => stash_checked(&PathBuf::from(expand_tilde(p)), &args),
+    }
+}
+
+/// Every route that ends in moving a folder passes here. Checking only the
+/// leading flag let `stash ~/Desktop --dry-run` empty the folder it was asked
+/// to leave alone.
+fn stash_checked(path: &Path, args: &[String]) -> ExitCode {
+    match check_flags("", args) {
+        Ok(()) => cmd_stash(path, args),
+        Err(message) => {
+            eprintln!("stash: {message}");
+            refuse(if message.contains("unknown option") {
+                etude_cli_support::reason::Code::UnknownOption
+            } else {
+                etude_cli_support::reason::Code::InvalidArguments
+            })
+        }
     }
 }
 
@@ -315,6 +337,32 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
     }
 }
 
+/// A folder pop that matches several batches is a choice for the caller, not a
+/// damaged journal. Nothing moved, so it is a refusal that names the choices.
+fn refuse_ambiguous_pop(
+    selector_args: &[String],
+    sealer: &dyn etude_core::journal::Sealer,
+) -> ExitCode {
+    let root = match batches::selector(selector_args) {
+        Ok(batches::Selector::Root(root)) => root,
+        _ => std::env::current_dir().unwrap_or_default(),
+    };
+    let ids = batches::live_ids_for(&root, sealer).unwrap_or_default();
+    eprintln!(
+        "stash: {} batches are stashed from this folder, and nothing was restored. Choose one:",
+        ids.len()
+    );
+    for id in &ids {
+        eprintln!("  stash pop --id {id}");
+    }
+    let folder = root
+        .to_str()
+        .and_then(etude_cli_support::shell_word)
+        .unwrap_or_else(|| "PATH".to_owned());
+    eprintln!("Or restore the newest: stash pop {folder} --latest");
+    refuse(etude_cli_support::reason::Code::InvalidArguments)
+}
+
 fn journal_reason(error: &etude_core::journal::JournalError) -> etude_cli_support::reason::Code {
     use etude_cli_support::reason::Code;
     use etude_core::journal::JournalError;
@@ -373,6 +421,7 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     if cmd.is_empty() {
         i = 0;
     }
+    let mut folders = 0;
     while i < args.len() {
         let a = &args[i];
         if matches!(
@@ -390,6 +439,15 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
             return Err(format!(
                 "unknown option {a} for this command. Run `stash help`."
             ));
+        }
+        if cmd.is_empty() && !a.starts_with('-') {
+            folders += 1;
+            if folders > 1 {
+                return Err(format!(
+                    "stash takes one folder, and `{a}` is a second. \
+                     To stash chosen items, use `stash select PATH...`."
+                ));
+            }
         }
         i += 1;
     }
@@ -1144,6 +1202,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             });
             etude_cli_support::envelope::status("nothing_to_do");
             return ExitCode::from(1);
+        }
+        Err(etude_core::journal::JournalError::Malformed(batches::AMBIGUOUS)) => {
+            return refuse_ambiguous_pop(&selector_args, &sl);
         }
         Err(error) => {
             if matches!(&error, etude_core::journal::JournalError::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied)

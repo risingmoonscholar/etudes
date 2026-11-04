@@ -143,8 +143,12 @@ fn path_pop_refuses_ambiguous_batches_without_mutation() {
     f.stash(None);
     let before = f.snapshot();
     let out = f.command().args(["pop", "--json"]).output().unwrap();
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("multiple live batches"));
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("2 batches are stashed"));
+    assert_eq!(stderr.matches("stash pop --id ").count(), 2);
+    assert!(!stderr.contains("malformed"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\"code\":\"invalid_arguments\""));
     assert_eq!(before, f.snapshot());
 }
 #[test]

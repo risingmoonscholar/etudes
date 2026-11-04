@@ -24,7 +24,8 @@ Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no conte
 
 Nothing has been moved.  Nothing left this machine.
 Note: this listing is in your terminal scrollback.
-Review: sweep review <path>     Apply: sweep apply <path> --yes
+Review: sweep review ~/Desktop
+Apply:  sweep apply ~/Desktop --yes
 Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed.
 ```
 
@@ -514,13 +515,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 63 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 64 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 63 scenarios
+bash stress/run.sh        # 64 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
