@@ -4,8 +4,8 @@
 dates of 2026-09-26 (`sweep-v0.5.3`, `stash-v0.5.3`, `unpack-v0.5.3`).
 The sections below record the candidate as it stood on 2026-09-24 and 2026-09-25;
 their statements that no 0.5.3 tag exists were true on those dates and are kept
-as history. The stress catalog now lists 57 scenarios; the latest full run
-(2026-10-16) was 1063 passed, 0 failed, 5 unproven.
+as history. The current scenario inventory is in `stress/catalog.json`. The full
+run on 2026-10-16 was 1063 passed, 0 failed, 5 unproven.
 
 ## Candidate changes
 

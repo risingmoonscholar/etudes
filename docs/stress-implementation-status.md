@@ -14,7 +14,7 @@ from this branch, not a release certification or independent-review result.
 | Same-root contention | Two live applies on one root produce one winner and one resumable loser; every payload remains present and one undo restores the exact original tree. |
 | Races | Source deletion, destination collision, symlink replacement, growing writers, directory blockers, and permission changes record an independent intervention witness before judging the result. |
 | Cost | The fixed 1.5 GiB cross-volume payload, 50k duplicate cap fixture, 1,450-file group fixture, and repeated signal timing guesses were replaced by contract-sized or bounded probes. |
-| Scheduling | The catalog assigns all 57 scenarios to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline, and every scenario runs in an owned process group with a configurable five-minute default deadline; timeout evidence records the reaped group. A tiered result names every catalogued contract it did not run. The CI scope rule self-tests that documentation-only pull requests visibly skip, while source changes and scheduled/manual events execute the suite. |
+| Scheduling | The catalog assigns every scenario to `fast`, `load`, or `platform`; CI runs the fast tier on relevant pull requests and the full tier on scheduled/manual work. The stress job has a 45-minute outer deadline, and every scenario runs in an owned process group with a configurable five-minute default deadline; timeout evidence records the reaped group. A tiered result names every catalogued contract it did not run. The CI scope rule self-tests that documentation-only pull requests visibly skip, while source changes and scheduled/manual events execute the suite. |
 | Evidence | Failure-only transcripts, assertion records, process records, and generated filesystem manifests are retained; CI uploads them with the generated result bundle. |
 
 ## Local evidence
@@ -50,7 +50,7 @@ cross-device interruption. Its retained result bundle is
 
 | Guide stage | Evidence in this branch |
 | --- | --- |
-| Inventory | `stress/catalog.json` has one disposition, tier, capability, and contract for each of the 57 tracked scenarios. `scripts/check-stress-catalog.py` rejects missing, duplicate, or invalid rows. |
+| Inventory | `stress/catalog.json` has one disposition, tier, capability, and contract for each tracked scenario. `scripts/check-stress-catalog.py` rejects missing, duplicate, or invalid rows. |
 | Reporting | `stress/lib.sh` records pass, fail, unproven, and completion separately. `85-scenario-exit-status.sh` falsifies hidden failures, aborted cases, signal death, and all-unproven cases. |
 | Shared helpers | `snapshot.py` records paths, kinds, modes, payload digests, and link targets. `bounded.py` owns and reaps a process group. Failed cases retain their transcript, assertions, process record, and snapshots. |
 | Movement and recovery | Desktop and interrupted-undo scenarios assert real changes, protected paths, and exact recovery. Local no-op, dropped-movement, and false-recovery mutants are rejected. |
