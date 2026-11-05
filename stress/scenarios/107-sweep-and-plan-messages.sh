@@ -286,7 +286,7 @@ for how in "" "$D"; do
   assert_eq 3 "$RC" "wrong key: exit"
   has "wrong key: names the record" "$OUT" "the undo record $RECORD cannot be opened (wrong key, or it was altered)"
   has "wrong key: nothing moved" "$OUT" "Nothing was moved."
-  has "wrong key: which key" "$OUT" "Use the key from when you applied."
+  has "wrong key: which key" "$OUT" "Use the key it was made with."
   has "wrong key: by hand" "$OUT" "you can move them back by hand"
   hasnt "wrong key: no forget" "$OUT" "forget"
 done

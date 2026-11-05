@@ -76,7 +76,7 @@ assert_eq 3 "$CODE" "stash select finishes incomplete when a tagged object stays
 grep -q '1 Finder-tagged item was left in the folder: moving to another volume would drop the tag' <<<"$OUT" \
   && pass "stash counted the tagged object by its named reason" \
   || fail "stash did not name the cross-volume hold: $OUT"
-grep -q 'Not every selected object was stashed' <<<"$OUT" \
+grep -q 'Not every selected item was stashed' <<<"$OUT" \
   && pass "and said so instead of calling the selection done" || fail "stash select did not say a selected object was left: $OUT"
 [ -f "$S2" ] && [ "$(xattr -p "$TAGATTR" "$S2" 2>/dev/null)" = opaque-second ] \
   && pass "the tagged object is still in place with its tag" || fail "the tagged object moved or lost its tag"
