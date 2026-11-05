@@ -10,6 +10,10 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+- **sweep:** a folder held back only because its files are too recent still reports `nothing_to_do`, and the reason now says retry `later`, on both a scan and `sweep apply`. Hidden files and links in the folder do not change that. An empty folder, or one held for any other reason, keeps `not_needed`.
+- **sweep:** Finder aliases are skipped. Sweep reads only the alias flag in the FinderInfo attribute, never resolves the alias and never reads its contents. The plan gains `details.skipped.aliases_skipped` and the summary gains one line. The sweep contract is version 13. The plan file gains an optional section for a nonzero alias count; other plans encode as before.
+- **Tests:** a process killed between the hard link and the unlink of the link-then-unlink move recovers on undo, with one copy at the original path and the original bytes.
+
 ## [0.5.4] - 2026-11-04
 
 sweep, stash and unpack.
@@ -107,7 +111,6 @@ Journal append reuses one handle per apply and writes each frame together; relea
 - **unpack:** several extractions at the same time no longer refuse each other's safe zip files. This was new in the 0.5.4 candidate: 4 runs at a time refused a safe zip in 11 of 3,000 runs before this fix and 0 of 6,000 after it. Two runs can still get the same descriptor number, so the failure is rare, not impossible; it ends in a refusal with an error.
 - **sweep:** when two applies overlap on one folder, the loser now records a refused attempt and reports a conflict, even if it fails after the plan check and before its journal exists. Before this fix, that loser left no record and could print a bare error. The check that every file is still present passed in the failed runs.
 - Apply re-checks member eligibility before any change and again before each move or tag write, and refuses invalid tag entries in exported plans. A member found ineligible before anything moved is a refusal; one found ineligible after a move stops the apply as incomplete, with the journal holding what moved for `sweep undo`.
-- sweep reports `nothing_to_do` with retry `later` when only the grace window holds every candidate; an empty folder keeps retry `not_needed`.
 
 ### Changes since 0.5.3
 
@@ -287,8 +290,11 @@ Journal append reuses one handle per apply and writes each frame together; relea
   declarations are now version 11 (sweep), 10 (stash) and 6 (unpack).
 - **Known gaps in `reason`:** the contract check proves 16 of sweep's 18 listed
   codes, 11 of stash's 15 and 9 of unpack's 10, and names the rest as unproven:
-  `internal_error`, `journal_key_unavailable`, `destination_outside_root` and,
-  for stash, `destination_exists`. Two `sweep apply` runs on one folder at once are not held apart,
+  `internal_error` for all three, `journal_key_unavailable` for sweep and stash,
+  and `destination_exists` and `destination_outside_root` for stash. A folder
+  that holds only recent files reports `nothing_to_do`; a "try again later"
+  code for it is a possible later
+  addition. Two `sweep apply` runs on one folder at once are not held apart,
   and the one that loses ends in one of two ways. Either it is refused before
   it moves anything (exit 2, `plan_stale`; plan again), or it stops part-way
   (exit 3, `operation_incomplete`, with a `recovery.operation` id that status
