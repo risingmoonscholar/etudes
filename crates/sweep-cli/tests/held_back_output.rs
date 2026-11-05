@@ -280,3 +280,66 @@ fn a_recent_file_that_would_not_group_does_not_say_retry_later() {
         }
     }
 }
+
+/// The words must make the same promise as the reason. Waiting cannot make a
+/// group of a lone file, and --since 0 does not either.
+#[test]
+fn run_again_later_is_printed_only_when_waiting_would_make_a_group() {
+    let lone = TestDir(unique_temp("lone-words"));
+    fs::create_dir_all(&lone.0).unwrap();
+    write_file(&lone.0.join("one.pdf"));
+    let scan = sweep_bin().arg(&lone.0).output().unwrap();
+    let apply = sweep_bin()
+        .args(["apply", "--yes"])
+        .arg(&lone.0)
+        .output()
+        .unwrap();
+    for text in [stdout(&scan), stderr(&apply)] {
+        assert!(!text.contains("Run again later"), "{text}");
+        assert!(!text.contains("--since 0"), "{text}");
+        assert!(
+            text.contains(
+                "That file is too recent to judge, and on its own it would not form a group."
+            ),
+            "{text}"
+        );
+    }
+
+    write_file(&lone.0.join("notes.xyz"));
+    let two = stdout(&sweep_bin().arg(&lone.0).output().unwrap());
+    assert!(
+        two.contains(
+            "Those files are too recent to judge, and on their own they would not form a group."
+        ),
+        "{two}"
+    );
+
+    let group = TestDir(unique_temp("group-words"));
+    fs::create_dir_all(&group.0).unwrap();
+    for n in 1..=5 {
+        write_file(&group.0.join(format!("document-{n}.pdf")));
+    }
+    let scan = sweep_bin().arg(&group.0).output().unwrap();
+    let apply = sweep_bin()
+        .args(["apply", "--yes"])
+        .arg(&group.0)
+        .output()
+        .unwrap();
+    assert!(
+        stdout(&scan).contains("Run again later"),
+        "{}",
+        stdout(&scan)
+    );
+    assert!(
+        stderr(&apply).contains("Run again later"),
+        "{}",
+        stderr(&apply)
+    );
+    assert!(stderr(&apply).contains("--since 0"), "{}", stderr(&apply));
+
+    // Other holds: the reason says not_needed, so the words do not promise waiting.
+    write_file(&group.0.join("tax_return.pdf"));
+    let mixed = stdout(&sweep_bin().arg(&group.0).output().unwrap());
+    assert!(!mixed.contains("Run again later"), "{mixed}");
+    assert!(mixed.contains("--since 0 would include"), "{mixed}");
+}

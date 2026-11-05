@@ -442,10 +442,20 @@ MX="$W/Mixed"; mkdir -p "$MX/b.part"
 # --since 1d, because the harness exports SWEEP_GRACE_SECS=0 and a mixed case
 # needs a live window. The flag beats the environment variable by design.
 MX_OUT=$("$SWEEP" "$MX" --depth 2 --since 1d 2>&1 || true)
-if grep -q "downloads have to finish first" <<<"$MX_OUT"; then
+# One recent file would not group on its own, so neither waiting nor --since 0
+# helps it, and only the downloads are worth waiting for.
+if grep -q "would not form a group" <<<"$MX_OUT" && grep -q "downloads finish on" <<<"$MX_OUT" && ! grep -q -- "--since 0" <<<"$MX_OUT"; then
   pass "mixed recent and in-flight gets guidance that is true of both"
 else
   fail "mixed held-back reasons were told --since 0 includes everything: $MX_OUT"
+fi
+# Recent files that would group keep the flag, and the downloads still come first.
+for n in 1 2 3 4; do : > "$MX/report-$n.pdf"; done
+MX_OUT=$("$SWEEP" "$MX" --depth 2 --since 1d 2>&1 || true)
+if grep -q "downloads have to finish first" <<<"$MX_OUT"; then
+  pass "recent files that would group, beside a download, get --since 0 and the wait"
+else
+  fail "recent files that would group lost their guidance: $MX_OUT"
 fi
 
 # --- a generic OS package is not a project bundle ----------------------------

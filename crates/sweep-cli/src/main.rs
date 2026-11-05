@@ -1788,8 +1788,6 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             + plan.locked_skipped;
         if held > 0 {
             // The left-alone notes above already gave these counts.
-            let recent = plan.too_recent();
-            let downloading = plan.in_flight();
             // --since 0 only helps if the grace window is what held things
             // back. An in-flight download is refused regardless of the
             // window, so telling someone to pass --since 0 for a folder of
@@ -1797,8 +1795,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // and prints the same refusal. The directory-form downloads were
             // already disclosed by the left-alone notes above; they are only
             // counted here so the conclusion does not contradict them.
-            let still_arriving = downloading + plan.skipped_in_flight;
-            print_hold_advice(recent, still_arriving, plan.skipped_tagged);
+            print_hold_advice(&plan);
             println!("\nNothing has been moved.  Nothing left this machine.");
         } else {
             println!(
@@ -2024,38 +2021,91 @@ fn print_locked_skipped(p: &plan::Plan) {
 }
 
 /// What to do about the items a scan held back, one sentence per cause.
-fn print_hold_advice(recent: usize, downloading: usize, tagged: usize) {
-    match (recent > 0, downloading > 0) {
-        (true, false) => println!(
+fn print_hold_advice(p: &plan::Plan) {
+    let downloading = p.in_flight() + p.skipped_in_flight > 0;
+    match (recent_hold(p), downloading) {
+        (RecentHold::WaitingHelps, _) => println!(
             "\nNothing else here needs organising. Run again later, or pass\n\
              --since 0 to include everything."
         ),
-        (false, true) => println!(
-            "\nNothing else here needs organising. These finish downloading on\n\
-             their own; run again once they have."
+        (RecentHold::SinceZeroHelps, false) => println!(
+            "\nNothing else here needs organising. --since 0 would include the\n\
+             recent ones."
         ),
-        (true, true) => println!(
+        (RecentHold::SinceZeroHelps, true) => println!(
             "\nNothing else here needs organising. --since 0 would include the\n\
              recent ones; the downloads have to finish first either way."
         ),
-        (false, false) => println!("\nNothing else here needs organising."),
+        (RecentHold::WouldNotGroup, false) => println!(
+            "\nNothing else here needs organising. {}",
+            would_not_group(p.too_recent())
+        ),
+        (RecentHold::WouldNotGroup, true) => println!(
+            "\nNothing else here needs organising. {} The downloads finish on\n\
+             their own; run again once they have.",
+            would_not_group(p.too_recent())
+        ),
+        (RecentHold::None, true) => println!(
+            "\nNothing else here needs organising. These finish downloading on\n\
+             their own; run again once they have."
+        ),
+        (RecentHold::None, false) => println!("\nNothing else here needs organising."),
     }
-    if tagged > 0 {
+    if p.skipped_tagged > 0 {
         println!(
             "Tagged items stay where they are unless --include-tagged is passed deliberately."
         );
     }
 }
 
+/// What the grace window is holding, and what would change the answer. The
+/// words promise waiting only where the JSON reason says retry `later`.
+enum RecentHold {
+    None,
+    WaitingHelps,
+    SinceZeroHelps,
+    WouldNotGroup,
+}
+
+fn recent_hold(p: &plan::Plan) -> RecentHold {
+    if p.too_recent() == 0 {
+        RecentHold::None
+    } else if p.only_too_recent() {
+        RecentHold::WaitingHelps
+    } else if p.recent_would_group {
+        RecentHold::SinceZeroHelps
+    } else {
+        RecentHold::WouldNotGroup
+    }
+}
+
+fn would_not_group(count: usize) -> &'static str {
+    if count == 1 {
+        "That file is too recent to judge, and on its own it would not form a group."
+    } else {
+        "Those files are too recent to judge, and on their own they would not form a group."
+    }
+}
+
 /// The way forward when an apply found nothing it may move yet.
-fn hold_hint(p: &plan::Plan) -> &'static str {
-    match (p.too_recent() > 0, p.in_flight() + p.skipped_in_flight > 0) {
-        (true, false) => " Run again later, or pass --since 0 to include everything.",
-        (false, true) => " Run again once the downloads have finished.",
-        (true, true) => {
-            " --since 0 would include the recent files; the downloads have to finish first either way."
+fn hold_hint(p: &plan::Plan) -> String {
+    let downloading = p.in_flight() + p.skipped_in_flight > 0;
+    match (recent_hold(p), downloading) {
+        (RecentHold::WaitingHelps, _) => {
+            " Run again later, or pass --since 0 to include everything.".into()
         }
-        (false, false) => "",
+        (RecentHold::SinceZeroHelps, false) => " --since 0 would include the recent files.".into(),
+        (RecentHold::SinceZeroHelps, true) => {
+            " --since 0 would include the recent files; the downloads have to finish first either way."
+                .into()
+        }
+        (RecentHold::WouldNotGroup, false) => format!(" {}", would_not_group(p.too_recent())),
+        (RecentHold::WouldNotGroup, true) => format!(
+            " {} Run again once the downloads have finished.",
+            would_not_group(p.too_recent())
+        ),
+        (RecentHold::None, true) => " Run again once the downloads have finished.".into(),
+        (RecentHold::None, false) => String::new(),
     }
 }
 
@@ -2383,11 +2433,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     print_agent_named_note(&p);
     if p.groups.is_empty() {
         if p.too_recent() + p.in_flight() + p.skipped_in_flight + p.skipped_tagged > 0 {
-            print_hold_advice(
-                p.too_recent(),
-                p.in_flight() + p.skipped_in_flight,
-                p.skipped_tagged,
-            );
+            print_hold_advice(&p);
         } else {
             println!("\nNothing here needs organising.");
         }
