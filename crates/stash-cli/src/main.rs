@@ -2180,6 +2180,7 @@ fn pop_one_item(
     };
     if journal.entries[index].state == etude_core::journal::EntryState::Reversed {
         println!("That item is already restored.");
+        etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
         return ExitCode::from(1);
     }
 

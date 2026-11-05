@@ -109,6 +109,42 @@ fn undo_with_nothing_left_ends_its_stream_with_zero() {
 }
 
 #[test]
+fn every_undo_with_nothing_to_do_ends_its_stream() {
+    let (dir, root) = fixture("undo-nothing", 3);
+    let none_on_record = sweep(&dir, &["undo", "--json", "--progress-json"]);
+    let unknown_id = sweep(&dir, &["undo", "--id", "nope", "--json", "--progress-json"]);
+    apply(&dir, &root);
+    let status = sweep(&dir, &["status", &root, "--json"]);
+    let text = String::from_utf8_lossy(&status.stdout).into_owned();
+    let id = text
+        .split("sweep undo --id ")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("status names the undo id")
+        .to_owned();
+    assert_eq!(sweep(&dir, &["undo", "--id", &id]).status.code(), Some(0));
+    let already_undone = sweep(&dir, &["undo", "--id", &id, "--json", "--progress-json"]);
+    for (label, run) in [
+        ("no apply on record", none_on_record),
+        ("unknown id", unknown_id),
+        ("already undone", already_undone),
+    ] {
+        assert_eq!(run.status.code(), Some(1), "{label}");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        let records: Vec<_> = stderr
+            .lines()
+            .filter(|line| line.contains("\"event\":\"progress\""))
+            .collect();
+        assert_eq!(records.len(), 1, "{label}: {stderr}");
+        assert!(
+            records[0].contains("\"phase\":\"done\""),
+            "{label}: {stderr}"
+        );
+        assert!(records[0].contains("\"planned\":0"), "{label}: {stderr}");
+    }
+}
+
+#[test]
 fn apply_of_an_exported_plan_keeps_the_apply_operation_name() {
     let (dir, root) = fixture("plan", 3);
     let plan = dir.join("exported.plan");

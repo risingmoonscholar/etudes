@@ -3562,6 +3562,11 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
         Err(JournalError::NotFound) => {
             let code = status_unknown(id);
             eprintln!("Nothing was moved. `sweep status FOLDER` lists the ids for a folder.");
+            etude_cli_support::progress::finish_without_work(
+                "sweep undo",
+                "undo",
+                ExitCode::from(1),
+            );
             return code;
         }
         Err(error) => {
@@ -3580,6 +3585,7 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
         println!("\nNothing to undo. That apply was already restored, or moved nothing.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
         etude_cli_support::envelope::status("nothing_to_do");
+        etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
     finish_undo(&mut journal, sl, UndoAsked::Id)
@@ -3663,6 +3669,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(newest) = candidates.into_iter().next() else {
         eprintln!("sweep: nothing to undo. No apply is on record.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
+        etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
     let mut j = match newest.load("sweep", &sl) {

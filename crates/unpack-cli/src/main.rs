@@ -752,7 +752,7 @@ fn archive_first(mut args: Vec<String>) -> Vec<String> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--list" | "--json" => i += 1,
+            "--list" | "--json" | etude_cli_support::progress::FLAG => i += 1,
             "--into" | "--max-size" => i += 2,
             "help" | "version" | "contract" => break,
             word if word.starts_with('-') => break,
@@ -3437,6 +3437,11 @@ mod tests {
             validate_args(&archive_first(args(&["--frob", "a.zip"]))),
             Err(BadArgument::UnknownOption(_))
         ));
+        assert!(validate_args(&archive_first(args(&["--progress-json", "a.zip"]))).is_ok());
+        assert_eq!(
+            archive_first(args(&["--progress-json", "--list", "a.zip"]))[0],
+            "a.zip"
+        );
         assert!(validate_args(&archive_first(args(&["--max-size", "0", "a.zip"]))).is_err());
         assert!(validate_args(&archive_first(args(&["a.zip", "--max-size", "0G"]))).is_err());
     }

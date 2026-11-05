@@ -148,6 +148,22 @@ fn restoring_one_item_plans_one() {
         },
     );
     assert_eq!(files_in(&root), 1);
+    // The same item again has nothing to do, and that still ends the stream.
+    let again = stash(
+        &dir,
+        &[
+            "pop",
+            "--id",
+            &id,
+            "--item",
+            &item,
+            "--json",
+            "--progress-json",
+        ],
+    );
+    assert_eq!(again.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&again.stderr);
+    assert!(stderr.contains("\"phase\":\"done\""), "{stderr}");
 }
 
 #[test]
