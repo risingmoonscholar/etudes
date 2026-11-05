@@ -75,5 +75,6 @@
   "111-sweep-undo-id": 303,
   "112-locked-items": 48,
   "113-shared-progress": 22,
-  "114-unpack-staging-recovery": 42
+  "114-unpack-staging-recovery": 42,
+  "115-non-utf8-arguments": 98
 }
