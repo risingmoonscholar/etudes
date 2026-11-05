@@ -2997,6 +2997,13 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     print_agent_named_note(&p);
     if p.moves() == 0 {
         eprintln!("sweep: nothing to apply.{}", hold_hint(&p));
+        if p.only_too_recent() {
+            etude_cli_support::envelope::reason(
+                etude_cli_support::reason::Reason::nothing_to_do_later(
+                    etude_cli_support::reason::Subject::wait("input", None),
+                ),
+            );
+        }
         if has(args, "--progress-json") {
             etude_cli_support::progress::JsonProgress::stderr(
                 env!("CARGO_PKG_VERSION"),

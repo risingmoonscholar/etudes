@@ -191,7 +191,10 @@ targets. An unreadable attribute holds the file and makes the scan incomplete.
 pins remain unchanged. The binary probe checks flagged and unflagged files,
 separate symlink accounting, the human summary and unchanged fixture bytes.
 Plan artifacts append optional section 4 for a nonzero alias count; older plans
-load with zero and plans without aliases retain their earlier encoding.
+load with zero and plans without aliases retain their earlier encoding. A folder
+held back only because its files are too recent reports `nothing_to_do` with
+retry `later` and an `input` subject, on a scan and on apply; `nothing_to_do` keeps
+retry `not_needed` everywhere else.
 
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every

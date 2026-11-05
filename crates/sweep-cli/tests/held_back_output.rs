@@ -212,3 +212,49 @@ fn review_with_groups_discloses_held_back_files_before_reviewing() {
         "the disclosure must come before the first question: {text}"
     );
 }
+
+fn reason_of(out: &Output) -> (String, String) {
+    let text = stdout(out);
+    let field = |name: &str| {
+        let key = format!("\"{name}\":\"");
+        let reason = text.split("\"reason\":").nth(1).expect("a reason");
+        let start = reason.find(&key).expect("a reason field") + key.len();
+        reason[start..].split('"').next().unwrap().to_string()
+    };
+    (field("code"), field("retry"))
+}
+
+/// Scan and apply both print "Run again later" for this folder, so the JSON
+/// reason must promise the same. A hidden file or a link is never a candidate,
+/// and nearly every real folder holds a .DS_Store.
+#[test]
+fn a_folder_held_only_by_recency_says_retry_later_on_scan_and_apply() {
+    let root = TestDir(unique_temp("only-recent"));
+    fs::create_dir_all(&root.0).unwrap();
+    write_file(&root.0.join("photo.jpg"));
+    write_file(&root.0.join(".DS_Store"));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.0.join("photo.jpg"), root.0.join("link.jpg")).unwrap();
+
+    let later = (String::from("nothing_to_do"), String::from("later"));
+    let scan = sweep_bin().arg(&root.0).arg("--json").output().unwrap();
+    assert_eq!(reason_of(&scan), later, "{}", stdout(&scan));
+    let apply = sweep_bin()
+        .args(["apply", "--yes", "--json"])
+        .arg(&root.0)
+        .output()
+        .unwrap();
+    assert_eq!(reason_of(&apply), later, "{}", stdout(&apply));
+
+    // A download cannot be released by waiting out the grace window alone.
+    write_file(&root.0.join("movie.mp4.part"));
+    let not_needed = (String::from("nothing_to_do"), String::from("not_needed"));
+    let mixed = sweep_bin().arg(&root.0).arg("--json").output().unwrap();
+    assert_eq!(reason_of(&mixed), not_needed, "{}", stdout(&mixed));
+    let mixed = sweep_bin()
+        .args(["apply", "--yes", "--json"])
+        .arg(&root.0)
+        .output()
+        .unwrap();
+    assert_eq!(reason_of(&mixed), not_needed, "{}", stdout(&mixed));
+}

@@ -327,7 +327,8 @@ impl Plan {
     }
 
     /// Waiting alone can release every candidate in this otherwise empty plan.
-    /// Other holds and skipped entries make that promise unsafe.
+    /// Other holds make that promise unsafe. Hidden files, links and aliases
+    /// are never candidates, so they do not change it.
     pub fn only_too_recent(&self) -> bool {
         let recent = self.too_recent();
         recent > 0
@@ -335,10 +336,7 @@ impl Plan {
             && recent == self.untouched.len()
             && self.groups.is_empty()
             && self.unclaimed.is_empty()
-            && self.skipped_hidden
-                + self.skipped_symlink
-                + self.aliases_skipped
-                + self.skipped_system
+            && self.skipped_system
                 + self.skipped_project
                 + self.skipped_in_flight
                 + self.skipped_package
