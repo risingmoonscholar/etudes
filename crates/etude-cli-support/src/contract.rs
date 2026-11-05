@@ -141,8 +141,8 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 8,
-                Tool::Stash => 11,
+                Tool::Sweep => SCHEMA_VERSION + 9,
+                Tool::Stash => 12,
                 Tool::Unpack => SCHEMA_VERSION + 3,
             }),
         ),
@@ -462,6 +462,22 @@ pub fn declaration(
         ));
     }
     if matches!(tool, Tool::Sweep) {
+        fields.push(("finder_aliases", j::obj(&[
+            ("attribute", j::str("com.apple.FinderInfo")),
+            ("read_scope", j::str("selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category")),
+            ("handling", j::str("skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload")),
+            ("counter", j::str("plan.skipped.aliases_skipped")),
+            ("unreadable", j::str("hold_and_count_unreadable;_scan_incomplete")),
+            ("platform", j::str("macos_only")),
+        ])));
+        fields.push(("locked_items", j::obj(&[
+            ("flag", j::str("st_flags_UF_IMMUTABLE_or_SF_IMMUTABLE")),
+            ("read_scope", j::str("selected_tree_metadata;_from_the_lstat_already_taken_per_entry;_no_extra_read")),
+            ("scan", j::str("hold_locked_files_and_folders_by_name;_a_locked_folder_is_not_entered;_a_group_whose_existing_destination_folder_is_locked_is_held")),
+            ("apply", j::str("one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move_because_the_plan_cannot_run_as_made;_clear_the_lock_then_plan_again;_never_tagged")),
+            ("counters", j::str("plan.skipped.locked_skipped;_plan.skipped.locked_system;_apply.held_locked")),
+            ("platform", j::str("macos_only;_never_locked_elsewhere")),
+        ])));
         fields.push(("structured_progress", j::obj(&[
             ("flag", j::str("--progress-json")),
             ("stream", j::str("stderr_ndjson_alongside_diagnostics")),

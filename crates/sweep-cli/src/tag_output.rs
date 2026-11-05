@@ -4,6 +4,7 @@
 //! facts in view every time: tags already on a file stay, nothing is moved,
 //! and a tag is called new only when no file in the scanned folder carries it.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use etude_core::apply::{ApplyReport, TagRefusal, UndoReport};
@@ -140,6 +141,8 @@ pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
 
 /// A tag plan that tags no file.
 pub fn nothing_to_tag(p: &Plan) {
+    super::print_aliases_skipped(p);
+    super::print_locked_skipped(p);
     println!(
         "\nScanned {}  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
         etude_cli_support::counted(p.scanned, "item", "items"),
@@ -154,7 +157,7 @@ pub fn nothing_to_tag(p: &Plan) {
 }
 
 /// Report a tag apply that ran to the end, and pick its exit.
-pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
+pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str, root: &Path) -> ExitCode {
     use etude_cli_support::envelope;
     envelope::effect("items_tagged", r.tagged);
     envelope::detail(j::obj(&[
@@ -163,6 +166,7 @@ pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
         ("tag_skipped_unreadable", j::num(r.tag_skipped_unreadable)),
         ("tag_skipped_present", j::num(r.tag_skipped_present)),
         ("tag_skipped_changed", j::num(r.tag_skipped_changed)),
+        ("held_locked", j::num(r.held_locked)),
         ("binding", binding.to_string()),
         (
             "journal",
@@ -187,6 +191,14 @@ pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
             } else {
                 "were"
             }
+        );
+    }
+    if r.held_locked > 0 {
+        println!(
+            "{} locked {} got no tag. {}",
+            r.held_locked,
+            files(r.held_locked),
+            etude_cli_support::problems::unlock_step(root)
         );
     }
     if r.tag_skipped_unreadable > 0 {

@@ -212,3 +212,134 @@ fn review_with_groups_discloses_held_back_files_before_reviewing() {
         "the disclosure must come before the first question: {text}"
     );
 }
+
+fn reason_of(out: &Output) -> (String, String) {
+    let text = stdout(out);
+    let field = |name: &str| {
+        let key = format!("\"{name}\":\"");
+        let reason = text.split("\"reason\":").nth(1).expect("a reason");
+        let start = reason.find(&key).expect("a reason field") + key.len();
+        reason[start..].split('"').next().unwrap().to_string()
+    };
+    (field("code"), field("retry"))
+}
+
+/// Scan and apply both print "Run again later" for this folder, so the JSON
+/// reason must promise the same. A hidden file or a link is never a candidate,
+/// and nearly every real folder holds a .DS_Store.
+#[test]
+fn a_folder_held_only_by_recency_says_retry_later_on_scan_and_apply() {
+    let root = TestDir(unique_temp("only-recent"));
+    fs::create_dir_all(&root.0).unwrap();
+    for n in 1..=5 {
+        write_file(&root.0.join(format!("document-{n}.pdf")));
+    }
+    write_file(&root.0.join(".DS_Store"));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.0.join("document-1.pdf"), root.0.join("link.pdf")).unwrap();
+
+    let later = (String::from("nothing_to_do"), String::from("later"));
+    let scan = sweep_bin().arg(&root.0).arg("--json").output().unwrap();
+    assert_eq!(reason_of(&scan), later, "{}", stdout(&scan));
+    let apply = sweep_bin()
+        .args(["apply", "--yes", "--json"])
+        .arg(&root.0)
+        .output()
+        .unwrap();
+    assert_eq!(reason_of(&apply), later, "{}", stdout(&apply));
+
+    // A download cannot be released by waiting out the grace window alone.
+    write_file(&root.0.join("movie.mp4.part"));
+    let not_needed = (String::from("nothing_to_do"), String::from("not_needed"));
+    let mixed = sweep_bin().arg(&root.0).arg("--json").output().unwrap();
+    assert_eq!(reason_of(&mixed), not_needed, "{}", stdout(&mixed));
+    let mixed = sweep_bin()
+        .args(["apply", "--yes", "--json"])
+        .arg(&root.0)
+        .output()
+        .unwrap();
+    assert_eq!(reason_of(&mixed), not_needed, "{}", stdout(&mixed));
+}
+
+/// Waiting cannot help a file that would not group anyway: the answer with the
+/// window must match the answer without it.
+#[test]
+fn a_recent_file_that_would_not_group_does_not_say_retry_later() {
+    for name in ["notes.xyz", "one.pdf"] {
+        let root = TestDir(unique_temp("lone-recent"));
+        fs::create_dir_all(&root.0).unwrap();
+        write_file(&root.0.join(name));
+        let not_needed = (String::from("nothing_to_do"), String::from("not_needed"));
+        for since in ["3600", "0"] {
+            let scan = sweep_bin()
+                .arg(&root.0)
+                .args(["--since", since, "--json"])
+                .output()
+                .unwrap();
+            assert_eq!(reason_of(&scan), not_needed, "{name} --since {since}");
+        }
+    }
+}
+
+/// The words must make the same promise as the reason. Waiting cannot make a
+/// group of a lone file, and --since 0 does not either.
+#[test]
+fn run_again_later_is_printed_only_when_waiting_would_make_a_group() {
+    let lone = TestDir(unique_temp("lone-words"));
+    fs::create_dir_all(&lone.0).unwrap();
+    write_file(&lone.0.join("one.pdf"));
+    let scan = sweep_bin().arg(&lone.0).output().unwrap();
+    let apply = sweep_bin()
+        .args(["apply", "--yes"])
+        .arg(&lone.0)
+        .output()
+        .unwrap();
+    for text in [stdout(&scan), stderr(&apply)] {
+        assert!(!text.contains("Run again later"), "{text}");
+        assert!(!text.contains("--since 0"), "{text}");
+        assert!(
+            text.contains(
+                "That file is too recent to judge, and on its own it would not form a group."
+            ),
+            "{text}"
+        );
+    }
+
+    write_file(&lone.0.join("notes.xyz"));
+    let two = stdout(&sweep_bin().arg(&lone.0).output().unwrap());
+    assert!(
+        two.contains(
+            "Those files are too recent to judge, and on their own they would not form a group."
+        ),
+        "{two}"
+    );
+
+    let group = TestDir(unique_temp("group-words"));
+    fs::create_dir_all(&group.0).unwrap();
+    for n in 1..=5 {
+        write_file(&group.0.join(format!("document-{n}.pdf")));
+    }
+    let scan = sweep_bin().arg(&group.0).output().unwrap();
+    let apply = sweep_bin()
+        .args(["apply", "--yes"])
+        .arg(&group.0)
+        .output()
+        .unwrap();
+    assert!(
+        stdout(&scan).contains("Run again later"),
+        "{}",
+        stdout(&scan)
+    );
+    assert!(
+        stderr(&apply).contains("Run again later"),
+        "{}",
+        stderr(&apply)
+    );
+    assert!(stderr(&apply).contains("--since 0"), "{}", stderr(&apply));
+
+    // Other holds: the reason says not_needed, so the words do not promise waiting.
+    write_file(&group.0.join("tax_return.pdf"));
+    let mixed = stdout(&sweep_bin().arg(&group.0).output().unwrap());
+    assert!(!mixed.contains("Run again later"), "{mixed}");
+    assert!(mixed.contains("--since 0 would include"), "{mixed}");
+}

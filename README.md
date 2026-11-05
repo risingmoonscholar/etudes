@@ -71,7 +71,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 648 tests
+cargo test --all                # 677 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -199,9 +199,9 @@ exported plan, and refuses replay if the profile changes.
 | State | Current behavior |
 |---|---|
 | locked | An unreadable subtree is counted and the scan reports incomplete; visible siblings remain usable. A selected folder that cannot be read at all is an error (exit 3, `permission_denied`) that names the folder and what to do next. |
-| immutable | Sweep does not preflight the immutable flag. If the operating system refuses a move, apply reports the failure and leaves recovery to the journal; sweep does not claim it detected the flag. |
+| immutable | A file or folder with the locked flag (Finder's Locked box, `chflags uchg` or `schg`) is left in place and counted, and the summary says how to clear it. A folder with the flag is not entered. Apply checks again before each move. A locked root or destination folder refuses the plan before any move. Sweep reads the flag from the metadata it already has. |
 | invisible | Hidden entries are skipped and counted. Unreadable entries are separately reported as incomplete. |
-| alias | Symlinks are skipped during scans; selected parent aliases are resolved for overlap checks. |
+| alias | Finder aliases are skipped by the kIsAlias flag in FinderInfo, without resolving them or reading their contents. Symlinks are skipped during scans; selected parent aliases are resolved for overlap checks. |
 | iCloud placeholder | Dot-prefixed `.icloud` stubs are skipped as hidden entries, not grouped as their missing original file. |
 | coordinated write | Recognized in-flight filename suffixes and recent modification times are held. Sweep does not query File Provider coordination, so those checks do not prove that no coordinated write is active. |
 
@@ -511,9 +511,6 @@ unreadable history also keeps the folder. Undo reports how many empty folders
 it retained for journals. A folder with anything inside it, or one that was
 replaced, is left alone. Undo never deletes or overwrites a file.
 
-Known gap: a folder that holds only recent files reports `nothing_to_do`, with
-no code that says "try again later".
-
 **The refusals are the guardrail, not the operator's judgment.** Every safety
 property holds no matter who is driving:
 
@@ -546,13 +543,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 74 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 75 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 74 scenarios
+bash stress/run.sh        # 75 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but

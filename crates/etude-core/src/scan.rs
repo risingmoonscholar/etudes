@@ -939,20 +939,10 @@ pub enum ScanError {
     Io(io::Error),
 }
 
-/// Whether the file or folder at `path` has the user locked flag, which is
-/// Finder's Locked box and `chflags uchg`. Moving a locked item gives EPERM.
+/// Whether the file or folder at `path` is locked. A missing or unreadable path
+/// counts as not locked. Moving a locked item gives EPERM.
 pub fn is_locked(path: &Path) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::macos::fs::MetadataExt;
-        const UF_IMMUTABLE: u32 = 0x2;
-        fs::symlink_metadata(path).is_ok_and(|meta| meta.st_flags() & UF_IMMUTABLE != 0)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        false
-    }
+    is_locked_at(path).unwrap_or(false)
 }
 
 /// How many entries the count below reads before it stops. It only decides a
@@ -1113,6 +1103,15 @@ pub struct ScanOutcome {
     /// Paths refused during the walk, for the "what was inspected" report.
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    /// Finder alias files held by the FinderInfo kIsAlias flag, without resolution.
+    pub aliases_skipped: usize,
+    /// Items held because they carry the immutable flag (`chflags uchg` or
+    /// `schg`, `st_flags`). A locked folder is held whole and not entered. A
+    /// count only; the flag is read from metadata the scan already holds.
+    pub locked_skipped: usize,
+    /// How many of those carry the system flag (`schg`), which only an
+    /// administrator can clear. They need a different step.
+    pub locked_system: usize,
     /// Entries refused by POLICY: a credential/noise directory by name
     /// (`.ssh`, `node_modules`, ...) or an absolute system location
     /// (`/System`, `~/Library`, ...). sweep could have looked and chose not
@@ -1585,6 +1584,9 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
         project_holds: Vec::new(),
         skipped_hidden: 0,
         skipped_symlink: 0,
+        aliases_skipped: 0,
+        locked_skipped: 0,
+        locked_system: 0,
         skipped_system: 0,
         skipped_project: 0,
         skipped_in_flight: 0,
@@ -1728,6 +1730,30 @@ fn walk(
             out.skipped_system += 1;
             continue;
         }
+        // A locked item cannot be renamed and a locked folder cannot have
+        // entries moved out of it, so neither is a candidate. The flag comes
+        // from the metadata already read above: no further syscall.
+        if has_lock_flag(&meta) {
+            out.locked_skipped += 1;
+            if has_system_flag(&meta) {
+                out.locked_system += 1;
+            }
+            continue;
+        }
+        if !cfg.whole_units && meta.is_file() {
+            match is_finder_alias(&path) {
+                Ok(true) => {
+                    out.aliases_skipped += 1;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    out.skipped_unreadable += 1;
+                    continue;
+                }
+            }
+        }
+
         if is_refused_system_location(&path) {
             out.skipped_system += 1;
             continue;
@@ -1867,6 +1893,102 @@ fn hold_for_tag_probe(probe: io::Result<bool>, out: &mut ScanOutcome) -> bool {
             true
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+const UF_IMMUTABLE: u32 = 0x0000_0002;
+#[cfg(target_os = "macos")]
+const SF_IMMUTABLE: u32 = 0x0002_0000;
+
+/// Whether the immutable flag is set: user (Finder's Locked box, `chflags uchg`)
+/// or system (`chflags schg`). Read from `st_flags` in metadata already fetched,
+/// so the question costs no syscall of its own.
+#[cfg(target_os = "macos")]
+pub fn has_lock_flag(meta: &fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    flags_lock(meta.st_flags())
+}
+
+#[cfg(target_os = "macos")]
+fn flags_lock(flags: u32) -> bool {
+    flags & (UF_IMMUTABLE | SF_IMMUTABLE) != 0
+}
+
+#[cfg(target_os = "macos")]
+fn flags_system_lock(flags: u32) -> bool {
+    flags & SF_IMMUTABLE != 0
+}
+
+/// Other platforms have no `st_flags`; nothing is ever locked by flag.
+#[cfg(not(target_os = "macos"))]
+pub fn has_lock_flag(_: &fs::Metadata) -> bool {
+    false
+}
+
+/// Whether the entry at `path` carries the system flag, which only an
+/// administrator can clear: Finder's Locked box and `chflags nouchg` do not.
+pub fn has_system_lock_flag(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| has_system_flag(&meta))
+}
+
+#[cfg(target_os = "macos")]
+fn has_system_flag(meta: &fs::Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    flags_system_lock(meta.st_flags())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn has_system_flag(_: &fs::Metadata) -> bool {
+    false
+}
+
+/// Whether the entry at `path` is locked by flag, without following links.
+/// One `lstat`; apply uses it to check again just before each move.
+pub fn is_locked_at(path: &Path) -> io::Result<bool> {
+    fs::symlink_metadata(path).map(|meta| has_lock_flag(&meta))
+}
+
+/// Read only FinderInfo, never the alias payload or its target. Finder's
+/// kIsAlias is bit 15 of the big-endian flags word at byte offset 8.
+#[cfg(target_os = "macos")]
+fn is_finder_alias(path: &Path) -> io::Result<bool> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    let mut info = [0u8; 32];
+    // SAFETY: valid C strings and a writable 32-byte buffer; no link following.
+    let result = unsafe {
+        getxattr(
+            path.as_ptr(),
+            c"com.apple.FinderInfo".as_ptr(),
+            info.as_mut_ptr().cast(),
+            info.len(),
+            0,
+            XATTR_NOFOLLOW,
+        )
+    };
+    let outcome = if result == info.len() as isize {
+        Ok(u16::from_be_bytes([info[8], info[9]]) & 0x8000 != 0)
+    } else if result >= 0 {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid FinderInfo length",
+        ))
+    } else {
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(ENOATTR) | Some(ENOTSUP) => Ok(false),
+            _ => Err(error),
+        }
+    };
+    observe_read("metadata", outcome)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_finder_alias(_: &Path) -> io::Result<bool> {
+    Ok(false)
 }
 
 /// Whether Finder attached at least one tag to this directory entry.
@@ -2521,3 +2643,19 @@ mod tests {
 #[cfg(test)]
 #[path = "project_document_hold.rs"]
 mod project_document_hold;
+
+#[cfg(all(test, target_os = "macos"))]
+mod lock_flag_tests {
+    use super::*;
+
+    /// Setting `schg` needs root, so the classification is pinned on the bits.
+    #[test]
+    fn the_user_and_system_flags_are_told_apart() {
+        assert!(flags_lock(UF_IMMUTABLE));
+        assert!(!flags_system_lock(UF_IMMUTABLE));
+        assert!(flags_lock(SF_IMMUTABLE));
+        assert!(flags_system_lock(SF_IMMUTABLE));
+        assert!(!flags_lock(0));
+        assert!(!flags_system_lock(0));
+    }
+}

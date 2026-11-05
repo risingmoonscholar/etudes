@@ -1506,6 +1506,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             .report();
     }
     if bound.moves() == 0 {
+        etude_cli_support::envelope::no_undo_needed();
         eprintln!("sweep: nothing to apply.");
         return ExitCode::from(1);
     }
@@ -1731,8 +1732,19 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
                 etude_core::json::arr(blocked.iter().map(|name| etude_core::json::str(name)));
             json.push_str(&format!(",\"blocked_folders\":{names}}}"));
         }
+        if root_is_locked(&plan) {
+            json.pop();
+            json.push_str(",\"root_locked\":true}");
+        }
         json
     };
+    if plan.only_too_recent() {
+        etude_cli_support::envelope::reason(
+            etude_cli_support::reason::Reason::nothing_to_do_later(
+                etude_cli_support::reason::Subject::wait("input", None),
+            ),
+        );
+    }
     if plan.skipped_unreadable > 0 {
         // The plan below is real but partial. Its reason must say so: a
         // caller reading only `reason` would otherwise see `done`.
@@ -1769,12 +1781,13 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         // "Nothing here needs organising", which denies what it just said.
         // A download in progress is something to organise later, whether it
         // arrived as a file or as a directory.
-        let held =
-            plan.too_recent() + plan.in_flight() + plan.skipped_in_flight + plan.skipped_tagged;
+        let held = plan.too_recent()
+            + plan.in_flight()
+            + plan.skipped_in_flight
+            + plan.skipped_tagged
+            + plan.locked_skipped;
         if held > 0 {
             // The left-alone notes above already gave these counts.
-            let recent = plan.too_recent();
-            let downloading = plan.in_flight();
             // --since 0 only helps if the grace window is what held things
             // back. An in-flight download is refused regardless of the
             // window, so telling someone to pass --since 0 for a folder of
@@ -1782,8 +1795,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // and prints the same refusal. The directory-form downloads were
             // already disclosed by the left-alone notes above; they are only
             // counted here so the conclusion does not contradict them.
-            let still_arriving = downloading + plan.skipped_in_flight;
-            print_hold_advice(recent, still_arriving, plan.skipped_tagged);
+            print_hold_advice(&plan);
             println!("\nNothing has been moved.  Nothing left this machine.");
         } else {
             println!(
@@ -1865,6 +1877,8 @@ fn print_refused_by_policy_note(p: &plan::Plan) {
 /// its reason: separating them caused a real user to attach a large count to
 /// the wrong explanation.
 fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
+    print_aliases_skipped(p);
+    print_locked_skipped(p);
     let counts = p.sensitive_counts();
     let personal: usize = counts.values().sum();
     let recent = p.too_recent();
@@ -1980,39 +1994,118 @@ fn include_tagged_warning() {
     );
 }
 
+/// Finder aliases have separate accounting from symlinks.
+fn print_aliases_skipped(p: &plan::Plan) {
+    if p.aliases_skipped > 0 {
+        println!(
+            "  {} Finder {} skipped by flag",
+            p.aliases_skipped,
+            if p.aliases_skipped == 1 {
+                "alias"
+            } else {
+                "aliases"
+            }
+        );
+    }
+}
+
+/// Locked items are held by the scan, never moved or tagged.
+fn print_locked_skipped(p: &plan::Plan) {
+    if p.locked_skipped > 0 {
+        println!(
+            "  {}. {}",
+            etude_cli_support::problems::locked_note(p.locked_skipped),
+            etude_cli_support::problems::locked_steps(&p.root, p.locked_skipped, p.locked_system)
+        );
+    }
+}
+
 /// What to do about the items a scan held back, one sentence per cause.
-fn print_hold_advice(recent: usize, downloading: usize, tagged: usize) {
-    match (recent > 0, downloading > 0) {
-        (true, false) => println!(
+fn print_hold_advice(p: &plan::Plan) {
+    let downloading = p.in_flight() + p.skipped_in_flight > 0;
+    match (recent_hold(p), downloading) {
+        (RecentHold::WaitingHelps, _) => println!(
             "\nNothing else here needs organising. Run again later, or pass\n\
              --since 0 to include everything."
         ),
-        (false, true) => println!(
-            "\nNothing else here needs organising. These finish downloading on\n\
-             their own; run again once they have."
+        (RecentHold::SinceZeroHelps, false) => println!(
+            "\nNothing else here needs organising. --since 0 would include the\n\
+             recent ones."
         ),
-        (true, true) => println!(
+        (RecentHold::SinceZeroHelps, true) => println!(
             "\nNothing else here needs organising. --since 0 would include the\n\
              recent ones; the downloads have to finish first either way."
         ),
-        (false, false) => println!("\nNothing else here needs organising."),
+        (RecentHold::WouldNotGroup, false) => println!(
+            "\nNothing else here needs organising. {}",
+            would_not_group(p.too_recent())
+        ),
+        (RecentHold::WouldNotGroup, true) => println!(
+            "\nNothing else here needs organising. {} The downloads finish on\n\
+             their own; run again once they have.",
+            would_not_group(p.too_recent())
+        ),
+        (RecentHold::None, true) => println!(
+            "\nNothing else here needs organising. These finish downloading on\n\
+             their own; run again once they have."
+        ),
+        (RecentHold::None, false) => println!("\nNothing else here needs organising."),
     }
-    if tagged > 0 {
+    if p.skipped_tagged > 0 {
         println!(
             "Tagged items stay where they are unless --include-tagged is passed deliberately."
         );
     }
 }
 
+/// What the grace window is holding, and what would change the answer. The
+/// words promise waiting only where the JSON reason says retry `later`.
+enum RecentHold {
+    None,
+    WaitingHelps,
+    SinceZeroHelps,
+    WouldNotGroup,
+}
+
+fn recent_hold(p: &plan::Plan) -> RecentHold {
+    if p.too_recent() == 0 {
+        RecentHold::None
+    } else if p.only_too_recent() {
+        RecentHold::WaitingHelps
+    } else if p.recent_would_group {
+        RecentHold::SinceZeroHelps
+    } else {
+        RecentHold::WouldNotGroup
+    }
+}
+
+fn would_not_group(count: usize) -> &'static str {
+    if count == 1 {
+        "That file is too recent to judge, and on its own it would not form a group."
+    } else {
+        "Those files are too recent to judge, and on their own they would not form a group."
+    }
+}
+
 /// The way forward when an apply found nothing it may move yet.
-fn hold_hint(p: &plan::Plan) -> &'static str {
-    match (p.too_recent() > 0, p.in_flight() + p.skipped_in_flight > 0) {
-        (true, false) => " Run again later, or pass --since 0 to include everything.",
-        (false, true) => " Run again once the downloads have finished.",
-        (true, true) => {
-            " --since 0 would include the recent files; the downloads have to finish first either way."
+fn hold_hint(p: &plan::Plan) -> String {
+    let downloading = p.in_flight() + p.skipped_in_flight > 0;
+    match (recent_hold(p), downloading) {
+        (RecentHold::WaitingHelps, _) => {
+            " Run again later, or pass --since 0 to include everything.".into()
         }
-        (false, false) => "",
+        (RecentHold::SinceZeroHelps, false) => " --since 0 would include the recent files.".into(),
+        (RecentHold::SinceZeroHelps, true) => {
+            " --since 0 would include the recent files; the downloads have to finish first either way."
+                .into()
+        }
+        (RecentHold::WouldNotGroup, false) => format!(" {}", would_not_group(p.too_recent())),
+        (RecentHold::WouldNotGroup, true) => format!(
+            " {} Run again once the downloads have finished.",
+            would_not_group(p.too_recent())
+        ),
+        (RecentHold::None, true) => " Run again once the downloads have finished.".into(),
+        (RecentHold::None, false) => String::new(),
     }
 }
 
@@ -2090,6 +2183,11 @@ fn next_commands(args: &[String], quiet: bool, exported: Option<&(String, String
     }
     next.push(format!("Apply:  sweep apply {path}{carried} --yes"));
     next
+}
+
+/// Apply refuses a moving plan in a locked folder. A tag plan moves nothing.
+fn root_is_locked(p: &plan::Plan) -> bool {
+    !p.adds_tags && !p.groups.is_empty() && etude_core::scan::is_locked(&p.root)
 }
 
 /// Groups whose folder cannot be made, because something that is not a folder
@@ -2186,6 +2284,14 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next:
         println!("Note: this listing is in your terminal scrollback.");
     }
     // A scan must not offer an apply it already knows will refuse.
+    if root_is_locked(p) {
+        println!(
+            "\nNot ready to apply: {} is locked, so nothing can move into or out of it.\n{} Then scan again.",
+            etude_cli_support::shown(&p.root),
+            etude_cli_support::problems::UNLOCK_FOLDER
+        );
+        return;
+    }
     let blocked = blocked_folders(p);
     if !blocked.is_empty() {
         for name in &blocked {
@@ -2327,11 +2433,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
     print_agent_named_note(&p);
     if p.groups.is_empty() {
         if p.too_recent() + p.in_flight() + p.skipped_in_flight + p.skipped_tagged > 0 {
-            print_hold_advice(
-                p.too_recent(),
-                p.in_flight() + p.skipped_in_flight,
-                p.skipped_tagged,
-            );
+            print_hold_advice(&p);
         } else {
             println!("\nNothing here needs organising.");
         }
@@ -2401,7 +2503,13 @@ fn refuse_scan(path: &Path, e: &etude_core::scan::ScanError) {
 /// apart from the moves because it is raised after a move or restore has already
 /// succeeded: the files moved, the record of them did not. The caller's own
 /// follow-up line says what that means for the files.
-fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, items: &[PathBuf]) {
+fn refuse_apply(
+    e: &etude_core::apply::ApplyError,
+    root: &Path,
+    doing: &str,
+    items: &[PathBuf],
+    work: etude_cli_support::problems::LockedWork,
+) {
     use etude_cli_support::problems::{disk_full, disk_read_only};
     use etude_cli_support::{plain_io_error, shown, shown_text};
     use etude_core::apply::ApplyError as E;
@@ -2429,7 +2537,7 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, ite
         ),
         E::Io(source) => {
             eprintln!("sweep: {doing} in {folder}: {}.", plain_io_error(source));
-            let advice = etude_cli_support::problems::move_denied_advice(source, items, root);
+            let advice = etude_cli_support::problems::denied_advice(source, items, root, work);
             if let Some(advice) = advice {
                 eprintln!("       {advice}");
             }
@@ -2469,6 +2577,14 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, ite
             "sweep: refused: {} looks cloud-synced (its path contains \"{}\"). If it is not, or you accept that, pass --allow-sync.",
             shown(path),
             etude_core::scan::sync_marker(path).unwrap_or("a sync folder's name"),
+        ),
+        E::DestinationLocked(path) => eprintln!(
+            "{}",
+            etude_cli_support::problems::locked_folder_message(
+                "sweep",
+                path,
+                &format!("sweep {}", etude_cli_support::quoted_path(root))
+            )
         ),
         E::DestinationDirectoryChanged(path) => {
             eprintln!(
@@ -2532,7 +2648,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError, moved: usize) -> ExitCode 
                 Some(Subject::wait("destination", None)),
             )
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) => {
+        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => {
             refusal(Code::PlanStale, Some(Subject::wait("plan", None)))
         }
         DestinationExists(_) | DestinationCollision(_) => refusal(
@@ -2628,7 +2744,13 @@ fn run_apply(
             if let Some(id) = r.journal_path.as_deref().and_then(undo_record_id) {
                 etude_cli_support::envelope::recovery_operation(id);
             }
-            finish_apply(&r, &p.binding_json(), p.adds_tags, &undo_step(&p.root))
+            finish_apply(
+                &r,
+                &p.binding_json(),
+                p.adds_tags,
+                &undo_step(&p.root),
+                &p.root,
+            )
         }
         Err(failure) => {
             let moved = failure.moved;
@@ -2655,7 +2777,12 @@ fn run_apply(
                 .iter()
                 .flat_map(|group| group.members.iter().cloned())
                 .collect();
-            refuse_apply(&e, &p.root, doing, &items);
+            let work = if p.adds_tags {
+                etude_cli_support::problems::LockedWork::TagApply
+            } else {
+                etude_cli_support::problems::LockedWork::Move
+            };
+            refuse_apply(&e, &p.root, doing, &items, work);
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
                 etude_cli_support::envelope::status("refused");
@@ -2766,14 +2893,16 @@ fn finish_apply(
     binding: &str,
     adds_tags: bool,
     undo: &str,
+    root: &Path,
 ) -> ExitCode {
     if adds_tags {
-        return tag_output::finish_apply(r, binding, undo);
+        return tag_output::finish_apply(r, binding, undo, root);
     }
     etude_cli_support::envelope::effect("items_moved", r.moved);
     etude_cli_support::envelope::detail(etude_core::json::obj(&[
         ("moved", etude_core::json::num(r.moved)),
         ("held_tagged", etude_core::json::num(r.held_tagged)),
+        ("held_locked", etude_core::json::num(r.held_locked)),
         (
             "held_cross_volume",
             etude_core::json::num(r.held_cross_volume),
@@ -2799,7 +2928,7 @@ fn finish_apply(
         "\nMoved {}.",
         etude_cli_support::counted(r.moved, "file", "files")
     );
-    print_apply_holds(r);
+    print_apply_holds(r, root);
     if r.moved > 0 {
         match &r.journal_path {
             Some(jp) => {
@@ -2820,15 +2949,24 @@ fn finish_apply(
             Some(etude_cli_support::reason::Subject::wait("journal", None)),
         );
     }
-    if r.moved == 0 && r.held_tagged + r.held_cross_volume > 0 {
+    if r.moved == 0 && r.held_tagged + r.held_locked + r.held_cross_volume > 0 {
         return ExitCode::from(1);
     }
     ExitCode::SUCCESS
 }
 
+fn locked_after_scan_note(count: usize, root: &Path) -> String {
+    format!(
+        "{} locked after the scan and {} in place. {}",
+        etude_cli_support::counted(count, "item was", "items were"),
+        if count == 1 { "stays" } else { "stay" },
+        etude_cli_support::problems::unlock_step(root)
+    )
+}
+
 /// Counts of what apply left alone, with the reason for each. No tag names and
 /// no paths.
-fn print_apply_holds(r: &etude_core::apply::ApplyReport) {
+fn print_apply_holds(r: &etude_core::apply::ApplyReport, root: &Path) {
     let items = |n: usize| if n == 1 { "item" } else { "items" };
     if r.held_tagged > 0 {
         println!(
@@ -2843,6 +2981,9 @@ fn print_apply_holds(r: &etude_core::apply::ApplyReport) {
             r.held_cross_volume,
             items(r.held_cross_volume)
         );
+    }
+    if r.held_locked > 0 {
+        println!("{}", locked_after_scan_note(r.held_locked, root));
     }
     if r.tagged_not_returned > 0 {
         println!(
@@ -2973,7 +3114,15 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
     if p.moves() == 0 {
+        etude_cli_support::envelope::no_undo_needed();
         eprintln!("sweep: nothing to apply.{}", hold_hint(&p));
+        if p.only_too_recent() {
+            etude_cli_support::envelope::reason(
+                etude_cli_support::reason::Reason::nothing_to_do_later(
+                    etude_cli_support::reason::Subject::wait("input", None),
+                ),
+            );
+        }
         if has(args, "--progress-json") {
             etude_cli_support::progress::JsonProgress::stderr(
                 env!("CARGO_PKG_VERSION"),
@@ -3887,7 +4036,19 @@ fn finish_undo(
             .filter(|entry| entry.is_moved())
             .flat_map(|entry| [entry.to.clone(), entry.from.clone()])
             .collect();
-        refuse_apply(&err, &root, "could not put every file back", &items);
+        let tag_undo = j.entries.iter().any(|entry| entry.tag.is_some());
+        let (doing, work) = if tag_undo {
+            (
+                "could not put back every file's old tags",
+                etude_cli_support::problems::LockedWork::TagUndo,
+            )
+        } else {
+            (
+                "could not put every file back",
+                etude_cli_support::problems::LockedWork::Move,
+            )
+        };
+        refuse_apply(&err, &root, doing, &items, work);
         match saved {
             Ok(()) => {
                 if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path) = &err {
@@ -5003,6 +5164,7 @@ mod tag_report_tests {
                 after_journal: None,
                 before_rename: Some(&mut tag_it),
                 after_rename: Some(&mut occupy),
+                ..Default::default()
             },
         )
         .expect("apply reports instead of failing");
@@ -5010,7 +5172,7 @@ mod tag_report_tests {
         assert_eq!(report.moved, 1);
         assert_eq!(std::fs::read(&file).unwrap(), b"occupant");
         assert_eq!(
-            finish_apply(&report, "{}", false, "sweep undo"),
+            finish_apply(&report, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::from(3)
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -5024,9 +5186,22 @@ mod tag_report_tests {
             ..Default::default()
         };
         assert_eq!(
-            finish_apply(&report, "{}", false, "sweep undo"),
+            finish_apply(&report, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::from(3)
         );
+    }
+
+    #[test]
+    fn the_locked_after_the_scan_line_gives_the_step_that_finds_the_item() {
+        let one = locked_after_scan_note(1, Path::new("/nowhere"));
+        assert!(one.starts_with("1 item was locked after the scan and stays in place."));
+        assert!(one.contains("chflags nouchg"), "{one}");
+        assert!(
+            one.contains("See which with: find '/nowhere' -flags +uchg"),
+            "{one}"
+        );
+        let two = locked_after_scan_note(2, Path::new("/nowhere"));
+        assert!(two.starts_with("2 items were locked after the scan and stay in place."));
     }
 
     /// An item returned because it was tagged mid-move is a count in a normal
@@ -5040,7 +5215,7 @@ mod tag_report_tests {
             ..Default::default()
         };
         assert_eq!(
-            finish_apply(&some, "{}", false, "sweep undo"),
+            finish_apply(&some, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::SUCCESS
         );
         let all = ApplyReport {
@@ -5049,12 +5224,12 @@ mod tag_report_tests {
             ..Default::default()
         };
         assert_eq!(
-            finish_apply(&all, "{}", false, "sweep undo"),
+            finish_apply(&all, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::from(1)
         );
         let nothing = ApplyReport::default();
         assert_eq!(
-            finish_apply(&nothing, "{}", false, "sweep undo"),
+            finish_apply(&nothing, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::SUCCESS
         );
     }

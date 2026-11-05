@@ -256,6 +256,24 @@ pub fn move_denied_advice(
     paths: &[std::path::PathBuf],
     within: &Path,
 ) -> Option<String> {
+    denied_advice(error, paths, within, LockedWork::Move)
+}
+
+/// What the denied work was, so the words say what really failed. Tag work
+/// moves nothing.
+#[derive(Clone, Copy)]
+pub enum LockedWork {
+    Move,
+    TagApply,
+    TagUndo,
+}
+
+pub fn denied_advice(
+    error: &std::io::Error,
+    paths: &[std::path::PathBuf],
+    within: &Path,
+    work: LockedWork,
+) -> Option<String> {
     if error.raw_os_error() != Some(1) {
         return scan::permission_advice(error).map(str::to_owned);
     }
@@ -267,8 +285,6 @@ pub fn move_denied_advice(
         .collect();
     locked.sort();
     locked.dedup();
-    const UNLOCK: &str =
-        "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the item.";
     let Some(first) = locked.first() else {
         return Some(format!(
             "A file may be locked. {UNLOCK}\n       See which with: find {} -flags +uchg\n       If none is locked, macOS may be blocking the app running this command. Check System Settings > Privacy & Security > Files & Folders for that app.",
@@ -282,11 +298,97 @@ pub fn move_denied_advice(
     } else {
         first.parent().unwrap_or(first)
     };
-    Some(format!(
-        "{} locked, and a locked item cannot be moved. {UNLOCK}\n       See which with: find {} -flags +uchg",
-        crate::counted(locked.len(), "item is", "items are"),
-        crate::quoted_path(folder),
-    ))
+    let system = locked.iter().any(|path| scan::has_system_lock_flag(path));
+    Some(locked_advice(locked.len(), folder, system, work))
+}
+
+fn locked_advice(count: usize, folder: &Path, system: bool, work: LockedWork) -> String {
+    let (items, why) = match work {
+        LockedWork::Move => (
+            crate::counted(count, "item is", "items are"),
+            "a locked item cannot be moved",
+        ),
+        LockedWork::TagApply => (
+            crate::counted(count, "file is", "files are"),
+            "a locked file cannot take a new tag",
+        ),
+        LockedWork::TagUndo => (
+            crate::counted(count, "file is", "files are"),
+            "a locked file cannot take back its old tags",
+        ),
+    };
+    if system {
+        return format!(
+            "{items} locked by a system flag, and {why}. {}",
+            system_unlock_step(folder)
+        );
+    }
+    format!("{items} locked, and {why}. {}", unlock_step(folder))
+}
+
+pub const UNLOCK: &str =
+    "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the item.";
+pub const UNLOCK_FOLDER: &str =
+    "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the folder.";
+
+/// How to clear a lock. Scans count locked items without naming them, so the
+/// step also finds them.
+pub fn unlock_step(folder: &Path) -> String {
+    unlock_step_in(std::slice::from_ref(&folder.to_path_buf()))
+}
+
+/// The same step for items that sit in several folders.
+pub fn unlock_step_in(folders: &[std::path::PathBuf]) -> String {
+    let folders: Vec<String> = folders.iter().map(|f| crate::quoted_path(f)).collect();
+    format!(
+        "{UNLOCK}\n       See which with: find {} -flags +uchg",
+        folders.join(" ")
+    )
+}
+
+/// The system flag: Finder and `nouchg` cannot clear it, and `+uchg` cannot find it.
+fn system_unlock_step(folder: &Path) -> String {
+    format!(
+        "An administrator can clear it with sudo chflags noschg on the item.\n       See which with: find {} -flags +schg",
+        crate::quoted_path(folder)
+    )
+}
+
+/// The steps for what a scan held: `system` of the `count` items carry the
+/// system flag. Only the steps that apply are printed.
+pub fn locked_steps(folder: &Path, count: usize, system: usize) -> String {
+    if system == 0 {
+        unlock_step(folder)
+    } else if system >= count {
+        system_unlock_step(folder)
+    } else {
+        format!(
+            "{}\n       {}",
+            unlock_step(folder),
+            system_unlock_step(folder)
+        )
+    }
+}
+
+/// One wording for items a scan held because of a lock, in every tool. Sweep
+/// also holds a group whose existing folder is locked, so the item itself may
+/// not carry the flag.
+pub fn locked_note(count: usize) -> String {
+    if count == 1 {
+        "1 item is locked or headed for a locked folder, and stays in place".into()
+    } else {
+        format!("{count} items are locked or headed for a locked folder, and stay in place")
+    }
+}
+
+/// A folder the plan needs is locked. Nothing can move into or out of it. The
+/// line after this one says what became of the files. `again` is the command
+/// that makes a new plan.
+pub fn locked_folder_message(tool: &str, folder: &Path, again: &str) -> String {
+    format!(
+        "{tool}: {} is locked, so nothing can move into or out of it, and this plan cannot run as made.\n       {UNLOCK_FOLDER} Then plan again with: {again}",
+        crate::shown(folder)
+    )
 }
 
 /// A folder named on the command line that cannot be opened. One condition, one
@@ -466,6 +568,30 @@ mod tests {
         assert!(!modes.contains("locked"), "{modes}");
         let enoent = std::io::Error::from_raw_os_error(2);
         assert!(move_denied_advice(&enoent, &[], Path::new("/nowhere")).is_none());
+        let plain = locked_advice(2, Path::new("/nowhere"), false, LockedWork::Move);
+        assert!(plain.starts_with("2 items are locked"), "{plain}");
+        assert!(plain.contains("chflags nouchg"), "{plain}");
+        assert!(plain.contains("-flags +uchg"), "{plain}");
+        // Finder and nouchg cannot clear the system flag, and +uchg cannot find it.
+        let system = locked_advice(1, Path::new("/nowhere"), true, LockedWork::Move);
+        assert!(system.contains("sudo chflags noschg"), "{system}");
+        assert!(system.contains("-flags +schg"), "{system}");
+        assert!(!system.contains("nouchg"), "{system}");
+        assert!(!system.contains("+uchg"), "{system}");
+
+        let tag = locked_advice(1, Path::new("/nowhere"), false, LockedWork::TagApply);
+        assert!(tag.starts_with("1 file is locked, and a locked file cannot take a new tag."));
+        let tag = locked_advice(2, Path::new("/nowhere"), true, LockedWork::TagUndo);
+        assert!(tag.contains("cannot take back its old tags"), "{tag}");
+        assert!(!tag.contains("moved"), "{tag}");
+
+        let folder = Path::new("/nowhere");
+        let user_only = locked_steps(folder, 2, 0);
+        assert!(user_only.contains("nouchg") && !user_only.contains("noschg"));
+        let system_only = locked_steps(folder, 2, 2);
+        assert!(system_only.contains("noschg") && !system_only.contains("nouchg"));
+        let both = locked_steps(folder, 2, 1);
+        assert!(both.contains("+uchg") && both.contains("+schg"));
     }
 
     use super::*;

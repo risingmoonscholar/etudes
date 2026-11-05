@@ -6,9 +6,9 @@
   "104-sweep-progress-json": 11,
   "15-agent-mappings": 14,
   "15-document-scopes": 55,
-  "15-real-project-layouts": 68,
+  "15-real-project-layouts": 69,
   "20-allow-sync-apply-illusion": 27,
-  "20-apple-metadata": 9,
+  "20-apple-metadata": 18,
   "20-case-fold-collision": 6,
   "20-icloud-allow-sync-unreachable": 12,
   "20-package-opacity": 15,
@@ -72,5 +72,6 @@
   "108-stash-messages": 560,
   "109-unpack-messages": 668,
   "110-final-message-consistency": 438,
-  "111-sweep-undo-id": 303
+  "111-sweep-undo-id": 303,
+  "112-locked-items": 48
 }

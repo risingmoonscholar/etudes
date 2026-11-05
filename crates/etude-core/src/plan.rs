@@ -28,8 +28,7 @@ pub const DECISION_PRECEDENCE: &[DecisionClass] = &[
     DecisionClass::AgentMapping,
 ];
 
-/// Stable scheme names used by the roadmap. Only `folders` is implemented by
-/// this version; declaring a name does not make its behavior available.
+/// Stable names for the implemented folders, existing-folder and Finder-tag schemes.
 pub const DECLARED_SCHEMES: &[&str] = &["folders", "existing", "tags"];
 
 /// Filesystem states the sweep contract must account for by name. These are
@@ -42,12 +41,12 @@ pub const SCAN_STATE_ACCOUNTING: &[(&str, &str)] = &[
     ),
     (
         "immutable",
-        "the immutable flag is not preflighted; an OS refusal is reported during apply",
+        "items and folders with the immutable flag (st_flags) are held by the scan and counted; apply checks the flag again before each move",
     ),
     ("invisible", "hidden entries are skipped and counted"),
     (
         "alias",
-        "symlink aliases are skipped; selected-path aliases are normalized for overlap checks",
+        "Finder aliases are skipped by the FinderInfo kIsAlias flag without resolution; symlinks are skipped",
     ),
     (
         "iCloud placeholder",
@@ -180,6 +179,15 @@ pub struct Plan {
     pub scanned: usize,
     pub skipped_hidden: usize,
     pub skipped_symlink: usize,
+    pub aliases_skipped: usize,
+    /// Items held because they, or the folder they would move into, carry
+    /// the immutable flag. A count only.
+    pub locked_skipped: usize,
+    /// How many of those carry the system flag, or wait on a folder that does.
+    pub locked_system: usize,
+    /// The recent files would form a group if the window were ignored, so
+    /// waiting can change the answer. Decided while planning; never stored.
+    pub recent_would_group: bool,
     /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
@@ -257,6 +265,10 @@ impl Plan {
             scanned: 0,
             skipped_hidden: 0,
             skipped_symlink: 0,
+            aliases_skipped: 0,
+            locked_skipped: 0,
+            locked_system: 0,
+            recent_would_group: false,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -289,6 +301,10 @@ impl Plan {
             scanned: scan.entries.len(),
             skipped_hidden: scan.skipped_hidden,
             skipped_symlink: scan.skipped_symlink,
+            aliases_skipped: scan.aliases_skipped,
+            locked_skipped: scan.locked_skipped,
+            locked_system: scan.locked_system,
+            recent_would_group: false,
             skipped_system: scan.skipped_system,
             skipped_project: scan.skipped_project,
             skipped_in_flight: scan.skipped_in_flight,
@@ -322,6 +338,28 @@ impl Plan {
             .iter()
             .filter(|(_, u)| *u == Untouched::TooRecent)
             .count()
+    }
+
+    /// Waiting alone can turn this otherwise empty plan into one with groups.
+    /// Other holds make that promise unsafe, and so do files that would not
+    /// group once the window passes. Hidden files, links and aliases are never
+    /// candidates, so they do not change it.
+    pub fn only_too_recent(&self) -> bool {
+        let recent = self.too_recent();
+        self.recent_would_group
+            && recent > 0
+            && recent == self.scanned
+            && recent == self.untouched.len()
+            && self.groups.is_empty()
+            && self.unclaimed.is_empty()
+            && self.locked_skipped
+                + self.skipped_system
+                + self.skipped_project
+                + self.skipped_in_flight
+                + self.skipped_package
+                + self.skipped_unreadable
+                + self.skipped_tagged
+                == 0
     }
 
     /// Downloads still in flight.
@@ -573,6 +611,9 @@ impl Plan {
                 j::obj(&[
                     ("hidden", j::num(self.skipped_hidden)),
                     ("symlinks", j::num(self.skipped_symlink)),
+                    ("aliases_skipped", j::num(self.aliases_skipped)),
+                    ("locked_skipped", j::num(self.locked_skipped)),
+                    ("locked_system", j::num(self.locked_system)),
                     // A deliberate refusal: sweep could have entered these
                     // and chose not to (credential/noise names, or a system
                     // location like /Library).
@@ -810,9 +851,30 @@ pub fn build_with_maps(
 
 fn build_with_policy(
     scan: &ScanOutcome,
+    inspector: Option<&mut dyn Inspector>,
+    maps: &[MapSpec],
+    profile_routes: bool,
+) -> Plan {
+    let mut plan = group_entries(scan, inspector, maps, profile_routes, false);
+    if plan.groups.is_empty() && plan.too_recent() > 0 {
+        let unwindowed = group_entries(scan, None, maps, profile_routes, true);
+        plan.recent_would_group = would_group(&unwindowed);
+    }
+    plan
+}
+
+/// The same plan with the window ignored. Files still held as too recent have
+/// an unreadable mtime, and waiting cannot change that.
+fn would_group(unwindowed: &Plan) -> bool {
+    !unwindowed.groups.is_empty() && unwindowed.too_recent() == 0
+}
+
+fn group_entries(
+    scan: &ScanOutcome,
     mut inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
     profile_routes: bool,
+    ignore_window: bool,
 ) -> Plan {
     let mut untouched: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
     let mut remaining: Vec<&Entry> = Vec::new();
@@ -906,7 +968,8 @@ fn build_with_policy(
             untouched.push((e.path.clone(), Untouched::TooRecent));
             continue;
         }
-        if let Some(window) = scan.grace
+        if !ignore_window
+            && let Some(window) = scan.grace
             && !window.is_zero()
             && let Some(modified) = e.modified
             && modified
@@ -1117,6 +1180,25 @@ fn build_with_policy(
         untouched.push((e.path.clone(), Untouched::NoClearGroup));
     }
 
+    // A destination folder that already exists and carries the immutable
+    // flag cannot receive anything. Its group is held here, by name, and its
+    // members are counted as locked, so apply never has to refuse it.
+    let mut locked_skipped = scan.locked_skipped;
+    let mut locked_system = scan.locked_system;
+    groups.retain(|group| {
+        let locked = matches!(
+            crate::scan::is_locked_at(&scan.root.join(&group.name)),
+            Ok(true)
+        );
+        if locked {
+            locked_skipped += group.members.len();
+            if crate::scan::has_system_lock_flag(&scan.root.join(&group.name)) {
+                locked_system += group.members.len();
+            }
+        }
+        !locked
+    });
+
     untouched.sort_by(|a, b| a.0.cmp(&b.0));
     let unclaimed = untouched
         .iter()
@@ -1133,6 +1215,10 @@ fn build_with_policy(
         scanned: scan.entries.len(),
         skipped_hidden: scan.skipped_hidden,
         skipped_symlink: scan.skipped_symlink,
+        aliases_skipped: scan.aliases_skipped,
+        locked_skipped,
+        locked_system,
+        recent_would_group: false,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
@@ -1233,8 +1319,21 @@ pub fn build_tags(
     specs: &[TagSpec],
     inspector: Option<&mut dyn Inspector>,
 ) -> Plan {
+    let mut plan = tag_entries(scan, specs, inspector, false);
+    if plan.groups.is_empty() && plan.too_recent() > 0 {
+        plan.recent_would_group = would_group(&tag_entries(scan, specs, None, true));
+    }
+    plan
+}
+
+fn tag_entries(
+    scan: &ScanOutcome,
+    specs: &[TagSpec],
+    inspector: Option<&mut dyn Inspector>,
+    ignore_window: bool,
+) -> Plan {
     use std::collections::{BTreeMap, HashSet};
-    let mut plan = build_with_policy(scan, inspector, &[], false);
+    let mut plan = group_entries(scan, inspector, &[], false, ignore_window);
     let refused: HashSet<PathBuf> = plan
         .untouched
         .iter()
@@ -1444,6 +1543,9 @@ mod tests {
             project_holds: Vec::new(),
             skipped_hidden: 0,
             skipped_symlink: 0,
+            aliases_skipped: 0,
+            locked_skipped: 0,
+            locked_system: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -1482,6 +1584,10 @@ mod tests {
         assert!(
             p.groups.is_empty(),
             "an unreadable timestamp must not be the most permissive case"
+        );
+        assert!(
+            !p.only_too_recent(),
+            "waiting cannot make an unreadable timestamp readable"
         );
 
         // With the window off, they are eligible again -- zero means zero.
