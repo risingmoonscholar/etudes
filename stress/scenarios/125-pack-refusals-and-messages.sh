@@ -52,6 +52,13 @@ say "unknown recipient" 2 refused invalid_arguments 'got "friend"' -- "$S" --for
 say "empty recipient" 2 refused invalid_arguments "--for needs a value" -- "$S" --for ""
 say "empty destination" 2 refused invalid_arguments "--into needs a value" -- "$S" --for other --into ""
 say "a flag where a value goes" 2 refused invalid_arguments "--into needs a value" -- "$S" --for other --into --list
+say "a name that reads as an option" 2 refused invalid_arguments 'got "-x.zip", which reads as an option' -- "$S" --for other --into -x.zip
+hasnt "a name that reads as an option: does not say it is missing" "$LAST" "needs a value"
+(cd "$W" && "$PACK" "$S" --for other --into ./-x.zip >/dev/null 2>&1 </dev/null); assert_eq 0 "$?" "a name that reads as an option: the printed form works"
+rm -f "${W:?}/-x.zip"
+# Like stash and unpack, -- is not an option here.
+say "a double dash" 2 refused unknown_option "unknown option --." -- -- "$S" --for other
+say "a double dash after the folder" 2 refused unknown_option "unknown option --." -- "$S" --for other --
 say "repeated --for" 2 refused invalid_arguments "--for was given more than once" -- "$S" --for other --for self
 say "repeated --into" 2 refused invalid_arguments "--into was given more than once" -- "$S" --for other --into a.zip --into b.zip
 say "repeated --format" 2 refused invalid_arguments "--format was given more than once" -- "$S" --for other --format zip --format zip
@@ -216,6 +223,19 @@ E2="$W/only-private"; mkdir -p "$E2"; printf 'x\n' > "$E2/passport.pdf"; printf 
 say "only private items" 1 nothing_to_do nothing_to_do "was left out: 2 items that look personal" -- "$E2" --for other --into "$W/e.zip"
 hasnt "only private items: hides the names" "$LAST" "passport"
 nothing_new "nothing to include"
+
+# --- mdls runs for folders, never for each file ----------------------------------
+FAKE="$W/fake-bin"; mkdir -p "$FAKE"
+printf '#!/bin/sh\nprintf "x\\n" >> "%s/mdls-calls"\nexit 0\n' "$W" > "$FAKE/mdls"
+chmod +x "$FAKE/mdls"
+T="$W/many"; mkdir -p "$T/one" "$T/two"; for i in $(seq 1 60); do : > "$T/one/f$i"; done
+: > "$W/mdls-calls"
+PATH="$FAKE:$PATH" "$PACK" "$T" --for other --into "$W/many.zip" >/dev/null 2>&1 </dev/null
+assert_eq 0 "$?" "many files: pack"
+# Two folders, two passes over the folder, and the top folder once.
+CALLS=$(wc -l < "$W/mdls-calls" | tr -d ' ')
+[ "$CALLS" -gt 0 ] && [ "$CALLS" -le 5 ] && pass "many files: the system tool ran $CALLS times, for folders only" || fail "many files: the system tool ran $CALLS times for 60 files"
+rm -f "${W:?}/many.zip"
 
 # --- what is left out, counted and never named ----------------------------------
 T="$W/mixed"; mkdir -p "$T/.ssh" "$T/.git" "$T/node_modules/x"; printf 'x\n' > "$T/keep.txt"; printf 'x\n' > "$T/.env"; printf 'x\n' > "$T/id_rsa"

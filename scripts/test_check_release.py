@@ -18,6 +18,18 @@ class ReleaseGate(unittest.TestCase):
             f"cargo install --locked --git {release.REPO} --tag {tag} {tool}-cli"
             for tool, tag in self.expected.items())
 
+    def test_the_gate_reads_one_list_of_published_tools(self):
+        self.assertEqual(release.TOOLS, ("sweep", "stash", "unpack"))
+
+    def test_the_real_readme_has_a_pin_for_each_published_tool_and_none_for_others(self):
+        readme = Path(__file__).resolve().parents[1].joinpath("README.md").read_text()
+        self.assertEqual(sorted(release.pins(readme)), ["stash", "sweep", "unpack"])
+        self.assertNotIn("--tag pack-v", readme)
+
+    def test_an_unlisted_tool_needs_no_pin_or_tag(self):
+        listing = "\n".join(f"{'a' * 40}\trefs/tags/{tag}" for tag in self.expected.values())
+        release.check_tags(release.pins(self.readme), listing)
+
     def test_all_documented_pins_are_required(self):
         self.assertEqual(release.pins(self.readme), self.expected)
         with self.assertRaisesRegex(RuntimeError, "unpack"):

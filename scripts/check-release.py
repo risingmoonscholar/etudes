@@ -16,9 +16,12 @@ import sys
 import tempfile
 import tomllib
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from published_tools import PUBLISHED_TOOLS  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "https://github.com/risingmoonscholar/etudes"
-TOOLS = ("sweep", "stash", "unpack", "pack")
+TOOLS = PUBLISHED_TOOLS
 
 
 def require(condition, message):

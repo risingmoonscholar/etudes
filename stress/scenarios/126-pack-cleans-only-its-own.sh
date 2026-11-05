@@ -213,6 +213,8 @@ if paused "a live run" "$D"; then
   assert_eq 0 "$RC" "a live run: the second run finishes"
   assert_eq 0 "$(field details.leftovers_removed "$W/second.out")" "a live run: the second run removed nothing"
   assert_eq 0 "$(field details.leftovers_kept "$W/second.out")" "a live run: a busy file is not called a leftover"
+  assert_eq 1 "$(field details.leftovers_still_open "$W/second.out")" "a live run: the open file is counted"
+  grep -q "because another process still has it open" "$W/second.err" && pass "a live run: the second run says it left an open file" || fail "a live run: $(cat "$W/second.err")"
   [ -e "$FIRST" ] && pass "a live run: its unfinished file is still there" || fail "a live run: its unfinished file was removed"
   CHILDREN="$FIRST_CHILDREN"; PID="$FIRST_PID"; resume
   wait "$FIRST_PID" 2>/dev/null; RC=$?
@@ -229,13 +231,28 @@ if paused "an orphaned writer" "$D"; then
   ORPHAN_STAGE="$STAGE"
   "$PACK" "$W/small" --for other --into "$D" --json >"$W/o.out" 2>"$W/o.err" </dev/null
   assert_eq 0 "$(field details.leftovers_removed "$W/o.out")" "an orphaned writer: a file it still holds is not removed"
+  assert_eq 1 "$(field details.leftovers_still_open "$W/o.out")" "an orphaned writer: the open file is counted"
+  grep -q "the tar of a pack that was killed" "$W/o.err" && pass "an orphaned writer: says so" || fail "an orphaned writer: $(cat "$W/o.err")"
+  # The destination now exists. A refused run still looks, and removes nothing locked.
+  "$PACK" "$W/small" --for other --into "$D" --json >"$W/o2.out" 2>"$W/o2.err" </dev/null; RC=$?
+  assert_eq 2 "$RC" "an orphaned writer, destination exists: refused"
+  grep -q "because another process still has it open" "$W/o2.err" && pass "an orphaned writer, destination exists: reports the open file" || fail "an orphaned writer, destination exists: $(cat "$W/o2.err")"
+  [ -e "$ORPHAN_STAGE" ] && pass "an orphaned writer, destination exists: the open file stays" || fail "an orphaned writer, destination exists: the open file was removed"
   [ -e "$ORPHAN_STAGE" ] && pass "an orphaned writer: the file is still there" || fail "an orphaned writer: the file was removed under it"
   for c in $CHILDREN; do kill -9 "$c" 2>/dev/null; done
   await_gone "$CHILDREN" || fail "an orphaned writer: it did not stop"
-  rm -f "${D:?}"
-  "$PACK" "$W/small" --for other --into "$D" --json >"$W/o.out" 2>"$W/o.err" </dev/null
-  assert_eq 1 "$(field details.leftovers_removed "$W/o.out")" "an orphaned writer: once gone, the file is removed"
-  [ ! -e "$ORPHAN_STAGE" ] && pass "an orphaned writer: the file is gone" || fail "an orphaned writer: the file remains"
+  # --list reports it and removes nothing.
+  OUT=$("$PACK" "$W/small" --for other --into "$D" --list 2>&1 </dev/null)
+  case "$OUT" in *"can be removed"*) pass "--list: reports what a run would remove" ;; *) fail "--list: $OUT" ;; esac
+  [ -e "$ORPHAN_STAGE" ] && pass "--list: the leftover stays" || fail "--list: the leftover was removed"
+  # The destination still exists: the run refuses, and the leftover is dealt with.
+  BEFORE_DEST=$(ls -li "$D")
+  "$PACK" "$W/small" --for other --into "$D" --json >"$W/o3.out" 2>"$W/o3.err" </dev/null; RC=$?
+  assert_eq 2 "$RC" "destination exists: refused"
+  assert_eq destination_exists "$(field reason.code "$W/o3.out")" "destination exists: reason"
+  grep -q "removed 1 unfinished file from an earlier run" "$W/o3.err" && pass "destination exists: says what it removed" || fail "destination exists: $(cat "$W/o3.err")"
+  [ ! -e "$ORPHAN_STAGE" ] && pass "destination exists: the leftover is gone" || fail "destination exists: the leftover remains"
+  assert_eq "$BEFORE_DEST" "$(ls -li "$D")" "destination exists: the archive is untouched"
 fi
 
 # --- two runs at once: one wins the name, nothing is left --------------------------

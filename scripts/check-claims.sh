@@ -101,7 +101,12 @@ check_pin() {
 check_pin sweep-cli  crates/sweep-cli/Cargo.toml
 check_pin stash-cli  crates/stash-cli/Cargo.toml
 check_pin unpack-cli crates/unpack-cli/Cargo.toml
-check_pin pack-cli crates/pack-cli/Cargo.toml
+# pack has no release yet, so README must not offer a tag for it.
+if grep -qE -- "--tag pack-v" README.md; then
+  bad "README.md offers a tagged install of pack, which has no release"
+else
+  ok "README.md offers no tagged install of pack, which has no release"
+fi
 
 # The version the site shows, against the version the binaries report.
 # It was hardcoded in the page template as "v0.3" and stayed there through the

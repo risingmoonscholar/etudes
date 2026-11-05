@@ -295,14 +295,15 @@ MAC METADATA
 keep carries Finder tags, the download warning and other attributes, and needs
 tar.gz. drop removes them all. Pack counts the items with tags, the download
 warning, and forks or Finder info, and says what it did. A file that loses the
-download warning will not warn after it is extracted. Owners are not kept.
+download warning will not warn after it is extracted. Owners are not kept. A file
+with another hard-link name outside the archive goes in as its own copy.
 
 WHAT IS REFUSED
-Links, hard links between two names in FOLDER, setuid and setgid files, files
+Links, hard links between two names in FOLDER, setuid and setgid items, files
 still downloading or stored only in the cloud, unreadable items, names that are
 unsafe on another system, names that differ only by case or accent, more than
-20000 items, more than 32 folders deep. System and credential folders, your home
-folder and any folder holding it. Running as root.
+20000 items, items more than 31 levels down. System and credential folders, your
+home folder and any folder holding it. Running as root.
 
 WHAT IT PROMISES
 It never replaces a file. An archive appears at FILE only when complete and read
@@ -346,14 +347,14 @@ fn run(args: &[String]) -> Result<()> {
     refuse_root_user()?;
     resolve_source(&mut policy)?;
     resolve_destination(&mut policy)?;
-    let plan = preflight(&policy)?;
-    let leftovers = if plan.entries.is_empty() || policy.list {
-        Leftovers::default()
-    } else {
-        sweep_leftovers(policy.destination())
-    };
-    details(&policy, &plan, &leftovers);
+    // Before anything can refuse, so a leftover is found whatever happens next.
+    let leftovers = sweep_leftovers(policy.destination(), !policy.list);
     leftovers.report(policy.destination());
+    if fs::symlink_metadata(policy.destination()).is_ok() {
+        return Err(occupied(policy.destination()));
+    }
+    let plan = preflight(&policy)?;
+    details(&policy, &plan, &leftovers);
     if plan.entries.is_empty() {
         envelope::status("nothing_to_do");
         envelope::reason(Reason::nothing_to_do());
@@ -463,8 +464,11 @@ fn write_archive(policy: &Policy, plan: &Plan, staging: &Staging) -> Result<()> 
                 .metadata()
                 .map_err(|e| policy.write_failed(e))?
                 .len();
-            if size > policy.max || size > plan.bound {
-                return Err(over_limit(policy, size.max(plan.bound)));
+            // Only the person's limit. The bound is an estimate for the free-space
+            // check: it cannot count an attribute pack does not name, and tar
+            // stores those too, so passing it is no failure.
+            if size > policy.max {
+                return Err(passed_limit(policy, size));
             }
             check_stop(policy)?;
             if let Some(status) = status {
@@ -534,6 +538,22 @@ fn over_limit(policy: &Policy, needed: u64) -> Problem {
             human(needed),
             human(policy.max),
             size_flag(needed)
+        ),
+        Some(&policy.source),
+    )
+}
+
+fn passed_limit(policy: &Policy, size: u64) -> Problem {
+    Problem::new(
+        Code::SizeLimitExceeded,
+        2,
+        format!(
+            "the archive of {} passed the limit of {} while it was being written, at {}. No \
+             archive was made. To allow more: --max-size {}",
+            policy.shown(),
+            human(policy.max),
+            human(size),
+            size_flag(size.saturating_mul(2))
         ),
         Some(&policy.source),
     )
@@ -662,6 +682,18 @@ fn summary(policy: &Policy, plan: &Plan, first: &str) -> String {
     if plan.left_out() > 0 {
         lines.push(format!("Left out {}.", plan.left_out_text()));
     }
+    if plan.other_names > 0 {
+        lines.push(if plan.other_names == 1 {
+            "1 item has another name that stays out of the archive, and goes in as its own copy."
+                .to_string()
+        } else {
+            format!(
+                "{} items have another name that stays out of the archive, and go in as their \
+                 own copies.",
+                plan.other_names
+            )
+        });
+    }
     let attributes = plan.attributes_text();
     if policy.keep {
         lines.push(format!("Mac metadata carried: {attributes}."));
@@ -677,7 +709,6 @@ fn summary(policy: &Policy, plan: &Plan, first: &str) -> String {
 }
 
 fn details(policy: &Policy, plan: &Plan, leftovers: &Leftovers) {
-    envelope::effect("leftovers_removed", leftovers.removed);
     envelope::detail(j::obj(&[
         ("recipient", j::str(&policy.recipient)),
         ("format", j::str(&policy.format)),
@@ -697,8 +728,10 @@ fn details(policy: &Policy, plan: &Plan, leftovers: &Leftovers) {
         ("items_with_finder_tags", j::num(plan.tagged)),
         ("items_with_download_warning", j::num(plan.quarantined)),
         ("items_with_fork_or_finder_info", j::num(plan.attributed)),
+        ("items_with_another_name", j::num(plan.other_names)),
         ("leftovers_removed", j::num(leftovers.removed)),
         ("leftovers_kept", j::num(leftovers.kept.len())),
+        ("leftovers_still_open", j::num(leftovers.busy.len())),
         ("upper_bound_bytes", j::num(plan.bound)),
         (
             "items",
@@ -711,6 +744,7 @@ fn details(policy: &Policy, plan: &Plan, leftovers: &Leftovers) {
 
 fn parse(args: &[String]) -> Result<Policy> {
     const VALUED: [&str; 5] = ["--for", "--into", "--format", "--metadata", "--max-size"];
+    const OTHER_FLAGS: [&str; 3] = ["--json", "--list", "--"];
     let mut values: BTreeMap<&str, &str> = BTreeMap::new();
     let mut source: Option<&str> = None;
     let mut list = false;
@@ -727,19 +761,27 @@ fn parse(args: &[String]) -> Result<Policy> {
             }
             _ if VALUED.contains(&arg) => {
                 i += 1;
-                let Some(value) = args.get(i).filter(|s| !s.is_empty() && !s.starts_with('-'))
-                else {
-                    return Err(Problem::invalid(format!(
-                        "{arg} needs a value: {}. Nothing was written.",
-                        match arg {
-                            "--for" => "--for self, --for mac or --for other",
-                            "--into" => "--into FILE",
-                            "--format" => "--format tar.gz or --format zip",
-                            "--metadata" => "--metadata keep or --metadata drop",
-                            _ => "--max-size 500M or --max-size 2G",
-                        }
-                    )));
+                let hint = match arg {
+                    "--for" => "--for self, --for mac or --for other",
+                    "--into" => "--into FILE",
+                    "--format" => "--format tar.gz or --format zip",
+                    "--metadata" => "--metadata keep or --metadata drop",
+                    _ => "--max-size 500M or --max-size 2G",
                 };
+                let given = args.get(i).map(String::as_str).unwrap_or("");
+                if given.is_empty() || VALUED.contains(&given) || OTHER_FLAGS.contains(&given) {
+                    return Err(Problem::invalid(format!(
+                        "{arg} needs a value: {hint}. Nothing was written."
+                    )));
+                }
+                if given.starts_with('-') {
+                    return Err(Problem::invalid(format!(
+                        "{arg} got \"{0}\", which reads as an option. Nothing was written. \
+                         A name that starts with - needs a path in front, such as ./{0}.",
+                        shown_text(given)
+                    )));
+                }
+                let value = &args[i];
                 if values.insert(arg, value.as_str()).is_some() {
                     return Err(Problem::invalid(format!(
                         "{arg} was given more than once, and only one can be used. Remove the \
@@ -974,15 +1016,10 @@ fn resolve_source(policy: &mut Policy) -> Result<()> {
     if scan::refused_location(&source).is_some() {
         return Err(protected("a system or credential folder"));
     }
-    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty())
-        && let Ok(home) = fs::canonicalize(home)
-        && home.starts_with(&source)
-    {
-        return Err(protected(if home == source {
-            "your home folder"
-        } else {
-            "a folder holding your home folder"
-        }));
+    match home_relation(&source, &home_folders()) {
+        Some(HomeRelation::Is) => return Err(protected("your home folder")),
+        Some(HomeRelation::Holds) => return Err(protected("a folder holding your home folder")),
+        None => {}
     }
     let name = root_name(policy)?;
     if hazard(name) {
@@ -1001,6 +1038,36 @@ fn resolve_source(policy: &mut Policy) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum HomeRelation {
+    Is,
+    Holds,
+}
+
+/// The account's home from the system, and `HOME` too. `HOME` alone is not
+/// enough, because a safety rule must not fail open when a variable is unset or
+/// wrong. Sweep avoids it for the same reason; see `scan::refused_location`.
+fn home_folders() -> Vec<PathBuf> {
+    let variable = std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from);
+    [sys::account_home(), variable]
+        .into_iter()
+        .flatten()
+        .filter_map(|home| fs::canonicalize(home).ok())
+        .collect()
+}
+
+fn home_relation(source: &Path, homes: &[PathBuf]) -> Option<HomeRelation> {
+    if homes.iter().any(|home| home == source) {
+        return Some(HomeRelation::Is);
+    }
+    homes
+        .iter()
+        .any(|home| home.starts_with(source))
+        .then_some(HomeRelation::Holds)
 }
 
 fn root_name(policy: &Policy) -> Result<&str> {
@@ -1072,9 +1139,6 @@ fn resolve_destination(policy: &mut Policy) -> Result<()> {
             policy.shown()
         )));
     }
-    if fs::symlink_metadata(&into).is_ok() {
-        return Err(occupied(&into));
-    }
     policy.into = Some(into);
     Ok(())
 }
@@ -1133,6 +1197,8 @@ struct Plan {
     tagged: usize,
     quarantined: usize,
     attributed: usize,
+    /// Files with a hard-link name that stays out of the archive.
+    other_names: usize,
     payload: u64,
     bound: u64,
 }
@@ -1205,6 +1271,7 @@ fn sensitive(path: &Path, m: &Metadata) -> bool {
     })
     .is_some()
 }
+/// Only call this for a folder. The last test runs a system tool.
 fn package(path: &Path) -> bool {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     scan::is_package(&name)
@@ -1255,6 +1322,7 @@ fn preflight(policy: &Policy) -> Result<Plan> {
             tagged: 0,
             quarantined: 0,
             attributed: 0,
+            other_names: 0,
             payload: 0,
             bound: 65536,
         },
@@ -1281,7 +1349,9 @@ impl Walker<'_> {
         check_stop(policy)?;
         if depth >= MAX_DEPTH {
             return Err(policy.refuse(
-                &format!("{} goes more than {MAX_DEPTH} folders deep, and unpack would refuse the archive.", policy.shown()),
+                &format!("{} holds an item more than {} levels down, and unpack refuses anything deeper.",
+                    policy.shown(),
+                    MAX_DEPTH - 1),
                 "Move the deepest folders up, or pack a folder further down.".into(),
             ));
         }
@@ -1344,6 +1414,7 @@ impl Walker<'_> {
             ));
         }
         self.plan.identities.push((path.into(), Identity::of(&m)));
+        let in_package = in_package || (!top && m.is_dir() && package(path));
         if !top {
             if sensitive(path, &m) || (m.is_dir() && scan::never_enter(name)) {
                 if in_package {
@@ -1379,8 +1450,7 @@ impl Walker<'_> {
                 .map_err(|e| policy.read_failed(e))?;
             children.sort();
             for child in children {
-                let child_package = in_package || package(&child);
-                self.walk(&child, child_package, depth + 1)?;
+                self.walk(&child, in_package, depth + 1)?;
             }
         }
         Ok(())
@@ -1426,16 +1496,16 @@ impl Walker<'_> {
                 "Rename one of them, then run pack again.".into(),
             ));
         }
+        if m.mode() & 0o6000 != 0 {
+            return Err(inside(
+                "a setuid or setgid file or folder, and unpack refuses to extract one.",
+                format!(
+                    "To find it: find {} -mindepth 1 \\( -type f -o -type d \\) \\( -perm -4000 -o -perm -2000 \\)",
+                    policy.quoted()
+                ),
+            ));
+        }
         if m.is_file() {
-            if m.mode() & 0o6000 != 0 {
-                return Err(inside(
-                    "a setuid or setgid file, and unpack refuses to extract one.",
-                    format!(
-                        "To find it: find {} -perm -4000 -o -perm -2000",
-                        policy.quoted()
-                    ),
-                ));
-            }
             if m.nlink() > 1 && !self.links.insert((m.dev(), m.ino())) {
                 return Err(inside(
                     "two names for one file, known as hard links, and unpack refuses to extract them.",
@@ -1444,6 +1514,9 @@ impl Walker<'_> {
                         policy.quoted()
                     ),
                 ));
+            }
+            if m.nlink() > 1 {
+                self.plan.other_names += 1;
             }
             if sys::dataless(m) {
                 return Err(inside(
@@ -1621,6 +1694,10 @@ impl Drop for Staging {
 #[derive(Default)]
 struct Leftovers {
     removed: usize,
+    /// Proven with --list, which removes nothing.
+    removable: usize,
+    /// Held open by another process. Never removed.
+    busy: Vec<PathBuf>,
     /// Files with the right name that could not be proven to be pack's own.
     kept: Vec<PathBuf>,
 }
@@ -1631,6 +1708,32 @@ impl Leftovers {
                 "pack: removed {} from an earlier run for {} that was stopped.",
                 counted(self.removed, "unfinished file", "unfinished files"),
                 shown(destination)
+            );
+        }
+        envelope::effect("leftovers_removed", self.removed);
+        envelope::effect("leftovers_still_open", self.busy.len());
+        envelope::effect("leftovers_kept", self.kept.len());
+        if self.removable > 0 {
+            eprintln!(
+                "pack: {} from an earlier stopped run for {} can be removed. --list changes \
+                 nothing; a run without it removes {}.",
+                counted(self.removable, "unfinished file", "unfinished files"),
+                shown(destination),
+                if self.removable == 1 { "it" } else { "them" },
+            );
+        }
+        if !self.busy.is_empty() {
+            let names = self
+                .busy
+                .iter()
+                .map(|path| shown(path))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let it = if self.busy.len() == 1 { "it" } else { "them" };
+            eprintln!(
+                "pack: left {names} alone, because another process still has {it} open: another \
+                 pack, or the tar of a pack that was killed. A later run removes {it} once that \
+                 process has ended and nothing else removed {it} first."
             );
         }
         if !self.kept.is_empty() {
@@ -1661,7 +1764,7 @@ impl Leftovers {
 }
 
 /// Remove what a killed run left for this destination, and nothing else.
-fn sweep_leftovers(destination: &Path) -> Leftovers {
+fn sweep_leftovers(destination: &Path, remove: bool) -> Leftovers {
     let mut found = Leftovers::default();
     let prefix = staging_prefix(destination);
     let Some(parent) = destination.parent() else {
@@ -1686,10 +1789,10 @@ fn sweep_leftovers(destination: &Path) -> Leftovers {
             continue;
         };
         let path = entry.path();
-        match remove_if_ours(&path, nonce) {
+        match remove_if_ours(&path, nonce, remove) {
             Leftover::Removed => found.removed += 1,
-            // Another run is writing it. It is that run's to remove.
-            Leftover::Busy => {}
+            Leftover::Removable => found.removable += 1,
+            Leftover::Busy => found.busy.push(path),
             Leftover::NotProven => found.kept.push(path),
         }
     }
@@ -1698,13 +1801,14 @@ fn sweep_leftovers(destination: &Path) -> Leftovers {
 
 enum Leftover {
     Removed,
+    Removable,
     Busy,
     NotProven,
 }
 
 /// Every test must pass before anything is removed, and each one looks at the
 /// file itself through a descriptor opened without following links.
-fn remove_if_ours(path: &Path, nonce: &str) -> Leftover {
+fn remove_if_ours(path: &Path, nonce: &str, remove: bool) -> Leftover {
     let Ok(file) = OpenOptions::new()
         .read(true)
         .custom_flags(sys::OPEN_FLAGS)
@@ -1733,6 +1837,9 @@ fn remove_if_ours(path: &Path, nonce: &str) -> Leftover {
         Ok(true) => {}
         Ok(false) => return Leftover::Busy,
         Err(_) => return Leftover::NotProven,
+    }
+    if !remove {
+        return Leftover::Removable;
     }
     if !same_name() || fs::remove_file(path).is_err() {
         return Leftover::NotProven;
@@ -1976,12 +2083,12 @@ fn rename_no_replace(_: &Path, _: &Path) -> io::Result<()> {
 /// The operating system calls with no safe wrapper in the standard library.
 #[cfg(target_os = "macos")]
 mod sys {
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
     use std::fs::{File, Metadata};
     use std::io;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     /// sys/fcntl.h: O_NONBLOCK | O_NOFOLLOW, so opening never waits on a pipe
     /// and never looks through a link.
@@ -2024,6 +2131,36 @@ mod sys {
             position: u32,
             options: i32,
         ) -> isize;
+    }
+
+    /// pwd.h, through the one field read here.
+    #[repr(C)]
+    struct Passwd {
+        name: *const i8,
+        password: *const i8,
+        uid: u32,
+        gid: u32,
+        change: i64,
+        class: *const i8,
+        gecos: *const i8,
+        dir: *const i8,
+    }
+    unsafe extern "C" {
+        fn getpwuid(uid: u32) -> *const Passwd;
+    }
+
+    /// This account's home folder from the system's records, not the environment.
+    pub fn account_home() -> Option<PathBuf> {
+        // SAFETY: the record is read and copied at once, and this runs before the
+        // tool starts any thread, so nothing else can overwrite the shared result.
+        unsafe {
+            let record = getpwuid(user_id());
+            if record.is_null() || (*record).dir.is_null() {
+                return None;
+            }
+            let dir = CStr::from_ptr((*record).dir);
+            Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes())))
+        }
     }
 
     pub fn running_as_root() -> bool {
@@ -2143,8 +2280,11 @@ mod sys {
 mod sys {
     use std::fs::{File, Metadata};
     use std::io;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     pub const OPEN_FLAGS: i32 = 0;
+    pub fn account_home() -> Option<PathBuf> {
+        None
+    }
     pub const LOCKED: i32 = 0;
     pub fn running_as_root() -> bool {
         false
@@ -2503,13 +2643,13 @@ mod tests {
         let left = abandoned(&dest);
         // Another test's child holds every open file between fork and exec, so
         // the lock can look busy for a moment. A busy file is left, as it should be.
-        let mut found = sweep_leftovers(&dest);
+        let mut found = sweep_leftovers(&dest, true);
         for _ in 0..200 {
             if found.removed > 0 {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
-            found = sweep_leftovers(&dest);
+            found = sweep_leftovers(&dest, true);
         }
         assert_eq!((found.removed, found.kept.len()), (1, 0));
         assert!(!left.exists());
@@ -2520,8 +2660,9 @@ mod tests {
         let f = Fixture::new();
         let dest = f.0.join("out.zip");
         let live = Staging::create(&dest).unwrap();
-        let found = sweep_leftovers(&dest);
+        let found = sweep_leftovers(&dest, true);
         assert_eq!((found.removed, found.kept.len()), (0, 0));
+        assert_eq!(found.busy, vec![live.path.clone()]);
         assert!(live.path.exists());
     }
 
@@ -2566,7 +2707,7 @@ mod tests {
         let short = name("abc");
         fs::write(&short, b"mine").unwrap();
         let other = abandoned(&f.0.join("other.zip"));
-        let found = sweep_leftovers(&dest);
+        let found = sweep_leftovers(&dest, true);
         assert_eq!(found.removed, 0);
         assert_eq!(found.kept.len(), 6);
         for path in [
@@ -2657,5 +2798,75 @@ mod tests {
         assert!(parse(&args("a.TGZ", "tar.gz")).is_ok());
         assert!(parse(&args("folder/", "zip")).is_err());
         assert!(parse(&args("", "zip")).is_err());
+    }
+
+    #[test]
+    fn list_mode_proves_a_leftover_and_removes_nothing() {
+        let f = Fixture::new();
+        let dest = f.0.join("out.zip");
+        let left = abandoned(&dest);
+        let mut found = sweep_leftovers(&dest, false);
+        for _ in 0..200 {
+            if found.removable > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            found = sweep_leftovers(&dest, false);
+        }
+        assert_eq!((found.removed, found.removable), (0, 1));
+        assert!(left.exists());
+    }
+
+    #[test]
+    fn the_home_refusal_does_not_depend_on_the_variable() {
+        // Compared, never read: this touches nothing in the real home folder.
+        let account = fs::canonicalize(sys::account_home().unwrap()).unwrap();
+        let homes = vec![account.clone()];
+        assert_eq!(home_relation(&account, &homes), Some(HomeRelation::Is));
+        let parent = account.parent().unwrap();
+        assert_eq!(home_relation(parent, &homes), Some(HomeRelation::Holds));
+        assert_eq!(home_relation(&account.join("Documents"), &homes), None);
+        assert_eq!(home_relation(Path::new("/nowhere"), &homes), None);
+        // Whatever HOME says in this test run, the account's home is still listed.
+        assert!(home_folders().contains(&account));
+    }
+
+    #[test]
+    fn a_value_that_starts_with_a_dash_is_named_as_given() {
+        let run = |into: &str| {
+            parse(&[
+                "source".to_string(),
+                "--for".into(),
+                "other".into(),
+                "--into".into(),
+                into.into(),
+            ])
+            .unwrap_err()
+            .message
+        };
+        assert!(run("-x.zip").contains("got \"-x.zip\""));
+        assert!(run("--list").contains("needs a value"));
+    }
+
+    #[test]
+    fn a_setgid_folder_is_refused_as_unpack_would() {
+        let f = Fixture::new();
+        fs::create_dir(f.0.join("source/shared")).unwrap();
+        fs::set_permissions(
+            f.0.join("source/shared"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o2755),
+        )
+        .unwrap();
+        // The no-network sandbox denies setting the bit, so there is nothing to refuse.
+        let mode = fs::metadata(f.0.join("source/shared")).unwrap().mode();
+        if mode & 0o2000 == 0 {
+            return;
+        }
+        assert!(
+            preflight(&f.policy())
+                .unwrap_err()
+                .message
+                .contains("setuid or setgid")
+        );
     }
 }

@@ -107,7 +107,9 @@ round_trip "32 levels with the top folder" "$T" --for other
 T="$W/deep-no"; mkdir -p "$T"; deep "$T" 32
 OUT=$("$PACK" "$T" --for other --into "$W/deep-no.zip" 2>&1 </dev/null); RC=$?
 assert_eq 2 "$RC" "too deep: pack refuses before unpack would"
-case "$OUT" in *"more than 32 folders deep"*) pass "too deep: says so" ;; *) fail "too deep: $OUT" ;; esac
+case "$OUT" in *"more than 31 levels down"*) pass "too deep: states the real limit" ;; *) fail "too deep: $OUT" ;; esac
+T="$W/deep-edge"; mkdir -p "$T"; deep "$T" 31
+assert_exit 2 "one past the limit: refused" -- "$PACK" "$T" --for other --into "$W/deep-edge.zip"
 [ ! -e "$W/deep-no.zip" ] && pass "too deep: no archive" || fail "too deep: an archive was made"
 
 # Unpack also refuses setuid files and hard links, so pack refuses them first.
@@ -123,9 +125,41 @@ T="$W/hard-other"; mkdir -p "$T"; printf 'x\n' > "$T/a"; ln "$T/a" "$T/b"
 OUT=$("$PACK" "$T" --for other --into "$W/hard-other.zip" 2>&1 </dev/null); RC=$?
 assert_eq 2 "$RC" "hard links in zip: refused the same way"
 case "$OUT" in *"hard links"*) pass "hard links in zip: says so" ;; *) fail "hard links in zip: $OUT" ;; esac
-# A second name outside the folder is not the folder's business.
+# A setgid or setuid folder: unpack refuses any such member, so pack does first.
+T="$W/setgid-dir"; mkdir -p "$T/shared"; printf 'x\n' > "$T/shared/f"; chmod 2755 "$T/shared"
+if [ -n "$(find "$T/shared" -maxdepth 0 -perm -2000)" ]; then
+  OUT=$("$PACK" "$T" --for other --into "$W/setgid.zip" 2>&1 </dev/null); RC=$?
+  assert_eq 2 "$RC" "a setgid folder: refused"
+  case "$OUT" in *"setuid or setgid file or folder"*) pass "a setgid folder: says so" ;; *) fail "a setgid folder: $OUT" ;; esac
+  [ ! -e "$W/setgid.zip" ] && pass "a setgid folder: no archive" || fail "a setgid folder: an archive unpack refuses was made"
+  STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*To find it: //p')
+  assert_eq "$T/shared" "$(eval "$STEP")" "a setgid folder: the printed step finds it"
+  chmod 755 "$T/shared"
+  round_trip "a setgid folder after the bit is cleared" "$T" --for other
+  chmod 2755 "$T"
+  round_trip "a setgid top folder, which is not stored" "$T" --for other
+else
+  unproven "a setgid folder" "this host did not set the bit"
+fi
+# A second name outside the folder: it goes in as its own copy, and pack says so.
 T="$W/hard-out"; mkdir -p "$T"; printf 'x\n' > "$T/a"; ln "$T/a" "$W/second-name"
 round_trip "a hard link outside the folder" "$T" --for self
+grep -q "1 item has another name that stays out of the archive, and goes in as its own copy." "$RT_PACK" \
+  && pass "a hard link outside the folder: says so" || fail "a hard link outside the folder: $(cat "$RT_PACK")"
+
+# An attribute pack does not count must not look like the person's size limit.
+T="$W/big-attr"; mkdir -p "$T"; printf 'x\n' > "$T/a"
+python3 -I -c 'import os, subprocess, sys
+subprocess.run(["/usr/bin/xattr", "-w", "user.blob", os.urandom(300 * 1024).hex(), sys.argv[1]], check=True)' "$T/a"
+round_trip "a large uncounted attribute" "$T" --for mac
+assert_exit 0 "a large uncounted attribute: a large limit also works" -- "$PACK" "$T" --for mac --max-size 100G --into "$W/big-attr.tar.gz"
+rm -f "${W:?}/big-attr.tar.gz"
+OUT=$("$PACK" "$T" --for mac --max-size 200K --into "$W/big-attr.tar.gz" 2>&1 </dev/null); RC=$?
+assert_eq 2 "$RC" "a large attribute over a real limit: refused"
+case "$OUT" in *"passed the limit of"*) pass "a large attribute over a real limit: says so" ;; *) fail "a large attribute over a real limit: $OUT" ;; esac
+STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*To allow more: //p')
+# shellcheck disable=SC2086
+assert_exit 0 "a large attribute over a real limit: the printed step works" -- "$PACK" "$T" --for mac --into "$W/big-attr.tar.gz" $STEP
 
 # Metadata. keep carries it; drop removes it, counts it, and warns.
 require xattr "attributes need xattr" || exit 0

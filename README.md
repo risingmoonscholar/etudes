@@ -1,6 +1,6 @@
 # etudes
 
-Three small command-line tools that tidy a folder without reading your private files.
+Small command-line tools that tidy a folder without reading your private files. Three are released: `sweep`, `stash` and `unpack`. A fourth, `pack`, is not released yet.
 
 **macOS only.**
 ```console
@@ -41,7 +41,7 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 | **`sweep`** | Organises the obvious and leaves the private alone | v0.5.4 |
 | **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.4 |
 | **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.4 |
-| **`pack`** | Creates a new archive under an explicit recipient policy | v0.6.0 candidate |
+| **`pack`** | Creates a new archive under an explicit recipient policy | not released yet |
 
 ## Install
 
@@ -54,15 +54,11 @@ cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag s
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.4 unpack-cli
 ```
 
-Pack is a source candidate. Install it with `cargo install --path crates/pack-cli --locked`.
-Its planned per-tool tag is `pack-v0.6.0`; it has not been published:
+`pack` is not released yet, so it has no tag to install. To try it from a
+checkout: `cargo install --path crates/pack-cli --locked`.
 
-```sh
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag pack-v0.6.0 pack-cli
-```
-
-The crates are named `*-cli`; the binaries they install are `sweep`, `stash`,
-`unpack` and `pack`, in `~/.cargo/bin`.
+The crates are named `*-cli`; the binaries they install are `sweep`, `stash`
+and `unpack`, in `~/.cargo/bin`.
 
 `--tag` pins the install to a released version. Without it `cargo install` takes
 whatever `main` is at that moment, so two people running the same command on the
@@ -801,13 +797,14 @@ info, and says what it carried or removed. It reads the lengths of those four
 attributes only, and never lists attribute names, so it does not look at Finder
 comments itself; with `keep` the system tar reads and stores every attribute. A file that loses the download warning will not warn
 after it is extracted. The top folder's own attributes and file owners are not
-kept. Empty folders are kept.
+kept. Empty folders are kept. A file whose other hard-link name stays out of the
+archive goes in as its own copy, and pack says so.
 
 **What is refused.** Links of any kind, hard links between two names in FOLDER,
-setuid and setgid files, pipes, sockets and devices, files still downloading,
+setuid and setgid files and folders, pipes, sockets and devices, files still downloading,
 files stored only in the cloud, unreadable items, names unsafe on another system,
-names that differ only by case or accent, more than 20,000 items and more than 32
-folders deep. These are refused before anything is written. Also system and
+names that differ only by case or accent, more than 20,000 items and items more
+than 31 levels below FOLDER. These are refused before anything is written. Also system and
 credential folders as sweep judges them, your home folder and any folder holding
 it, and running as root. An in-flight refusal names the entry unless its name
 looks private. Other found names stay hidden; the message prints a `find` command
@@ -831,7 +828,9 @@ destination removes it only after proving all of this: the exact name with a
 32-hex nonce, a regular file with one name, mode 0600, owned by this user, an
 extended attribute holding the same nonce, and no process holding the lock pack
 took when creating it, which the writer shares, so an orphaned writer still counts.
-Anything else with that kind of name is left alone and reported. A kill in the
+Anything else with that kind of name is left alone and reported, and so is a file
+another process still has open. This happens even when the run then refuses
+because the destination exists; `--list` only reports. A kill in the
 moment between creating the file and marking it leaves an empty file that pack
 will report and not remove. `--list` and refusals before writing remove nothing.
 

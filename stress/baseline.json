@@ -80,7 +80,7 @@
   "121-pack-kill-mid-write": 16,
   "122-pack-then-unpack": 18,
   "123-pack-full-and-read-only-disks": 31,
-  "124-pack-round-trip": 88,
-  "125-pack-refusals-and-messages": 577,
-  "126-pack-cleans-only-its-own": 74
+  "124-pack-round-trip": 110,
+  "125-pack-refusals-and-messages": 605,
+  "126-pack-cleans-only-its-own": 86
 }
