@@ -53,6 +53,7 @@ USAGE
                                     paths redacted; --paths shows them
     stash contract --json           print the versioned capability contract
     --no-journal                    legacy folder mode only; explicit selections require undo
+    --allow-home                    stash your whole home folder; refused without it
     --json                          machine-readable output (for agents)
     --export-plan FILE               save a private bound plan, without moving
     --plan FILE --plan-digest SHA     apply the exact exported observation
@@ -227,6 +228,7 @@ const STASH_FLAGS: &[&str] = &[
     "--for",
     "--json",
     "--no-journal",
+    "--allow-home",
     "--export-plan",
     "--plan",
     "--plan-digest",
@@ -245,6 +247,7 @@ const COMMAND_FLAGS: &[(&str, &[&str])] = &[
             "--for",
             "--json",
             "--no-journal",
+            "--allow-home",
             "--export-plan",
             "--plan",
             "--plan-digest",
@@ -256,22 +259,7 @@ const COMMAND_FLAGS: &[(&str, &[&str])] = &[
 ];
 
 fn refusal_reason(code: etude_cli_support::reason::Code) {
-    use etude_cli_support::reason::{Code, Reason, Subject};
-    let subject = match code {
-        Code::MissingInput | Code::UnsafeInput | Code::PermissionDenied => {
-            Some(Subject::wait("input", None))
-        }
-        Code::DestinationExists | Code::DestinationOutsideRoot => {
-            Some(Subject::wait("destination", None))
-        }
-        Code::PlanStale => Some(Subject::wait("plan", None)),
-        Code::JournalUnreadable | Code::JournalKeyUnavailable | Code::OperationIncomplete => {
-            Some(Subject::wait("journal", None))
-        }
-        Code::NotDueYet => Some(Subject::wait("journal", None)),
-        _ => None,
-    };
-    etude_cli_support::envelope::reason(Reason::refusal(code, subject));
+    etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::of(code));
 }
 
 fn refuse(code: etude_cli_support::reason::Code) -> ExitCode {
@@ -333,7 +321,7 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
         Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Code::PermissionDenied,
         Io(error) if error.kind() == std::io::ErrorKind::NotFound => Code::MissingInput,
         Io(_) => Code::InternalError,
-        Journal(_) => Code::JournalUnreadable,
+        Journal(_) => Code::JournalWriteFailed,
         Injected(_) => Code::OperationIncomplete,
     }
 }
@@ -423,8 +411,20 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
         i = 0;
     }
     let mut folders = 0;
+    let mut seen: Vec<&str> = Vec::new();
     while i < args.len() {
         let a = &args[i];
+        // --item is the one flag that accumulates. A repeat of any other would
+        // silently drop a value the caller believes is in force.
+        if a.starts_with('-') && allowed.contains(&a.as_str()) && a != "--item" {
+            if seen.contains(&a.as_str()) {
+                return Err(format!(
+                    "{a} was given more than once, and only the first would have been used. \
+                     Remove the ones you do not mean."
+                ));
+            }
+            seen.push(a);
+        }
         if matches!(
             a.as_str(),
             "--for" | "--export-plan" | "--plan" | "--plan-digest" | "--id" | "--item"
@@ -450,12 +450,27 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
                 ));
             }
         }
+        if cmd == "status" && !a.starts_with('-') {
+            folders += 1;
+            if folders > 1 {
+                return Err(format!(
+                    "status takes one folder, and `{}` is a second.",
+                    etude_cli_support::shown_text(a)
+                ));
+            }
+        }
         i += 1;
+    }
+    if cmd == "status" && seen.contains(&"--paths") && !seen.contains(&"--all") {
+        return Err("--paths needs --all.".to_owned());
     }
     Ok(())
 }
 
 fn expand_tilde(p: &str) -> String {
+    if p == "~" {
+        return std::env::var("HOME").unwrap_or_else(|_| p.into());
+    }
     match p.strip_prefix("~/") {
         Some(rest) => std::env::var("HOME")
             .map(|h| format!("{h}/{rest}"))
@@ -575,6 +590,27 @@ fn current_binding_context(profile: &str) -> etude_core::plan::BindingContext {
     )
 }
 
+/// Whether `path` is the home folder, however it was written. A bare `stash`
+/// typed in the wrong place would otherwise move everything a person keeps there.
+fn is_home_folder(path: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) else {
+        return false;
+    };
+    matches!(
+        (path.canonicalize(), Path::new(&home).canonicalize()),
+        (Ok(path), Ok(home)) if path == home
+    )
+}
+
+fn refuse_home_folder(path: &Path) -> ExitCode {
+    eprintln!(
+        "stash: refused: {} is your home folder, and stashing it would move everything you keep there. Nothing was moved.\n\
+         To stash chosen items, use `stash select PATH...`. To stash the whole home folder, pass --allow-home.",
+        etude_cli_support::shown(path)
+    );
+    refuse(etude_cli_support::reason::Code::UnsafeInput)
+}
+
 fn replay_stash(args: &[String], file: &str) -> ExitCode {
     if positional_path(args).is_some() {
         eprintln!("stash: exported plan fixes its original root; do not supply another path");
@@ -604,6 +640,9 @@ fn replay_stash(args: &[String], file: &str) -> ExitCode {
         eprintln!("stash: plan scheme changed; replan required");
         return refuse(etude_cli_support::reason::Code::PlanStale);
     }
+    if is_home_folder(&bound.root) && !flag(args, "--allow-home") {
+        return refuse_home_folder(&bound.root);
+    }
     let context = current_binding_context(&bound.context().profile);
     execute_stash(bound, context, args)
 }
@@ -615,6 +654,9 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     if flag(args, "--plan-digest") {
         eprintln!("stash: --plan-digest requires --plan FILE");
         return refuse(etude_cli_support::reason::Code::InvalidArguments);
+    }
+    if is_home_folder(path) && !flag(args, "--allow-home") {
+        return refuse_home_folder(path);
     }
     let deadline = match value(args, "--for") {
         Some(d) => match parse_duration(&d) {
@@ -742,13 +784,13 @@ fn execute_stash(
         eprintln!("stash: --no-journal removes undo. stash pop cannot restore this operation.");
         None
     } else {
-        let Some(sl) = sealer() else {
+        let Some(sl) = sealer(true) else {
             return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
         };
         Some(sl)
     };
     let mut progress = etude_cli_support::ProgressReporter::stderr("stash", count);
-    let result = etude_core::apply::apply_with_progress(
+    let result = etude_core::apply::apply_with_progress_outcome(
         &bound,
         &context,
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
@@ -839,39 +881,72 @@ fn execute_stash(
             }
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            if let Some(sealer) = sl.as_ref()
-                && let Some(id) =
-                    find_stash_id_for_holding(&bound.root, &bound.groups[0].name, sealer)
-            {
-                etude_cli_support::envelope::recovery_operation(&id);
-            }
-            if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) {
+        Err(failure) => {
+            let moved = failure.moved;
+            let e = failure.error;
+            etude_cli_support::envelope::effect("items_moved", moved);
+            if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
                 eprintln!("stash: {e}");
                 etude_cli_support::envelope::status("refused");
                 return refuse_preserving_status(apply_reason(&e));
             }
-            etude_cli_support::envelope::status("incomplete");
-            refusal_reason(apply_reason(&e));
-            eprintln!(
-                "stash: operation could not finish ({})",
-                apply_error_reason(&e)
-            );
-            if let etude_core::apply::ApplyError::Io(source) = &e {
-                eprintln!("       {source}");
-                if let Some(advice) = scan::permission_advice(source) {
-                    eprintln!("       {advice}");
-                }
+            print_stash_failure(&e, &bound.root, moved);
+            // Decided from the count of moves, never from the kind of failure.
+            if moved == 0 {
+                etude_cli_support::envelope::status("refused");
+                eprintln!("Nothing was moved, so there is nothing to restore.");
+                return apply_exit_code(&e);
             }
-            if sl.is_some() {
-                eprintln!("Nothing further was moved. `stash pop` reverses what did happen.");
-            } else {
-                eprintln!(
-                    "Nothing further was moved. --no-journal removed undo; restore files manually."
-                );
+            etude_cli_support::envelope::status("incomplete");
+            let what = format!(
+                "{} moved before this stopped.",
+                etude_cli_support::counted(moved, "item was", "items were")
+            );
+            let them = if moved == 1 { "it" } else { "them" };
+            match failure.durable_journal_id.as_deref() {
+                Some(id) => {
+                    etude_cli_support::envelope::recovery_operation(id);
+                    eprintln!("{what} To put {them} back: stash pop --id {id}");
+                }
+                None => eprintln!(
+                    "{what} --no-journal removed undo. Move {them} back by hand from {}.",
+                    etude_cli_support::shown(&bound.root.join(&bound.groups[0].name))
+                ),
             }
             apply_exit_code(&e)
         }
+    }
+}
+
+/// What failed, in the words of what the person asked for. The line after this
+/// one says what became of the files.
+fn print_stash_failure(error: &etude_core::apply::ApplyError, root: &Path, moved: usize) {
+    use etude_core::apply::ApplyError as E;
+    let folder = etude_cli_support::shown(root);
+    let scope = if moved == 0 { "anything" } else { "everything" };
+    match error {
+        E::Io(source) => {
+            eprintln!(
+                "stash: could not move {scope} out of {folder}: {}",
+                etude_cli_support::plain_io_error(source)
+            );
+            if let Some(advice) = scan::permission_advice(source) {
+                eprintln!("       {advice}");
+            }
+        }
+        E::Journal(journal) => {
+            eprintln!(
+                "stash: {}",
+                etude_cli_support::journal_write_problem(journal)
+            );
+            eprintln!(
+                "       Free some space or fix that folder, or set ETUDE_STATE_DIR to another one."
+            );
+        }
+        other => eprintln!(
+            "stash: could not move {scope} out of {folder}: {}",
+            apply_error_reason(other)
+        ),
     }
 }
 
@@ -916,7 +991,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
         println!("Nothing selected to stash.");
         return ExitCode::from(1);
     }
-    let Some(sealer) = sealer() else {
+    let Some(sealer) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
     let root = match selection::reserve(&prepared.parent) {
@@ -1215,7 +1290,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         eprintln!("stash: --item requires --id OPERATION");
         return refuse(etude_cli_support::reason::Code::InvalidArguments);
     }
-    let Some(sl) = sealer() else {
+    let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
     // An id no journal holds is the same answer `status --id` gives. A folder
@@ -1393,7 +1468,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if let Err(save_err) = saved {
         eprintln!("stash: pop finished, but the journal could not be saved: {save_err}");
-        return fail(etude_cli_support::reason::Code::JournalUnreadable);
+        return fail(etude_cli_support::reason::Code::JournalWriteFailed);
     }
     if r.skipped_changed.is_empty() {
         selection::remove_empty_root(&j);
@@ -1518,7 +1593,7 @@ fn pop_one_item(
         Ok(()) => {}
         Err(error) => {
             eprintln!("stash: item restore finished, but its journal could not be saved: {error}");
-            return fail(etude_cli_support::reason::Code::JournalUnreadable);
+            return fail(etude_cli_support::reason::Code::JournalWriteFailed);
         }
     }
     if let Some(error) = report.error {
@@ -1565,7 +1640,7 @@ fn cmd_inspect(args: &[String]) -> ExitCode {
             return refuse(etude_cli_support::reason::Code::InvalidArguments);
         }
     };
-    let Some(sealer) = sealer() else {
+    let Some(sealer) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
     let journal = match batches::select(selector, &sealer) {
@@ -1664,7 +1739,7 @@ fn cmd_status_all(args: &[String]) -> ExitCode {
         eprintln!("{msg}");
         return refuse(etude_cli_support::reason::Code::PermissionDenied);
     }
-    let Some(sl) = sealer() else {
+    let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
     let stashes = match batches::inventory(&sl) {
@@ -1749,8 +1824,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
         return refuse(etude_cli_support::reason::Code::MissingInput);
     };
 
-    if let Ok(key) = etude_keep::key() {
-        let sealer = KeychainSeal { key };
+    let Some(sealer) = sealer(false) else {
+        return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
+    };
+    {
         let batches = match batches::inventory(&sealer) {
             Ok(value) => value,
             Err(error) => {
@@ -1986,12 +2063,28 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
     let key = match etude_keep::key_if_present() {
         Ok(Some(key)) => key,
         Ok(None) => {
-            eprintln!("stash: journal is unreadable without its key");
-            return fail(etude_cli_support::reason::Code::JournalUnreadable);
+            eprintln!(
+                "{}",
+                etude_cli_support::journal_key_problem(
+                    "stash",
+                    &"there is no key in the login keychain, so undo records cannot be read",
+                    false,
+                    false,
+                )
+            );
+            return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
         }
         Err(error) => {
-            eprintln!("stash: journal is unreadable with the available key: {error}");
-            return fail(etude_cli_support::reason::Code::JournalUnreadable);
+            eprintln!(
+                "{}",
+                etude_cli_support::journal_key_problem(
+                    "stash",
+                    &error,
+                    matches!(error, etude_keep::KeepError::SuppliedKey),
+                    false,
+                )
+            );
+            return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
         }
     };
     let sealer = KeychainSeal { key };
@@ -2153,17 +2246,23 @@ impl etude_core::journal::Sealer for KeychainSeal {
     }
 }
 
-/// Refuses rather than writing an unencrypted record of what was stashed.
-fn sealer() -> Option<KeychainSeal> {
+/// Refuses rather than writing an unencrypted record of what was stashed. Only
+/// folder stash takes --no-journal, so only folder stash may mention it.
+fn sealer(takes_no_journal: bool) -> Option<KeychainSeal> {
     let result = etude_keep::key();
     etude_core::scan::record_read_outcome("key_material", result.is_ok());
     match result {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
             refusal_reason(etude_cli_support::reason::Code::JournalKeyUnavailable);
-            eprintln!("stash: {e}");
             eprintln!(
-                "Refusing to record a stash in the clear. The only alternative is --no-journal; it removes undo."
+                "{}",
+                etude_cli_support::journal_key_problem(
+                    "stash",
+                    &e,
+                    matches!(e, etude_keep::KeepError::SuppliedKey),
+                    takes_no_journal,
+                )
             );
             None
         }
@@ -2296,6 +2395,7 @@ mod tests {
                 "--for",
                 "--json",
                 "--no-journal",
+                "--allow-home",
                 "--export-plan",
                 "--plan",
                 "--plan-digest"
