@@ -231,7 +231,7 @@ has "--max-size --into: the step keeps --into" "$LAST" "--into '$W/kept' --max-s
 leftovers "size limit"
 
 # --- options and their values (rows 98, 99, 100) --------------------------------
-OPTIONS='unknown option --frob. It handles --list, --json, --into DIR and --max-size SIZE. Run `unpack help`.'
+OPTIONS='unknown option --frob. It handles --list, --json, --progress-json, --into DIR and --max-size SIZE. Run `unpack help`.'
 say "--frob after" 2 refused unknown_option "$OPTIONS" -- "$A/good.zip" --frob
 say "--frob first" 2 refused unknown_option "$OPTIONS" -- --frob
 say "--frob before the archive" 2 refused unknown_option "$OPTIONS" -- --frob "$A/good.zip"

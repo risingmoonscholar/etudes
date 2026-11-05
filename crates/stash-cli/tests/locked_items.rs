@@ -262,6 +262,10 @@ fn selecting_only_a_locked_item_needs_no_undo() {
     assert!(output.contains("no_operation_undo_needed"), "{output}");
     assert!(!output.contains("conditional_journal_restore"), "{output}");
     assert!(output.contains("\"conditions\":[]"), "{output}");
+    // The same answer as a folder holding only locked items.
+    assert!(output.contains("\"status\":\"refused\""), "{output}");
+    assert!(!output.contains("\"status\":\"incomplete\""), "{output}");
+    assert!(output.contains("permission_denied"), "{output}");
 }
 
 /// The printed plan step runs and finishes the job once the lock is cleared.

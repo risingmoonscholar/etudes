@@ -127,18 +127,25 @@ pub fn capture(file: &File) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-pub fn preserve(root: &Path, mark: Option<&[u8]>) -> io::Result<usize> {
+pub fn preserve(root: &Path, mark: Option<&[u8]>, skip: Option<&Path>) -> io::Result<usize> {
     let Some(mark) = mark else {
         return Ok(0);
     };
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (root, mark);
+        let _ = (root, mark, skip);
         Err(io::Error::other("quarantine storage requires macOS"))
     }
     #[cfg(target_os = "macos")]
     {
-        fn collect(path: &Path, paths: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
+        fn collect(
+            path: &Path,
+            skip: Option<&Path>,
+            paths: &mut Vec<std::path::PathBuf>,
+        ) -> io::Result<()> {
+            if Some(path) == skip {
+                return Ok(());
+            }
             let metadata = etude_core::scan::observe_read(
                 "staging_tree_metadata",
                 std::fs::symlink_metadata(path),
@@ -154,7 +161,7 @@ pub fn preserve(root: &Path, mark: Option<&[u8]>) -> io::Result<usize> {
                     std::fs::read_dir(path),
                 )?;
                 for entry in entries {
-                    collect(&entry?.path(), paths)?;
+                    collect(&entry?.path(), skip, paths)?;
                 }
             }
             paths.push(path.to_path_buf());
@@ -162,7 +169,7 @@ pub fn preserve(root: &Path, mark: Option<&[u8]>) -> io::Result<usize> {
         }
         // Collect before setting attributes: exFAT creates AppleDouble companions during the writes.
         let mut paths = Vec::new();
-        collect(root, &mut paths)?;
+        collect(root, skip, &mut paths)?;
         for path in &paths {
             platform::apply(path, mark)?;
         }
@@ -176,8 +183,8 @@ mod tests {
     #[test]
     fn unsupported_or_failed_storage_never_counts_as_preserved() {
         assert!(platform::apply(Path::new("/dev/null"), b"synthetic").is_err());
-        assert!(preserve(Path::new("/dev/null"), Some(b"synthetic")).is_err());
-        assert!(preserve(Path::new("/dev/null"), None).is_ok());
+        assert!(preserve(Path::new("/dev/null"), Some(b"synthetic"), None).is_err());
+        assert!(preserve(Path::new("/dev/null"), None, None).is_ok());
     }
     #[test]
     fn mismatched_readback_is_not_verification() {
@@ -195,7 +202,7 @@ mod tests {
             std::env::temp_dir().join(format!("etudes-quarantine-link-{}", std::process::id()));
         std::fs::create_dir(&root).unwrap();
         std::os::unix::fs::symlink("/dev/null", root.join("link")).unwrap();
-        assert!(preserve(&root, Some(b"synthetic")).is_err());
+        assert!(preserve(&root, Some(b"synthetic"), None).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

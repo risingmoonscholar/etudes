@@ -141,9 +141,9 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 9,
-                Tool::Stash => 12,
-                Tool::Unpack => SCHEMA_VERSION + 3,
+                Tool::Sweep => SCHEMA_VERSION + 10,
+                Tool::Stash => 13,
+                Tool::Unpack => SCHEMA_VERSION + 4,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -265,6 +265,7 @@ pub fn declaration(
                         Tool::Unpack => &[
                             "private_archive_copy",
                             "failed_staging_tree",
+                            "verified_abandoned_staging_for_same_destination",
                             "junk_members_in_staging",
                         ],
                     }),
@@ -461,6 +462,7 @@ pub fn declaration(
             ]),
         ));
     }
+    fields.push(("structured_progress", structured_progress(tool)));
     if matches!(tool, Tool::Sweep) {
         fields.push(("finder_aliases", j::obj(&[
             ("attribute", j::str("com.apple.FinderInfo")),
@@ -477,19 +479,6 @@ pub fn declaration(
             ("apply", j::str("one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move_because_the_plan_cannot_run_as_made;_clear_the_lock_then_plan_again;_never_tagged")),
             ("counters", j::str("plan.skipped.locked_skipped;_plan.skipped.locked_system;_apply.held_locked")),
             ("platform", j::str("macos_only;_never_locked_elsewhere")),
-        ])));
-        fields.push(("structured_progress", j::obj(&[
-            ("flag", j::str("--progress-json")),
-            ("stream", j::str("stderr_ndjson_alongside_diagnostics")),
-            ("schema_version", j::num(crate::progress::SCHEMA_VERSION)),
-            ("operations", strings(&["apply", "review"])),
-            ("fields", strings(&["schema_version", "event", "tool_version", "operation_id", "operation", "phase", "planned", "completed", "journalled"])),
-            ("maximum_events", j::num(crate::progress::MAX_EVENTS)),
-            ("planned", j::str("entries_after_full_preflight_validation")),
-            ("completed", j::str("successful_moves_including_a_move_whose_done_record_failed")),
-            ("journalled", j::str("successful_durable_done_records;_zero_without_a_journal")),
-            ("ordering", j::str("each_done_record_is_durable_before_callback_and_next_move")),
-            ("disclosure", j::str("counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values")),
         ])));
         fields.push(("status_lookup", j::obj(&[
             ("support", j::str("read_only")),
@@ -587,6 +576,84 @@ pub fn declaration(
         ])));
     }
     j::obj(&fields)
+}
+
+/// The same declaration for every tool: only which operations, and what their
+/// counts count, differ. Fields and bounds come from the writer's own constants.
+fn structured_progress(tool: Tool) -> String {
+    let count = |operation, planned, completed, journalled| {
+        j::obj(&[
+            ("operation", j::str(operation)),
+            ("planned", j::str(planned)),
+            ("completed", j::str(completed)),
+            ("journalled", j::str(journalled)),
+        ])
+    };
+    const MOVES: &str = "successful_moves_including_a_move_whose_done_record_failed";
+    const DONE_RECORDS: &str = "successful_durable_done_records;_zero_without_a_journal";
+    const VALIDATED: &str = "entries_after_full_preflight_validation";
+    const EXAMINED: &str = "entries_fully_examined_including_ones_left_alone_or_already_restored";
+    const REVERSALS: &str = "reversals_made_durable_by_this_run";
+    let counts = match tool {
+        Tool::Sweep => vec![
+            count("apply", VALIDATED, MOVES, DONE_RECORDS),
+            count("review", VALIDATED, MOVES, DONE_RECORDS),
+            count("undo", "journal_entries", EXAMINED, REVERSALS),
+        ],
+        Tool::Stash => vec![
+            count("stash", VALIDATED, MOVES, DONE_RECORDS),
+            count(
+                "pop",
+                "journal_entries_or_one_with_item",
+                EXAMINED,
+                REVERSALS,
+            ),
+        ],
+        Tool::Unpack => vec![
+            count(
+                "extract",
+                "distinct_judged_listing_members_without_dropped_metadata",
+                "planned_members_observed_in_private_staging_by_the_engine;_the_newest_is_not_counted_until_the_extractor_exits_successfully",
+                "zero;_no_journal",
+            ),
+            count(
+                "list",
+                "members_in_the_plain_listing",
+                "members_in_the_plain_listing_once_it_returned",
+                "zero;_no_journal",
+            ),
+        ],
+    };
+    j::obj(&[
+        ("flag", j::str(crate::progress::FLAG)),
+        ("stream", j::str("stderr_ndjson_alongside_diagnostics")),
+        ("schema_version", j::num(crate::progress::SCHEMA_VERSION)),
+        ("fields", strings(crate::progress::FIELDS)),
+        ("maximum_events", j::num(crate::progress::MAX_EVENTS)),
+        ("counts", j::arr(counts)),
+        (
+            "indeterminate",
+            j::str("phase_planning_with_planned_zero;_the_count_is_not_known_yet"),
+        ),
+        (
+            "terminal",
+            j::str(
+                "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
+            ),
+        ),
+        (
+            "ordering",
+            j::str(
+                "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
+            ),
+        ),
+        (
+            "disclosure",
+            j::str(
+                "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values",
+            ),
+        ),
+    ])
 }
 
 fn operation_scopes(tool: Tool) -> Vec<String> {
@@ -836,6 +903,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "archive_quarantine_metadata",
                     "private_archive_copy",
                     "destination_parent_metadata",
+                    "staging_recovery_metadata_and_lock_marker",
                     "volume_free_space",
                     "staging_tree_metadata",
                     "staging_quarantine_metadata",
@@ -844,6 +912,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 &[
                     "private_archive_copy",
                     "private_staging_tree",
+                    "verified_abandoned_staging_for_same_destination",
                     "staging_quarantine_attributes",
                     "new_destination_tree",
                 ],

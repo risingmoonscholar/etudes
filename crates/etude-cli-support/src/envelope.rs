@@ -32,6 +32,7 @@ struct ResultState {
     scope: String,
     journal_enabled: bool,
     no_undo_needed: bool,
+    progress_json: bool,
     effects: std::collections::BTreeMap<&'static str, usize>,
     reason: Option<crate::reason::Reason>,
 }
@@ -98,6 +99,10 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
             scope,
             journal_enabled: !args.iter().any(|arg| arg == "--no-journal"),
             no_undo_needed: false,
+            progress_json: args
+                .iter()
+                .take_while(|arg| *arg != "--")
+                .any(|arg| arg == crate::progress::FLAG),
             effects: std::collections::BTreeMap::new(),
             reason: None,
         }
@@ -157,6 +162,36 @@ pub fn operation_id() -> String {
     RESULT.with(|state| state.borrow().operation_id.clone())
 }
 
+pub fn tool_version() -> String {
+    RESULT.with(|state| state.borrow().version.clone())
+}
+
+pub fn progress_json() -> bool {
+    RESULT.with(|state| state.borrow().progress_json)
+}
+
+fn outcome(explicit: Option<&'static str>, code: ExitCode) -> &'static str {
+    explicit.unwrap_or(if code == ExitCode::from(1) {
+        "nothing_to_do"
+    } else if code == ExitCode::from(2) {
+        "refused"
+    } else if code != ExitCode::SUCCESS {
+        "error"
+    } else {
+        "done"
+    })
+}
+
+/// Whether the result of this invocation reads done or nothing to do.
+pub fn outcome_finished(code: ExitCode) -> bool {
+    RESULT.with(|state| {
+        matches!(
+            outcome(state.borrow().status, code),
+            "done" | "nothing_to_do"
+        )
+    })
+}
+
 /// Attach the journal's durable identifier without changing the per-run id.
 pub fn recovery_operation(id: &str) {
     assert!(
@@ -192,7 +227,7 @@ pub fn finish(code: ExitCode) {
         let state = state.borrow();
         if !state.enabled { return; }
         let details = match state.payloads.as_slice() { [] => "{}".into(), [value] => value.clone(), values => j::arr(values.iter().cloned()) };
-        let status = state.status.unwrap_or(if code == ExitCode::from(1) { "nothing_to_do" } else if code == ExitCode::from(2) { "refused" } else if code != ExitCode::SUCCESS { "error" } else { "done" });
+        let status = outcome(state.status, code);
         let id = &state.operation_id;
         let recovery = match state.operation.as_str() {
             _ if state.no_undo_needed => "no_operation_undo_needed",
@@ -278,6 +313,28 @@ mod tests {
                 Some("sweep-journal-123")
             );
         });
+    }
+
+    #[test]
+    fn the_progress_flag_after_a_double_dash_is_a_name_and_not_a_request() {
+        let args = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| word.to_string())
+                .collect::<Vec<_>>()
+        };
+        super::begin(
+            "stash",
+            "0.5.4",
+            &args(&["select", "--progress-json", "--", "a"]),
+        );
+        assert!(super::progress_json());
+        super::begin(
+            "stash",
+            "0.5.4",
+            &args(&["select", "--", "--progress-json"]),
+        );
+        assert!(!super::progress_json());
     }
 
     #[test]

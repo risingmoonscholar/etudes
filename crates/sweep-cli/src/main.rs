@@ -63,7 +63,7 @@ FLAGS
     apply --plan F --plan-digest SHA --yes applies that exact observed plan
                       (the only way tags are added)
     --proposal P    propose: a JSON file of per-file folder decisions
-    --progress-json bounded versioned progress on stderr for apply or review
+    --progress-json bounded versioned progress on stderr for apply, review or undo
     --quiet         counts and signals only; never prints a filename
     --explain       print the signal trace for every file
     --allow-sync    proceed even inside a cloud-synced folder
@@ -822,7 +822,14 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         ],
     ),
     ("forget", &[("--yes", false)]),
-    ("undo", &[("--json", false), ("--id", true)]),
+    (
+        "undo",
+        &[
+            ("--json", false),
+            ("--id", true),
+            ("--progress-json", false),
+        ],
+    ),
     ("status", &[("--json", false), ("--id", true)]),
     ("verify", &[]),
     ("lesson", &[]),
@@ -1535,7 +1542,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         };
         Some(sl)
     };
-    run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
+    run_apply(&bound, &context, sl, "apply")
 }
 
 /// Load a plan file for `apply --plan` or `propose`, and refuse one that is not
@@ -2461,7 +2468,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
                 Ok(plan) => plan,
                 Err(code) => return code,
             };
-            run_apply(&bound, &context, sl, has(args, "--progress-json"), "review")
+            run_apply(&bound, &context, sl, "review")
         }
     }
 }
@@ -2711,34 +2718,33 @@ fn run_apply(
     p: &plan::BoundPlan,
     context: &plan::BindingContext,
     sl: Option<KeychainSeal>,
-    structured: bool,
     operation: &'static str,
 ) -> ExitCode {
     if let Err(code) = verify_existing_profile(&context.profile) {
         return code;
     }
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
-    let result = if structured {
-        let mut progress = etude_cli_support::progress::JsonProgress::stderr(
-            env!("CARGO_PKG_VERSION"),
-            &etude_cli_support::envelope::operation_id(),
-            operation,
-        );
-        let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
-            p,
-            context,
-            sealer,
-            None,
-            |event| progress.update(event),
-        );
-        drop(progress);
-        result
-    } else {
-        let mut progress = etude_cli_support::ProgressReporter::stderr("sweep apply", p.moves());
-        etude_core::apply::apply_with_progress_outcome(p, context, sealer, None, |event| {
-            progress.update(event.completed, event.total)
-        })
-    };
+    let mut progress =
+        etude_cli_support::progress::Reporter::for_operation("sweep apply", operation);
+    let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
+        p,
+        context,
+        sealer,
+        None,
+        |event| progress.update(event),
+    );
+    progress.settle();
+    let code = report_apply(result, p, operation, sl.is_some());
+    progress.finish(code);
+    code
+}
+
+fn report_apply(
+    result: Result<etude_core::apply::ApplyReport, etude_core::apply::ApplyFailure>,
+    p: &plan::BoundPlan,
+    operation: &'static str,
+    journal_enabled: bool,
+) -> ExitCode {
     match result {
         Ok(r) => {
             if let Some(id) = r.journal_path.as_deref().and_then(undo_record_id) {
@@ -2809,7 +2815,7 @@ fn run_apply(
                     etude_cli_support::counted(moved, "file was", "files were")
                 )
             };
-            if sl.is_some() {
+            if journal_enabled {
                 eprintln!(
                     "{what} To put {} back: {}",
                     if moved == 1 { "it" } else { "them" },
@@ -3123,19 +3129,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
                 ),
             );
         }
-        if has(args, "--progress-json") {
-            etude_cli_support::progress::JsonProgress::stderr(
-                env!("CARGO_PKG_VERSION"),
-                &etude_cli_support::envelope::operation_id(),
-                "apply",
-            )
-            .update(etude_core::apply::StructuredProgress {
-                planned: 0,
-                completed: 0,
-                journalled: 0,
-                phase: etude_core::apply::ProgressPhase::Done,
-            });
-        }
+        etude_cli_support::progress::finish_without_work("sweep apply", "apply", ExitCode::from(1));
         return ExitCode::from(1);
     }
 
@@ -3182,7 +3176,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             );
         }
     };
-    run_apply(&bound, &context, sl, has(args, "--progress-json"), "apply")
+    run_apply(&bound, &context, sl, "apply")
 }
 
 /// `sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT`
@@ -3568,6 +3562,11 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
         Err(JournalError::NotFound) => {
             let code = status_unknown(id);
             eprintln!("Nothing was moved. `sweep status FOLDER` lists the ids for a folder.");
+            etude_cli_support::progress::finish_without_work(
+                "sweep undo",
+                "undo",
+                ExitCode::from(1),
+            );
             return code;
         }
         Err(error) => {
@@ -3586,6 +3585,7 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
         println!("\nNothing to undo. That apply was already restored, or moved nothing.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
         etude_cli_support::envelope::status("nothing_to_do");
+        etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
     finish_undo(&mut journal, sl, UndoAsked::Id)
@@ -3632,6 +3632,11 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
                     etude_cli_support::shown(&target)
                 );
+                etude_cli_support::progress::finish_without_work(
+                    "sweep undo",
+                    "undo",
+                    ExitCode::from(1),
+                );
                 ExitCode::from(1)
             }
         };
@@ -3664,6 +3669,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(newest) = candidates.into_iter().next() else {
         eprintln!("sweep: nothing to undo. No apply is on record.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
+        etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
     let mut j = match newest.load("sweep", &sl) {
@@ -3689,6 +3695,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         println!(
             "If you just ran apply with --no-journal, nothing was recorded and undo cannot \nreverse it."
         );
+        etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
     finish_undo(&mut j, &sl, UndoAsked::Newest)
@@ -3708,6 +3715,18 @@ fn finish_undo(
     j: &mut etude_core::Journal,
     sl: &dyn etude_core::journal::Sealer,
     asked: UndoAsked,
+) -> ExitCode {
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("sweep undo", "undo");
+    let code = run_undo(j, sl, asked, &mut progress);
+    progress.finish(code);
+    code
+}
+
+fn run_undo(
+    j: &mut etude_core::Journal,
+    sl: &dyn etude_core::journal::Sealer,
+    asked: UndoAsked,
+    progress: &mut etude_cli_support::progress::Reporter<std::io::Stderr>,
 ) -> ExitCode {
     // Pass the sealer: undo persists each reversal as it happens now, so a
     // kill partway through leaves a journal that agrees with the disk.
@@ -3730,9 +3749,8 @@ fn finish_undo(
     }
 
     let tag_journal = j.entries.iter().any(|entry| entry.tag.is_some());
-    let mut progress = etude_cli_support::ProgressReporter::stderr("sweep undo", j.entries.len());
-    let r = etude_core::apply::undo_with_progress(j, sl, |p| progress.update(p.completed, p.total));
-    drop(progress);
+    let r = etude_core::apply::undo_with_structured_progress(j, sl, |event| progress.update(event));
+    progress.settle();
     let root = j.root.clone();
     let folder = etude_cli_support::shown(&root);
     let retry = if asked == UndoAsked::Id {

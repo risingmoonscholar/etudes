@@ -56,6 +56,8 @@ USAGE
     --no-journal                    folder mode only; removes undo. stash select needs undo
     --allow-home                    stash your whole home folder; refused without it
     --json                          machine-readable output (for agents)
+    --progress-json                 bounded versioned progress on stderr while
+                                    items move or restore
     --export-plan FILE               save a private bound plan, without moving
     --plan FILE --plan-digest SHA     apply exactly what was exported
     --version                       print the version and exit
@@ -239,6 +241,7 @@ const STASH_FLAGS: &[&str] = &[
     "--export-plan",
     "--plan",
     "--plan-digest",
+    "--progress-json",
 ];
 
 /// Every command, and every flag reachable from it. Same construction as
@@ -258,9 +261,20 @@ const COMMAND_FLAGS: &[(&str, &[&str])] = &[
             "--export-plan",
             "--plan",
             "--plan-digest",
+            "--progress-json",
         ],
     ),
-    ("pop", &["--id", "--item", "--latest", "--if-due", "--json"]),
+    (
+        "pop",
+        &[
+            "--id",
+            "--item",
+            "--latest",
+            "--if-due",
+            "--json",
+            "--progress-json",
+        ],
+    ),
     ("inspect", &["--id", "--json"]),
     ("status", &["--json", "--all", "--paths", "--id"]),
 ];
@@ -786,6 +800,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                 etude_cli_support::shown(path)
             );
         }
+        etude_cli_support::progress::finish_without_work("stash", "stash", ExitCode::from(1));
         return ExitCode::from(1);
     }
 
@@ -869,7 +884,6 @@ fn execute_stash(
         return etude_cli_support::problems::plan_check_problem("stash", &bound.root, &error)
             .report();
     }
-    let count = bound.moves();
     let deadline = bound
         .groups
         .first()
@@ -892,16 +906,16 @@ fn execute_stash(
         );
     }
     let downloads = downloads_in_plan(&bound.plan);
-    let mut progress = etude_cli_support::ProgressReporter::stderr("stash", count);
-    let result = etude_core::apply::apply_with_progress_outcome(
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash", "stash");
+    let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
         &bound,
         &context,
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
-        |p| progress.update(p.completed, p.total),
+        |event| progress.update(event),
     );
-    drop(progress);
-    match result {
+    progress.settle();
+    let code = (|| match result {
         Ok(r) => {
             if sl.is_some() {
                 etude_cli_support::envelope::recovery_operation(&r.journal_id);
@@ -940,8 +954,7 @@ fn execute_stash(
                 );
                 print_downloads_note(downloads);
                 if !clear {
-                    etude_cli_support::envelope::status("incomplete");
-                    return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                    return held_back(r.moved, r.held_locked);
                 }
                 return ExitCode::SUCCESS;
             }
@@ -999,8 +1012,7 @@ fn execute_stash(
             }
             print_downloads_note(downloads);
             if !clear {
-                etude_cli_support::envelope::status("incomplete");
-                return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                return held_back(r.moved, r.held_locked);
             }
             ExitCode::SUCCESS
         }
@@ -1059,7 +1071,9 @@ fn execute_stash(
             }
             apply_exit_code(&e)
         }
-    }
+    })();
+    progress.finish(code);
+    code
 }
 
 /// Downloads still arriving that this plan is about to move, counted while they
@@ -1175,6 +1189,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
     };
     if prepared.sources.is_empty() {
         println!("Nothing selected to stash.");
+        etude_cli_support::progress::finish_without_work("stash", "stash", ExitCode::from(1));
         return ExitCode::from(1);
     }
     let Some(sealer) = sealer(false) else {
@@ -1186,20 +1201,16 @@ fn cmd_select(args: &[String]) -> ExitCode {
     };
     let plan = selection::plan(&prepared, root.clone(), &holding_name(deadline));
     let downloads = downloads_in_plan(&plan);
-    let mut progress = etude_cli_support::ProgressReporter::stderr("stash", prepared.sources.len());
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash", "stash");
     let result = etude_core::apply::apply_with_structured_progress_outcome(
         &plan,
         "stash",
         Some(&sealer),
         None,
-        |event| {
-            if event.phase == etude_core::apply::ProgressPhase::Advancing {
-                progress.update(event.completed, event.planned);
-            }
-        },
+        |event| progress.update(event),
     );
-    drop(progress);
-    match result {
+    progress.settle();
+    let code = (|| match result {
         Ok(report) => {
             if report.moved > 0 {
                 etude_cli_support::envelope::recovery_operation(&report.journal_id);
@@ -1252,8 +1263,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
             }
             print_downloads_note(downloads);
             if held > 0 {
-                etude_cli_support::envelope::status("incomplete");
-                return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                return held_back(report.moved, report.held_locked);
             }
             ExitCode::SUCCESS
         }
@@ -1302,7 +1312,26 @@ fn cmd_select(args: &[String]) -> ExitCode {
             }
             apply_exit_code(&error)
         }
+    })();
+    progress.finish(code);
+    code
+}
+
+/// A stash that left items behind. Moving nothing is a refusal, whichever way it
+/// was reached: a locked item is `permission_denied`, as for a folder that holds
+/// only locked items. Moving some is incomplete.
+fn held_back(moved: usize, held_locked: usize) -> ExitCode {
+    use etude_cli_support::reason::Code;
+    if moved == 0 {
+        etude_cli_support::envelope::status("refused");
+        return fail(if held_locked > 0 {
+            Code::PermissionDenied
+        } else {
+            Code::OperationIncomplete
+        });
     }
+    etude_cli_support::envelope::status("incomplete");
+    fail(Code::OperationIncomplete)
 }
 
 /// The folders a locked selected item sits in. `--into` holds none of them.
@@ -1894,6 +1923,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
                 etude_cli_support::reason::Code::MissingInput
             });
             etude_cli_support::envelope::status("nothing_to_do");
+            etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
             return ExitCode::from(1);
         }
         Err(etude_core::journal::JournalError::Malformed(batches::AMBIGUOUS)) => {
@@ -1930,6 +1960,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if journal_is_fully_undone(&j) {
         println!("\nNothing to restore. This stash was already popped.");
+        etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
         return ExitCode::from(1);
     }
     // Before the counts, because it changes what they mean. A journal cut
@@ -1956,130 +1987,135 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         );
     }
 
-    let mut progress = etude_cli_support::ProgressReporter::stderr("stash pop", j.entries.len());
-    let r = etude_core::apply::undo_with_progress(&mut j, &sl, |p| {
-        progress.update(p.completed, p.total)
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash pop", "pop");
+    let r = etude_core::apply::undo_with_structured_progress(&mut j, &sl, |event| {
+        progress.update(event)
     });
-    drop(progress);
-    if r.unrecorded_moves > 1 {
-        return refuse_missing_entries(&j, r.unrecorded_moves);
-    }
-    // Report what actually happened before anything about the outcome: this
-    // count is real even when `r.error` is set below.
-    etude_cli_support::envelope::detail(etude_core::json::obj(&[
-        ("restored", etude_core::json::num(r.restored)),
-        ("stash_id", etude_core::json::str(&j.id)),
-        (
-            "skipped_changed",
-            etude_core::json::num(r.skipped_changed.len()),
-        ),
-        (
-            "skipped_occupied",
-            etude_core::json::num(r.skipped_occupied.len()),
-        ),
-        (
-            "skipped_missing",
-            etude_core::json::num(r.skipped_missing.len()),
-        ),
-    ]));
-    // Any item not restored leaves the request unfinished, whatever the cause.
-    let left = r.skipped_changed.len() + r.skipped_occupied.len() + r.skipped_missing.len();
-    if left > 0 || r.error.is_some() {
-        etude_cli_support::envelope::status("incomplete");
-    }
-    etude_cli_support::envelope::effect("items_restored", r.restored);
-    etude_cli_support::envelope::effect("changed_items_left", r.skipped_changed.len());
-    etude_cli_support::envelope::effect("occupied_items_left", r.skipped_occupied.len());
-    etude_cli_support::envelope::effect("missing_items", r.skipped_missing.len());
-    let still_out = j
-        .entries
-        .iter()
-        .filter(|entry| entry.is_moved())
-        .count()
-        .max(left);
-    if still_out > 0 {
-        println!(
-            "\nRestored {} of {}.",
-            r.restored,
-            etude_cli_support::counted(r.restored + still_out, "item", "items")
-        );
-    } else {
-        println!(
-            "\nRestored {}.",
-            etude_cli_support::counted(r.restored, "item", "items")
-        );
-    }
-    if no_deadline {
-        println!("{NO_DEADLINE}");
-    }
-    print_pop_left(&j, &r, &sl, latest_any_folder);
-    if r.already_reversed > 0 {
-        println!(
-            "  {} already restored by an earlier run that did not finish.",
-            etude_cli_support::counted(r.already_reversed, "item was", "items were")
-        );
-    }
-    if !r.reconciled.is_empty() {
-        // Different from healed: nothing was reachable by two names here. An
-        // earlier undo moved these home and was killed before it could write
-        // that down, so this run only had to agree with the disk.
-        println!(
-            "  {} already home from an interrupted restore; the undo record now says so.",
-            etude_cli_support::counted(r.reconciled.len(), "item was", "items were")
-        );
-    }
-    if !r.healed.is_empty() {
-        println!(
-            "  {} left over from an interrupted run: one file was reachable by two\n  names and the extra name has been removed.",
-            r.healed.len()
-        );
-    }
-    // Persist regardless of outcome: on error just as much as on success, so
-    // the on-disk journal matches what was actually restored rather than
-    // still claiming every entry is pending. Whether *this* save itself
-    // succeeded changes what we can honestly tell the user next -- claiming
-    // "resumable" while the save failed would repeat the exact lie this fix
-    // exists to remove, just moved one line later.
-    let saved = j.save_sealed(&sl);
-    let step = format!("stash pop --id {}", j.id);
-    let next_pop_corrects =
-        format!("The next `{step}` will see which items are already home and correct the record.");
-    if let Some(error) = &r.error {
-        let going_home: Vec<PathBuf> = j
+    progress.settle();
+    let code = (|| {
+        if r.unrecorded_moves > 1 {
+            return refuse_missing_entries(&j, r.unrecorded_moves);
+        }
+        // Report what actually happened before anything about the outcome: this
+        // count is real even when `r.error` is set below.
+        etude_cli_support::envelope::detail(etude_core::json::obj(&[
+            ("restored", etude_core::json::num(r.restored)),
+            ("stash_id", etude_core::json::str(&j.id)),
+            (
+                "skipped_changed",
+                etude_core::json::num(r.skipped_changed.len()),
+            ),
+            (
+                "skipped_occupied",
+                etude_core::json::num(r.skipped_occupied.len()),
+            ),
+            (
+                "skipped_missing",
+                etude_core::json::num(r.skipped_missing.len()),
+            ),
+        ]));
+        // Any item not restored leaves the request unfinished, whatever the cause.
+        let left = r.skipped_changed.len() + r.skipped_occupied.len() + r.skipped_missing.len();
+        if left > 0 || r.error.is_some() {
+            etude_cli_support::envelope::status("incomplete");
+        }
+        etude_cli_support::envelope::effect("items_restored", r.restored);
+        etude_cli_support::envelope::effect("changed_items_left", r.skipped_changed.len());
+        etude_cli_support::envelope::effect("occupied_items_left", r.skipped_occupied.len());
+        etude_cli_support::envelope::effect("missing_items", r.skipped_missing.len());
+        let still_out = j
             .entries
             .iter()
             .filter(|entry| entry.is_moved())
-            .filter_map(|entry| entry.from.parent().map(Path::to_path_buf))
-            .collect();
-        print_restore_failure(error, &folder_phrase(going_home), &j);
-        match saved {
-            Ok(()) => eprintln!("Fix that, then run: {step}"),
-            Err(save_err) => eprintln!(
-                "stash: the undo record could not be updated either: {}. {next_pop_corrects}",
-                etude_cli_support::plain_journal_error(&save_err)
-            ),
+            .count()
+            .max(left);
+        if still_out > 0 {
+            println!(
+                "\nRestored {} of {}.",
+                r.restored,
+                etude_cli_support::counted(r.restored + still_out, "item", "items")
+            );
+        } else {
+            println!(
+                "\nRestored {}.",
+                etude_cli_support::counted(r.restored, "item", "items")
+            );
         }
-        if matches!(error, etude_core::apply::ApplyError::Io(source) if etude_cli_support::problems::disk_full(source))
-        {
-            return fail(etude_cli_support::reason::Code::InsufficientSpace);
+        if no_deadline {
+            println!("{NO_DEADLINE}");
         }
-        return fail(etude_cli_support::reason::Code::OperationIncomplete);
-    }
-    if let Err(save_err) = saved {
-        eprintln!(
-            "stash: the restored items are back, but the undo record could not be updated: {}. {next_pop_corrects}",
-            etude_cli_support::plain_journal_error(&save_err)
+        print_pop_left(&j, &r, &sl, latest_any_folder);
+        if r.already_reversed > 0 {
+            println!(
+                "  {} already restored by an earlier run that did not finish.",
+                etude_cli_support::counted(r.already_reversed, "item was", "items were")
+            );
+        }
+        if !r.reconciled.is_empty() {
+            // Different from healed: nothing was reachable by two names here. An
+            // earlier undo moved these home and was killed before it could write
+            // that down, so this run only had to agree with the disk.
+            println!(
+                "  {} already home from an interrupted restore; the undo record now says so.",
+                etude_cli_support::counted(r.reconciled.len(), "item was", "items were")
+            );
+        }
+        if !r.healed.is_empty() {
+            println!(
+                "  {} left over from an interrupted run: one file was reachable by two\n  names and the extra name has been removed.",
+                r.healed.len()
+            );
+        }
+        // Persist regardless of outcome: on error just as much as on success, so
+        // the on-disk journal matches what was actually restored rather than
+        // still claiming every entry is pending. Whether *this* save itself
+        // succeeded changes what we can honestly tell the user next -- claiming
+        // "resumable" while the save failed would repeat the exact lie this fix
+        // exists to remove, just moved one line later.
+        let saved = j.save_sealed(&sl);
+        let step = format!("stash pop --id {}", j.id);
+        let next_pop_corrects = format!(
+            "The next `{step}` will see which items are already home and correct the record."
         );
-        return fail(etude_cli_support::reason::Code::JournalWriteFailed);
-    }
-    if r.skipped_changed.is_empty() && r.skipped_occupied.is_empty() {
-        selection::remove_empty_root(&j);
-    }
-    if left > 0 {
-        // Exit 0 means the whole request was done, and this one was not.
-        return fail(etude_cli_support::reason::Code::OperationIncomplete);
-    }
-    ExitCode::SUCCESS
+        if let Some(error) = &r.error {
+            let going_home: Vec<PathBuf> = j
+                .entries
+                .iter()
+                .filter(|entry| entry.is_moved())
+                .filter_map(|entry| entry.from.parent().map(Path::to_path_buf))
+                .collect();
+            print_restore_failure(error, &folder_phrase(going_home), &j);
+            match saved {
+                Ok(()) => eprintln!("Fix that, then run: {step}"),
+                Err(save_err) => eprintln!(
+                    "stash: the undo record could not be updated either: {}. {next_pop_corrects}",
+                    etude_cli_support::plain_journal_error(&save_err)
+                ),
+            }
+            if matches!(error, etude_core::apply::ApplyError::Io(source) if etude_cli_support::problems::disk_full(source))
+            {
+                return fail(etude_cli_support::reason::Code::InsufficientSpace);
+            }
+            return fail(etude_cli_support::reason::Code::OperationIncomplete);
+        }
+        if let Err(save_err) = saved {
+            eprintln!(
+                "stash: the restored items are back, but the undo record could not be updated: {}. {next_pop_corrects}",
+                etude_cli_support::plain_journal_error(&save_err)
+            );
+            return fail(etude_cli_support::reason::Code::JournalWriteFailed);
+        }
+        if r.skipped_changed.is_empty() && r.skipped_occupied.is_empty() {
+            selection::remove_empty_root(&j);
+        }
+        if left > 0 {
+            // Exit 0 means the whole request was done, and this one was not.
+            return fail(etude_cli_support::reason::Code::OperationIncomplete);
+        }
+        ExitCode::SUCCESS
+    })();
+    progress.finish(code);
+    code
 }
 
 fn pop_item_args(args: &[String]) -> Result<(Vec<String>, Option<String>), &'static str> {
@@ -2158,6 +2194,7 @@ fn pop_one_item(
     };
     if journal.entries[index].state == etude_core::journal::EntryState::Reversed {
         println!("That item is already restored.");
+        etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
         return ExitCode::from(1);
     }
 
@@ -2166,7 +2203,13 @@ fn pop_one_item(
         .parent()
         .map(etude_cli_support::shown)
         .unwrap_or_default();
-    let report = match etude_core::apply::undo_entry(journal, index, sealer) {
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash pop", "pop");
+    let report = match etude_core::apply::undo_entry_with_structured_progress(
+        journal,
+        index,
+        sealer,
+        |event| progress.update(event),
+    ) {
         Ok(report) => report,
         Err(_) => {
             eprintln!(
@@ -2175,96 +2218,100 @@ fn pop_one_item(
             return fail(etude_cli_support::reason::Code::OperationIncomplete);
         }
     };
-    if report.unrecorded_moves > 1 {
-        return refuse_missing_entries(journal, report.unrecorded_moves);
-    }
-    let saved = journal.save_sealed(sealer);
-    let remaining = match batches::held(journal) {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!(
-                "stash: restored {}, but could not count what is still held: {}. See it with: {inspect}",
-                counted(report.restored, "item", "items"),
-                etude_cli_support::plain_journal_error(&error)
-            );
-            return fail(etude_cli_support::reason::Code::PermissionDenied);
+    let code = (|| {
+        if report.unrecorded_moves > 1 {
+            return refuse_missing_entries(journal, report.unrecorded_moves);
         }
-    };
-    etude_cli_support::envelope::detail(etude_core::json::obj(&[
-        ("stash_id", etude_core::json::str(&journal.id)),
-        ("item_id", etude_core::json::str(item_id)),
-        ("restored", etude_core::json::num(report.restored)),
-        ("remaining_held", etude_core::json::num(remaining)),
-        (
-            "skipped_changed",
-            etude_core::json::num(report.skipped_changed.len()),
-        ),
-        (
-            "skipped_occupied",
-            etude_core::json::num(report.skipped_occupied.len()),
-        ),
-        (
-            "skipped_missing",
-            etude_core::json::num(report.skipped_missing.len()),
-        ),
-    ]));
-    etude_cli_support::envelope::effect("items_restored", report.restored);
-    etude_cli_support::envelope::effect("items_still_held", remaining);
-    if report.error.is_some() || report.restored == 0 {
-        etude_cli_support::envelope::status("incomplete");
-    }
-    let still_held = format!(
-        "{} held in this operation.",
-        counted(remaining, "item remains", "items remain")
-    );
-    if let Err(error) = saved {
-        let cause = etude_cli_support::plain_journal_error(&error);
+        let saved = journal.save_sealed(sealer);
+        let remaining = match batches::held(journal) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "stash: restored {}, but could not count what is still held: {}. See it with: {inspect}",
+                    counted(report.restored, "item", "items"),
+                    etude_cli_support::plain_journal_error(&error)
+                );
+                return fail(etude_cli_support::reason::Code::PermissionDenied);
+            }
+        };
+        etude_cli_support::envelope::detail(etude_core::json::obj(&[
+            ("stash_id", etude_core::json::str(&journal.id)),
+            ("item_id", etude_core::json::str(item_id)),
+            ("restored", etude_core::json::num(report.restored)),
+            ("remaining_held", etude_core::json::num(remaining)),
+            (
+                "skipped_changed",
+                etude_core::json::num(report.skipped_changed.len()),
+            ),
+            (
+                "skipped_occupied",
+                etude_core::json::num(report.skipped_occupied.len()),
+            ),
+            (
+                "skipped_missing",
+                etude_core::json::num(report.skipped_missing.len()),
+            ),
+        ]));
+        etude_cli_support::envelope::effect("items_restored", report.restored);
+        etude_cli_support::envelope::effect("items_still_held", remaining);
+        if report.error.is_some() || report.restored == 0 {
+            etude_cli_support::envelope::status("incomplete");
+        }
+        let still_held = format!(
+            "{} held in this operation.",
+            counted(remaining, "item remains", "items remain")
+        );
+        if let Err(error) = saved {
+            let cause = etude_cli_support::plain_journal_error(&error);
+            if report.restored > 0 {
+                eprintln!(
+                    "stash: the item is back, but the undo record could not be updated: {cause}. The next `{whole_stash}` will see which items are already home and correct the record."
+                );
+            } else {
+                eprintln!("stash: the undo record could not be updated: {cause}.");
+            }
+            return fail(etude_cli_support::reason::Code::JournalWriteFailed);
+        }
+        let this_item = format!("{whole_stash} --item {shown_item}");
+        if let Some(error) = report.error {
+            print_restore_failure(&error, &going_home, journal);
+            eprintln!("{still_held} Fix that, then run: {this_item}");
+            return fail(apply_reason(&error));
+        }
         if report.restored > 0 {
-            eprintln!(
-                "stash: the item is back, but the undo record could not be updated: {cause}. The next `{whole_stash}` will see which items are already home and correct the record."
+            println!(
+                "Restored {}; {}",
+                counted(report.restored, "item", "items"),
+                still_held
             );
         } else {
-            eprintln!("stash: the undo record could not be updated: {cause}.");
+            println!("Nothing was restored. {still_held}");
         }
-        return fail(etude_cli_support::reason::Code::JournalWriteFailed);
-    }
-    let this_item = format!("{whole_stash} --item {shown_item}");
-    if let Some(error) = report.error {
-        print_restore_failure(&error, &going_home, journal);
-        eprintln!("{still_held} Fix that, then run: {this_item}");
-        return fail(apply_reason(&error));
-    }
-    if report.restored > 0 {
-        println!(
-            "Restored {}; {}",
-            counted(report.restored, "item", "items"),
-            still_held
-        );
-    } else {
-        println!("Nothing was restored. {still_held}");
-    }
-    let holding = holding_shown(journal);
-    if !report.skipped_changed.is_empty() {
-        println!(
-            "  That item changed while stashed and was left alone. It is still held in {holding}."
-        );
-    }
-    if !report.skipped_occupied.is_empty() {
-        println!(
-            "  Its original place is taken by another file. It is still held in {holding}. Move the other file away, then run: {this_item}"
-        );
-    }
-    if !report.skipped_missing.is_empty() {
-        println!(
-            "  That item is not where stash left it ({holding}). If you moved that folder, move it back and run: {this_item}\n  If you deleted it, there is nothing to restore."
-        );
-    }
-    if report.restored == 0 {
-        refuse_preserving_status(etude_cli_support::reason::Code::OperationIncomplete)
-    } else {
-        selection::remove_empty_root(journal);
-        ExitCode::SUCCESS
-    }
+        let holding = holding_shown(journal);
+        if !report.skipped_changed.is_empty() {
+            println!(
+                "  That item changed while stashed and was left alone. It is still held in {holding}."
+            );
+        }
+        if !report.skipped_occupied.is_empty() {
+            println!(
+                "  Its original place is taken by another file. It is still held in {holding}. Move the other file away, then run: {this_item}"
+            );
+        }
+        if !report.skipped_missing.is_empty() {
+            println!(
+                "  That item is not where stash left it ({holding}). If you moved that folder, move it back and run: {this_item}\n  If you deleted it, there is nothing to restore."
+            );
+        }
+        if report.restored == 0 {
+            refuse_preserving_status(etude_cli_support::reason::Code::OperationIncomplete)
+        } else {
+            selection::remove_empty_root(journal);
+            ExitCode::SUCCESS
+        }
+    })();
+    progress.finish(code);
+    code
 }
 
 fn cmd_inspect(args: &[String]) -> ExitCode {
@@ -3154,7 +3201,8 @@ mod tests {
                 "--allow-home",
                 "--export-plan",
                 "--plan",
-                "--plan-digest"
+                "--plan-digest",
+                "--progress-json"
             ]
         );
         for typo in ["--dry-run", "--yes", "-n", "--all", "--force"] {

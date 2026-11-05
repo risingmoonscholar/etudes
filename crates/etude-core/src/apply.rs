@@ -2032,7 +2032,24 @@ pub fn undo(j: &mut Journal, sealer: &dyn Sealer) -> UndoReport {
 pub fn undo_with_progress(
     j: &mut Journal,
     sealer: &dyn Sealer,
-    progress: impl FnMut(Progress),
+    mut progress: impl FnMut(Progress),
+) -> UndoReport {
+    undo_selected_with_progress(j, sealer, None, |event| {
+        if event.phase == ProgressPhase::Advancing {
+            progress(Progress {
+                completed: event.completed,
+                total: event.planned,
+            });
+        }
+    })
+}
+
+/// Reverse a journal with structured progress: `completed` counts entries
+/// fully examined and `journalled` the reversals made durable by this run.
+pub fn undo_with_structured_progress(
+    j: &mut Journal,
+    sealer: &dyn Sealer,
+    progress: impl FnMut(StructuredProgress),
 ) -> UndoReport {
     undo_selected_with_progress(j, sealer, None, progress)
 }
@@ -2046,17 +2063,32 @@ pub fn undo_with_progress(
 /// progress stream already supports holes, so selective reversals remain
 /// replayable alongside later whole-operation restores.
 pub fn undo_entry(j: &mut Journal, index: usize, sealer: &dyn Sealer) -> Result<UndoReport, usize> {
+    undo_entry_with_structured_progress(j, index, sealer, |_| {})
+}
+
+/// [`undo_entry`] with structured progress.
+pub fn undo_entry_with_structured_progress(
+    j: &mut Journal,
+    index: usize,
+    sealer: &dyn Sealer,
+    progress: impl FnMut(StructuredProgress),
+) -> Result<UndoReport, usize> {
     if index >= j.entries.len() {
         return Err(j.entries.len());
     }
-    Ok(undo_selected_with_progress(j, sealer, Some(index), |_| {}))
+    Ok(undo_selected_with_progress(
+        j,
+        sealer,
+        Some(index),
+        progress,
+    ))
 }
 
 fn undo_selected_with_progress(
     j: &mut Journal,
     sealer: &dyn Sealer,
     selected: Option<usize>,
-    mut progress: impl FnMut(Progress),
+    mut progress: impl FnMut(StructuredProgress),
 ) -> UndoReport {
     let mut r = UndoReport::default();
 
@@ -2086,16 +2118,29 @@ fn undo_selected_with_progress(
     let unrecorded = unrecorded_moves(j);
     if unrecorded > 1 {
         r.unrecorded_moves = unrecorded;
+        progress(StructuredProgress {
+            planned: 0,
+            completed: 0,
+            journalled: 0,
+            phase: ProgressPhase::Error,
+        });
         return r;
     }
 
     // Reverse order, so nested destinations empty before their parents.
     let total = selected.map_or(j.entries.len(), |_| 1);
-    let mut completed = 0usize;
+    let mut event = StructuredProgress {
+        planned: total,
+        completed: 0,
+        journalled: 0,
+        phase: ProgressPhase::Planning,
+    };
+    progress(event);
+    event.phase = ProgressPhase::Advancing;
     macro_rules! advance {
         () => {{
-            completed += 1;
-            progress(Progress { completed, total });
+            event.completed += 1;
+            progress(event);
         }};
     }
     for i in (0..j.entries.len()).rev() {
@@ -2107,6 +2152,9 @@ fn undo_selected_with_progress(
             undo_tag_entry(j, i, &e, sealer, &mut r);
             if r.error.is_some() {
                 break;
+            }
+            if e.state != EntryState::Reversed && j.entries[i].state == EntryState::Reversed {
+                event.journalled += 1;
             }
             advance!();
             continue;
@@ -2233,6 +2281,7 @@ fn undo_selected_with_progress(
                     r.error = Some(ApplyError::Journal(err));
                     break;
                 }
+                event.journalled += 1;
                 r.reconciled.push(e.from.clone());
                 advance!();
                 continue;
@@ -2301,6 +2350,7 @@ fn undo_selected_with_progress(
                     r.error = Some(ApplyError::Journal(err));
                     break;
                 }
+                event.journalled += 1;
             }
             Err(err) => {
                 r.error = Some(ApplyError::Io(err));
@@ -2309,6 +2359,13 @@ fn undo_selected_with_progress(
         }
         advance!();
     }
+
+    event.phase = if r.error.is_some() {
+        ProgressPhase::Error
+    } else {
+        ProgressPhase::Done
+    };
+    progress(event);
 
     // Remove only destination directories this operation recorded creating,
     // and only while the same real directory is still present and empty.

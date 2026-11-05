@@ -71,7 +71,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 677 tests
+cargo test --all                # 735 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -381,6 +381,18 @@ refuse publication. The requested destination appears with one rename after
 the final audit. Failed runs remove staging; if removal fails, the diagnostic
 names the remaining staging path or explicitly says its state is unverified.
 
+SIGKILL itself still leaves a private folder until a later extraction into the same
+destination under the same parent. That run removes the folder only when its name is exactly
+`.{name}.unpack-{32 lowercase hex digits}.partial`, it is a real directory
+owned by this user, its lock file names that very directory by device and inode,
+and that lock can be taken. The extractor inherits the lock, so a surviving writer
+also prevents removal. A symlink, a copy, a folder from an older version, a live
+extraction and anything else unproved stay in place. Stderr names each folder
+removed and each folder with that exact name left in place, and `--json` counts
+them under `effects`. A failed removal is reported and does not block the new
+extraction. On a volume without advisory locks, extraction works as before and its
+leftover is never removed. See [staging recovery evidence](docs/release-evidence/unpack-staging-recovery.md).
+
 **Unpack's size budget is a monitored soft limit.** `--max-size N[G|M]` replaces
 the default of half the target volume's free space. System extractors write
 directly, so unpack measures logical file bytes every 100 ms and after exit,
@@ -532,7 +544,7 @@ already exist, the output says so plainly: *the folder name "Blender" was
 chosen by your agent, not derived from your files* -- the one sanctioned
 exception to the naming rule, and it announces itself.
 
-Large apply, undo, stash and pop operations report item-count milestones to
+Large apply, undo, stash, pop and unpack extraction operations report item-count milestones to
 stderr, leaving JSON on stdout untouched. Small operations stay quiet; large
 ones produce at most ten updates.
 
@@ -543,13 +555,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 75 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 77 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 75 scenarios
+bash stress/run.sh        # 77 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
@@ -588,7 +600,7 @@ crates/
   etude-core/    scan, plan, apply, journal-first undo, zero dependencies
   etude-keep/    journal encryption (XChaCha20-Poly1305, keychain or supplied key)
   etude-read/    content inspection, mlock'd, zeroed, never persisted
-  etude-cli-support/ bounded progress presentation shared by the CLIs
+  etude-cli-support/ the progress layer, result envelope, refusal codes and contracts shared by the CLIs
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
   unpack-cli/    bin: unpack, dispatches to system tools, parses nothing
@@ -695,11 +707,11 @@ Sources: Apple's [getxattr(2)](https://developer.apple.com/library/archive/docum
 and [fsetxattr(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsetxattr.2.html)
 document descriptor access, absent attributes, and unsupported storage. Extractor
 propagation and exFAT storage are measured behavior, rather than promises inferred
-from these manuals. The unpack capability declaration is version 6 and the result
-envelope is version 4. `docs/contracts/v6/unpack.json` is the canonical pin and
+from these manuals. The unpack capability declaration is version 8 and the result
+envelope is version 4. `docs/contracts/v8/unpack.json` is the canonical pin and
 `v1/unpack.json` mirrors it; earlier pins stay immutable.
 
-Opt in to versioned stderr progress with `sweep apply PATH --yes --progress-json` (also available during review). Records distinguish planned entries, successful moves, and durable journal acknowledgements; `--json` stdout remains one result envelope. See [structured progress](docs/sweep-progress.md) for the schema and failure counts. Journal persistence is unchanged; no speed improvement is claimed.
+Every operation that takes time or writes takes `--progress-json`: `sweep apply`, `review` and `undo`, `stash`, `stash select`, `stash pop` and `restore`, and `unpack` extraction and `--list`. One shared layer writes versioned, bounded records on stderr; `--json` stdout remains one result envelope. Records distinguish planned entries, completed steps and durable journal acknowledgements, say so when a count is not known yet, and never state a count nobody observed. Unpack still parses nothing while extracting: it counts planned members in its private staging, from the walk its soft limit already makes. See [structured progress](docs/progress.md) for the schema, what a killed run leaves, and measured cost. Journal persistence is unchanged; no speed improvement is claimed.
 
 ### Stash exactly the selected objects
 

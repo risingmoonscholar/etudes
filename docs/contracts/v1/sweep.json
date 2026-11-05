@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 13,
+    "schema_version": 14,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -638,6 +638,47 @@
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
     },
+    "structured_progress": {
+      "flag": "--progress-json",
+      "stream": "stderr_ndjson_alongside_diagnostics",
+      "schema_version": 1,
+      "fields": [
+        "schema_version",
+        "event",
+        "tool_version",
+        "operation_id",
+        "operation",
+        "phase",
+        "planned",
+        "completed",
+        "journalled"
+      ],
+      "maximum_events": 12,
+      "counts": [
+        {
+          "operation": "apply",
+          "planned": "entries_after_full_preflight_validation",
+          "completed": "successful_moves_including_a_move_whose_done_record_failed",
+          "journalled": "successful_durable_done_records;_zero_without_a_journal"
+        },
+        {
+          "operation": "review",
+          "planned": "entries_after_full_preflight_validation",
+          "completed": "successful_moves_including_a_move_whose_done_record_failed",
+          "journalled": "successful_durable_done_records;_zero_without_a_journal"
+        },
+        {
+          "operation": "undo",
+          "planned": "journal_entries",
+          "completed": "entries_fully_examined_including_ones_left_alone_or_already_restored",
+          "journalled": "reversals_made_durable_by_this_run"
+        }
+      ],
+      "indeterminate": "phase_planning_with_planned_zero;_the_count_is_not_known_yet",
+      "terminal": "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
+      "ordering": "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
+      "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
     "finder_aliases": {
       "attribute": "com.apple.FinderInfo",
       "read_scope": "selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category",
@@ -653,32 +694,6 @@
       "apply": "one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move_because_the_plan_cannot_run_as_made;_clear_the_lock_then_plan_again;_never_tagged",
       "counters": "plan.skipped.locked_skipped;_plan.skipped.locked_system;_apply.held_locked",
       "platform": "macos_only;_never_locked_elsewhere"
-    },
-    "structured_progress": {
-      "flag": "--progress-json",
-      "stream": "stderr_ndjson_alongside_diagnostics",
-      "schema_version": 1,
-      "operations": [
-        "apply",
-        "review"
-      ],
-      "fields": [
-        "schema_version",
-        "event",
-        "tool_version",
-        "operation_id",
-        "operation",
-        "phase",
-        "planned",
-        "completed",
-        "journalled"
-      ],
-      "maximum_events": 12,
-      "planned": "entries_after_full_preflight_validation",
-      "completed": "successful_moves_including_a_move_whose_done_record_failed",
-      "journalled": "successful_durable_done_records;_zero_without_a_journal",
-      "ordering": "each_done_record_is_durable_before_callback_and_next_move",
-      "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
     },
     "status_lookup": {
       "support": "read_only",

@@ -25,6 +25,10 @@ watched_by = ["cargo test --all", "stress-ratchet.sh"]
 what = "whether what the tools print is true of what they did"
 watched_by = ["stress-ratchet.sh", "check-transcripts-reproduce.sh"]
 
+[surface.progress-output]
+what = "what --progress-json says while sweep, stash and unpack run, on stderr, and what a kill leaves behind"
+watched_by = ["cargo test --all", "stress-ratchet.sh", "check-progress-mutation.sh"]
+
 [surface.docs-claims]
 what = "every number and version stated in README, CHANGELOG, the site"
 watched_by = ["check-claims.sh"]
@@ -87,6 +91,10 @@ failable = "a scenario not on the baseline turns the run red"
 [check."check-claims.sh"]
 guards = "every number the docs state matches what runs"
 failable = "a claim the pattern cannot find is a FAILURE, never a skip"
+
+[check."check-progress-mutation.sh"]
+guards = "the progress tests reject a count of the whole tree, a partly written member, a failed walk on a vanished name, a schema change, unbounded records, done on a bad outcome, records on stdout and overstated durability"
+failable = "it is the failability check: a fault that survives or fails for an unrelated reason stops it, and so does a pattern that no longer matches"
 
 [check."check-transcripts-reproduce.sh"]
 guards = "the site's captured output still comes out of these binaries"

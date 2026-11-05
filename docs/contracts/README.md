@@ -47,7 +47,7 @@ Scope domains resolve as follows:
 | `archive_bytes`, `archive_metadata` | The requested archive's bytes and filesystem metadata |
 | `private_archive_copy`, `os_random_bytes` | A temporary private copy of the archive and /dev/urandom bytes for its name |
 | `destination_parent_metadata`, `volume_free_space` | Destination checks and the volume measurement used for the default soft extraction budget |
-| `staging_tree_metadata`, `private_staging_tree` | Audits of the actual extracted tree, and private extraction, junk removal and failure cleanup beside the destination |
+| `staging_tree_metadata`, `private_staging_tree` | Audits of the actual extracted tree and the periodic walk that measures bytes and planned members during extraction, and private extraction, junk removal and failure cleanup beside the destination |
 | `new_destination_tree` | The audited tree published by rename to a previously absent destination |
 
 `overwrite.user_destinations` covers caller-owned destinations. Journal updates
@@ -95,7 +95,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v13/sweep.json`, `v12/stash.json` and `v7/unpack.json` are the
+later declaration: `v14/sweep.json`, `v13/stash.json` and `v8/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -212,6 +212,18 @@ locked. Clear any lock, then plan again. A locked root or destination folder
 keeps this code and exit 2. `v12/stash.json` pins the stash declaration and
 `v1/stash.json` mirrors it; earlier pins remain unchanged.
 
+**Declaration versions 14 (sweep), 13 (stash) and 8 (unpack)** declare one
+`structured_progress` section for every tool: the flag, the schema version, the
+fields, the record bound, what each operation's counts count, how an unknown
+count reads, and what a terminal record means. It lists sweep `undo`, stash
+`stash` and `pop`, and unpack `extract` and `list` for the first time, and moves
+sweep's single count descriptions into per-operation rows. The progress schema
+itself stays at version 1 and the result envelope at version 4. No read or write
+domain is added: unpack's count comes from the staging walk already declared as
+`staging_tree_metadata`, so progress adds nothing to an unpack `extract` scope. `v14/sweep.json`,
+`v13/stash.json` and `v8/unpack.json` pin these declarations and `v1/` mirrors
+them. See [structured progress](../progress.md).
+
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
 conditional path (including keychain, EXDEV, review and crash recovery). Those
@@ -227,7 +239,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v13/sweep.json`, `v12/stash.json` and `v7/unpack.json`);
+contract envelopes (`v14/sweep.json`, `v13/stash.json` and `v8/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.
@@ -294,8 +306,8 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 
 ## Unpack quarantine declaration (introduced in version 3)
 
-Unpack's capability declaration under `details.schema_version` is version 6;
-its surrounding result envelope is version 4. `v6/unpack.json` pins the
+Unpack's capability declaration under `details.schema_version` is version 8;
+its surrounding result envelope is version 4. `v8/unpack.json` pins the
 current declaration and `v1/unpack.json` mirrors that current fixture. Earlier
 unpack pins stay unchanged. Sweep and stash use their own declaration
 versions, while the shared result envelope uses version 4.
@@ -330,7 +342,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 10 and its surrounding result envelope is version 4.
+declaration is version 13 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -361,7 +373,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 10 in `v10/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 13 in `v13/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
@@ -387,3 +399,16 @@ Stash declaration version 8 adds `not_due_yet` to the refusal catalog for an
 explicit `pop --if-due` whose journal deadline is still ahead. It is retryable
 later with the same request and identifies the journal as its subject. Earlier
 versioned declarations remain unchanged.
+
+## Unpack staging recovery, declaration version 8
+
+`staging_recovery_metadata_and_lock_marker` covers listing the destination's
+parent, ownership and identity checks on folders with the exact leftover name, and
+the lock marker. `verified_abandoned_staging_for_same_destination` is a write
+scope and an owned artifact that may be deleted. Recovery does not read archived
+payloads to decide whether a folder is abandoned. `v8/unpack.json` pins this
+declaration and `v1/unpack.json` mirrors it; `v7/unpack.json` remains retained.
+Stderr names every folder removed and every folder with the exact name left in
+place. The result's `effects.counters` add `leftover_folders_removed` and
+`leftover_folders_kept`, present only when not zero. See
+[staging recovery evidence](../release-evidence/unpack-staging-recovery.md).
