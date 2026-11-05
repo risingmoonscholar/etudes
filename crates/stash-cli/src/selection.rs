@@ -271,8 +271,8 @@ fn parent_problem(parent: &Path, named: bool, cause: &std::io::Error) -> Problem
         cause.kind(),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
     ) {
-        return Problem::refused(
-            format!("stash: {place} does not exist. Nothing was moved."),
+        return Problem::failed(
+            format!("stash: no folder at {}. Nothing was moved.", shown(parent)),
             Code::MissingInput,
         );
     }

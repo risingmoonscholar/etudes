@@ -46,7 +46,8 @@ USAGE
     stash pop [PATH]                restore the unique batch for PATH (or here)
     stash pop [PATH] --latest       restore the latest live batch; no PATH means all
     stash pop [PATH] --if-due       pop only if the deadline has passed;
-                                    exit 2 when early, 1 when nothing stashed
+                                    exit 2 when early, 1 when nothing stashed,
+                                    3 when there is no folder at PATH
     stash status [PATH]             what is stashed, and when it is due back
     stash inspect --id ID           inspect item ids and what remains held
     stash status --all              every stash this machine's journals know,

@@ -287,7 +287,7 @@ for how in "" "$D"; do
   has "wrong key: names the record" "$OUT" "the undo record $RECORD cannot be opened (wrong key, or it was altered)"
   has "wrong key: nothing moved" "$OUT" "Nothing was moved."
   has "wrong key: which key" "$OUT" "Use the key it was made with."
-  has "wrong key: by hand" "$OUT" "you can move them back by hand"
+  has "wrong key: says what it cannot know" "$OUT" "cannot say where the files from that apply are"
   hasnt "wrong key: no forget" "$OUT" "forget"
 done
 OUT=$(ETUDE_JOURNAL_KEY="$OTHER" "$SWEEP" status "$D" 2>&1 </dev/null); RC=$?
