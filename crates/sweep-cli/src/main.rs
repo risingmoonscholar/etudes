@@ -1000,21 +1000,21 @@ fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
     }
 }
 
-/// The names to offer when `--only` matches no group.
-fn no_such_group(only: &str, groups: &[plan::Group], place: &str) -> String {
-    let only = etude_cli_support::shown_text(only);
+/// `--only` named a group the plan does not have. A plan with no groups at all
+/// is a different answer: there is nothing to apply, and the notes say why.
+fn no_such_group(only: &str, groups: &[plan::Group], place: &str) -> Option<String> {
+    if groups.is_empty() || groups.iter().any(|group| group.name == only) {
+        return None;
+    }
     let names: Vec<String> = groups
         .iter()
         .map(|group| etude_cli_support::shown_text(&group.name))
         .collect();
-    if names.is_empty() {
-        format!("no group named \"{only}\" {place}, which has no groups. Nothing was moved.")
-    } else {
-        format!(
-            "no group named \"{only}\" {place}. Groups: {}. Nothing was moved.",
-            names.join(", ")
-        )
-    }
+    Some(format!(
+        "no group named \"{}\" {place}. Groups: {}. Nothing was moved.",
+        etude_cli_support::shown_text(only),
+        names.join(", ")
+    ))
 }
 
 /// The positional PATH for `cmd`, skipping any flag's value while it looks.
@@ -1356,13 +1356,11 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         eprintln!("sweep: applying requires --yes or --only NAME");
         return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
-    if let Some(name) = only.as_deref()
-        && !bound.plan.groups.iter().any(|group| group.name == name)
+    if let Some(msg) = only
+        .as_deref()
+        .and_then(|name| no_such_group(name, &bound.plan.groups, "in this plan"))
     {
-        eprintln!(
-            "sweep: {}",
-            no_such_group(name, &bound.plan.groups, "in this plan")
-        );
+        eprintln!("sweep: {msg}");
         return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     for group in &mut bound.plan.groups {
@@ -2402,11 +2400,13 @@ fn run_apply(
             let moved = failure.moved;
             let e = failure.error;
             etude_cli_support::envelope::effect("items_moved", moved);
+            // A journal that became durable before the failure is the handle
+            // for `status --id`; name it in the result. It is the only handle:
+            // the words below decide whether any undo step is printed.
+            if let Some(id) = failure.durable_journal_id.as_deref() {
+                etude_cli_support::envelope::recovery_operation(id);
+            }
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
-                // A refused attempt keeps its record; `status --id` reads it.
-                if let Some(id) = failure.durable_journal_id.as_deref() {
-                    etude_cli_support::envelope::recovery_operation(id);
-                }
                 etude_cli_support::envelope::status("refused");
                 eprintln!("sweep: {e}");
                 return apply_exit_code(&e);
@@ -2421,11 +2421,6 @@ fn run_apply(
                     eprintln!("Nothing was moved, so there is nothing to undo.");
                 }
                 return apply_exit_code(&e);
-            }
-            // The journal that became durable before the failure is the handle
-            // for `status --id` and `undo`; name it in the result.
-            if let Some(id) = failure.durable_journal_id.as_deref() {
-                etude_cli_support::envelope::recovery_operation(id);
             }
             etude_cli_support::envelope::status("incomplete");
             let what = if p.adds_tags {
@@ -2673,10 +2668,11 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     } else {
         plan::build_mapped(&outcome, &scheme.maps)
     };
-    if let Some(name) = only.as_deref()
-        && !p.groups.iter().any(|group| group.name == name)
+    if let Some(msg) = only
+        .as_deref()
+        .and_then(|name| no_such_group(name, &p.groups, "here"))
     {
-        eprintln!("sweep: {}", no_such_group(name, &p.groups, "here"));
+        eprintln!("sweep: {msg}");
         return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     for g in &mut p.groups {

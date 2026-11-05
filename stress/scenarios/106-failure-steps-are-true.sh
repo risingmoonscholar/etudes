@@ -61,7 +61,6 @@ no_moves() {  # no_moves LABEL DIR WANT_CODE [ARGS]: apply moved nothing and say
   hasnt "$label does not call anything resumable" "$out" "resumable"
   "$SWEEP" apply "$dir" --yes --json >"$W/out.json" 2>/dev/null </dev/null
   assert_eq refused "$(json_field status "$W/out.json")" "$label: status refused"
-  assert_eq "" "$(json_field recovery.operation "$W/out.json")" "$label: no recovery handle"
 }
 
 B="$W/B"; shots "$B"; printf 'file' > "$B/Screenshots"

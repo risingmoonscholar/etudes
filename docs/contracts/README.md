@@ -68,6 +68,9 @@ Each format domain includes a named unsupported list and an `unlisted:
 unavailable. Archive support is still subject to member safety gates, extractor
 availability and the monitored soft size budget. The supported platform is macOS.
 
+Stash's `home_folder` says it refuses the caller's home folder unless the named
+flag is passed.
+
 The declarations do not enforce an OS sandbox. Network policy is `none`, runtime
 enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.

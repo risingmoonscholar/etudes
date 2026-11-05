@@ -885,6 +885,9 @@ fn execute_stash(
             let moved = failure.moved;
             let e = failure.error;
             etude_cli_support::envelope::effect("items_moved", moved);
+            if let Some(id) = failure.durable_journal_id.as_deref() {
+                etude_cli_support::envelope::recovery_operation(id);
+            }
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
                 eprintln!("stash: {e}");
                 etude_cli_support::envelope::status("refused");
@@ -904,10 +907,7 @@ fn execute_stash(
             );
             let them = if moved == 1 { "it" } else { "them" };
             match failure.durable_journal_id.as_deref() {
-                Some(id) => {
-                    etude_cli_support::envelope::recovery_operation(id);
-                    eprintln!("{what} To put {them} back: stash pop --id {id}");
-                }
+                Some(id) => eprintln!("{what} To put {them} back: stash pop --id {id}"),
                 None => eprintln!(
                     "{what} --no-journal removed undo. Move {them} back by hand from {}.",
                     etude_cli_support::shown(&bound.root.join(&bound.groups[0].name))

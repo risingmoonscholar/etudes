@@ -929,8 +929,8 @@ fn an_apply_that_stops_part_way_names_its_recovery_operation() {
     assert!(stdout.contains(r#""state":"interrupted""#), "{stdout}");
 }
 
-/// A failure that moved nothing is a refusal. It names no recovery operation, and
-/// the empty folder the attempt made is gone, so there is truly nothing to undo.
+/// A failure that moved nothing is a refusal, and the empty folder the attempt
+/// made is gone, so there is truly nothing to undo.
 #[cfg(unix)]
 #[test]
 fn an_apply_whose_first_move_fails_moved_nothing_and_says_so() {
@@ -968,7 +968,6 @@ fn an_apply_whose_first_move_fails_moved_nothing_and_says_so() {
     std::fs::set_permissions(tree.join("sub"), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(code, Some(3), "{stdout}");
     assert!(stdout.contains(r#""status":"refused""#), "{stdout}");
-    assert!(stdout.contains(r#""operation":"""#), "{stdout}");
     assert!(!tree.join("Screenshots").exists());
 }
 

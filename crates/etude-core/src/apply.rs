@@ -821,7 +821,13 @@ fn apply_plan_with_structured_progress(
     progress(event);
     let moved = event.completed;
     if result.is_err() && moved == 0 {
-        remove_folders_of_a_failed_attempt(&created_directories);
+        remove_folders_of_a_failed_attempt(
+            plan,
+            tool,
+            durable_journal_id.as_deref(),
+            sealer,
+            &created_directories,
+        );
     }
     result.map_err(|error| ApplyFailure {
         error,
@@ -832,12 +838,36 @@ fn apply_plan_with_structured_progress(
 
 /// A failure that moved nothing leaves the folder as it found it, so that
 /// "nothing was moved, so there is nothing to undo" stays true. Only a folder
-/// this attempt made, still the same directory and still empty, is removed.
-fn remove_folders_of_a_failed_attempt(created: &HashMap<PathBuf, (u64, u64)>) {
+/// this attempt made, still the same directory, still empty and not relied on by
+/// another live operation, is removed. Anything else stays where it is.
+fn remove_folders_of_a_failed_attempt(
+    plan: &Plan,
+    tool: &str,
+    own_journal: Option<&str>,
+    sealer: Option<&dyn Sealer>,
+    created: &HashMap<PathBuf, (u64, u64)>,
+) {
+    let attempt = Journal {
+        // Its own record must not count as another operation relying on the folder.
+        id: own_journal.unwrap_or_default().to_string(),
+        tool: tool.to_string(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+        created_directories: Vec::new(),
+        validated_directories: Vec::new(),
+        progress_tail_damaged: false,
+    };
     let mut folders: Vec<_> = created.iter().collect();
     folders.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
-    for (path, identity) in folders {
-        if directory_identity(path).as_ref() == Some(identity) {
+    for (path, (device, inode)) in folders {
+        let folder = CreatedDirectory {
+            path: path.clone(),
+            device: *device,
+            inode: *inode,
+        };
+        if created_directory_is_removable(&attempt, &folder)
+            && sealer.is_none_or(|sl| !created_directory_is_needed(&attempt, &folder, sl))
+        {
             let _ = fs::remove_dir(path);
         }
     }
