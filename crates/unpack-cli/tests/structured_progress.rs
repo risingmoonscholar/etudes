@@ -165,14 +165,22 @@ fn metadata_this_tool_drops_is_not_planned_or_counted() {
 #[test]
 fn a_duplicate_member_is_planned_once() {
     let dir = ProbeDir::new("dup");
-    let source = dir.join("source");
-    std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("same.txt"), b"x").unwrap();
-    std::fs::write(source.join("other.txt"), b"x").unwrap();
+    // Written by hand so the same name is two plain file entries on every
+    // machine. `tar -cf` stores the second copy of one file as a hard link
+    // on GNU tar and as a second file on bsdtar, and unpack rightly refuses
+    // the hard link.
+    let writer = r#"
+import io, sys, tarfile
+with tarfile.open(sys.argv[1], "w") as t:
+    for name in ("same.txt", "other.txt", "same.txt"):
+        info = tarfile.TarInfo(name)
+        info.size = 1
+        t.addfile(info, io.BytesIO(b"x"))
+"#;
     tool(
-        "/usr/bin/tar",
-        &["-cf", "../a.tar", "same.txt", "other.txt", "same.txt"],
-        &source,
+        "python3",
+        &["-I", "-c", writer, dir.join("a.tar").to_str().unwrap()],
+        &dir.0,
     );
     let run = unpack(&[
         dir.join("a.tar").to_str().unwrap(),
@@ -191,6 +199,48 @@ fn a_duplicate_member_is_planned_once() {
             ..Default::default()
         },
     );
+}
+
+#[test]
+fn a_member_stored_as_a_hard_link_is_refused_before_anything_is_counted() {
+    let dir = ProbeDir::new("hardlink");
+    let writer = r#"
+import io, sys, tarfile
+with tarfile.open(sys.argv[1], "w") as t:
+    info = tarfile.TarInfo("same.txt")
+    info.size = 1
+    t.addfile(info, io.BytesIO(b"x"))
+    link = tarfile.TarInfo("same.txt")
+    link.type = tarfile.LNKTYPE
+    link.linkname = "same.txt"
+    t.addfile(link)
+"#;
+    let archive = dir.join("a.tar");
+    tool(
+        "python3",
+        &["-I", "-c", writer, archive.to_str().unwrap()],
+        &dir.0,
+    );
+    let run = unpack(&[
+        archive.to_str().unwrap(),
+        "--into",
+        dir.join("out").to_str().unwrap(),
+        "--json",
+        "--progress-json",
+    ]);
+    assert_eq!(run.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&run.stdout).contains("\"unsafe_input\""));
+    witness(
+        "extract",
+        &run.stdout,
+        &run.stderr,
+        Expect {
+            planned: Some(0),
+            completed: Some(0),
+            ..Default::default()
+        },
+    );
+    assert!(!dir.join("out").exists());
 }
 
 #[test]
