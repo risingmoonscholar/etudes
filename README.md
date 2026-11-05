@@ -1,6 +1,6 @@
 # etudes
 
-Four small command-line tools for macOS: organise, hold, extract, and create archives.
+Three small command-line tools that tidy a folder without reading your private files.
 
 **macOS only.**
 ```console
@@ -772,44 +772,69 @@ Journalled stash operations return a persistent `stash_id`. Use `stash pop --id 
 
 ## Pack a selected tree
 
-`pack SOURCE --for self|mac|other` creates a new archive beside SOURCE, or at
-`--into FILE`. The recipient class is required. `self` and `mac` default to
-`tar.gz` with metadata kept; `other` defaults to ZIP with metadata dropped.
+`pack FOLDER --for self|mac|other` makes a new archive beside FOLDER, or at
+`--into FILE`. The recipient is required. `self` and `mac` default to `tar.gz`
+with metadata kept; `other` defaults to ZIP with metadata dropped.
 `--format tar.gz|zip` and `--metadata keep|drop` make those choices explicit.
-ZIP with `keep` is refused because this writer cannot retain the required Mac
-metadata streams in that format. `--list` does preflight without staging.
+ZIP with `keep` is refused because this writer cannot carry Mac metadata in that
+format. The name given to `--into` must end in the suffix of the format. `--list`
+says what would happen and writes nothing.
 
-The sensitive-name classifier is shared with sweep. Excluded sensitive entries
-are omitted and counted without printing their names. Credential and excluded
-directory names are omitted too. Hidden entries are included; `drop` omits
-AppleDouble files and `.DS_Store` and tells the system writer to discard xattrs,
-resource forks, ACLs and file flags. `keep` uses the system tar writer's Mac
-metadata support. Packages are complete or the operation is refused when an
-exclusion would split one. A package selected as SOURCE is refused because the
-relative manifest would omit its wrapper; select its parent tree to retain it.
-Recently modified files remain eligible.
+Every member sits under one top folder named after FOLDER, so a stranger's
+`unzip` does not spill files and `unpack` puts every path back where it was.
+Scenario 124 packs and unpacks each recipient and format and compares every
+path, mode and byte, including a folder holding only a subfolder, empty folders
+and the deepest tree unpack accepts.
 
-Pack refuses all symlinks, unsupported node types, in-flight downloads,
-case-insensitive and normalized-name collisions, reserved extraction names,
-absolute paths, traversal and paths its readback cannot represent safely.
-An in-flight refusal identifies the affected entry. Control characters and
-backslashes are refused. No source entry is renamed, deleted or rewritten.
+**What is left out, counted and never named.** The sensitive-name classifier is
+shared with sweep. Folders such as `.ssh`, `.git` and `node_modules` are left out
+too. Stored `._` files are always left out; `.DS_Store`, `Thumbs.db` and
+`__MACOSX` are left out with `drop`. Other hidden entries are included. A package
+goes in whole, and a package holding a private-looking part is refused. A package
+chosen as FOLDER is refused; pack the folder holding it.
 
-A conservative bound includes payload, per-member overhead and retained
-metadata lengths. `--max-size N[G|M]` defaults to 4 GiB. Available space is
-checked before writing, and staging size is checked every 100 ms and after the
-writer exits. The limit is soft: overshoot can occur between checks. Staging
-is a private mode-0600 file beside the output. A closed archive is independently
-read back, its manifest compared with the plan, and source identities checked
-before exclusive publication. Unicode member names are compared in NFC because
-the system writer can store canonically equivalent spellings. Existing outputs are never replaced. Volumes
-without exclusive rename support are refused. A post-publication verification
-failure retains the output and reports `incomplete` with exit 3.
+**Metadata.** `keep` carries Finder tags, the download warning (quarantine) and
+other attributes as AppleDouble entries in the tar, and `unpack` restores them.
+`drop` removes them and discards resource forks, ACLs and file flags. Pack counts
+the items with Finder tags, the download warning and other attributes and says
+what it carried or removed. A file that loses the download warning will not warn
+after it is extracted. The top folder's own attributes and file owners are not
+kept. Empty folders are kept.
 
-Source identity checks are metadata checks, not a filesystem lock or an
-application consistency snapshot. Ownership, hard-link topology and every
-application's metadata fidelity are not guaranteed. The system archive process
-reads included file bytes; this differs from sweep's metadata classification.
-Receipts contain opaque item ids and redacted paths, with subprocess reads
-explicitly outside complete instrumentation coverage. No pack animation is
-included; the site records its help output.
+**What is refused.** Links of any kind, hard links between two names in FOLDER,
+setuid and setgid files, pipes, sockets and devices, files still downloading,
+files stored only in the cloud, unreadable items, names unsafe on another system,
+names that differ only by case or accent, more than 20,000 items and more than 32
+folders deep. These are refused before anything is written. Also system and
+credential folders as sweep judges them, your home folder and any folder holding
+it, and running as root. An in-flight refusal names the entry unless its name
+looks private. Other found names stay hidden; the message prints a `find` command
+that lists them.
+
+**Writing.** A conservative bound includes payload, per-member overhead and
+retained metadata lengths. `--max-size N[K|M|G]` defaults to 4 GiB, and a run over
+it prints the value that would allow it. Free space is checked before writing, and
+size every 100 ms while writing; the limit is soft and can be passed between
+checks. The archive is written to a private mode-0600 file beside the destination.
+That file is read back, its member list and payload byte count are compared with
+the plan, and the folder is re-checked, before a rename that cannot replace
+anything gives it the requested name. So the requested name holds a complete
+archive or nothing, after a failure, a full disk, SIGTERM, SIGINT, SIGHUP or
+SIGKILL. Volumes without that rename are refused. A failed check after the rename
+keeps the archive and reports `incomplete` with exit 3.
+
+**Cleanup.** A stop signal or failure removes the unfinished file only if its name
+still means the file pack made. A kill leaves it, so a later run for the same
+destination removes it only after proving all of this: the exact name with a
+32-hex nonce, a regular file with one name, mode 0600, owned by this user, an
+extended attribute holding the same nonce, and no process holding the lock pack
+took when creating it, which the writer shares, so an orphaned writer still counts.
+Anything else with that kind of name is left alone and reported. A kill in the
+moment between creating the file and marking it leaves an empty file that pack
+will report and not remove. `--list` and refusals before writing remove nothing.
+
+Source checks are metadata checks, not a filesystem lock or an application
+consistency snapshot. The system archive process reads included file bytes; this
+differs from sweep's metadata classification. Receipts contain opaque item ids and
+redacted paths, with subprocess reads explicitly outside complete instrumentation
+coverage. No pack animation is included; the site records its help output.

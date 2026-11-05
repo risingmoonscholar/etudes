@@ -113,7 +113,7 @@ for name in "${SENSITIVE[@]}"; do
 done
 [ "$leaked" -eq 0 ] && pass "$R: no sensitive name on stdout, stderr or in the archive listing" \
   || fail "$R: a sensitive name was disclosed"
-[ -f "$W/$R/out.zip" ] && /usr/bin/tar -tf "$W/$R/out.zip" 2>/dev/null | grep -qx 'ordinary.txt' \
+[ -f "$W/$R/out.zip" ] && /usr/bin/tar -tf "$W/$R/out.zip" 2>/dev/null | grep -qx 'source/ordinary.txt' \
   && pass "$R: the ordinary file is archived" || fail "$R: the ordinary file is missing from the archive"
 
 # 2. in-flight-download: refused, the entry is named, nothing else is.
@@ -134,7 +134,7 @@ R=recent-file; S="$W/$R/source"; mkdir -p "$S"
 printf 'fresh payload\n' > "$S/just-created.txt"
 run_row "$R" 0 done not_needed null "$S" "$W/$R/out.tar.gz" --for self
 assert_eq 0 "$(field "$OUT" details.excluded)" "$R: nothing excluded"
-/usr/bin/tar -tzf "$W/$R/out.tar.gz" 2>/dev/null | grep -qx 'just-created.txt' \
+/usr/bin/tar -tzf "$W/$R/out.tar.gz" 2>/dev/null | grep -qx 'source/just-created.txt' \
   && pass "$R: the just-created file is in the archive" || fail "$R: the recent file was not archived"
 
 # 4. opaque-package: a package is archived whole, or the run is refused.
@@ -143,7 +143,7 @@ printf 'plist\n' > "$S/Example.app/Contents/Info.plist"
 printf 'binary\n' > "$S/Example.app/Contents/MacOS/Example"
 run_row "$R" 0 done not_needed null "$S" "$W/$R/out.zip" --for other
 members=$(/usr/bin/tar -tf "$W/$R/out.zip" 2>/dev/null | sed 's#/$##' | LC_ALL=C sort | tr '\n' ' ')
-assert_eq "Example.app Example.app/Contents Example.app/Contents/Info.plist Example.app/Contents/MacOS Example.app/Contents/MacOS/Example " "$members" "$R: the package tree is archived complete"
+assert_eq "source/Example.app source/Example.app/Contents source/Example.app/Contents/Info.plist source/Example.app/Contents/MacOS source/Example.app/Contents/MacOS/Example " "$members" "$R: the package tree is archived complete"
 R=opaque-package-split; S="$W/$R/source"; mkdir -p "$S/Example.app/Contents"
 printf 'plist\n' > "$S/Example.app/Contents/Info.plist"
 printf 'synthetic private text\n' > "$S/Example.app/Contents/passport_scan.pdf"
@@ -167,7 +167,7 @@ run_row "$R" 2 unsafe_input after_change input "$S" "$W/$R/out.zip" --for other
 #    a contradiction and is refused as invalid arguments.
 R=metadata-size-bound; S="$W/$R/source"; mkdir -p "$S"
 dd if=/dev/zero of="$S/payload.bin" bs=1048576 count=2 status=none
-run_row "$R" 2 insufficient_space after_change destination "$S" "$W/$R/out.zip" --for other --max-size 1M
+run_row "$R" 2 size_limit_exceeded after_change input "$S" "$W/$R/out.zip" --for other --max-size 1M
 R=metadata-zip-keep; S="$W/$R/source"; mkdir -p "$S"
 printf 'ordinary payload\n' > "$S/ordinary.txt"
 run_row "$R" 2 invalid_arguments never null "$S" "$W/$R/out.zip" --for other --metadata keep

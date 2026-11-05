@@ -20,6 +20,19 @@ reviewers were pointed at the tools before anyone else could be.
 - One shared progress layer for every tool. `--progress-json` now also covers `sweep undo`, `stash`, `stash select`, `stash pop` and `restore`, and `unpack` extraction and `--list`, with the same flag, schema and writer, and human milestones come from the same layer. The schema stays at version 1 and sweep's records keep their fields. `planning` with `planned` zero now means the count is not known yet, a combination the schema never wrote. The terminal record now agrees with the result: an apply or pop whose result reads `incomplete` ends in `error`, where an apply ended in `done`. `stash`, `stash select`, `stash pop`, `restore`, `sweep undo` and `unpack` used to refuse `--progress-json` with exit 2 and now accept it. Capability declarations are now version 14 (sweep), 13 (stash) and 8 (unpack); progress adds no read or write domain. See [structured progress](docs/progress.md).
 - `unpack` reports progress without parsing extractor output: planned members from its judged listing, found in private staging by the walk its soft limit already makes, with the newest not counted until the extractor exits. Redirected runs of 100 or more members now print the shared milestones on stderr. On 100,000 files of 4,096 bytes, the median of five complete runs of a stored ZIP was 14.40 s before, 14.55 s after without the flag and 14.20 s with it, inside the spread of the runs.
 
+### 0.6.0 candidate: pack
+
+Not published. `pack FOLDER --for self|mac|other` makes a new archive from a folder.
+
+- **The recipient is required.** `self` and `mac` default to tar.gz with metadata kept, `other` to ZIP with metadata dropped. Nothing is guessed.
+- **It never replaces a file, and the requested name holds a complete archive or nothing.** The archive is written to a private file beside the destination, read back and compared with the plan, the folder is re-checked, and a rename that cannot replace anything gives it the name. This holds after a failure, a full disk, a stop signal and a kill.
+- **Pack then unpack returns every path, mode and byte.** Members sit under one top folder named after the source, so unpack never strips a real level. Pack refuses what unpack would refuse: more than 32 folders deep, setuid and setgid files, hard links between two names in the folder.
+- **It leaves out what sweep holds, counted and never named,** and refuses system and credential folders, your home folder, links, unreadable items, files still downloading or only in the cloud, and unsafe or colliding names.
+- **It says what happens to metadata.** `keep` carries Finder tags, the download warning and other attributes, and unpack restores them. `drop` removes them, and pack counts what it removed and warns about the download warning.
+- **It cleans up only its own file.** A later run removes what a killed run left only after proving the name, a matching mark, privacy and that nothing holds its lock. Anything similar is left alone and reported.
+- Every failure says what failed, that no archive was made, and a next step that works. `--help` answers from any position. `pack` needs macOS; it calls the system `tar`. The result envelope stays at version 4, and the capability declaration is version 1 with its own pin.
+- **Verification:** scenarios 120 to 126 cover the refusal matrix, a kill mid-write, cross-tool use, full and read-only disks, the round trip, every message and cleanup. `scripts/check-pack-refusal-mutation.sh` plants three faults and requires a witness to catch each.
+
 ## [0.5.4] - 2026-11-04
 
 sweep, stash and unpack.

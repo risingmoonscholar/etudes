@@ -8,7 +8,8 @@
 #      source keeps the bytes that were written to it.
 #   2. SIGKILL the supervisor at a witnessed partial state. The orphaned system
 #      archiver may finish, but only inside staging: the destination stays
-#      absent, and a retry publishes an archive equal to the source.
+#      absent, a retry publishes an archive equal to the source, and the retry
+#      removes the file the killed run left.
 #
 # Timing probes: the process is stopped and `ps` must report state T before any
 # injection; a window that was missed is reported unproven and retried at most
@@ -139,14 +140,16 @@ for attempt in 1 2 3 4; do
     || fail "the orphan reached the destination"
   if [ -e "$STAGE" ]; then
     mode=$(stat -f %Lp "$STAGE")
-    assert_eq 600 "$mode" "orphaned staging file stays private (mode $mode) and dot-prefixed; nothing cleans it after SIGKILL"
+    assert_eq 600 "$mode" "orphaned staging file stays private (mode $mode) and dot-prefixed until a later run"
   else
     pass "no staging file remained after the orphan settled"
   fi
   assert_exit 0 "retry publishes after the killed run" -- "$PACK" "$SOURCE" --for other --into "$DEST" --json
   mkdir -p "$W/extract-$attempt"
   /usr/bin/tar -xf "$DEST" -C "$W/extract-$attempt" 2>/dev/null
-  assert_eq "$SOURCE_MANIFEST" "$(manifest "$W/extract-$attempt")" "retry archive holds every source path and payload exactly"
+  assert_eq "$SOURCE_MANIFEST" "$(manifest "$W/extract-$attempt/source")" "retry archive holds every source path and payload exactly"
+  [ ! -e "$STAGE" ] && pass "the retry removed the file the killed run left" \
+    || fail "the file the killed run left is still there after the retry"
   PHASE2_DONE=1
   break
 done

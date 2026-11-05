@@ -431,7 +431,15 @@ Existing tools' pins remain unchanged. The result envelope stays at version 4.
 
 `list` declares source and destination metadata preflight only and no writes. `pack` additionally
 declares destination metadata, volume free space, randomness, archive reads and
-the two archive writes. Metadata byte reads depend on keep. The system xattr utility lists attribute
-names for length queries; the system tar writer reads retained values. Source entries are
-retained and no journal is created. A declaration is not evidence of complete
-read coverage; the receipt explicitly leaves subprocess reads unproven.
+the two archive writes. Attribute names and lengths are read by system call for
+the counts in the result; values stay out of the process. The system tar writer
+reads retained values with keep. Source entries are retained and no journal is
+created. A declaration is not evidence of complete read coverage; the receipt
+explicitly leaves subprocess reads unproven.
+
+`deletion.owned_artifacts` names the only two things pack removes: the private
+file of the current run, and a marked, unlocked private file a killed run left for
+the same destination. `policy` states the archive layout and what is refused.
+Pack reuses the codes `size_limit_exceeded`, `extraction_stopped` and
+`archive_unreadable` from unpack. Pack has not been published, so version 1 was
+revised in place during its candidate period.
