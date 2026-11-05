@@ -517,6 +517,41 @@
       "policy": "refused_unless_flag",
       "flag": "--allow-home"
     },
+    "structured_progress": {
+      "flag": "--progress-json",
+      "stream": "stderr_ndjson_alongside_diagnostics",
+      "schema_version": 1,
+      "fields": [
+        "schema_version",
+        "event",
+        "tool_version",
+        "operation_id",
+        "operation",
+        "phase",
+        "planned",
+        "completed",
+        "journalled"
+      ],
+      "maximum_events": 12,
+      "counts": [
+        {
+          "operation": "stash",
+          "planned": "entries_after_full_preflight_validation",
+          "completed": "successful_moves_including_a_move_whose_done_record_failed",
+          "journalled": "successful_durable_done_records;_zero_without_a_journal"
+        },
+        {
+          "operation": "pop",
+          "planned": "journal_entries_or_one_with_item",
+          "completed": "entries_fully_examined_including_ones_left_alone_or_already_restored",
+          "journalled": "reversals_made_durable_by_this_run"
+        }
+      ],
+      "indeterminate": "phase_planning_with_planned_zero;_the_count_is_not_known_yet",
+      "terminal": "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
+      "ordering": "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
+      "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
     "explicit_selection": {
       "command": "select",
       "sources": "multiple_exact_canonical_files_and_directories;_no_common_ancestor_or_sibling_scan",

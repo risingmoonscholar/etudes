@@ -24,7 +24,7 @@ The version is still 1: no field, type or phase changed, and sweep's stream is t
 
 There are at most twelve records per run: one `planning` with a count, at most ten `advancing` milestones and one terminal. A run that starts indeterminate spends one milestone on that record. Each record is written whole in one call and is shorter than the 512 bytes POSIX guarantees a pipe writes atomically, so a kill cannot tear one and an extractor sharing the stream cannot land inside one. Twelve short records also cannot fill a pipe, so a reader that never reads cannot stall a run through this layer.
 
-Records begin once work begins. A refusal before that, such as a missing archive, a `.dmg` or a bad argument, uses the usual diagnostics and result envelope and writes no record. A run that has nothing to do writes one terminal record with zero counts.
+Records begin once work begins. A refusal before that, such as a missing archive, a `.dmg` or a bad argument, uses the usual diagnostics and result envelope and writes no record. Unpack begins work when it starts reading the archive, so a refusal it reaches after that, such as a destination that exists or an unsafe member, writes `planning` with `planned` zero and then `error`. A run that has nothing to do writes one terminal record with zero counts.
 
 ## What a killed run leaves
 

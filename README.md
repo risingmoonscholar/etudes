@@ -544,7 +544,7 @@ already exist, the output says so plainly: *the folder name "Blender" was
 chosen by your agent, not derived from your files* -- the one sanctioned
 exception to the naming rule, and it announces itself.
 
-Large apply, undo, stash and pop operations report item-count milestones to
+Large apply, undo, stash, pop and unpack extraction operations report item-count milestones to
 stderr, leaving JSON on stdout untouched. Small operations stay quiet; large
 ones produce at most ten updates.
 

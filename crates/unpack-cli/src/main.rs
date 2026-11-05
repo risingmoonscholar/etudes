@@ -479,8 +479,8 @@ impl BadArgument {
         match self {
             Self::UnknownOption(option) => {
                 eprintln!(
-                    "unpack: unknown option {}. It handles --list, --json, --into DIR and \
-                     --max-size SIZE. Run `unpack help`.",
+                    "unpack: unknown option {}. It handles --list, --json, --progress-json, \
+                     --into DIR and --max-size SIZE. Run `unpack help`.",
                     shown_text(option)
                 );
                 refusal(ReasonCode::UnknownOption, None)
@@ -2460,9 +2460,18 @@ fn rename_no_replace(_staging: &Path, _dest: &Path) -> std::io::Result<()> {
 /// The directory is created, rather than merely named, before the extractor
 /// starts. That makes uniqueness an OS-enforced property and gives a crash a
 /// harmless place to strand an orphaned system extractor.
+/// `.{destination}.unpack-{nonce}.partial`, keeping the destination's exact
+/// bytes: two names that read the same once made lossy are two destinations.
+fn staging_name(dest: &Path, nonce: &str) -> std::ffi::OsString {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let mut name = vec![b'.'];
+    name.extend_from_slice(dest.file_name().unwrap_or_default().as_bytes());
+    name.extend_from_slice(format!(".unpack-{nonce}.partial").as_bytes());
+    std::ffi::OsString::from_vec(name)
+}
+
 fn staging_destination(dest: &Path) -> std::io::Result<PathBuf> {
     let parent = dest.parent().unwrap_or(Path::new("."));
-    let name = dest.file_name().unwrap_or_default().to_string_lossy();
     for _ in 0..128 {
         let mut nonce = [0_u8; 16];
         etude_core::scan::observe_read(
@@ -2470,13 +2479,11 @@ fn staging_destination(dest: &Path) -> std::io::Result<PathBuf> {
             std::fs::File::open("/dev/urandom")
                 .and_then(|mut random| random.read_exact(&mut nonce)),
         )?;
-        let candidate = parent.join(format!(
-            ".{name}.unpack-{}.partial",
-            nonce
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        ));
+        let nonce = nonce
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let candidate = parent.join(staging_name(dest, &nonce));
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {

@@ -143,6 +143,49 @@ fn owned_directory(path: &Path) -> io::Result<Metadata> {
     Ok(md)
 }
 
+/// access(2) with W_OK: whether this user may add and remove names here.
+fn writable(folder: &Path) -> bool {
+    unsafe extern "C" {
+        fn access(path: *const std::ffi::c_char, mode: i32) -> i32;
+    }
+    let Ok(path) = std::ffi::CString::new(folder.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: the pointer is a valid NUL-terminated string for this call. W_OK
+    // is 2 in the platform's sys/unistd.h.
+    unsafe { access(path.as_ptr(), 2) == 0 }
+}
+
+/// A step that removes this folder when it is run, or why none can be given.
+/// `when` opens the sentence: it says in what case to run the step.
+fn removal_step(path: &Path, when: &str) -> String {
+    let parent = super::folder_of(path);
+    let quoted = quoted_path(path);
+    if writable(parent) {
+        return format!("{when}: chmod -R u+rwx {quoted} && rm -rf {quoted}");
+    }
+    unsafe extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: geteuid has no arguments or side effects.
+    let owner = parent
+        .metadata()
+        .is_ok_and(|md| md.uid() == unsafe { geteuid() });
+    if owner {
+        format!(
+            "{} is read-only, and removing it makes that folder writable. {when}: \
+             chmod u+w {} && chmod -R u+rwx {quoted} && rm -rf {quoted}",
+            shown(parent),
+            quoted_path(parent)
+        )
+    } else {
+        format!(
+            "{} is read-only for you and is not yours, so its owner has to remove it.",
+            shown(parent)
+        )
+    }
+}
+
 /// What became of one folder with an exact leftover name.
 #[derive(Debug)]
 enum Reclaim {
@@ -225,6 +268,11 @@ fn reclaim(path: &Path) -> Reclaim {
             return Reclaim::Gone;
         }
         _ => return Reclaim::Unproved,
+    }
+    // Without write access to the parent the folder's own name cannot go, so
+    // emptying it would only destroy the proof and the contents.
+    if !writable(super::folder_of(path)) {
+        return Reclaim::RemoveFailed(io::Error::from(io::ErrorKind::PermissionDenied));
     }
     if let Err(error) = std::fs::remove_dir_all(path)
         && error.kind() != io::ErrorKind::NotFound
@@ -321,21 +369,22 @@ pub fn recover(dest: &Path) {
                 left += 1;
                 eprintln!(
                     "unpack: left {} in place: its name looks like a folder from an interrupted \
-                     extraction, but unpack cannot prove it made it. Continuing.\n\
-                     If no other extraction is running and you do not need it: rm -rf {}",
+                     extraction, but unpack cannot prove it made it. Continuing.\n{}",
                     shown(&path),
-                    quoted_path(&path)
+                    removal_step(
+                        &path,
+                        "If no other extraction is running and you do not need it"
+                    )
                 );
             }
             Reclaim::RemoveFailed(error) => {
                 left += 1;
                 eprintln!(
                     "unpack: could not finish removing {}, a folder from an interrupted \
-                     extraction: {}. Continuing.\n\
-                     To delete it: chmod -R u+w {quoted} && rm -rf {quoted}",
+                     extraction: {}. Continuing.\n{}",
                     shown(&path),
                     plain_io_error(&error),
-                    quoted = quoted_path(&path)
+                    removal_step(&path, "To delete it")
                 );
             }
         }
@@ -421,6 +470,18 @@ mod tests {
         ] {
             assert!(!is_leftover_name(other.as_bytes(), b"out"), "{other}");
         }
+    }
+
+    #[test]
+    fn a_leftover_name_keeps_the_exact_bytes_of_its_destination() {
+        use std::ffi::OsStr;
+        let hex = "0123456789abcdef0123456789abcdef";
+        let raw = Path::new(OsStr::from_bytes(b"dir/\xff"));
+        let name = super::super::staging_name(raw, hex);
+        assert!(is_leftover_name(name.as_bytes(), b"\xff"));
+        // Two destinations that read the same once made lossy stay two.
+        assert!(!is_leftover_name(name.as_bytes(), "\u{fffd}".as_bytes()));
+        assert!(!is_leftover_name(name.as_bytes(), b"\xfe"));
     }
 
     #[test]

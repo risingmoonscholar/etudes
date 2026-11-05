@@ -197,7 +197,7 @@
           "apply",
           "propose"
         ],
-        "why": "The observed plan is stale; create a fresh plan before applying."
+        "why": "The plan cannot run as made: what it saw has changed, or a folder it needs is locked. Clear any lock, then plan again."
       },
       {
         "code": "profile_missing",
@@ -678,6 +678,22 @@
       "terminal": "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
       "ordering": "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
       "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
+    "finder_aliases": {
+      "attribute": "com.apple.FinderInfo",
+      "read_scope": "selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category",
+      "handling": "skip_regular_files_with_big_endian_flags_word_at_offset_8_mask_0x8000;_never_resolve_or_read_payload",
+      "counter": "plan.skipped.aliases_skipped",
+      "unreadable": "hold_and_count_unreadable;_scan_incomplete",
+      "platform": "macos_only"
+    },
+    "locked_items": {
+      "flag": "st_flags_UF_IMMUTABLE_or_SF_IMMUTABLE",
+      "read_scope": "selected_tree_metadata;_from_the_lstat_already_taken_per_entry;_no_extra_read",
+      "scan": "hold_locked_files_and_folders_by_name;_a_locked_folder_is_not_entered;_a_group_whose_existing_destination_folder_is_locked_is_held",
+      "apply": "one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move_because_the_plan_cannot_run_as_made;_clear_the_lock_then_plan_again;_never_tagged",
+      "counters": "plan.skipped.locked_skipped;_plan.skipped.locked_system;_apply.held_locked",
+      "platform": "macos_only;_never_locked_elsewhere"
     },
     "status_lookup": {
       "support": "read_only",

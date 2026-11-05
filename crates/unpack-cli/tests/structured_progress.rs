@@ -398,6 +398,39 @@ fn work_that_never_starts_writes_no_records() {
 }
 
 #[test]
+fn an_unknown_option_names_the_progress_flag_among_the_ones_that_work() {
+    let dir = ProbeDir::new("unknown-option");
+    let run = unpack(&[dir.join("a.zip").to_str().unwrap(), "--frob"]);
+    assert_eq!(run.status.code(), Some(2));
+    let text = String::from_utf8_lossy(&run.stderr);
+    assert!(text.contains("--progress-json"), "{text}");
+}
+
+#[test]
+fn a_destination_that_exists_is_found_after_work_began_so_it_ends_in_error() {
+    let dir = ProbeDir::new("destination-exists");
+    tree(&dir, 1);
+    tool(
+        "/usr/bin/zip",
+        &["-qr", "../a.zip", "deep"],
+        &dir.join("source"),
+    );
+    std::fs::create_dir(dir.join("out")).unwrap();
+    let run = unpack(&[
+        dir.join("a.zip").to_str().unwrap(),
+        "--into",
+        dir.join("out").to_str().unwrap(),
+        "--progress-json",
+    ]);
+    assert_eq!(run.status.code(), Some(2));
+    let records = records(&run.stderr);
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert!(records[0].contains("\"phase\":\"planning\""), "{records:?}");
+    assert!(records[0].contains("\"planned\":0"), "{records:?}");
+    assert!(records[1].contains("\"phase\":\"error\""), "{records:?}");
+}
+
+#[test]
 fn a_garbage_archive_stays_indeterminate_then_fails() {
     let dir = ProbeDir::new("garbage");
     std::fs::write(dir.join("a.zip"), b"this is not a zip").unwrap();

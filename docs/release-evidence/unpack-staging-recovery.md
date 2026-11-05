@@ -114,7 +114,10 @@ copied or otherwise unverified folders with the exact name remain and are
 reported by path. A name that only resembles a leftover is neither touched nor
 mentioned. Recursive removal failures are reported without blocking the new
 extraction or claiming that cleanup succeeded. A run that finds a folder another
-run has just removed says nothing about it. No process is killed by recovery.
+run has just removed says nothing about it. Under a read-only parent the folder cannot lose its
+name, so recovery does not start: the contents stay, and the printed step makes
+the parent writable first. A destination name keeps its exact bytes in the folder
+name, so names that read the same when made lossy stay separate destinations. No process is killed by recovery.
 
 A volume that answers `flock` with ENOTSUP, EOPNOTSUPP or ENOLCK still extracts,
 as it did before locks existed. Its folder has no lock file, so a later run

@@ -84,7 +84,7 @@ def plain_words(text, label):
 def step_works(text, path, label):
     # The printed step is the last line naming the folder. Run it as printed.
     step = [line for line in text.splitlines() if "rm -rf" in line and str(path) in line][-1]
-    command = step.split(": ", 1)[1]
+    command = step.rsplit(": ", 1)[1]
     code = subprocess.run(["bash", "-c", command]).returncode
     check(code == 0 and not os.path.lexists(path), label + ": the printed step removes it")
 
@@ -202,6 +202,24 @@ try:
     step_works(text, failed_cleanup, "failed removal")
     failed_cleanup = root / "absent"
 
+    # A folder that keeps its mode 0 still goes by the printed step.
+    blocked_text = (root / "failed-removal.log").read_text()
+    step_works(blocked_text, blocked, "unreadable lock")
+
+    # Under a read-only parent the leftover cannot go. It keeps its contents, and
+    # the printed step, which must also make the parent writable, works.
+    shut = root / "shut"; shut.mkdir()
+    keep_parent = parent; parent = shut
+    held = candidate(11); ready(held); (held / "member").write_bytes(b"member")
+    parent = keep_parent
+    shut.chmod(0o500)
+    done = subprocess.run([binary, str(small), "--into", str(shut / "out")], capture_output=True, text=True)
+    plain_words(done.stderr, "read-only parent")
+    check(done.returncode == 3 and (held / "member").read_bytes() == b"member",
+          "a leftover under a read-only parent keeps its contents and the extraction is refused")
+    step_works(done.stderr, held, "read-only parent")
+    shut.chmod(0o700)
+
     dead = candidate(9); ready(dead)
     first, second = start(small, "race-a"), start(small, "race-b")
     codes = [first.wait(timeout=30), second.wait(timeout=30)]
@@ -218,7 +236,9 @@ finally:
         p.wait(timeout=10)
     for log in logs:
         log.close()
-    if 'blocked' in locals():
+    if 'shut' in locals():
+        shut.chmod(0o700)
+    if 'blocked' in locals() and blocked.exists():
         blocked.chmod(0o700)
     if 'failed_cleanup' in locals() and failed_cleanup.exists():
         failed_cleanup.chmod(0o700)

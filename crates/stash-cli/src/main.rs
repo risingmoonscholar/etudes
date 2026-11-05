@@ -954,8 +954,7 @@ fn execute_stash(
                 );
                 print_downloads_note(downloads);
                 if !clear {
-                    etude_cli_support::envelope::status("incomplete");
-                    return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                    return held_back(r.moved, r.held_locked);
                 }
                 return ExitCode::SUCCESS;
             }
@@ -1013,8 +1012,7 @@ fn execute_stash(
             }
             print_downloads_note(downloads);
             if !clear {
-                etude_cli_support::envelope::status("incomplete");
-                return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                return held_back(r.moved, r.held_locked);
             }
             ExitCode::SUCCESS
         }
@@ -1265,8 +1263,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
             }
             print_downloads_note(downloads);
             if held > 0 {
-                etude_cli_support::envelope::status("incomplete");
-                return fail(etude_cli_support::reason::Code::OperationIncomplete);
+                return held_back(report.moved, report.held_locked);
             }
             ExitCode::SUCCESS
         }
@@ -1318,6 +1315,23 @@ fn cmd_select(args: &[String]) -> ExitCode {
     })();
     progress.finish(code);
     code
+}
+
+/// A stash that left items behind. Moving nothing is a refusal, whichever way it
+/// was reached: a locked item is `permission_denied`, as for a folder that holds
+/// only locked items. Moving some is incomplete.
+fn held_back(moved: usize, held_locked: usize) -> ExitCode {
+    use etude_cli_support::reason::Code;
+    if moved == 0 {
+        etude_cli_support::envelope::status("refused");
+        return fail(if held_locked > 0 {
+            Code::PermissionDenied
+        } else {
+            Code::OperationIncomplete
+        });
+    }
+    etude_cli_support::envelope::status("incomplete");
+    fail(Code::OperationIncomplete)
 }
 
 /// The folders a locked selected item sits in. `--into` holds none of them.
