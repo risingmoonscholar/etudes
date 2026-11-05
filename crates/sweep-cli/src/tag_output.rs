@@ -217,6 +217,9 @@ pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
         match &r.journal_path {
             Some(path) => {
                 println!("Undo with: {undo}");
+                if let Some(id) = crate::undo_record_id(path) {
+                    println!("Undo record id: {id}");
+                }
                 println!("Encrypted journal: {}", path.display());
             }
             None => println!("No journal was written. This cannot be undone."),
