@@ -630,6 +630,8 @@ fn structured_progress(tool: Tool) -> String {
                 "zero;_no_journal",
             ),
         ],
+        // Pack declares itself in `pack_declaration` and has no progress stream.
+        Tool::Pack => Vec::new(),
     };
     j::obj(&[
         ("flag", j::str(crate::progress::FLAG)),
