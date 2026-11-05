@@ -271,7 +271,8 @@ pub fn move_denied_advice(
         "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the item.";
     let Some(first) = locked.first() else {
         return Some(format!(
-            "A file may be locked. {UNLOCK}\n       If none is locked, macOS may be blocking the app running this command. Check System Settings > Privacy & Security > Files & Folders for that app."
+            "A file may be locked. {UNLOCK}\n       See which with: find {} -flags +uchg\n       If none is locked, macOS may be blocking the app running this command. Check System Settings > Privacy & Security > Files & Folders for that app.",
+            crate::quoted_path(within),
         ));
     };
     let folder = if first.starts_with(within) {
@@ -450,6 +451,15 @@ mod tests {
         let locked = advice.find("may be locked").unwrap();
         let privacy = advice.find("Privacy & Security").unwrap();
         assert!(locked < privacy, "{advice}");
+        assert!(
+            advice.contains("find '/nowhere' -flags +uchg"),
+            "no locked item in the plan still gets the step that finds it: {advice}"
+        );
+        let quoted = move_denied_advice(&eperm, &[], Path::new("/no where/it's")).unwrap();
+        assert!(
+            quoted.contains("find '/no where/it'\\''s' -flags +uchg"),
+            "{quoted}"
+        );
         let eacces = std::io::Error::from_raw_os_error(13);
         let modes = move_denied_advice(&eacces, &[], Path::new("/nowhere")).unwrap();
         assert!(modes.contains("ls -ld"), "{modes}");

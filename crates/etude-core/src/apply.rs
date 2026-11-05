@@ -56,6 +56,32 @@ pub enum ApplyError {
     StalePlan(io::Error),
 }
 
+/// Marks the `AlreadyExists` error raised when a folder this apply had to make
+/// was made by someone else after the plan. Any other `AlreadyExists` at the
+/// rename is a file that landed on the destination.
+#[derive(Debug)]
+struct FolderAppeared;
+
+impl std::fmt::Display for FolderAppeared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a folder it needed to make appeared after the plan was made")
+    }
+}
+
+impl std::error::Error for FolderAppeared {}
+
+fn folder_appeared_error() -> io::Error {
+    io::Error::new(io::ErrorKind::AlreadyExists, FolderAppeared)
+}
+
+/// True when `error` is a destination folder that appeared after planning, as
+/// opposed to a file landing at a rename.
+pub fn is_folder_appeared(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<FolderAppeared>())
+}
+
 /// An apply failure and the durable journal, if one had already been saved.
 ///
 /// `durable_journal_id` is present only after the corresponding sealed journal
@@ -452,9 +478,15 @@ fn refuse_saved_attempt(
             return ApplyError::Journal(error);
         }
     }
-    ApplyError::StalePlan(io::Error::other(
-        "conflict: a folder it needed appeared after the plan was made; no moves from this attempt, existing journals remain recoverable",
-    ))
+    let what = match &failure.error {
+        ApplyError::Io(error) if is_folder_appeared(error) => {
+            "a folder it needed appeared after the plan was made"
+        }
+        _ => "a file appeared at the destination after the plan was made",
+    };
+    ApplyError::StalePlan(io::Error::other(format!(
+        "conflict: {what}; no moves from this attempt, existing journals remain recoverable"
+    )))
 }
 
 /// Record a live attempt that a contender beat before it moved anything.
@@ -1168,10 +1200,7 @@ fn create_destination_dirs(
         match fs::metadata(&current) {
             Ok(metadata) if metadata.is_dir() => {
                 if current == destination && !created_this_apply.contains_key(&current) {
-                    return Err(ApplyError::Io(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        "destination already exists; it appeared after planning",
-                    )));
+                    return Err(ApplyError::Io(folder_appeared_error()));
                 }
                 break;
             }
@@ -1200,6 +1229,9 @@ fn create_destination_dirs(
                         .map_err(ApplyError::Journal)?;
                 }
                 created_this_apply.insert(directory, identity);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(ApplyError::Io(folder_appeared_error()));
             }
             Err(error) => return Err(ApplyError::Io(error)),
         }
@@ -1612,6 +1644,8 @@ pub struct UndoReport {
     /// Entries left where apply put them because another file is at the
     /// original place. The file itself did not change.
     pub skipped_occupied: Vec<PathBuf>,
+    /// The original places that are taken, in step with `skipped_occupied`.
+    pub skipped_occupied_origins: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
     pub skipped_missing: Vec<PathBuf>,
     /// Half-moves collapsed: a crash between the link and the unlink left one
@@ -2167,6 +2201,7 @@ fn undo_selected_with_progress(
             // The crash case leaves `done` false and is handled above. This
             // stays a refusal.
             r.skipped_occupied.push(e.to.clone());
+            r.skipped_occupied_origins.push(e.from.clone());
             advance!();
             continue;
         }
