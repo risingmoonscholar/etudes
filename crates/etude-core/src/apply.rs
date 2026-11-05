@@ -2228,8 +2228,12 @@ fn undo_tag_entry(
             return;
         }
         EntryState::Planned => {
-            // Equal bytes cannot distinguish apply from a later manual tag.
-            report.skipped_changed.push(entry.from.clone());
+            // Tags that still read as they did before were never written, so
+            // there is nothing to leave behind. Anything else may be apply's
+            // write: equal bytes cannot distinguish it from a later manual tag.
+            if !crate::tags::read(&entry.from).is_ok_and(|now| now == change.previous) {
+                report.skipped_changed.push(entry.from.clone());
+            }
             j.entries[index].state = EntryState::Reversed;
             if let Err(error) = j.record_undone(index, sealer) {
                 report.error = Some(ApplyError::Journal(error));

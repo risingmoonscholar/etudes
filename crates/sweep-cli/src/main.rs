@@ -2530,7 +2530,7 @@ fn run_apply(
             }
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
                 etude_cli_support::envelope::status("refused");
-                eprintln!("{}", stale_apply_text(&e, p));
+                eprintln!("{}", stale_apply_text(&e, p, operation));
                 return apply_exit_code(&e, moved);
             }
             let doing = if p.adds_tags {
@@ -2594,7 +2594,11 @@ fn undo_record_write_reason(error: &etude_core::apply::ApplyError) -> String {
 }
 
 /// Words for a plan that stopped being true before anything moved.
-fn stale_apply_text(e: &etude_core::apply::ApplyError, p: &plan::BoundPlan) -> String {
+fn stale_apply_text(
+    e: &etude_core::apply::ApplyError,
+    p: &plan::BoundPlan,
+    operation: &str,
+) -> String {
     use etude_cli_support::problems;
     if e.to_string()
         .contains("destination must stay inside the plan root")
@@ -2604,7 +2608,8 @@ fn stale_apply_text(e: &etude_core::apply::ApplyError, p: &plan::BoundPlan) -> S
             etude_cli_support::shown(&p.root)
         );
     }
-    if p.is_live() {
+    // Only a plan saved to a file can be old; these two planned just now.
+    if p.is_live() || operation == "review" {
         problems::folder_changed_just_now("sweep", &p.root)
     } else {
         problems::plan_stale_text("sweep", &p.root)

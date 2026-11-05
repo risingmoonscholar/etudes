@@ -546,7 +546,8 @@ fn a_tag_written_without_a_done_record_is_retained_without_guessing() {
     let undone = apply::undo(&mut journal, &TestSeal);
     assert!(undone.error.is_none());
     assert_eq!(undone.tags_restored, 0);
-    assert_eq!(undone.skipped_changed.len(), 2);
+    // b.pdf still reads as it did before, so nothing of apply's is there to leave.
+    assert_eq!(undone.skipped_changed, vec![s.file("a.pdf")]);
     assert_eq!(raw(&s.file("a.pdf")), written);
     assert_eq!(raw(&s.file("b.pdf")), None);
     let mut journal = Journal::load_sealed("test", &id, &TestSeal).unwrap();
