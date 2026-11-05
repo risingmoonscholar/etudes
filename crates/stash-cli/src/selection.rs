@@ -47,7 +47,7 @@ pub fn receipt_arguments(args: &[String]) -> Vec<String> {
 
 /// `-` alone is the one dash-led value: `--from0 -` reads the list from stdin.
 fn takes_as_value(flag: &str, next: &str) -> bool {
-    !next.starts_with('-') || (flag == "--from0" && next == "-")
+    !next.is_empty() && (!next.starts_with('-') || (flag == "--from0" && next == "-"))
 }
 
 fn bad_argument(text: String) -> Problem {

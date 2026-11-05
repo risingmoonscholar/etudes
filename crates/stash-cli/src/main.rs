@@ -399,7 +399,10 @@ fn missing_value_text(flag: &str, next: Option<&str>) -> String {
     } else {
         ""
     };
-    match next.map(etude_cli_support::shown_text) {
+    match next
+        .filter(|value| !value.is_empty())
+        .map(etude_cli_support::shown_text)
+    {
         Some(value) if flag == "--for" && value[1..].starts_with(|c: char| c.is_ascii_digit()) => {
             format!("--for must be a length of time, got `{value}`.{try_these}")
         }
@@ -440,7 +443,10 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
             "--for" | "--export-plan" | "--plan" | "--plan-digest" | "--id" | "--item"
         ) && allowed.contains(&a.as_str())
         {
-            if args.get(i + 1).is_none_or(|value| value.starts_with('-')) {
+            if args
+                .get(i + 1)
+                .is_none_or(|value| value.is_empty() || value.starts_with('-'))
+            {
                 return Err(missing_value_text(a, args.get(i + 1).map(String::as_str)));
             }
             i += 2;
@@ -837,6 +843,13 @@ fn execute_stash(
         };
         Some(sl)
     };
+    // Before the moves: this is the person's last chance to stop them.
+    if scan::is_synced(&bound.root) {
+        println!(
+            "warning: this folder is inside a cloud-synced tree, so these moves reach your other devices too."
+        );
+    }
+    let downloads = downloads_in_plan(&bound.plan);
     let mut progress = etude_cli_support::ProgressReporter::stderr("stash", count);
     let result = etude_core::apply::apply_with_progress_outcome(
         &bound,
@@ -880,7 +893,7 @@ fn execute_stash(
                         ("skipped_unreadable", j::num(bound.skipped_unreadable)),
                     ])
                 );
-                print_stash_warnings(&bound);
+                print_downloads_note(downloads);
                 if !clear {
                     etude_cli_support::envelope::status("incomplete");
                     return fail(etude_cli_support::reason::Code::OperationIncomplete);
@@ -933,7 +946,7 @@ fn execute_stash(
                     }
                 );
             }
-            print_stash_warnings(&bound);
+            print_downloads_note(downloads);
             if !clear {
                 etude_cli_support::envelope::status("incomplete");
                 return fail(etude_cli_support::reason::Code::OperationIncomplete);
@@ -970,6 +983,8 @@ fn execute_stash(
                     if moved == 0 { "anything" } else { "everything" },
                     etude_cli_support::shown(&bound.root)
                 ),
+                &bound.plan,
+                &bound.root,
             );
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
@@ -995,27 +1010,14 @@ fn execute_stash(
     }
 }
 
-/// Stash moves these on purpose. They are said, and the exit does not change.
-fn print_stash_warnings(bound: &etude_core::plan::BoundPlan) {
-    if scan::is_synced(&bound.root) {
-        println!(
-            "warning: this folder is inside a cloud-synced tree, so these moves reach your other devices too."
-        );
-    }
-    let downloads = bound
-        .groups
-        .iter()
-        .flat_map(|group| &group.members)
-        .filter(|member| {
-            let name = member
-                .file_name()
-                .map(|name| name.to_string_lossy().to_ascii_lowercase())
-                .unwrap_or_default();
-            scan::IN_FLIGHT_SUFFIXES
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
-        })
-        .count();
+/// Downloads still arriving that this plan is about to move, counted while they
+/// are still where the plan says. A stash moves them on purpose.
+fn downloads_in_plan(plan: &etude_core::plan::Plan) -> usize {
+    scan::downloads_in_progress(plan.groups.iter().flat_map(|group| &group.members))
+}
+
+/// Said after the moves, and the exit does not change.
+fn print_downloads_note(downloads: usize) {
     if downloads > 0 {
         println!(
             "{} stashed too; {} may fail.",
@@ -1031,7 +1033,12 @@ fn print_stash_warnings(bound: &etude_core::plan::BoundPlan) {
 
 /// What failed, in the words of what the person asked for. The line after this
 /// one says what became of the files.
-fn print_stash_failure(error: &etude_core::apply::ApplyError, doing: &str) {
+fn print_stash_failure(
+    error: &etude_core::apply::ApplyError,
+    doing: &str,
+    plan: &etude_core::plan::Plan,
+    within: &Path,
+) {
     use etude_core::apply::ApplyError as E;
     match error {
         E::Io(source) if etude_cli_support::problems::disk_full(source) => {
@@ -1046,7 +1053,13 @@ fn print_stash_failure(error: &etude_core::apply::ApplyError, doing: &str) {
                 "stash: {doing}: {}",
                 etude_cli_support::plain_io_error(source)
             );
-            if let Some(advice) = scan::permission_advice(source) {
+            let items: Vec<PathBuf> = plan
+                .groups
+                .iter()
+                .flat_map(|group| group.members.iter().cloned())
+                .collect();
+            let advice = etude_cli_support::problems::move_denied_advice(source, &items, within);
+            if let Some(advice) = advice {
                 eprintln!("       {advice}");
             }
         }
@@ -1101,6 +1114,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
         Err(problem) => return refused(problem),
     };
     let plan = selection::plan(&prepared, root.clone(), &holding_name(deadline));
+    let downloads = downloads_in_plan(&plan);
     let mut progress = etude_cli_support::ProgressReporter::stderr("stash", prepared.sources.len());
     let result = etude_core::apply::apply_with_structured_progress_outcome(
         &plan,
@@ -1150,6 +1164,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     print_stash_holds(&report, false);
                 }
             }
+            print_downloads_note(downloads);
             if held > 0 {
                 etude_cli_support::envelope::status("incomplete");
                 return fail(etude_cli_support::reason::Code::OperationIncomplete);
@@ -1173,6 +1188,8 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 } else {
                     "could not move every selected item"
                 },
+                &plan,
+                &prepared.parent,
             );
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
@@ -1536,7 +1553,11 @@ fn holding_shown(journal: &etude_core::Journal) -> String {
 }
 
 /// Restoring stopped on `error`. `folders` is where the items were going.
-fn print_restore_failure(error: &etude_core::apply::ApplyError, folders: &str) {
+fn print_restore_failure(
+    error: &etude_core::apply::ApplyError,
+    folders: &str,
+    journal: &etude_core::Journal,
+) {
     use etude_cli_support::problems::{disk_full, disk_read_only};
     use etude_core::apply::ApplyError as E;
     let doing = format!("stash: could not restore into {folders}");
@@ -1545,7 +1566,15 @@ fn print_restore_failure(error: &etude_core::apply::ApplyError, folders: &str) {
         E::Io(source) if disk_read_only(source) => eprintln!("{doing}: the disk is read-only."),
         E::Io(source) => {
             eprintln!("{doing}: {}.", etude_cli_support::plain_io_error(source));
-            if let Some(advice) = scan::permission_advice(source) {
+            let items: Vec<PathBuf> = journal
+                .entries
+                .iter()
+                .filter(|entry| entry.is_moved())
+                .flat_map(|entry| [entry.to.clone(), entry.from.clone()])
+                .collect();
+            let within = batches::holding(journal).unwrap_or_else(|_| journal.root.clone());
+            let advice = etude_cli_support::problems::move_denied_advice(source, &items, &within);
+            if let Some(advice) = advice {
                 eprintln!("       {advice}");
             }
         }
@@ -1563,11 +1592,17 @@ fn print_restore_failure(error: &etude_core::apply::ApplyError, folders: &str) {
 
 /// What pop left behind and how to finish. Names of files stash found by itself
 /// stay redacted; the folder that holds them is its own.
-/// The newest other stash, for a step past one whose items are gone.
-fn other_stash(sealer: &dyn etude_core::journal::Sealer, id: &str) -> Option<etude_core::Journal> {
+/// The newest other stash that `stash pop --latest` cannot reach while `journal`
+/// is the newest. `any_folder` is false when --latest named a folder, because
+/// only that folder's stashes are then in its way.
+fn other_stash(
+    sealer: &dyn etude_core::journal::Sealer,
+    journal: &etude_core::Journal,
+    any_folder: bool,
+) -> Option<etude_core::Journal> {
     let (live, _) = batches::survey(sealer).ok()?;
     live.into_iter()
-        .filter(|journal| journal.id != id)
+        .filter(|other| other.id != journal.id && (any_folder || other.root == journal.root))
         .max_by_key(|journal| batches::creation(&journal.id))
 }
 
@@ -1575,6 +1610,7 @@ fn print_pop_left(
     journal: &etude_core::Journal,
     r: &etude_core::apply::UndoReport,
     sealer: &dyn etude_core::journal::Sealer,
+    latest_any_folder: Option<bool>,
 ) {
     use etude_cli_support::counted;
     let holding = holding_shown(journal);
@@ -1624,7 +1660,12 @@ fn print_pop_left(
             "  If you deleted {}, there is nothing to restore.",
             if one { "it" } else { "them" }
         );
-        if let Some(other) = other_stash(sealer, &journal.id) {
+        // Only --latest keeps stopping at this stash, so only there is another
+        // stash part of the way forward. --id and a folder pick their own, and
+        // a folder with two stashes is refused before it gets here.
+        if let Some(any_folder) = latest_any_folder
+            && let Some(other) = other_stash(sealer, journal, any_folder)
+        {
             println!(
                 "  To restore the stash from {} instead, run: stash pop --id {}",
                 etude_cli_support::shown(&other.root),
@@ -1679,6 +1720,10 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         _ => None,
     };
     let nothing_found = no_stash_text(&selector);
+    let latest_any_folder = match &selector {
+        batches::Selector::Latest(folder) => Some(folder.is_none()),
+        _ => None,
+    };
     let mut j = match batches::select(selector, &sl) {
         Ok(Some(journal)) => journal,
         Ok(None) => {
@@ -1807,7 +1852,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     if no_deadline {
         println!("{NO_DEADLINE}");
     }
-    print_pop_left(&j, &r, &sl);
+    print_pop_left(&j, &r, &sl, latest_any_folder);
     if r.already_reversed > 0 {
         println!(
             "  {} already restored by an earlier run that did not finish.",
@@ -1846,7 +1891,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             .filter(|entry| entry.is_moved())
             .filter_map(|entry| entry.from.parent().map(Path::to_path_buf))
             .collect();
-        print_restore_failure(error, &folder_phrase(going_home));
+        print_restore_failure(error, &folder_phrase(going_home), &j);
         match saved {
             Ok(()) => eprintln!("Fix that, then run: {step}"),
             Err(save_err) => eprintln!(
@@ -2025,7 +2070,7 @@ fn pop_one_item(
     }
     let this_item = format!("{whole_stash} --item {shown_item}");
     if let Some(error) = report.error {
-        print_restore_failure(&error, &going_home);
+        print_restore_failure(&error, &going_home, journal);
         eprintln!("{still_held} Fix that, then run: {this_item}");
         return fail(apply_reason(&error));
     }

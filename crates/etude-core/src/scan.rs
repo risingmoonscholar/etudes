@@ -939,9 +939,59 @@ pub enum ScanError {
     Io(io::Error),
 }
 
-/// What a person can do about a denied read or write, by the errno that denied
-/// it. macOS privacy protection gives EPERM, and file modes give EACCES. The
-/// settings path is from Apple's "Control access to files and folders on Mac".
+/// Whether the file or folder at `path` has the user locked flag, which is
+/// Finder's Locked box and `chflags uchg`. Moving a locked item gives EPERM.
+pub fn is_locked(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const UF_IMMUTABLE: u32 = 0x2;
+        fs::symlink_metadata(path).is_ok_and(|meta| meta.st_flags() & UF_IMMUTABLE != 0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// How many entries the count below reads before it stops. It only decides a
+/// remark, so it must never hold up the stash on a very large folder.
+const DOWNLOAD_COUNT_LIMIT: usize = 200_000;
+
+/// How many downloads still in progress are at or under these items. A folder
+/// that is itself a download is one and is not read further. Links are not
+/// followed. Anything unreadable counts as nothing.
+pub fn downloads_in_progress<'a>(items: impl IntoIterator<Item = &'a PathBuf>) -> usize {
+    let mut pending: Vec<PathBuf> = items.into_iter().cloned().collect();
+    let mut found = 0;
+    let mut read = 0;
+    while let Some(path) = pending.pop() {
+        read += 1;
+        if read > DOWNLOAD_COUNT_LIMIT {
+            break;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if IN_FLIGHT_SUFFIXES.iter().any(|end| name.ends_with(end)) {
+            found += 1;
+            continue;
+        }
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
+            && let Ok(entries) = fs::read_dir(&path)
+        {
+            pending.extend(entries.flatten().map(|entry| entry.path()));
+        }
+    }
+    found
+}
+
+/// What a person can do about a denied read, by the errno that denied it. macOS
+/// privacy protection gives EPERM, and file modes give EACCES. The settings path
+/// is from Apple's "Control access to files and folders on Mac". A denied move
+/// has one more cause; see `problems::move_denied_advice` in etude-cli-support.
 pub fn permission_advice(error: &io::Error) -> Option<&'static str> {
     match error.raw_os_error() {
         Some(1) => Some(

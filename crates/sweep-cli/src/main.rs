@@ -926,6 +926,9 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
                                     "{a} needs a value, and `{v}` is another option."
                                 ));
                             }
+                            Some(v) if v.is_empty() => {
+                                return Err(format!("{a} needs a value and got nothing."));
+                            }
                             None => {
                                 return Err(format!("{a} needs a value and got nothing."));
                             }
@@ -2272,6 +2275,10 @@ fn cmd_review(args: &[String]) -> ExitCode {
     } else {
         plan::build_mapped(&outcome, &scheme.maps)
     };
+    // Only the refusal: a note about the folder would read as a review starting.
+    if !p.groups.is_empty() && review::refuse_without_terminal() {
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
     print_include_tagged_warning(args);
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
@@ -2290,9 +2297,6 @@ fn cmd_review(args: &[String]) -> ExitCode {
 
     match review::run(&mut p) {
         Ok(review::Outcome::Cancelled) => ExitCode::SUCCESS,
-        Ok(review::Outcome::NoTerminal) => {
-            refusal(etude_cli_support::reason::Code::InvalidArguments, None)
-        }
         Err(e) => {
             refuse("could not finish the review", &e);
             failure(etude_cli_support::reason::Code::InternalError, None)
@@ -2354,7 +2358,7 @@ fn refuse_scan(path: &Path, e: &etude_core::scan::ScanError) {
 /// apart from the moves because it is raised after a move or restore has already
 /// succeeded: the files moved, the record of them did not. The caller's own
 /// follow-up line says what that means for the files.
-fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str) {
+fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, items: &[PathBuf]) {
     use etude_cli_support::problems::{disk_full, disk_read_only};
     use etude_cli_support::{plain_io_error, shown, shown_text};
     use etude_core::apply::ApplyError as E;
@@ -2379,7 +2383,8 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str) {
         ),
         E::Io(source) => {
             eprintln!("sweep: {doing} in {folder}: {}.", plain_io_error(source));
-            if let Some(advice) = etude_core::scan::permission_advice(source) {
+            let advice = etude_cli_support::problems::move_denied_advice(source, items, root);
+            if let Some(advice) = advice {
                 eprintln!("       {advice}");
             }
         }
@@ -2604,7 +2609,12 @@ fn run_apply(
             } else {
                 "could not move the files"
             };
-            refuse_apply(&e, &p.root, doing);
+            let items: Vec<PathBuf> = p
+                .groups
+                .iter()
+                .flat_map(|group| group.members.iter().cloned())
+                .collect();
+            refuse_apply(&e, &p.root, doing, &items);
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
                 etude_cli_support::envelope::status("refused");
@@ -3257,7 +3267,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         };
         return match sweep_journal_for_root(&sl, &target) {
             Err(record) => refuse_unreadable_record(&record),
-            Ok(Some(mut j)) => finish_undo(&mut j, &sl),
+            Ok(Some(mut j)) => finish_undo(&mut j, &sl, false),
             Ok(None) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
@@ -3275,7 +3285,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
     match newest_undoable(&sl) {
-        Ok(Some(mut j)) => return finish_undo(&mut j, &sl),
+        Ok(Some(mut j)) => return finish_undo(&mut j, &sl, true),
         Ok(None) => {}
         Err(record) => return refuse_unreadable_record(&record),
     }
@@ -3312,11 +3322,15 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    finish_undo(&mut j, &sl)
+    finish_undo(&mut j, &sl, true)
 }
 
 /// The part of undo that is the same whether a path was named or not.
-fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
+fn finish_undo(
+    j: &mut etude_core::Journal,
+    sl: &dyn etude_core::journal::Sealer,
+    no_folder_named: bool,
+) -> ExitCode {
     // Pass the sealer: undo persists each reversal as it happens now, so a
     // kill partway through leaves a journal that agrees with the disk.
     // Said before the counts, because it changes what they mean: a journal
@@ -3529,7 +3543,9 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
             "  If you deleted {}, there is nothing to restore.",
             if one { "it" } else { "them" }
         );
-        if let Some(older) = other_folder_to_undo(sl, &root) {
+        // Only `sweep undo` with no folder keeps stopping at this record. Anyone
+        // who named a folder is not held up by it.
+        if no_folder_named && let Some(older) = other_folder_to_undo(sl, &root) {
             println!(
                 "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
                 etude_cli_support::shown(&older),
@@ -3572,7 +3588,13 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     let next_undo_corrects =
         "The next sweep undo will see which files are already home and correct the record.";
     if let Some(err) = r.error {
-        refuse_apply(&err, &root, "could not put every file back");
+        let items: Vec<PathBuf> = j
+            .entries
+            .iter()
+            .filter(|entry| entry.is_moved())
+            .flat_map(|entry| [entry.to.clone(), entry.from.clone()])
+            .collect();
+        refuse_apply(&err, &root, "could not put every file back", &items);
         match saved {
             Ok(()) => {
                 if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path) = &err {

@@ -31,8 +31,6 @@ pub enum Outcome {
     Apply,
     /// User quit. Nothing has moved.
     Cancelled,
-    /// Refused before it began: there is nobody to ask.
-    NoTerminal,
 }
 
 /// Longest destination name accepted. Well under NAME_MAX, and a name longer
@@ -73,15 +71,20 @@ fn prompt(input: &mut dyn BufRead, label: &str) -> io::Result<String> {
     Ok(line.trim().to_string())
 }
 
-/// Entry point used by the CLI: requires a terminal, reads real stdin.
-pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
-    if !io::stdin().is_terminal() {
-        eprintln!(
-            "sweep: review needs a terminal. Use `sweep apply PATH --yes`\n\
-             or `--only NAME` when running non-interactively."
-        );
-        return Ok(Outcome::NoTerminal);
+/// Refuse a review that nobody can answer. True means it was refused.
+pub fn refuse_without_terminal() -> bool {
+    if io::stdin().is_terminal() {
+        return false;
     }
+    eprintln!(
+        "sweep: review needs a terminal. Use `sweep apply PATH --yes`\n\
+         or `--only NAME` when running non-interactively."
+    );
+    true
+}
+
+/// Entry point used by the CLI: reads real stdin, which the caller has checked.
+pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
     let stdin = io::stdin();
     let mut locked = stdin.lock();
     run_with(plan, &mut locked)

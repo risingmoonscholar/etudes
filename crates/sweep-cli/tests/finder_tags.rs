@@ -141,7 +141,6 @@ fn include_tagged_is_loud_and_the_tag_survives_the_move() {
     for args in [
         vec![root, "--since", "0", "--include-tagged", "--quiet"],
         vec![root, "--since", "0", "--include-tagged", "--json"],
-        vec!["review", root, "--include-tagged", "--since", "0"],
     ] {
         let o = sweep(&s, &args);
         let stderr = err(&o);
@@ -150,6 +149,21 @@ fn include_tagged_is_loud_and_the_tag_survives_the_move() {
             "{args:?}: {stderr}"
         );
     }
+    // Review warns only once it has someone to ask. `script` gives it a terminal,
+    // and its empty stdin quits at the first question.
+    let reviewed = Command::new("/usr/bin/script")
+        .args(["-q", "/dev/null", env!("CARGO_BIN_EXE_sweep")])
+        .args(["review", root, "--include-tagged", "--since", "0"])
+        .env("ETUDE_STATE_DIR", &s.state)
+        .env("ETUDE_JOURNAL_KEY", KEY)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out(&reviewed).contains("WARNING: --include-tagged is on"),
+        "{}",
+        out(&reviewed)
+    );
     let json = out(&sweep(
         &s,
         &[root, "--since", "0", "--include-tagged", "--json"],

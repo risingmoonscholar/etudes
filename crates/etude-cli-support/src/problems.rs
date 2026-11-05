@@ -247,6 +247,47 @@ pub fn plan_export_problem(
     }
 }
 
+/// What a person can do about a move the system denied. EPERM on a move usually
+/// means a locked file, so that is checked first. `paths` are the items the move
+/// was working through, and their folders count too. `within` is where to look
+/// for the locked item; file names stay out of the message, so the step finds them.
+pub fn move_denied_advice(
+    error: &std::io::Error,
+    paths: &[std::path::PathBuf],
+    within: &Path,
+) -> Option<String> {
+    if error.raw_os_error() != Some(1) {
+        return scan::permission_advice(error).map(str::to_owned);
+    }
+    let mut locked: Vec<&Path> = paths
+        .iter()
+        .flat_map(|path| [Some(path.as_path()), path.parent()])
+        .flatten()
+        .filter(|path| scan::is_locked(path))
+        .collect();
+    locked.sort();
+    locked.dedup();
+    const UNLOCK: &str =
+        "In Finder, choose Get Info and clear Locked, or run chflags nouchg on the item.";
+    let Some(first) = locked.first() else {
+        return Some(format!(
+            "A file may be locked. {UNLOCK}\n       If none is locked, macOS may be blocking the app running this command. Check System Settings > Privacy & Security > Files & Folders for that app."
+        ));
+    };
+    let folder = if first.starts_with(within) {
+        within
+    } else if first.is_dir() {
+        first
+    } else {
+        first.parent().unwrap_or(first)
+    };
+    Some(format!(
+        "{} locked, and a locked item cannot be moved. {UNLOCK}\n       See which with: find {} -flags +uchg",
+        crate::counted(locked.len(), "item is", "items are"),
+        crate::quoted_path(folder),
+    ))
+}
+
 /// A folder named on the command line that cannot be opened. One condition, one
 /// answer, on every command of both tools.
 pub fn folder_open_problem(tool: &str, typed: &Path, error: &std::io::Error) -> Problem {
@@ -402,6 +443,21 @@ pub fn record_open_problem(tool: &str, id: &str, error: &JournalError) -> String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_denied_move_names_a_locked_file_first_and_the_privacy_setting_second() {
+        let eperm = std::io::Error::from_raw_os_error(1);
+        let advice = move_denied_advice(&eperm, &[], Path::new("/nowhere")).unwrap();
+        let locked = advice.find("may be locked").unwrap();
+        let privacy = advice.find("Privacy & Security").unwrap();
+        assert!(locked < privacy, "{advice}");
+        let eacces = std::io::Error::from_raw_os_error(13);
+        let modes = move_denied_advice(&eacces, &[], Path::new("/nowhere")).unwrap();
+        assert!(modes.contains("ls -ld"), "{modes}");
+        assert!(!modes.contains("locked"), "{modes}");
+        let enoent = std::io::Error::from_raw_os_error(2);
+        assert!(move_denied_advice(&enoent, &[], Path::new("/nowhere")).is_none());
+    }
+
     use super::*;
     use std::path::PathBuf;
 

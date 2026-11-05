@@ -796,7 +796,7 @@ fn validate_args(args: &[String]) -> Result<(), BadArgument> {
         match args[i].as_str() {
             "--list" | "--json" => i += 1,
             "--into" => {
-                let Some(directory) = args.get(i + 1) else {
+                let Some(directory) = args.get(i + 1).filter(|value| !value.is_empty()) else {
                     return Err(BadArgument::Invalid(
                         "--into needs a folder: --into DIR.".into(),
                     ));
@@ -1702,7 +1702,7 @@ fn max_size_flag(args: &[String]) -> Result<Option<u64>, BadArgument> {
     let Some(i) = args.iter().position(|a| a == "--max-size") else {
         return Ok(None);
     };
-    let Some(raw) = args.get(i + 1) else {
+    let Some(raw) = args.get(i + 1).filter(|value| !value.is_empty()) else {
         return Err(BadArgument::Invalid(
             "--max-size needs a size, such as 500M or 2G.".into(),
         ));
