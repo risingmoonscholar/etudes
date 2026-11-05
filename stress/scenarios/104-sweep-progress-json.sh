@@ -41,12 +41,20 @@ check(all('PRIVATE' not in json.dumps(record) and not any(name in json.dumps(rec
 files = [p for p in root.rglob('*') if p.is_file()]
 check(len(files) == 3 and {p.name: p.read_bytes() for p in files} == original
       and all(p.parent != root for p in files), 'all three reported moves exist on disk with their original bytes')
-for args, label in (((root,), 'scan'), (('status',), 'status'), (('undo', root), 'undo')):
+for args, label in (((root,), 'scan'), (('status',), 'status'), (('verify',), 'verify')):
     result = run(*args, '--progress-json', '--json')
     check(result.returncode == 2 and 'progress' in result.stdout + result.stderr,
           f'{label} refuses the unsupported progress flag')
 check({p.name: p.read_bytes() for p in root.rglob('*') if p.is_file()} == original
       and all(not (root / name).exists() for name in original), 'unsupported commands move and restore nothing')
+# Undo takes the flag now, through the same layer, and the envelope stays one line.
+result = run('undo', root, '--progress-json', '--json')
+records = [json.loads(line) for line in result.stderr.splitlines() if line.startswith('{')]
+check(result.returncode == 0 and len(result.stdout.strip().splitlines()) == 1
+      and records and all(r['operation'] == 'undo' for r in records) and records[-1]['phase'] == 'done'
+      and records[-1]['journalled'] == 3,
+      'undo reports three durable reversals on stderr and one result on stdout')
+check({p.name: p.read_bytes() for p in root.iterdir() if p.is_file()} == original, 'undo put all three files back')
 PY
 while IFS= read -r label; do pass "$label"; done < "$W/checks"
 [ "$CODE" -eq 0 ] || fail "structured progress contract failed (Python exit $CODE)"
