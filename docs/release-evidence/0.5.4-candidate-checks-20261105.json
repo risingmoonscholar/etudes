@@ -254,8 +254,7 @@
     "unproven rlimit: the real login keychain fails honestly under descriptor pressure (this suite never reaches the login keychain, because a run could add a key to it)",
     "unproven sweep absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)",
     "unproven stash absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)",
-    "unproven unpack absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)",
-    "unproven 5"
+    "unproven unpack absence of reads and subprocess networking (snapshots and symbol checks cannot observe all access attempts)"
   ],
   "scope": "Local candidate installation, committed documentation and assets, required host checks and the full stress suite on disposable fixtures only.",
   "not_assessed": [
