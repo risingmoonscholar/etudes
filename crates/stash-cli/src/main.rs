@@ -202,6 +202,12 @@ fn run_main() -> ExitCode {
                 refuse(etude_cli_support::reason::Code::UnknownOption)
             }
         }
+        Some("") => {
+            eprintln!(
+                "stash: the folder name is empty. Give the folder to stash. Nothing was moved."
+            );
+            refuse(etude_cli_support::reason::Code::InvalidArguments)
+        }
         Some(p) => stash_checked(&PathBuf::from(expand_tilde(p)), &args),
     }
 }
