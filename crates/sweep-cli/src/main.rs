@@ -136,21 +136,8 @@ fn run_main() -> ExitCode {
     // to upload. Close that before doing any work. THREAT-MODEL § T5.
     disable_core_dumps();
 
-    // One-time move from the old XDG-style state directory to the correct
-    // macOS one (issue #23). Before anything reads state_dir(), so nothing
-    // else in this run can look in the new location and find it empty while
-    // the old one still has what it's looking for.
-    etude_core::journal::migrate_legacy_state_dir();
-
-    // Journals past their TTL are dropped before anything else. Keeping an
-    // index of the user's filenames forever keeps the exposure forever.
-    let expired = etude_core::journal::prune_expired();
-    etude_cli_support::envelope::effect("expired_journals_removed", expired);
-    if expired > 0 {
-        eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
-    }
-
-    // Every command's flags are checked here, once, before the command runs.
+    // Every command's arguments are checked here, once, before the command runs
+    // and before startup touches any state, so a refusal changes nothing.
     // Doing it per-command is what let three of them ship with no checking at
     // all, and `sweep forget --frobnicate` destroy a journal on a typo.
     // Which command was named, or "" for a bare scan. Derived from the table
@@ -183,6 +170,24 @@ fn run_main() -> ExitCode {
             etude_cli_support::reason::Code::InvalidArguments
         };
         return refusal(code, None);
+    }
+    if let Err(msg) = check_positionals(cmd, &args) {
+        eprintln!("sweep: {msg}");
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
+
+    // One-time move from the old XDG-style state directory to the correct
+    // macOS one (issue #23). Before anything reads state_dir(), so nothing
+    // else in this run can look in the new location and find it empty while
+    // the old one still has what it's looking for.
+    etude_core::journal::migrate_legacy_state_dir();
+
+    // Journals past their TTL are dropped before anything else. Keeping an
+    // index of the user's filenames forever keeps the exposure forever.
+    let expired = etude_core::journal::prune_expired();
+    etude_cli_support::envelope::effect("expired_journals_removed", expired);
+    if expired > 0 {
+        eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
     }
 
     match args.first().map(String::as_str) {
@@ -222,7 +227,7 @@ fn run_main() -> ExitCode {
 /// Read-only journal status by durable id or operation root. This deliberately
 /// bypasses startup migration and pruning in `run_main`.
 fn cmd_status(args: &[String]) -> ExitCode {
-    use etude_cli_support::reason::{Code, Reason, Subject};
+    use etude_cli_support::reason::{Code, Reason};
     let json = has(args, "--json");
     let tail: Vec<&str> = args
         .iter()
@@ -265,28 +270,31 @@ fn cmd_status(args: &[String]) -> ExitCode {
         Ok(Some(key)) => key,
         Ok(None) => {
             etude_core::scan::record_read_outcome("key_material", false);
-            etude_cli_support::envelope::reason(Reason::refusal(
-                Code::JournalKeyUnavailable,
-                Some(Subject::wait("journal", None)),
-            ));
-            etude_cli_support::envelope::status("error");
-            eprintln!("sweep: journal key is not available; status did not create one");
-            return ExitCode::from(3);
+            set_journal_key_reason();
+            eprintln!(
+                "{}",
+                etude_cli_support::journal_key_problem(
+                    "sweep",
+                    &"there is no key in the login keychain, so undo records cannot be read",
+                    false,
+                    false,
+                )
+            );
+            return ExitCode::from(2);
         }
         Err(error) => {
             etude_core::scan::record_read_outcome("key_material", false);
-            let code = key_error_code(&error);
-            etude_cli_support::envelope::reason(Reason::refusal(
-                code,
-                if code == Code::JournalKeyUnavailable {
-                    Some(Subject::wait("journal", None))
-                } else {
-                    None
-                },
-            ));
-            etude_cli_support::envelope::status("error");
-            eprintln!("sweep: {error}");
-            return ExitCode::from(3);
+            set_journal_key_reason();
+            eprintln!(
+                "{}",
+                etude_cli_support::journal_key_problem(
+                    "sweep",
+                    &error,
+                    matches!(error, etude_keep::KeepError::SuppliedKey),
+                    false,
+                )
+            );
+            return ExitCode::from(2);
         }
     };
     etude_core::scan::record_read_outcome("key_material", true);
@@ -464,7 +472,7 @@ const LESSON: &[(&str, &str)] = &[
     ),
     (
         "Move one group instead of all of them",
-        "    sweep apply Desktop --only acme\n\
+        "    sweep apply Desktop --only Screenshots\n\
          \n\
          All-or-nothing is a bad default for someone else's folder. Run the\n\
          plan, pick one name out of it, move only that.\n\
@@ -907,6 +915,108 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Arguments that are not flags or flag values, for `cmd`.
+fn positionals<'a>(cmd: &str, args: &'a [String]) -> Vec<&'a str> {
+    let allowed = COMMAND_FLAGS
+        .iter()
+        .find(|(c, _)| *c == cmd)
+        .map_or(&[][..], |(_, flags)| *flags);
+    let mut found = Vec::new();
+    let mut i = usize::from(!cmd.is_empty());
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--" {
+            found.extend(args[i + 1..].iter().map(String::as_str));
+            break;
+        }
+        match allowed.iter().find(|(name, _)| *name == a) {
+            Some((_, true)) => i += 2,
+            Some((_, false)) => i += 1,
+            None => {
+                if !a.starts_with('-') {
+                    found.push(a);
+                }
+                i += 1;
+            }
+        }
+    }
+    found
+}
+
+/// Refuse a word the named command would otherwise drop without a word.
+/// `sweep apply A B` moved A and never mentioned B, and `sweep forget xyz`
+/// removed every sweep journal after a stray word.
+fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
+    let first = args.first().map(String::as_str).unwrap_or_default();
+    if matches!(first, "version" | "--version" | "-V") {
+        return match args[1..].iter().find(|arg| !arg.starts_with('-')) {
+            Some(extra) => Err(format!(
+                "version takes no arguments, and got `{}`.",
+                etude_cli_support::shown_text(extra)
+            )),
+            None => Ok(()),
+        };
+    }
+    if first == "help" {
+        return Ok(());
+    }
+    let found = positionals(cmd, args);
+    let quoted = |word: &str| format!("`{}`", etude_cli_support::shown_text(word));
+    match cmd {
+        "forget" | "verify" => match found.first() {
+            Some(extra) if cmd == "forget" => Err(format!(
+                "forget takes no arguments, and got {}. Nothing was removed.\n\
+                 Run `sweep forget` on its own to remove sweep's undo records.",
+                quoted(extra)
+            )),
+            Some(extra) => Err(format!(
+                "{cmd} takes no arguments, and got {}.",
+                quoted(extra)
+            )),
+            None => Ok(()),
+        },
+        "lesson" => match found.get(1) {
+            Some(extra) => Err(format!(
+                "lesson takes one step number, and {} is a second.",
+                quoted(extra)
+            )),
+            None => Ok(()),
+        },
+        "apply" | "undo" | "review" => match found.get(1) {
+            Some(extra) => Err(format!(
+                "{cmd} takes one folder, and {} is a second. Nothing was moved.",
+                quoted(extra)
+            )),
+            None => Ok(()),
+        },
+        "" => match found.get(1) {
+            Some(extra) => Err(format!(
+                "a scan takes one folder, and {} is a second. Nothing was changed.",
+                quoted(extra)
+            )),
+            None => Ok(()),
+        },
+        _ => Ok(()),
+    }
+}
+
+/// The names to offer when `--only` matches no group.
+fn no_such_group(only: &str, groups: &[plan::Group], place: &str) -> String {
+    let only = etude_cli_support::shown_text(only);
+    let names: Vec<String> = groups
+        .iter()
+        .map(|group| etude_cli_support::shown_text(&group.name))
+        .collect();
+    if names.is_empty() {
+        format!("no group named \"{only}\" {place}, which has no groups. Nothing was moved.")
+    } else {
+        format!(
+            "no group named \"{only}\" {place}. Groups: {}. Nothing was moved.",
+            names.join(", ")
+        )
+    }
+}
+
 /// The positional PATH for `cmd`, skipping any flag's value while it looks.
 ///
 /// This was `apply_path`, hardcoded to "apply", and the bug it fixed was
@@ -1246,6 +1356,15 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         eprintln!("sweep: applying requires --yes or --only NAME");
         return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
+    if let Some(name) = only.as_deref()
+        && !bound.plan.groups.iter().any(|group| group.name == name)
+    {
+        eprintln!(
+            "sweep: {}",
+            no_such_group(name, &bound.plan.groups, "in this plan")
+        );
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
     for group in &mut bound.plan.groups {
         group.accepted = only.as_ref().is_none_or(|name| name == &group.name);
     }
@@ -1257,6 +1376,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         );
     }
     if bound.moves() == 0 {
+        eprintln!("sweep: nothing to apply.");
         return ExitCode::from(1);
     }
     if has(args, "--no-journal")
@@ -1279,7 +1399,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
     let sl = if has(args, "--no-journal") {
         None
     } else {
-        let Some(sl) = sealer() else {
+        let Some(sl) = sealer(false) else {
             return ExitCode::from(2);
         };
         Some(sl)
@@ -1916,37 +2036,33 @@ impl etude_core::journal::Sealer for KeychainSeal {
 ///
 /// On failure sweep refuses rather than falling back to a plaintext journal.
 /// Silently degrading is the failure mode a privacy tool must not have.
-fn key_error_code(error: &etude_keep::KeepError) -> etude_cli_support::reason::Code {
-    if matches!(error, etude_keep::KeepError::SuppliedKey) {
-        etude_cli_support::reason::Code::InvalidArguments
-    } else {
-        etude_cli_support::reason::Code::JournalKeyUnavailable
-    }
-}
-
-fn sealer() -> Option<KeychainSeal> {
+fn sealer(takes_no_journal: bool) -> Option<KeychainSeal> {
     let result = etude_keep::key();
     etude_core::scan::record_read_outcome("key_material", result.is_ok());
     match result {
         Ok(key) => Some(KeychainSeal { key }),
         Err(e) => {
-            let code = key_error_code(&e);
-            set_reason(
-                code,
-                if code == etude_cli_support::reason::Code::JournalKeyUnavailable {
-                    Some(etude_cli_support::reason::Subject::wait("journal", None))
-                } else {
-                    None
-                },
-            );
-            refuse("could not get the journal key", &e);
+            set_journal_key_reason();
             eprintln!(
-                "Refusing to write an unencrypted journal.\n\
-                 The only alternative is --no-journal; it removes undo."
+                "{}",
+                etude_cli_support::journal_key_problem(
+                    "sweep",
+                    &e,
+                    matches!(e, etude_keep::KeepError::SuppliedKey),
+                    takes_no_journal,
+                )
             );
             None
         }
     }
+}
+
+/// One condition, one answer: every command refuses an unusable key the same way.
+fn set_journal_key_reason() {
+    etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::of(
+        etude_cli_support::reason::Code::JournalKeyUnavailable,
+    ));
+    etude_cli_support::envelope::status("refused");
 }
 
 /// `sweep review PATH`: scan, decide interactively, apply in one pass.
@@ -2037,6 +2153,9 @@ fn cmd_review(args: &[String]) -> ExitCode {
 
     match review::run(&mut p) {
         Ok(review::Outcome::Cancelled) => ExitCode::SUCCESS,
+        Ok(review::Outcome::NoTerminal) => {
+            refusal(etude_cli_support::reason::Code::InvalidArguments, None)
+        }
         Err(e) => {
             refuse("could not finish the review", &e);
             failure(etude_cli_support::reason::Code::InternalError, None)
@@ -2044,7 +2163,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
         Ok(review::Outcome::Apply) => {
             let use_journal = !has(args, "--no-journal");
             let sl = if use_journal {
-                match sealer() {
+                match sealer(false) {
                     Some(s) => Some(s),
                     None => return ExitCode::from(2),
                 }
@@ -2129,10 +2248,10 @@ fn refuse_apply(e: &etude_core::apply::ApplyError) {
         // overclaim as the "could not finish putting the files back" it was
         // brought in to replace.
         //
-        // JournalError already names its own subsystem: "journal io: ...",
-        // "journal malformed: ...", "no journal found". It needs no phrase
-        // in front of it, and the caller's own follow-up lines (about
-        // whether the journal is resumable) carry the consequence.
+        // The caller's own follow-up line says what that means for the files.
+        E::Journal(error) => {
+            eprintln!("sweep: {}", etude_cli_support::journal_write_problem(error))
+        }
         _ => eprintln!("sweep: {e}"),
     }
 }
@@ -2201,7 +2320,11 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             failure(Code::PermissionDenied, Some(Subject::wait("input", None)))
         }
-        Io(_) | Journal(_) | Injected(_) => failure(
+        Journal(_) => failure(
+            Code::JournalWriteFailed,
+            Some(Subject::wait("journal", None)),
+        ),
+        Io(_) | Injected(_) => failure(
             Code::OperationIncomplete,
             Some(Subject::wait("journal", None)),
         ),
@@ -2273,26 +2396,71 @@ fn run_apply(
             {
                 etude_cli_support::envelope::recovery_operation(id);
             }
-            finish_apply(&r, &p.binding_json(), p.adds_tags)
+            finish_apply(&r, &p.binding_json(), p.adds_tags, &undo_step(&p.root))
         }
         Err(failure) => {
-            // A journal that became durable before the failure is the handle
-            // for `status --id` and `undo`; name it in the result.
-            if let Some(id) = failure.durable_journal_id.as_deref() {
-                etude_cli_support::envelope::recovery_operation(id);
-            }
+            let moved = failure.moved;
             let e = failure.error;
-            if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) {
+            etude_cli_support::envelope::effect("items_moved", moved);
+            if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
+                // A refused attempt keeps its record; `status --id` reads it.
+                if let Some(id) = failure.durable_journal_id.as_deref() {
+                    etude_cli_support::envelope::recovery_operation(id);
+                }
                 etude_cli_support::envelope::status("refused");
                 eprintln!("sweep: {e}");
                 return apply_exit_code(&e);
             }
-            etude_cli_support::envelope::status("incomplete");
             refuse_apply(&e);
-            eprintln!("The journal is resumable. `sweep undo` reverses what did happen.");
+            // Decided from the count of moves, never from the kind of failure.
+            if moved == 0 {
+                etude_cli_support::envelope::status("refused");
+                if p.adds_tags {
+                    eprintln!("No tags were added, so there is nothing to undo.");
+                } else {
+                    eprintln!("Nothing was moved, so there is nothing to undo.");
+                }
+                return apply_exit_code(&e);
+            }
+            // The journal that became durable before the failure is the handle
+            // for `status --id` and `undo`; name it in the result.
+            if let Some(id) = failure.durable_journal_id.as_deref() {
+                etude_cli_support::envelope::recovery_operation(id);
+            }
+            etude_cli_support::envelope::status("incomplete");
+            let what = if p.adds_tags {
+                format!(
+                    "{} tagged before this stopped.",
+                    etude_cli_support::counted(moved, "file was", "files were")
+                )
+            } else {
+                format!(
+                    "{} moved before this stopped.",
+                    etude_cli_support::counted(moved, "file was", "files were")
+                )
+            };
+            if sl.is_some() {
+                eprintln!(
+                    "{what} To put {} back: {}",
+                    if moved == 1 { "it" } else { "them" },
+                    undo_step(&p.root)
+                );
+            } else {
+                eprintln!(
+                    "{what} --no-journal removed undo, so {} cannot be put back by sweep.",
+                    if moved == 1 { "it" } else { "they" }
+                );
+            }
             apply_exit_code(&e)
         }
     }
+}
+
+/// The undo command for this folder. It names the folder, so running it cannot
+/// reverse an apply of some other folder.
+fn undo_step(root: &Path) -> String {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    format!("sweep undo {}", etude_cli_support::quoted_path(&root))
 }
 
 /// Report an apply that ran to the end, and pick its exit.
@@ -2303,9 +2471,14 @@ fn run_apply(
 /// as `incomplete` with exit 3 and the counts printed, never a bare error. A
 /// run where every item was held moved nothing and is reported the way a run
 /// with nothing to do is.
-fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str, adds_tags: bool) -> ExitCode {
+fn finish_apply(
+    r: &etude_core::apply::ApplyReport,
+    binding: &str,
+    adds_tags: bool,
+    undo: &str,
+) -> ExitCode {
     if adds_tags {
-        return tag_output::finish_apply(r, binding);
+        return tag_output::finish_apply(r, binding, undo);
     }
     etude_cli_support::envelope::effect("items_moved", r.moved);
     etude_cli_support::envelope::detail(etude_core::json::obj(&[
@@ -2337,7 +2510,7 @@ fn finish_apply(r: &etude_core::apply::ApplyReport, binding: &str, adds_tags: bo
     if r.moved > 0 {
         match &r.journal_path {
             Some(jp) => {
-                println!("Undo with: sweep undo");
+                println!("Undo with: {undo}");
                 println!("Encrypted journal: {}", jp.display());
             }
             None => println!("No journal was written. This cannot be undone."),
@@ -2500,6 +2673,12 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     } else {
         plan::build_mapped(&outcome, &scheme.maps)
     };
+    if let Some(name) = only.as_deref()
+        && !p.groups.iter().any(|group| group.name == name)
+    {
+        eprintln!("sweep: {}", no_such_group(name, &p.groups, "here"));
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
     for g in &mut p.groups {
         g.accepted = match &only {
             Some(n) => &g.name == n,
@@ -2533,7 +2712,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     }
 
     let sl = if use_journal {
-        match sealer() {
+        match sealer(scheme.maps.is_empty()) {
             Some(s) => Some(s),
             None => return ExitCode::from(2),
         }
@@ -2774,7 +2953,7 @@ fn sweep_journal_for_root(
 }
 
 fn cmd_undo(args: &[String]) -> ExitCode {
-    let Some(sl) = sealer() else {
+    let Some(sl) = sealer(false) else {
         return ExitCode::from(2);
     };
 
@@ -3039,7 +3218,7 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     if let Err(save_err) = saved {
         eprintln!("sweep: undo finished, but the journal could not be saved: {save_err}");
         return failure(
-            etude_cli_support::reason::Code::JournalUnreadable,
+            etude_cli_support::reason::Code::JournalWriteFailed,
             Some(etude_cli_support::reason::Subject::wait("journal", None)),
         );
     }
@@ -3124,10 +3303,11 @@ fn forget_shared_key_consent() -> bool {
 
 fn destroy_shared_key() -> ExitCode {
     if std::env::var_os("ETUDE_JOURNAL_KEY").is_some() {
+        // The journals are already gone, so this is not a refusal.
         eprintln!(
             "sweep: a supplied key is in use. Remove every retained copy yourself; forget cannot destroy it."
         );
-        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+        return ExitCode::SUCCESS;
     }
     if etude_keep::destroy_key() {
         println!("Destroyed the journal key in the keychain.");
@@ -3155,25 +3335,79 @@ fn refuse_shared_key_destroy() -> ExitCode {
 fn cmd_forget(args: &[String]) -> ExitCode {
     use std::io::IsTerminal;
 
+    use etude_cli_support::reason::{Code, Subject};
     let dir = etude_core::journal::state_dir();
+    let shown_dir = etude_cli_support::shown(&dir);
     let mut n = 0;
     let mut stash_present = false;
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            match classify_journal_filename(&name) {
-                JournalOwner::Sweep => {
-                    if std::fs::remove_file(e.path()).is_ok() {
-                        n += 1;
+    let mut not_removed = 0;
+    let mut first_error = None;
+    match std::fs::read_dir(&dir) {
+        Ok(rd) => {
+            for e in rd {
+                let e = match e {
+                    Ok(e) => e,
+                    Err(error) => {
+                        not_removed += 1;
+                        first_error.get_or_insert(error);
+                        continue;
                     }
+                };
+                let name = e.file_name().to_string_lossy().into_owned();
+                match classify_journal_filename(&name) {
+                    JournalOwner::Sweep => match std::fs::remove_file(e.path()) {
+                        Ok(()) => n += 1,
+                        Err(error) => {
+                            not_removed += 1;
+                            first_error.get_or_insert(error);
+                        }
+                    },
+                    JournalOwner::Stash => stash_present = true,
+                    JournalOwner::Other => {}
                 }
-                JournalOwner::Stash => stash_present = true,
-                JournalOwner::Other => {}
             }
+        }
+        // No folder means no journals. That one case is a true "removed none".
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // Whether a stash relies on the key is unknown, so the key stays too.
+        Err(error) => {
+            eprintln!(
+                "sweep: could not read {shown_dir}: {}. Journals were not removed, and the key was left alone.",
+                etude_cli_support::plain_io_error(&error)
+            );
+            return failure(
+                if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    Code::PermissionDenied
+                } else {
+                    Code::JournalUnreadable
+                },
+                Some(Subject::wait(
+                    if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        "input"
+                    } else {
+                        "journal"
+                    },
+                    None,
+                )),
+            );
         }
     }
     // Sweep's own journals only, always, regardless of the key decision below.
-    println!("Removed {n} journal(s) from {}.", dir.display());
+    println!(
+        "Removed {} from {shown_dir}.",
+        etude_cli_support::counted(n, "journal", "journals")
+    );
+    if let Some(error) = first_error {
+        eprintln!(
+            "sweep: could not remove {} from {shown_dir}: {}. The key was left alone.",
+            etude_cli_support::counted(not_removed, "journal", "journals"),
+            etude_cli_support::plain_io_error(&error)
+        );
+        return failure(
+            Code::OperationIncomplete,
+            Some(Subject::wait("journal", None)),
+        );
+    }
 
     match forget_key_gate(args, stash_present, std::io::stdin().is_terminal()) {
         ForgetKeyGate::Proceed => destroy_shared_key(),
@@ -4034,7 +4268,10 @@ mod tag_report_tests {
         assert_eq!(report.tagged_not_returned, 1);
         assert_eq!(report.moved, 1);
         assert_eq!(std::fs::read(&file).unwrap(), b"occupant");
-        assert_eq!(finish_apply(&report, "{}", false), ExitCode::from(3));
+        assert_eq!(
+            finish_apply(&report, "{}", false, "sweep undo"),
+            ExitCode::from(3)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -4045,7 +4282,10 @@ mod tag_report_tests {
             hold_record_failed: 1,
             ..Default::default()
         };
-        assert_eq!(finish_apply(&report, "{}", false), ExitCode::from(3));
+        assert_eq!(
+            finish_apply(&report, "{}", false, "sweep undo"),
+            ExitCode::from(3)
+        );
     }
 
     /// An item returned because it was tagged mid-move is a count in a normal
@@ -4058,14 +4298,23 @@ mod tag_report_tests {
             held_tagged: 1,
             ..Default::default()
         };
-        assert_eq!(finish_apply(&some, "{}", false), ExitCode::SUCCESS);
+        assert_eq!(
+            finish_apply(&some, "{}", false, "sweep undo"),
+            ExitCode::SUCCESS
+        );
         let all = ApplyReport {
             held_tagged: 2,
             held_cross_volume: 1,
             ..Default::default()
         };
-        assert_eq!(finish_apply(&all, "{}", false), ExitCode::from(1));
+        assert_eq!(
+            finish_apply(&all, "{}", false, "sweep undo"),
+            ExitCode::from(1)
+        );
         let nothing = ApplyReport::default();
-        assert_eq!(finish_apply(&nothing, "{}", false), ExitCode::SUCCESS);
+        assert_eq!(
+            finish_apply(&nothing, "{}", false, "sweep undo"),
+            ExitCode::SUCCESS
+        );
     }
 }

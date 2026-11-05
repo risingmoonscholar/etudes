@@ -876,33 +876,36 @@ fn an_apply_that_stops_part_way_names_its_recovery_operation() {
     let tree = root.join("tree");
     let state = root.join("state");
     std::fs::create_dir_all(&state).unwrap();
-    // The destination folder exists and refuses new entries, so the first
-    // move fails after the journal is durable.
-    std::fs::create_dir_all(tree.join("Screenshots")).unwrap();
+    std::fs::create_dir_all(tree.join("a")).unwrap();
+    std::fs::create_dir_all(tree.join("z")).unwrap();
     let _root = TestDir(root.clone());
-    for day in 1..=3 {
+    // Two moves succeed. The third item's folder refuses to give it up.
+    for (folder, day) in [("a", 1), ("a", 2), ("z", 3)] {
         std::fs::write(
-            tree.join(format!("Screenshot 2025-01-0{day} at 1.00.00 PM.png")),
+            tree.join(folder)
+                .join(format!("Screenshot 2025-01-0{day} at 1.00.00 PM.png")),
             b"synthetic payload",
         )
         .unwrap();
     }
-    std::fs::set_permissions(
-        tree.join("Screenshots"),
-        std::fs::Permissions::from_mode(0o500),
-    )
-    .unwrap();
+    std::fs::set_permissions(tree.join("z"), std::fs::Permissions::from_mode(0o500)).unwrap();
     let (code, stdout) = sweep_json(
         &state,
-        &[OsStr::new("apply"), tree.as_os_str(), OsStr::new("--yes")],
+        &[
+            OsStr::new("apply"),
+            tree.as_os_str(),
+            OsStr::new("--yes"),
+            OsStr::new("--depth"),
+            OsStr::new("2"),
+        ],
     );
-    std::fs::set_permissions(
-        tree.join("Screenshots"),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
+    std::fs::set_permissions(tree.join("z"), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(code, Some(3), "exit code is unchanged: {stdout}");
     assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
+    assert!(
+        stdout.contains(r#""name":"items_moved","count":2"#),
+        "{stdout}"
+    );
 
     let journal = std::fs::read_dir(&state)
         .unwrap()
@@ -924,6 +927,49 @@ fn an_apply_that_stops_part_way_names_its_recovery_operation() {
     );
     assert_eq!(code, Some(0), "{stdout}");
     assert!(stdout.contains(r#""state":"interrupted""#), "{stdout}");
+}
+
+/// A failure that moved nothing is a refusal. It names no recovery operation, and
+/// the empty folder the attempt made is gone, so there is truly nothing to undo.
+#[cfg(unix)]
+#[test]
+fn an_apply_whose_first_move_fails_moved_nothing_and_says_so() {
+    use std::ffi::OsStr;
+    use std::os::unix::fs::PermissionsExt;
+    let uid = Command::new("id").arg("-u").output().unwrap();
+    if String::from_utf8_lossy(&uid.stdout).trim() == "0" {
+        return; // mode bits do not deny the superuser
+    }
+    let root = unique_temp("apply-first-move");
+    let tree = root.join("tree");
+    let state = root.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    let _root = TestDir(root.clone());
+    for day in 1..=3 {
+        std::fs::write(
+            tree.join("sub")
+                .join(format!("Screenshot 2025-01-0{day} at 1.00.00 PM.png")),
+            b"synthetic payload",
+        )
+        .unwrap();
+    }
+    std::fs::set_permissions(tree.join("sub"), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (code, stdout) = sweep_json(
+        &state,
+        &[
+            OsStr::new("apply"),
+            tree.as_os_str(),
+            OsStr::new("--yes"),
+            OsStr::new("--depth"),
+            OsStr::new("2"),
+        ],
+    );
+    std::fs::set_permissions(tree.join("sub"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(code, Some(3), "{stdout}");
+    assert!(stdout.contains(r#""status":"refused""#), "{stdout}");
+    assert!(stdout.contains(r#""operation":"""#), "{stdout}");
+    assert!(!tree.join("Screenshots").exists());
 }
 
 /// A member that stops being eligible after the apply has moved another is

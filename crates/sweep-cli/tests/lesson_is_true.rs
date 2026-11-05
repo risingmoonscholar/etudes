@@ -107,7 +107,10 @@ fn every_command_the_lesson_prints_is_accepted() {
             if rest.starts_with("forget") {
                 continue;
             }
-            let args: Vec<String> = rest
+            // A wide gap starts the lesson's own remark about the command, as
+            // in `sweep Desktop --json     for something that will parse it`.
+            let command = rest.split("  ").next().unwrap_or(rest);
+            let args: Vec<String> = command
                 .split_whitespace()
                 .map(|a| {
                     if a == "Desktop" {

@@ -31,6 +31,8 @@ pub enum Outcome {
     Apply,
     /// User quit. Nothing has moved.
     Cancelled,
+    /// Refused before it began: there is nobody to ask.
+    NoTerminal,
 }
 
 /// Longest destination name accepted. Well under NAME_MAX, and a name longer
@@ -78,7 +80,7 @@ pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
             "sweep: review needs a terminal. Use `sweep apply PATH --yes`\n\
              or `--only NAME` when running non-interactively."
         );
-        return Ok(Outcome::Cancelled);
+        return Ok(Outcome::NoTerminal);
     }
     let stdin = io::stdin();
     let mut locked = stdin.lock();

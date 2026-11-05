@@ -154,7 +154,7 @@ pub fn nothing_to_tag(p: &Plan) {
 }
 
 /// Report a tag apply that ran to the end, and pick its exit.
-pub fn finish_apply(r: &ApplyReport, binding: &str) -> ExitCode {
+pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
     use etude_cli_support::envelope;
     envelope::effect("items_tagged", r.tagged);
     envelope::detail(j::obj(&[
@@ -216,7 +216,7 @@ pub fn finish_apply(r: &ApplyReport, binding: &str) -> ExitCode {
     if r.tagged > 0 {
         match &r.journal_path {
             Some(path) => {
-                println!("Undo with: sweep undo");
+                println!("Undo with: {undo}");
                 println!("Encrypted journal: {}", path.display());
             }
             None => println!("No journal was written. This cannot be undone."),
