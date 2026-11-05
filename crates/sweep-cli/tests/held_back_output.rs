@@ -6,7 +6,9 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
+use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
 
 struct TestDir(PathBuf);

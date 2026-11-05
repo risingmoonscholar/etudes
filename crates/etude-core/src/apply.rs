@@ -216,6 +216,8 @@ pub type FaultHook<'a> = &'a mut dyn FnMut(usize, &Path);
 pub struct ApplyFaults<'a> {
     /// Runs after the plan check and before this attempt's journal exists.
     pub after_validate: Option<FaultHook<'a>>,
+    /// Runs after this attempt's journal is saved and before anything moves.
+    pub after_journal: Option<FaultHook<'a>>,
     /// Runs after the move-time tag check and immediately before the rename.
     pub before_rename: Option<FaultHook<'a>>,
     /// Runs after the rename and before the destination's tag is re-read.
@@ -414,8 +416,45 @@ fn apply_bound_with_faults(
             );
             Err(failure)
         }
+        // The contender made a group folder after this attempt's journal was
+        // saved. Nothing moved, so that journal must say refused, not interrupted.
+        Err(mut failure)
+            if failure.moved == 0
+                && failure.durable_journal_id.is_some()
+                && matches!(&failure.error, ApplyError::Io(error)
+                    if error.kind() == io::ErrorKind::AlreadyExists) =>
+        {
+            failure.error = refuse_saved_attempt(bound, context, sealer, &failure);
+            Err(failure)
+        }
         other => other,
     }
+}
+
+/// Empty an attempt's saved journal after a contender beat it before any move.
+fn refuse_saved_attempt(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    failure: &ApplyFailure,
+) -> ApplyError {
+    if let (Some(sl), Some(id)) = (sealer, &failure.durable_journal_id) {
+        let journal = Journal {
+            id: id.clone(),
+            tool: context.tool.clone(),
+            root: bound.root.clone(),
+            entries: Vec::new(),
+            created_directories: Vec::new(),
+            validated_directories: Vec::new(),
+            progress_tail_damaged: false,
+        };
+        if let Err(error) = journal.save_sealed(sl) {
+            return ApplyError::Journal(error);
+        }
+    }
+    ApplyError::StalePlan(io::Error::other(
+        "conflict: a folder it needed appeared after the plan was made; no moves from this attempt, existing journals remain recoverable",
+    ))
 }
 
 /// Record a live attempt that a contender beat before it moved anything.
@@ -668,6 +707,9 @@ fn apply_plan_with_structured_progress(
         if let Some(sl) = sealer {
             j.save_sealed(sl).map_err(ApplyError::Journal)?;
             durable_journal_id = Some(id.clone());
+        }
+        if let Some(hook) = faults.after_journal.as_mut() {
+            hook(0, &plan.root);
         }
 
         let mut progress_writer = sealer

@@ -4692,6 +4692,7 @@ mod tag_report_tests {
             None,
             ApplyFaults {
                 after_validate: None,
+                after_journal: None,
                 before_rename: Some(&mut tag_it),
                 after_rename: Some(&mut occupy),
             },
