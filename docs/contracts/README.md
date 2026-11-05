@@ -76,6 +76,10 @@ exists and cannot be used. `insufficient_space` and `destination_exists` now als
 cover a full disk and an occupied `--export-plan` path in `sweep` and `stash`.
 `sweep status` adds `counts.not_as_left` and `damaged`.
 
+A missing folder is exit 3 with `missing_input` on `sweep status PATH`, `stash
+status PATH` and `stash pop PATH`. A scan whose plan is blocked by a file holding a
+group folder's name adds `details.blocked_folders` and stays exit 0.
+
 Stash also returns `download_in_flight` for a folder still downloading and
 `unknown_item` for an item id its stash does not hold. `stash pop` exits 3 with
 `operation_incomplete` when any item is left behind, and its details add

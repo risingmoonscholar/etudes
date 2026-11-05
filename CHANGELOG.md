@@ -14,6 +14,72 @@ reviewers were pointed at the tools before anyone else could be.
 
 sweep, stash and unpack.
 
+### Error messages
+
+Every failure now says what failed, whether anything moved, and a next step that works when you run it. Printed undo and pop steps name the folder or the id, so they cannot act on other work. Exit 0 means the whole request was done. `schema_version` stays 4.
+
+- **A wrong step is gone.** A failed apply that moved nothing used to say `sweep undo` reverses what did happen, and following it could reverse an earlier apply of another folder. It now says nothing was moved and there is nothing to undo.
+- **A crash is gone.** `unpack` on a read-only destination panicked. It now names the folder and exits 3 with `permission_denied`.
+- **`unpack`:** a bare relative path such as `unpack a.zip`, or a relative `--into`, skipped the 256 MB free-space floor and took the 64 GB ceiling as its size limit, because the free-space check failed on an empty folder name. It now gets the same floor and limit as an absolute path.
+- **`unpack`:** options may come before the archive. `--max-size 0` is refused. Damaged, empty and password-protected archives each get their own message, and the leftover folder is named in full if it cannot be removed.
+- **`sweep`:** a scan says when a file holds a group folder's name and does not offer an apply that would refuse. It still exits 0, and `--json` adds `details.blocked_folders`.
+- **`sweep undo`, `stash pop`:** when files are not where they were left, the message covers both a moved folder and a deleted one, and points to another folder's apply or another stash. A record that cannot be opened no longer claims to know where the files are.
+- **`stash`:** refuses your home folder unless you pass `--allow-home`.
+- Folder names you typed are shown in full. Names of files the tool found itself stay hidden.
+- Singular and plural counts are right in all three tools.
+
+New reason codes: `journal_write_failed`, `profile_invalid`, `archive_unreadable`, `size_limit_exceeded`, `extraction_stopped`. `journal_unreadable` and `journal_key_unavailable` now have retry class `after_change`, not `later`: waiting does not fix a wrong key or a damaged record.
+
+**Breaking for scripts and agents.** Each line is old -> new.
+
+| Command and condition | Exit | Status or reason |
+|---|---|---|
+| any apply or stash failure that moved nothing | unchanged | status `incomplete` -> `refused` |
+| undo or pop that leaves any item behind, including files that are gone | 0 -> 3 | `done` -> `incomplete`, `operation_incomplete` |
+| `sweep status PATH`, missing folder | 1 -> 3 | `nothing_to_do` -> `error`, `missing_input` |
+| `stash status PATH`, missing folder | 2 -> 3 | `refused` -> `error` |
+| `stash pop PATH`, missing folder or a file | 1 -> 3 | `nothing_to_do` -> `error` |
+| `sweep undo FILE`, `sweep status FILE`, `stash status FILE` | 1 -> 3 | `nothing_to_do` -> `missing_input` |
+| `stash select --into`, missing folder | 2 -> 3 | `unsafe_input` -> `missing_input` |
+| `sweep review` with no terminal | 0 -> 2 | refused |
+| `sweep apply --only NAME`, unknown group | 1 -> 2 | `nothing_to_do` -> `invalid_arguments` |
+| stray word on `sweep apply`, `undo`, `forget`, `verify`, `version`, or a scan | 0 -> 2 | `invalid_arguments` |
+| `sweep PATH --scheme existing`, no profile | 0 -> 2 | `profile_missing` |
+| bad `ETUDE_JOURNAL_KEY`, every command | always 2; `sweep status` 3 -> 2, `stash status PATH` 0 -> 2 | `journal_key_unavailable` everywhere |
+| undo record cannot be saved | unchanged | `journal_unreadable` or `operation_incomplete` -> `journal_write_failed` |
+| `--plan` file missing, `stash` | 2 -> 3 | `plan_stale` -> `missing_input` |
+| `--plan` file unreadable | 2 -> 3 | `stash`: `plan_stale` -> `permission_denied` |
+| `--plan` empty, a folder, another tool's plan, a mistyped digest; `stash --plan --for` | unchanged | `plan_stale` -> `invalid_arguments` |
+| `--export-plan`, parent folder missing | `sweep` 2 -> 3 | `permission_denied` -> `missing_input` |
+| `--export-plan`, file exists | `stash` 3 -> 2 | `permission_denied` -> `destination_exists` |
+| `--export-plan`, inside the scanned folder | `stash` 3 -> 2 | `permission_denied` -> `invalid_arguments` |
+| `--export-plan`, disk full | `sweep` 2 -> 3 | `permission_denied` -> `insufficient_space` |
+| apply on a full disk or read-only disk | unchanged | `operation_incomplete` -> `insufficient_space` or `permission_denied` |
+| `sweep forget` with a supplied key | 2 -> 0 | undo records were removed, so it is not a refusal |
+| repeated `--for`, `--into` or `--max-size` | 0 -> 2 | `invalid_arguments` |
+| broken or malformed profile, or a route in it | unchanged | `profile_missing` or `invalid_arguments` -> `profile_invalid` |
+| `--map` with `--scheme existing` | unchanged | `profile_missing` -> `invalid_arguments` |
+| `sweep propose`, folder absent | unchanged | `profile_missing` -> `missing_input` |
+| `sweep apply --plan`, profile changed | unchanged | `profile_missing` -> `plan_stale` |
+| `stash` on a download folder | unchanged | `unsafe_input` -> `download_in_flight` |
+| `stash select --from0 FOLDER` | 3 -> 2 | `internal_error` -> `invalid_arguments` |
+| `stash status a b` | unchanged | `missing_input` -> `invalid_arguments` |
+| `stash status --paths` without `--all` | 1 -> 2 | `invalid_arguments` |
+| `stash pop --id ID --item NOPE` | 1 -> 2 | `nothing_to_do` -> `unknown_item` |
+| `unpack`, damaged or not an archive | unchanged | `unsafe_input` or `internal_error` -> `archive_unreadable` |
+| `unpack`, empty ZIP | 3 -> 1 | `unsafe_input` -> `nothing_to_do` |
+| `unpack`, password-protected | 3 -> 2 | `internal_error` -> `unsupported_format` |
+| `unpack`, `.rar`, `.7z`, `.pkg` or no suffix | 3 -> 2 | `error` -> `refused` |
+| `unpack a.zip.part`, `.crdownload` | 3 -> 2 | `unsupported_format` -> `download_in_flight` |
+| `unpack`, over the size limit | unchanged | `insufficient_space` -> `size_limit_exceeded` |
+| `unpack`, stop signal | unchanged | `operation_incomplete` -> `extraction_stopped` |
+| `unpack --into`, parent folder missing | unchanged | `internal_error` -> `missing_input` |
+| `unpack`, destination is a broken link | unchanged | `internal_error` -> `destination_exists` |
+| `unpack`, archive is a folder | unchanged | `unsafe_input` -> `missing_input` |
+| `unpack`, read-only destination | panic -> 3 | `internal_error` -> `permission_denied` |
+
+### Other changes
+
 Journal append reuses one handle per apply and writes each frame together; release runs on 10,000 small files (9,998 moves) measured apply 74.83/101.72 s before and 60.07/55.56 s after, undo 65.91/79.88 s before and 99.22/55.82 s after.
 - **sweep, stash:** a folder the system will not let the tool read now exits 3 with `permission_denied`, names the folder, and says what to do next: macOS privacy settings or file permissions, depending on the error. Before this, `stash` said the folder was already clear, `sweep review` said it needed no organising, and `sweep --export-plan` said "plan has incomplete observations; replan required; replan required". For scripts and agents: a scan of a folder that cannot be read at all used to exit 1 with status `incomplete`, and now exits 3 with status `error`. The reason stays `permission_denied`.
 - **stash:** a folder is no longer called clear when an item in it could not be read. Stash says the item stayed and exits 3.
