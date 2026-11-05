@@ -205,7 +205,7 @@ class Probe:
                 "retain the old pin and add a new version")
         current_fixture = ROOT / "docs/contracts/v1" / f"{self.tool}.json"
         require(current_fixture.read_bytes() == pin.read_bytes(), "published contract fixture differs from versioned pin")
-        historical_hashes = {'pack': '50d393de90ac789b0d6b56705fc6b8cbbb1d62371d9df0d4ef5109008c951ce3', 'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
+        historical_hashes = {'pack': '53616376fbd4aa8024d06477e505e4cb655a104852cd88438d8ae6e3840d8371', 'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
         historical = ROOT / "docs/contracts/history/v1" / f"{self.tool}.json"
         require(hashlib.sha256(historical.read_bytes()).hexdigest() == historical_hashes[self.tool], "historical v1 contract pin changed")
         self.contract = contract
@@ -455,25 +455,25 @@ class Probe:
             if suffix == "zip":
                 with zipfile.ZipFile(dest) as archive:
                     names = {n.rstrip("/") for n in archive.namelist()}
-                    require(archive.read("ordinary.txt") == b"synthetic archive payload", "zip payload differs")
-                    require(archive.read("Example.app/part") == b"complete package", "package split")
-                    require(archive.read(".hidden") == b"hidden payload", "hidden payload omitted")
-                    unicode_name = next(n for n in archive.namelist() if unicodedata.normalize("NFC", n) == "café.txt")
+                    require(archive.read("selected/ordinary.txt") == b"synthetic archive payload", "zip payload differs")
+                    require(archive.read("selected/Example.app/part") == b"complete package", "package split")
+                    require(archive.read("selected/.hidden") == b"hidden payload", "hidden payload omitted")
+                    unicode_name = next(n for n in archive.namelist() if unicodedata.normalize("NFC", n) == "selected/café.txt")
                     require(archive.read(unicode_name) == b"unicode payload", "zip Unicode round trip differs")
-                    require(".DS_Store" not in names, "drop retained litter")
+                    require("selected/.DS_Store" not in names, "drop retained litter")
             else:
                 with tarfile.open(dest) as archive:
                     names = {n.rstrip("/") for n in archive.getnames()}
-                    require(archive.extractfile("ordinary.txt").read() == b"synthetic archive payload", "tar payload differs")
-                    require(archive.extractfile("Example.app/part").read() == b"complete package", "package split")
-                    unicode_name = next(n for n in archive.getnames() if unicodedata.normalize("NFC", n) == "café.txt")
+                    require(archive.extractfile("selected/ordinary.txt").read() == b"synthetic archive payload", "tar payload differs")
+                    require(archive.extractfile("selected/Example.app/part").read() == b"complete package", "package split")
+                    unicode_name = next(n for n in archive.getnames() if unicodedata.normalize("NFC", n) == "selected/café.txt")
                     require(archive.extractfile(unicode_name).read() == b"unicode payload", "tar Unicode round trip differs")
                     if sys.platform == "darwin":
-                        companion = archive.extractfile("._ordinary.txt").read()
+                        companion = archive.extractfile("selected/._ordinary.txt").read()
                         require(b"synthetic fork" in companion and b"synthetic attribute" in companion,
                                 "keep lost resource fork or attribute bytes")
-                    require(".DS_Store" in names, "keep lost litter")
-            require("passport.pdf" not in names, "sensitive file archived")
+                    require("selected/.DS_Store" in names, "keep lost litter")
+            require("selected/passport.pdf" not in names, "sensitive file archived")
             archived = dest.read_bytes()
             refused = self.run(tree, "--for", recipient, "--into", dest, "--json", codes=(2,))
             require(json.loads(refused.stdout)["reason"]["code"] == "destination_exists", "collision reason differs")
@@ -1097,7 +1097,7 @@ def pack_code(probe, code):
         (tree / "movie.part").write_bytes(b"incomplete")
     elif code == "destination_exists":
         (probe.directory / "tree.zip").write_bytes(b"occupied")
-    elif code == "insufficient_space":
+    elif code == "size_limit_exceeded":
         args += ["--max-size", "1"]
     elif code == "unsupported_format":
         args += ["--format", "rar"]
@@ -1106,7 +1106,7 @@ def pack_code(probe, code):
     elif code == "permission_denied":
         needs_denied_permissions()
         tree.chmod(0)
-    elif code == "internal_error":
+    elif code == "extraction_stopped":
         # A real SIGTERM is handled while the writer owns only staging.
         (tree / "large").write_bytes(bytes(32 * 1024 * 1024))
         process = subprocess.Popen([probe.binary, *args, "--json"],
@@ -1126,15 +1126,17 @@ def pack_code(probe, code):
                 process.communicate()
         if process.returncode == 0:
             raise Unreached("writer finished before signal arrived")
-        require(process.returncode == 3, "stopped writer exit differs")
+        require(process.returncode == 2, "stopped writer exit differs")
         probe.envelope(json.loads(stdout))
         require(not list(probe.directory.glob(".*.pack-*.partial")), "stopped writer left staging")
         require(not (probe.directory / "tree.zip").exists(), "stopped writer published")
         return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
     elif code == "operation_incomplete":
         raise Unreached("requires a post-publication readback failure; no deterministic filesystem interposition")
+    elif code == "archive_unreadable":
+        raise Unreached("requires a private archive that reads back wrong; the unit test an_archive_that_does_not_match_fails_its_check covers it")
     try:
-        result = probe.run(*args, "--json", codes=(2,))
+        result = probe.run(*args, "--json", codes=(3,) if code == "permission_denied" else (2,))
         if code == "download_in_flight":
             require(b"movie.part" in result.stderr, "in-flight entry was not named")
             require(b"ordinary" not in result.stdout + result.stderr, "unrelated source name disclosed")
@@ -1148,8 +1150,9 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent", "--for", "other", "--json", codes=(3,)),
         **{code: (lambda p, code=code: pack_code(p, code)) for code in (
-            "unsupported_format", "insufficient_space", "internal_error", "destination_exists",
-            "download_in_flight", "unsafe_input", "permission_denied", "operation_incomplete")},
+            "unsupported_format", "size_limit_exceeded", "extraction_stopped", "destination_exists",
+            "download_in_flight", "unsafe_input", "permission_denied", "operation_incomplete",
+            "archive_unreadable")},
     },
     "sweep": {
         "invalid_arguments": lambda p: p.run("apply", screenshots(p.directory / "tree"), "--json", codes=(2,)),
@@ -1217,7 +1220,7 @@ CODE_PROBES = {
 NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
-    "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash) and 109 (unpack) fill a disk image to prove it",
+    "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash), 109 (unpack) and 123 (pack) fill a disk image to prove it",
 }
 
 

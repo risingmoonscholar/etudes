@@ -176,6 +176,35 @@
           "pack"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "archive_unreadable",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "pack"
+        ],
+        "why": "The archive is damaged, incomplete or not the format its name says; obtain a good copy before retrying."
+      },
+      {
+        "code": "size_limit_exceeded",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted."
+      },
+      {
+        "code": "extraction_stopped",
+        "retry": "later",
+        "subject_kind": "input",
+        "operations": [
+          "pack",
+          "list"
+        ],
+        "why": "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names."
       }
     ],
     "contract_query": {
@@ -186,6 +215,7 @@
     "observation_scope": {
       "default_user_content": "included_source_file_bytes",
       "content_exceptions": [
+        "source_xattr_names_and_lengths",
         "source_xattr_bytes_keep_only",
         "archive_readback_bytes"
       ],
@@ -239,7 +269,6 @@
       "subprocesses": [
         "/usr/bin/tar",
         "/bin/df",
-        "/usr/bin/xattr",
         "/usr/bin/mdls"
       ],
       "subprocess_network_verified": false
@@ -252,7 +281,8 @@
       "source_entries": "never",
       "user_payloads": "never",
       "owned_artifacts": [
-        "identified_private_staging_archive"
+        "identified_private_staging_archive",
+        "marked_unlocked_private_staging_archive_of_a_killed_run_for_the_same_destination"
       ]
     },
     "reversibility": {
@@ -292,6 +322,27 @@
       "sensitive_names": "etude_core::classify::sensitive_omitted_and_counted",
       "packages": "complete_or_refused",
       "hidden": "included_except_metadata_drop_litter",
+      "layout": "one_top_folder_named_after_source",
+      "empty_folders": "included",
+      "refused_entries": [
+        "symlinks",
+        "hard_links_between_two_included_names",
+        "setuid_setgid",
+        "special_nodes",
+        "cloud_only_files",
+        "unreadable"
+      ],
+      "refused_sources": [
+        "system_and_credential_locations",
+        "home_folder_and_its_ancestors",
+        "whole_disk",
+        "selected_package"
+      ],
+      "metadata_counts": [
+        "finder_tags",
+        "download_warning",
+        "other_attributes"
+      ],
       "publication": "exclusive_rename_or_refuse"
     },
     "limits": {

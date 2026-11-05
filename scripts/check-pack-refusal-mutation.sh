@@ -88,12 +88,11 @@ witness >/dev/null 2>&1 || { echo "the contract check fails before any fault is 
 cargo test -p pack-cli failed_post_publication_verification_retains_output >/dev/null 2>&1 \
   || { echo "the post-publication unit test fails before any fault is planted" >&2; exit 1; }
 
-in_flight_site='Code::DownloadInFlight,\n            2,\n            "download is not complete",'
+in_flight_site='Code::DownloadInFlight,\n                2,'
 
 # Fault 1: the right exit status, the wrong code.
 plant "$in_flight_site" 'Code::UnsafeInput,
-            2,
-            "download is not complete",'
+                2,'
 must_reject "wrong-code fault" \
   "mismatched: download_in_flight: (contract promises .*unsafe_input|in-flight entry was not named)" \
   witness

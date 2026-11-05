@@ -1024,7 +1024,11 @@ fn pack_declaration(version: &str) -> String {
                 ("default_user_content", j::str("included_source_file_bytes")),
                 (
                     "content_exceptions",
-                    strings(&["source_xattr_bytes_keep_only", "archive_readback_bytes"]),
+                    strings(&[
+                        "source_xattr_names_and_lengths",
+                        "source_xattr_bytes_keep_only",
+                        "archive_readback_bytes",
+                    ]),
                 ),
                 ("symlinks", j::str("refused")),
                 ("environment", strings(&["HOME"])),
@@ -1048,7 +1052,7 @@ fn pack_declaration(version: &str) -> String {
                 ("runtime_enforcement", j::str("none")),
                 (
                     "subprocesses",
-                    strings(&["/usr/bin/tar", "/bin/df", "/usr/bin/xattr", "/usr/bin/mdls"]),
+                    strings(&["/usr/bin/tar", "/bin/df", "/usr/bin/mdls"]),
                 ),
                 ("subprocess_network_verified", j::bool(false)),
             ]),
@@ -1067,7 +1071,10 @@ fn pack_declaration(version: &str) -> String {
                 ("user_payloads", j::str("never")),
                 (
                     "owned_artifacts",
-                    strings(&["identified_private_staging_archive"]),
+                    strings(&[
+                        "identified_private_staging_archive",
+                        "marked_unlocked_private_staging_archive_of_a_killed_run_for_the_same_destination",
+                    ]),
                 ),
             ]),
         ),
@@ -1107,6 +1114,32 @@ fn pack_declaration(version: &str) -> String {
                 ),
                 ("packages", j::str("complete_or_refused")),
                 ("hidden", j::str("included_except_metadata_drop_litter")),
+                ("layout", j::str("one_top_folder_named_after_source")),
+                ("empty_folders", j::str("included")),
+                (
+                    "refused_entries",
+                    strings(&[
+                        "symlinks",
+                        "hard_links_between_two_included_names",
+                        "setuid_setgid",
+                        "special_nodes",
+                        "cloud_only_files",
+                        "unreadable",
+                    ]),
+                ),
+                (
+                    "refused_sources",
+                    strings(&[
+                        "system_and_credential_locations",
+                        "home_folder_and_its_ancestors",
+                        "whole_disk",
+                        "selected_package",
+                    ]),
+                ),
+                (
+                    "metadata_counts",
+                    strings(&["finder_tags", "download_warning", "other_attributes"]),
+                ),
                 ("publication", j::str("exclusive_rename_or_refuse")),
             ]),
         ),

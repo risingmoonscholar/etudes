@@ -349,7 +349,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "archive_unreadable",
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
-        operations: &["unpack:extract", "unpack:list"],
+        operations: &["pack:pack", "unpack:extract", "unpack:list"],
         explanation: "The archive is damaged, incomplete or not the format its name says; obtain a good copy before retrying.",
     },
     CodeSpec {
@@ -357,7 +357,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "size_limit_exceeded",
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted.",
     },
     CodeSpec {
@@ -365,7 +365,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "extraction_stopped",
         retry: RetryClass::Later,
         subject_kind: Some("input"),
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names.",
     },
     CodeSpec {
