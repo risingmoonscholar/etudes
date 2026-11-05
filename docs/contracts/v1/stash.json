@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 10,
+    "schema_version": 11,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -176,7 +176,7 @@
       },
       {
         "code": "journal_unreadable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "stash",
@@ -185,11 +185,11 @@
           "inspect",
           "select"
         ],
-        "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
+        "why": "A saved journal cannot be read: wrong key, damaged, or denied. Waiting does not help; restore its key or access first."
       },
       {
         "code": "journal_key_unavailable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "stash",
@@ -198,7 +198,19 @@
           "inspect",
           "select"
         ],
-        "why": "The required journal key is unavailable and may become available later."
+        "why": "The journal key is unusable or cannot be reached; fix ETUDE_JOURNAL_KEY or unlock the login keychain."
+      },
+      {
+        "code": "journal_write_failed",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "stash",
+          "pop",
+          "select",
+          "apply_exported_plan"
+        ],
+        "why": "The journal could not be written; free space or fix the state directory before retrying."
       },
       {
         "code": "unknown_operation",
@@ -468,6 +480,10 @@
       "limit_bytes": 67108864,
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
+    },
+    "home_folder": {
+      "policy": "refused_unless_flag",
+      "flag": "--allow-home"
     },
     "explicit_selection": {
       "command": "select",

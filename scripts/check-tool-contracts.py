@@ -594,6 +594,29 @@ def garbage_journal(probe):
     return probe.run("status", "--id", "unreadable", "--json", codes=(3,))
 
 
+def bad_key(probe):
+    """A supplied key that is not 64 hex digits gets one answer from every command."""
+    tree = screenshots(probe.directory / "tree")
+    arguments = ("apply", tree, "--yes", "--since", "0") if probe.tool == "sweep" else (tree,)
+    return probe.run(*arguments, "--json", codes=(2,),
+                     environment={**probe.environment, "ETUDE_JOURNAL_KEY": "not-a-key"})
+
+
+def journal_store_is_a_file(probe):
+    """The journal cannot be written, so nothing moves. It is not called unreadable."""
+    tree = screenshots(probe.directory / "tree")
+    before = snapshot(tree)
+    blocked = probe.directory / "state-file"
+    blocked.write_bytes(b"synthetic file where the journal store belongs")
+    arguments = ("apply", tree, "--yes", "--since", "0") if probe.tool == "sweep" else (tree,)
+    result = probe.run(*arguments, "--json", codes=(3,),
+                       environment={**probe.environment, "ETUDE_STATE_DIR": str(blocked)})
+    require(snapshot(tree) == before, "a failed journal write moved or left something")
+    require(json.loads(result.stdout)["status"] == "refused",
+            "a failed journal write that moved nothing is not refused")
+    return result
+
+
 def restore_into_read_only_folder(probe):
     """A journalled move, then a restore the folder's mode refuses. The restore
     stops part-way; afterwards the same command finishes it."""
@@ -872,6 +895,8 @@ CODE_PROBES = {
         "profile_missing": (sweep_profile_missing, sweep_propose_folder_absent),
         "download_in_flight": sweep_download_in_flight,
         "journal_unreadable": garbage_journal,
+        "journal_key_unavailable": bad_key,
+        "journal_write_failed": journal_store_is_a_file,
         "unknown_operation": lambda p: p.run("status", "--id", "absent", "--json", codes=(1,)),
         "unknown_item": sweep_unknown_item,
         "item_assigned_twice": sweep_item_assigned_twice,
@@ -887,6 +912,8 @@ CODE_PROBES = {
         "plan_stale": stale_plan,
         "not_due_yet": stash_not_due_yet,
         "journal_unreadable": garbage_journal,
+        "journal_key_unavailable": bad_key,
+        "journal_write_failed": journal_store_is_a_file,
         "unknown_operation": tuple(
             (lambda p, command=command: p.run(command, "--id", "absent", "--json", codes=(1,)))
             for command in ("status", "pop", "inspect")),
@@ -913,7 +940,6 @@ CODE_PROBES = {
 # are reported by name on every run. An entry here is a gap, never a pass.
 NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
-    "journal_key_unavailable": "needs the login keychain; every probe supplies a throwaway key",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
     "destination_exists": "needs a destination to appear inside {tool}'s private holding folder mid-move",
 }

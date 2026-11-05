@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 6,
+    "schema_version": 7,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -162,6 +162,25 @@
           "extract"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "archive_unreadable",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The archive is damaged, incomplete or not the format its name says; obtain a good copy before retrying."
+      },
+      {
+        "code": "size_limit_exceeded",
+        "retry": "after_change",
+        "subject_kind": "input",
+        "operations": [
+          "extract"
+        ],
+        "why": "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted."
       }
     ],
     "contract_query": {

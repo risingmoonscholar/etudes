@@ -141,9 +141,9 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 7,
-                Tool::Stash => 10,
-                Tool::Unpack => SCHEMA_VERSION + 2,
+                Tool::Sweep => SCHEMA_VERSION + 8,
+                Tool::Stash => 11,
+                Tool::Unpack => SCHEMA_VERSION + 3,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -449,6 +449,15 @@ pub fn declaration(
                     "concurrency",
                     j::str("metadata_preflight_not_an_os_filesystem_lock"),
                 ),
+            ]),
+        ));
+    }
+    if matches!(tool, Tool::Stash) {
+        fields.push((
+            "home_folder",
+            j::obj(&[
+                ("policy", j::str("refused_unless_flag")),
+                ("flag", j::str("--allow-home")),
             ]),
         ));
     }

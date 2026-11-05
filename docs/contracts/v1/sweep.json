@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 11,
+    "schema_version": 12,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -207,25 +207,37 @@
       },
       {
         "code": "journal_unreadable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "apply",
           "undo",
           "status"
         ],
-        "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
+        "why": "A saved journal cannot be read: wrong key, damaged, or denied. Waiting does not help; restore its key or access first."
       },
       {
         "code": "journal_key_unavailable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "apply",
           "undo",
           "status"
         ],
-        "why": "The required journal key is unavailable and may become available later."
+        "why": "The journal key is unusable or cannot be reached; fix ETUDE_JOURNAL_KEY or unlock the login keychain."
+      },
+      {
+        "code": "journal_write_failed",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "apply",
+          "undo",
+          "review",
+          "apply_exported_plan"
+        ],
+        "why": "The journal could not be written; free space or fix the state directory before retrying."
       },
       {
         "code": "unknown_operation",
@@ -292,6 +304,17 @@
           "propose"
         ],
         "why": "The proposal names one item more than once; the same proposal cannot work."
+      },
+      {
+        "code": "profile_invalid",
+        "retry": "after_change",
+        "subject_kind": "profile",
+        "operations": [
+          "scan",
+          "apply",
+          "propose"
+        ],
+        "why": "The saved profile exists but cannot be used as written; correct the file before retrying."
       }
     ],
     "contract_query": {
