@@ -129,6 +129,10 @@ fn run_main() -> ExitCode {
             };
             return refusal(code, None);
         }
+        if let Err(msg) = check_positionals("status", &args) {
+            eprintln!("sweep: {msg}");
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+        }
         disable_core_dumps();
         return cmd_status(&args);
     }
@@ -384,7 +388,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
                 ]),
             ),
             ("damaged", etude_core::json::bool(damaged)),
-            ("folder", etude_core::json::path(&folder)),
+            (
+                "folder",
+                etude_core::json::str(&etude_cli_support::shown(&folder)),
+            ),
             (
                 "command",
                 if command.is_empty() {
@@ -1031,6 +1038,14 @@ fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
     }
     let found = positionals(cmd, args);
     let quoted = |word: &str| format!("`{}`", etude_cli_support::shown_text(word));
+    if matches!(cmd, "" | "apply" | "undo" | "review" | "status")
+        && found.first().is_some_and(|folder| folder.is_empty())
+    {
+        return Err(
+            "the folder name is empty. Give a folder, or leave it out to use the current folder. Nothing was changed."
+                .to_string(),
+        );
+    }
     match cmd {
         "forget" | "verify" => match found.first() {
             Some(extra) if cmd == "forget" => Err(format!(
@@ -1069,10 +1084,6 @@ fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
             )),
             None => Ok(()),
         },
-        "" if found.first().is_some_and(|folder| folder.is_empty()) => Err(
-            "the folder name is empty. Give a folder, or leave it out to scan the current folder. Nothing was changed."
-                .to_string(),
-        ),
         "" => match found.get(1) {
             Some(extra) => Err(format!(
                 "a scan takes one folder, and {} is a second. Nothing was changed.",
@@ -3767,11 +3778,21 @@ fn finish_undo(
         if !folders.is_empty() {
             for p in folders.iter().take(3) {
                 println!(
-                    "  If that folder is empty, remove it with: rmdir {}",
-                    etude_cli_support::quoted_path(p),
+                    "  Another folder holds a file's original place, in {}, under the name {}.",
+                    p.parent().map(etude_cli_support::shown).unwrap_or_default(),
+                    etude_core::redact::path(Path::new(p.file_name().unwrap_or_default())),
                 );
             }
-            println!("  If a folder holds files, move it away. Then run: {retry}");
+            println!(
+                "  If {} empty, remove {}. If not, move {} away. Then run: {retry}",
+                if folders.len() == 1 {
+                    "that folder is"
+                } else {
+                    "those folders are"
+                },
+                if folders.len() == 1 { "it" } else { "them" },
+                if folders.len() == 1 { "it" } else { "them" },
+            );
         }
     }
     if !r.skipped_missing.is_empty() {

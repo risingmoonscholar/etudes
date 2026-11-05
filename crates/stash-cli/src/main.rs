@@ -1681,7 +1681,29 @@ fn print_pop_left(
     }
 }
 
+/// True when the folder word of `pop` or `status` is an empty string. The value
+/// of a flag that takes one is not the folder.
+fn empty_folder_word(args: &[String]) -> bool {
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--id" | "--item" | "--for" => i += 2,
+            a if a.starts_with('-') => i += 1,
+            a => return a.is_empty(),
+        }
+    }
+    false
+}
+
+fn refuse_empty_folder_word() -> ExitCode {
+    eprintln!("stash: the folder name is empty. Give the folder you stashed. Nothing was moved.");
+    refuse(etude_cli_support::reason::Code::InvalidArguments)
+}
+
 fn cmd_pop(args: &[String]) -> ExitCode {
+    if empty_folder_word(args) {
+        return refuse_empty_folder_word();
+    }
     let (selector_args, item_id) = match pop_item_args(args) {
         Ok(value) => value,
         Err(error) => {
@@ -2355,6 +2377,9 @@ fn damage_note(batch: &etude_core::Journal) -> Option<String> {
 }
 
 fn cmd_status(args: &[String]) -> ExitCode {
+    if empty_folder_word(args) {
+        return refuse_empty_folder_word();
+    }
     if flag(args, "--id") {
         return cmd_status_id(args);
     }

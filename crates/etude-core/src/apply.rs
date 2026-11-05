@@ -1231,7 +1231,10 @@ fn create_destination_dirs(
                 created_this_apply.insert(directory, identity);
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                return Err(ApplyError::Io(folder_appeared_error()));
+                return Err(match fs::metadata(&directory) {
+                    Ok(metadata) if !metadata.is_dir() => ApplyError::DestinationBlocked(directory),
+                    _ => ApplyError::Io(folder_appeared_error()),
+                });
             }
             Err(error) => return Err(ApplyError::Io(error)),
         }

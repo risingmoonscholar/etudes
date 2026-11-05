@@ -107,6 +107,15 @@ for TOOL in sweep stash unpack; do
   assert_eq invalid_arguments "$(field reason.code "$W/out.json")" "empty name: $TOOL: reason"
 done
 
+for CMD in "sweep undo" "sweep status" "sweep review" "sweep apply" "stash pop" "stash status"; do
+  OUT=$("$BIN/${CMD%% *}" ${CMD#* } '' 2>&1 </dev/null); RC=$?
+  clean "empty name: $CMD" "$OUT"
+  assert_eq 2 "$RC" "empty name: $CMD: exit"
+  has "empty name: $CMD: says it is empty" "$OUT" "the folder name is empty"
+  "$BIN/${CMD%% *}" ${CMD#* } '' --json >"$W/out.json" 2>/dev/null </dev/null
+  assert_eq invalid_arguments "$(field reason.code "$W/out.json")" "empty name: $CMD: reason"
+done
+
 # --- an unknown id: the same answer as status --id and stash pop --id ----------
 fresh unknown
 UNKNOWN=1-2-3-ab
@@ -243,11 +252,13 @@ undo_id "folder in the way" 3 "$ID"
 has "folder in the way: says folder" "$OUT" "taken by another folder"
 hasnt "folder in the way: not another file" "$OUT" "another file"
 hasnt "folder in the way: no step to move a file" "$OUT" "Move the other file"
-has "folder in the way: a step that works" "$OUT" "remove it with: rmdir '$F/a1.foo'"
-STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*remove it with: //p' | head -1)
-OUT=$(eval "$STEP" 2>&1 </dev/null); RC=$?
-assert_eq 0 "$RC" "folder in the way: printed rmdir: exit"
-OUT=$("$SWEEP" undo --id "$ID" 2>&1 </dev/null); RC=$?
+hasnt "folder in the way: no rmdir with a found name" "$OUT" "rmdir"
+has "folder in the way: names the parent in full" "$OUT" "in $F, under the name <name.foo>"
+has "folder in the way: says what to do" "$OUT" "If that folder is empty, remove it. If not, move it away."
+STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*Then run: //p' | head -1)
+has "folder in the way: the step names the record" "$STEP" "sweep undo"
+rmdir "$F/a1.foo"
+OUT=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
 assert_eq 0 "$RC" "folder in the way: then undo: exit"
 if [ -f "$F/a1.foo" ]; then pass "folder in the way: file is home"; else fail "folder in the way: file not home"; fi
 
