@@ -280,6 +280,13 @@ OUT=$("$STASH" "$D" 2>&1 </dev/null); RC=$?
 clean "synced" "$OUT"
 assert_eq 0 "$RC" "synced: exit unchanged"
 has "synced: warns" "$OUT" "warning: this folder is inside a cloud-synced tree"
+# The warning is the last chance to stop, so it comes before the moves.
+if [ "$(printf '%s\n' "$OUT" | head -1)" = "warning: this folder is inside a cloud-synced tree, so these moves reach your other devices too." ] \
+  && [ "$(printf '%s\n' "$OUT" | grep -c 'cloud-synced')" = 1 ]; then
+  pass "synced: warned once, before the moves"
+else
+  fail "synced: the warning is not first: $OUT"
+fi
 D="$W/plain"; files "$D"
 OUT=$("$STASH" "$D" 2>&1 </dev/null)
 hasnt "plain: no warning" "$OUT" "cloud-synced"
@@ -300,6 +307,24 @@ has "download: says so" "$OUT" "1 download still in progress was stashed too; it
 D="$W/dl2"; mkdir -p "$D"; : > "$D/x.crdownload"; : > "$D/y.part"
 OUT=$("$STASH" "$D" 2>&1 </dev/null)
 has "two downloads: plural" "$OUT" "2 downloads still in progress were stashed too; they may fail."
+# Row 43 again, where the download is not at the top of the folder. It moves
+# inside its subfolder, so a check of the planned items alone never sees it.
+D="$W/dl-nested"; files "$D"; mkdir -p "$D/sub/deeper"; : > "$D/sub/deeper/x.crdownload"
+OUT=$("$STASH" "$D" 2>&1 </dev/null); RC=$?
+clean "nested download" "$OUT"
+assert_eq 0 "$RC" "nested download: exit unchanged"
+has "nested download: says so" "$OUT" "1 download still in progress was stashed too; it may fail."
+hasnt "nested download: keeps the name out" "$OUT" "crdownload"
+D="$W/dl-package"; mkdir -p "$D/sub/film.mp4.download"; : > "$D/sub/film.mp4.download/part1"; : > "$D/sub/film.mp4.download/part2"
+OUT=$("$STASH" "$D" 2>&1 </dev/null)
+has "download folder inside: counted once" "$OUT" "1 download still in progress was stashed too; it may fail."
+D="$W/dl-select"; mkdir -p "$D/sub"; : > "$D/x.crdownload"; : > "$D/sub/y.part"; : > "$D/keep"
+OUT=$("$STASH" select "$D/x.crdownload" "$D/sub" 2>&1 </dev/null); RC=$?
+clean "select downloads" "$OUT"
+assert_eq 0 "$RC" "select downloads: exit unchanged"
+has "select downloads: says so" "$OUT" "2 downloads still in progress were stashed too; they may fail."
+OUT=$("$STASH" select "$D/keep" 2>&1 </dev/null)
+hasnt "select, no download: no line" "$OUT" "still in progress"
 D="$W/due"; files "$D"
 OUT=$("$STASH" "$D" --for 2d 2>&1 </dev/null)
 clean "deadline" "$OUT"

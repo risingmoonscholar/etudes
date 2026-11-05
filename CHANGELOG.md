@@ -23,7 +23,7 @@ Every failure now says what failed, whether anything moved, and a next step that
 - **`unpack`:** a bare relative path such as `unpack a.zip`, or a relative `--into`, skipped the 256 MB free-space floor and took the 64 GB ceiling as its size limit, because the free-space check failed on an empty folder name. It now gets the same floor and limit as an absolute path.
 - **`unpack`:** options may come before the archive. `--max-size 0` is refused. Damaged, empty and password-protected archives each get their own message, and the leftover folder is named in full if it cannot be removed.
 - **`sweep`:** a scan says when a file holds a group folder's name and does not offer an apply that would refuse. It still exits 0, and `--json` adds `details.blocked_folders`.
-- **`sweep undo`, `stash pop`:** when files are not where they were left, the message covers both a moved folder and a deleted one, and points to another folder's apply or another stash. A record that cannot be opened no longer claims to know where the files are.
+- **`sweep undo`, `stash pop`:** when files are not where they were left, the message covers both a moved folder and a deleted one. `sweep undo` with no folder and `stash pop --latest` keep stopping at that record, so they also point to another folder's apply or another stash. A record that cannot be opened no longer claims to know where the files are.
 - **`stash`:** refuses your home folder unless you pass `--allow-home`.
 - Folder names you typed are shown in full. Names of files the tool found itself stay hidden.
 - Singular and plural counts are right in all three tools.

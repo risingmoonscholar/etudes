@@ -256,7 +256,7 @@ say "--into value that is a flag" 2 refused invalid_arguments '--into needs a fo
 for bad in 0 0M 0G 1T x -5 --list; do
   say "--max-size $bad" 2 refused invalid_arguments "--max-size needs a whole number above 0, optionally with M or G, got \"$bad\"." -- "$A/good.zip" --max-size "$bad"
 done
-say '--max-size empty' 2 refused invalid_arguments '--max-size needs a whole number above 0, optionally with M or G, got "".' -- "$A/good.zip" --max-size ""
+say '--max-size empty' 2 refused invalid_arguments '--max-size needs a size, such as 500M or 2G.' -- "$A/good.zip" --max-size ""
 OUT=$("$UNPACK" "$A/good.zip" --max-size 2>&1); rc=$?
 clean '--max-size with no value' "$OUT"; assert_eq 2 "$rc" '--max-size with no value: exit'
 has '--max-size with no value: words' "$OUT" '--max-size needs a size, such as 500M or 2G.'

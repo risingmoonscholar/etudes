@@ -9,6 +9,7 @@ W=$(workdir)
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done
+  chflags -R nouchg "${W:?}" 2>/dev/null
   chmod -R u+rwx "${W:?}" 2>/dev/null; rm -rf "${W:?}"
 }
 trap cleanup EXIT
@@ -176,6 +177,10 @@ has "lost files: restored none" "$OUT" "Restored 0 of 3 files."
 has "lost files: the moved case" "$OUT" "If you moved that folder, move it back and run: sweep undo '$C'"
 has "lost files: the deleted case" "$OUT" "If you deleted them, there is nothing to restore."
 has "lost files: the older apply" "$OUT" "To undo the apply of $A, run: sweep undo '$A'"
+# Named, the record stops nothing else, so no step for other work is printed.
+OUT1=$(ETUDE_STATE_DIR="$USTATE" "$SWEEP" undo "$C" 2>&1 </dev/null)
+has "lost files, named undo: still says what is lost" "$OUT1" "If you moved that folder, move it back and run: sweep undo '$C'"
+hasnt "lost files, named undo: no step for other work" "$OUT1" "To undo the apply of"
 assert_eq "" "$(ls "$A" | grep -v '^Screenshots$')" "lost files: the older folder was not touched"
 # Bare undo must not skip this record and reverse a folder nobody named.
 OUT2=$(ETUDE_STATE_DIR="$USTATE" "$SWEEP" undo 2>&1 </dev/null)
@@ -221,6 +226,21 @@ assert_eq 3 "$RC" "lost items, pop: exit"
 has "lost items: restored none" "$OUT" "Restored 0 of 3 items."
 has "lost items: the moved case" "$OUT" "If you moved that folder, move it back and run: stash pop --id "
 has "lost items: the deleted case" "$OUT" "If you deleted them, there is nothing to restore."
+# A named folder or an id picks its own stash, so the other one is not in the way.
+hasnt "lost items, named pop: no step for other work" "$OUT" "instead, run:"
+LOST_ID=$(step_after 'move it back and run: stash pop --id ' "$OUT")
+OUT1=$(ETUDE_STATE_DIR="$PSTATE" "$STASH" pop --id "$LOST_ID" 2>&1 </dev/null)
+has "lost items, pop by id: still says what is lost" "$OUT1" "If you deleted them, there is nothing to restore."
+hasnt "lost items, pop by id: no step for other work" "$OUT1" "instead, run:"
+OUT1=$(cd "$G" && ETUDE_STATE_DIR="$PSTATE" "$STASH" pop 2>&1 </dev/null)
+has "lost items, bare pop: still says what is lost" "$OUT1" "If you deleted them, there is nothing to restore."
+hasnt "lost items, bare pop: no step for other work" "$OUT1" "instead, run:"
+OUT1=$(ETUDE_STATE_DIR="$PSTATE" "$STASH" pop "$G" --latest 2>&1 </dev/null)
+hasnt "lost items, --latest FOLDER: another folder's stash is not in the way" "$OUT1" "instead, run:"
+# --latest keeps stopping at this stash, so there the step is the way forward.
+OUT=$(ETUDE_STATE_DIR="$PSTATE" "$STASH" pop --latest 2>&1 </dev/null); RC=$?
+clean "lost items, --latest" "$OUT"
+assert_eq 3 "$RC" "lost items, --latest: exit"
 has "lost items: the other stash" "$OUT" "To restore the stash from $F instead, run: stash pop --id "
 STEP=$(step_after 'instead, run: ' "$OUT")
 OUT3=$(export ETUDE_STATE_DIR="$PSTATE"; run_step "$STEP" 2>&1 </dev/null); RC=$?
@@ -232,6 +252,126 @@ STEP=$(step_after 'move it back and run: ' "$OUT")
 OUT4=$(export ETUDE_STATE_DIR="$PSTATE"; run_step "$STEP" 2>&1 </dev/null); RC=$?
 assert_eq 0 "$RC" "moved-folder step, pop: exit"
 assert_eq 3 "$(ls "$G" | grep -c '^Screenshot 2026')" "moved-folder step, pop: items are home"
+
+# --- a locked file: the failed move says so, and the printed steps work -------
+LOCKED="Screenshot 2026-01-02 at 10.00.00.png"
+PRIVACY="Privacy & Security"
+locked_words() {  # locked_words LABEL OUT FOLDER: the cause, then a step that finds it
+  clean "$1" "$2"
+  has "$1: says it is locked" "$2" "1 item is locked"
+  has "$1: how to unlock" "$2" "choose Get Info and clear Locked, or run chflags nouchg on the item."
+  has "$1: how to find it" "$2" "See which with: find '$3' -flags +uchg"
+  hasnt "$1: does not blame privacy settings" "$2" "$PRIVACY"
+  hasnt "$1: keeps the file's name out" "$2" "Screenshot 2026"
+  local found
+  found=$(eval "$(step_after 'See which with: ' "$2")" 2>/dev/null)
+  has "$1: the find step finds it" "$found" "$LOCKED"
+}
+fresh_lock() { rm -f "$ETUDE_STATE_DIR"/*.journal; shots "$1"; chflags uchg "$1/$LOCKED"; }
+
+D="$W/lock-stash"; fresh_lock "$D"
+OUT=$("$STASH" "$D" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "locked, stash: exit"
+locked_words "locked, stash" "$OUT" "$D"
+chflags nouchg "$D/$LOCKED"
+assert_exit 0 "locked, stash: run again after unlocking" -- "$STASH" "$D"
+[ -z "$(ls "$D")" ] && pass "locked, stash: the folder is clear" || fail "locked, stash: still has files"
+
+D="$W/lock-apply"; fresh_lock "$D"
+OUT=$("$SWEEP" apply "$D" --yes 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "locked, apply: exit"
+locked_words "locked, apply" "$OUT" "$D"
+chflags nouchg "$D/$LOCKED"
+# Two files left would not group by themselves, so the way on is back, then again.
+STEP=$(step_after 'To put it back: ' "$OUT")
+OUT2=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "locked, apply: the printed undo step works"
+assert_exit 0 "locked, apply: apply works after unlocking" -- "$SWEEP" apply "$D" --yes
+assert_eq 3 "$(ls "$D/Screenshots" | wc -l | tr -d ' ')" "locked, apply: every file moved"
+
+D="$W/lock-select"; fresh_lock "$D"
+OUT=$("$STASH" select "$D/Screenshot 2026-01-01 at 10.00.00.png" "$D/$LOCKED" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "locked, select: exit"
+locked_words "locked, select" "$OUT" "$D"
+chflags nouchg "$D/$LOCKED"
+STEP=$(step_after 'To put it back: ' "$OUT")
+OUT2=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "locked, select: the printed step works"
+assert_exit 0 "locked, select: select works after unlocking" -- "$STASH" select "$D/Screenshot 2026-01-01 at 10.00.00.png" "$D/$LOCKED"
+
+# A file locked after it moved stops the way back in the same words.
+D="$W/lock-undo"; rm -f "$ETUDE_STATE_DIR"/*.journal; shots "$D"
+"$SWEEP" apply "$D" --yes >/dev/null 2>&1 </dev/null
+chflags uchg "$D/Screenshots/$LOCKED"
+OUT=$("$SWEEP" undo "$D" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "locked, undo: exit"
+locked_words "locked, undo" "$OUT" "$D"
+chflags nouchg "$D/Screenshots/$LOCKED"
+STEP=$(step_after 'stopped, run: ' "$OUT")
+OUT2=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "locked, undo: the printed step works after unlocking"
+assert_eq 3 "$(ls "$D" | grep -c '^Screenshot 2026')" "locked, undo: files are home"
+
+D="$W/lock-pop"; rm -f "$ETUDE_STATE_DIR"/*.journal; shots "$D"
+"$STASH" "$D" >/dev/null 2>&1 </dev/null
+HOLD=$(ls -A "$D" | head -1)
+chflags uchg "$D/$HOLD/$LOCKED"
+OUT=$("$STASH" pop "$D" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "locked, pop: exit"
+locked_words "locked, pop" "$OUT" "$D/$HOLD"
+chflags nouchg "$D/$HOLD/$LOCKED"
+STEP=$(step_after 'Fix that, then run: ' "$OUT")
+OUT2=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "locked, pop: the printed step works after unlocking"
+assert_eq 3 "$(ls "$D" | grep -c '^Screenshot 2026')" "locked, pop: items are home"
+
+# A locked folder the items are going back to is found the same way.
+D="$W/lock-home"; rm -f "$ETUDE_STATE_DIR"/*.journal; shots "$D"
+"$STASH" "$D" >/dev/null 2>&1 </dev/null
+chflags uchg "$D"
+OUT=$("$STASH" pop "$D" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "locked folder, pop: exit"
+has "locked folder, pop: says it is locked" "$OUT" "1 item is locked"
+has "locked folder, pop: looks in that folder" "$OUT" "See which with: find '$D' -flags +uchg"
+chflags nouchg "$D"
+rm -f "$ETUDE_STATE_DIR"/*.journal
+
+# --- an empty value is a missing value, in all three tools --------------------
+mkdir -p "$W/empty-values"; printf x > "$W/empty-values/one"
+empty_value() {  # empty_value LABEL WANT -- COMMAND: exit 2, the flag named, no empty name
+  local label="$1" want="$2"; shift 3
+  local out rc
+  out=$("$@" 2>&1 </dev/null); rc=$?
+  clean "$label" "$out"
+  assert_eq 2 "$rc" "$label: exit"
+  has "$label: says what is missing" "$out" "$want"
+  hasnt "$label: no empty name" "$out" '""'
+  hasnt "$label: no empty place" "$out" ' at : '
+}
+empty_value "unpack --into first" "--into needs a folder" -- "$UNPACK" --into '' "$W/one.zip"
+empty_value "unpack --into after" "--into needs a folder" -- "$UNPACK" "$W/one.zip" --into ''
+empty_value "unpack --max-size" "--max-size needs a size" -- "$UNPACK" "$W/one.zip" --max-size ''
+empty_value "select --into" "--into needs a value." -- "$STASH" select --into '' "$W/empty-values/one"
+empty_value "select --from0" "--from0 needs a value." -- "$STASH" select --from0 ''
+empty_value "select --for" "--for needs a value." -- "$STASH" select --for '' "$W/empty-values/one"
+empty_value "stash --for" "--for needs a value." -- "$STASH" "$W/empty-values" --for ''
+empty_value "pop --id" "--id needs a value." -- "$STASH" pop --id ''
+empty_value "stash --plan" "--plan needs a value." -- "$STASH" "$W/empty-values" --plan ''
+empty_value "stash status --id" "--id needs a value." -- "$STASH" status --id ''
+for flag in --only --since --depth --map --scheme --plan --plan-digest; do
+  empty_value "apply $flag" "$flag needs a value" -- "$SWEEP" apply "$W/empty-values" "$flag" ''
+done
+empty_value "sweep --depth" "--depth needs a value" -- "$SWEEP" "$W/empty-values" --depth ''
+empty_value "sweep status --id" "--id needs a value" -- "$SWEEP" status --id ''
+assert_eq x "$(cat "$W/empty-values/one")" "empty values: nothing moved"
+
+# --- review with nobody to answer: only the refusal ----------------------------
+D="$W/review-no-terminal"; shots "$D"
+OUT=$("$SWEEP" review "$D" 2>&1 </dev/null); RC=$?
+assert_eq 2 "$RC" "review, no terminal: exit"
+assert_eq "sweep: review needs a terminal. Use \`sweep apply PATH --yes\`
+or \`--only NAME\` when running non-interactively." "$OUT" "review, no terminal: prints only the refusal"
+assert_eq 3 "$(ls "$D" | wc -l | tr -d ' ')" "review, no terminal: nothing moved"
 
 # --- a scan does not offer an apply that will refuse ---------------------------
 B="$W/blocked"; shots "$B"; printf x > "$B/Screenshots"

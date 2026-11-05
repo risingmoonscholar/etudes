@@ -462,6 +462,9 @@ lists file names. An id that no journal holds gives exit 1 with the code
 `unknown_operation`. `reversed` means nothing is still moved; `partly_reversed`
 means some files are back and some are not.
 
+In `sweep status`, `planned`, `moved` and `reversed` are states of each file: each
+is a count of the files now in that state.
+
 A result's `status` and `reason` always agree: when the status is `incomplete`,
 `refused` or `error`, the reason is never `done` or `nothing_to_do`. An undo or
 pop that had to leave a file behind exits 3, with status `incomplete` and the
@@ -472,8 +475,8 @@ and says what to do. If you moved that folder, move it back and run the printed
 command. If you deleted them, there is nothing to restore. `sweep undo` with no
 folder keeps stopping at that record rather than reverse a folder you did not
 name, so reach another folder's apply by naming it: `sweep undo FOLDER`. In
-`stash pop` the same case prints the id of another stash, because `stash pop --id
-ID` goes straight to one stash.
+`stash pop --latest` the same case prints the id of another stash, because `stash
+pop --id ID` goes straight to one stash.
 
 Two applies on one folder at once are not held apart. One wins. The other ends
 in one of two ways, and timing decides which:
