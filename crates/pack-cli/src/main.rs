@@ -2501,7 +2501,16 @@ mod tests {
         let f = Fixture::new();
         let dest = f.0.join("out.zip");
         let left = abandoned(&dest);
-        let found = sweep_leftovers(&dest);
+        // Another test's child holds every open file between fork and exec, so
+        // the lock can look busy for a moment. A busy file is left, as it should be.
+        let mut found = sweep_leftovers(&dest);
+        for _ in 0..200 {
+            if found.removed > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            found = sweep_leftovers(&dest);
+        }
         assert_eq!((found.removed, found.kept.len()), (1, 0));
         assert!(!left.exists());
     }
