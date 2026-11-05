@@ -484,6 +484,13 @@ pub fn declaration(
             ("recovery_id", j::str("durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation")),
             ("side_effects", j::str("none;_no_key_creation_migration_pruning_or_file_content_reads")),
             ("disclosure", j::str("path_query_returns_newest_first_without_file_names")),
+            ("command", j::str("undo_by_that_row's_id;_null_when_nothing_is_left_to_reverse")),
+        ])));
+        fields.push(("undo_lookup", j::obj(&[
+            ("queries", strings(&["undo", "undo PATH", "undo --id OPERATION"])),
+            ("by_id", j::str("opens_only_that_record_and_searches_no_other_to_choose_it;_other_records_are_read_only_to_keep_a_folder_they_may_need")),
+            ("by_id_refusals", j::str("a_path_beside_it,_a_repeat,_an_empty_value_or_an_invalid_id_is_invalid_arguments;_an_id_no_record_holds_is_unknown_operation")),
+            ("unreadable_record", j::str("undo_and_undo_path_stop_at_it;_details.records_that_open_lists_up_to_5_live_records,_newest_first,_each_with_its_step")),
         ])));
         fields.push(("tag_scheme", j::obj(&[
             ("flag", j::str("--scheme tags")),
