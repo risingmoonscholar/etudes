@@ -40,12 +40,17 @@ pub enum Code {
     NotDueYet,
     JournalUnreadable,
     JournalKeyUnavailable,
+    JournalWriteFailed,
     UnknownOperation,
     UnsafeInput,
     PermissionDenied,
     OperationIncomplete,
     UnknownItem,
     ItemAssignedTwice,
+    ArchiveUnreadable,
+    SizeLimitExceeded,
+    ExtractionStopped,
+    ProfileInvalid,
 }
 
 impl Code {
@@ -65,12 +70,17 @@ impl Code {
         Self::NotDueYet,
         Self::JournalUnreadable,
         Self::JournalKeyUnavailable,
+        Self::JournalWriteFailed,
         Self::UnknownOperation,
         Self::UnsafeInput,
         Self::PermissionDenied,
         Self::OperationIncomplete,
         Self::UnknownItem,
         Self::ItemAssignedTwice,
+        Self::ArchiveUnreadable,
+        Self::SizeLimitExceeded,
+        Self::ExtractionStopped,
+        Self::ProfileInvalid,
     ];
 }
 
@@ -122,7 +132,19 @@ pub const CODES: &[CodeSpec] = &[
         name: "insufficient_space",
         retry: RetryClass::AfterChange,
         subject_kind: Some("destination"),
-        operations: &["unpack:extract"],
+        operations: &[
+            "sweep:apply",
+            "sweep:review",
+            "sweep:apply_exported_plan",
+            "sweep:undo",
+            "sweep:export_plan",
+            "stash:stash",
+            "stash:apply_exported_plan",
+            "stash:export_plan",
+            "stash:select",
+            "stash:pop",
+            "unpack:extract",
+        ],
         explanation: "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input.",
     },
     CodeSpec {
@@ -150,7 +172,9 @@ pub const CODES: &[CodeSpec] = &[
             "sweep:apply",
             "sweep:propose",
             "sweep:undo",
+            "sweep:export_plan",
             "stash:stash",
+            "stash:export_plan",
             "stash:pop",
             "unpack:extract",
         ],
@@ -177,15 +201,15 @@ pub const CODES: &[CodeSpec] = &[
         name: "profile_missing",
         retry: RetryClass::AfterChange,
         subject_kind: Some("profile"),
-        operations: &["sweep:scan", "sweep:apply", "sweep:propose"],
-        explanation: "The selected profile is unavailable; restore or select a valid profile.",
+        operations: &["sweep:scan", "sweep:apply", "sweep:review"],
+        explanation: "No saved profile exists; add one or choose another scheme.",
     },
     CodeSpec {
         code: Code::DownloadInFlight,
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["sweep:scan"],
+        operations: &["sweep:scan", "stash:stash", "unpack:extract", "unpack:list"],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {
@@ -199,7 +223,7 @@ pub const CODES: &[CodeSpec] = &[
     CodeSpec {
         code: Code::JournalUnreadable,
         name: "journal_unreadable",
-        retry: RetryClass::Later,
+        retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
         operations: &[
             "sweep:apply",
@@ -211,12 +235,12 @@ pub const CODES: &[CodeSpec] = &[
             "stash:status",
             "stash:select",
         ],
-        explanation: "The journal cannot be read now; the same read-only request may work after the journal becomes readable.",
+        explanation: "A saved journal cannot be read: wrong key, damaged, or denied. Waiting does not help; restore its key or access first.",
     },
     CodeSpec {
         code: Code::JournalKeyUnavailable,
         name: "journal_key_unavailable",
-        retry: RetryClass::Later,
+        retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
         operations: &[
             "sweep:apply",
@@ -228,7 +252,24 @@ pub const CODES: &[CodeSpec] = &[
             "stash:status",
             "stash:select",
         ],
-        explanation: "The required journal key is unavailable and may become available later.",
+        explanation: "The journal key is unusable or cannot be reached; fix ETUDE_JOURNAL_KEY or unlock the login keychain.",
+    },
+    CodeSpec {
+        code: Code::JournalWriteFailed,
+        name: "journal_write_failed",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("journal"),
+        operations: &[
+            "sweep:apply",
+            "sweep:review",
+            "sweep:apply_exported_plan",
+            "sweep:undo",
+            "stash:stash",
+            "stash:apply_exported_plan",
+            "stash:pop",
+            "stash:select",
+        ],
+        explanation: "The journal could not be written; free space or fix the state directory before retrying.",
     },
     CodeSpec {
         code: Code::UnknownOperation,
@@ -265,13 +306,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "operation_incomplete",
         retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
-        operations: &[
-            "sweep:apply",
-            "sweep:undo",
-            "stash:stash",
-            "stash:pop",
-            "unpack:extract",
-        ],
+        operations: &["sweep:apply", "sweep:undo", "stash:stash", "stash:pop"],
         explanation: "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing.",
     },
     CodeSpec {
@@ -279,8 +314,8 @@ pub const CODES: &[CodeSpec] = &[
         name: "unknown_item",
         retry: RetryClass::Never,
         subject_kind: Some("item"),
-        operations: &["sweep:propose"],
-        explanation: "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan.",
+        operations: &["sweep:propose", "stash:pop"],
+        explanation: "The request names an item that is not in the plan or the stash it addresses; the same request cannot work.",
     },
     CodeSpec {
         code: Code::ItemAssignedTwice,
@@ -289,6 +324,38 @@ pub const CODES: &[CodeSpec] = &[
         subject_kind: Some("item"),
         operations: &["sweep:propose"],
         explanation: "The proposal names one item more than once; the same proposal cannot work.",
+    },
+    CodeSpec {
+        code: Code::ArchiveUnreadable,
+        name: "archive_unreadable",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("input"),
+        operations: &["unpack:extract", "unpack:list"],
+        explanation: "The archive is damaged, incomplete or not the format its name says; obtain a good copy before retrying.",
+    },
+    CodeSpec {
+        code: Code::SizeLimitExceeded,
+        name: "size_limit_exceeded",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("input"),
+        operations: &["unpack:extract"],
+        explanation: "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted.",
+    },
+    CodeSpec {
+        code: Code::ExtractionStopped,
+        name: "extraction_stopped",
+        retry: RetryClass::Later,
+        subject_kind: Some("input"),
+        operations: &["unpack:extract"],
+        explanation: "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names.",
+    },
+    CodeSpec {
+        code: Code::ProfileInvalid,
+        name: "profile_invalid",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("profile"),
+        operations: &["sweep:scan", "sweep:apply", "sweep:review", "sweep:propose"],
+        explanation: "The saved profile exists but cannot be used as written; correct the file before retrying.",
     },
 ];
 
@@ -364,6 +431,17 @@ impl Reason {
         }
     }
 
+    /// A refusal with the subject its contract entry requires, carrying no path.
+    /// It cannot disagree with the contract, so it cannot panic.
+    pub fn of(code: Code) -> Self {
+        let subject = CODES
+            .iter()
+            .find(|spec| spec.code == code)
+            .and_then(|spec| spec.subject_kind)
+            .map(|kind| Subject::wait(kind, None));
+        Self::refusal(code, subject)
+    }
+
     pub fn json(&self) -> String {
         let spec = if matches!(self.code, Code::Done | Code::NothingToDo) {
             None
@@ -412,12 +490,17 @@ impl Reason {
             Code::NotDueYet => "not_due_yet",
             Code::JournalUnreadable => "journal_unreadable",
             Code::JournalKeyUnavailable => "journal_key_unavailable",
+            Code::JournalWriteFailed => "journal_write_failed",
             Code::UnknownOperation => "unknown_operation",
             Code::UnsafeInput => "unsafe_input",
             Code::PermissionDenied => "permission_denied",
             Code::OperationIncomplete => "operation_incomplete",
             Code::UnknownItem => "unknown_item",
             Code::ItemAssignedTwice => "item_assigned_twice",
+            Code::ArchiveUnreadable => "archive_unreadable",
+            Code::SizeLimitExceeded => "size_limit_exceeded",
+            Code::ExtractionStopped => "extraction_stopped",
+            Code::ProfileInvalid => "profile_invalid",
         }
     }
 }
@@ -542,7 +625,7 @@ mod tests {
         assert!(sweep.contains("\"subject_kind\":\"download_in_flight\""));
         assert!(sweep.contains("\"subject_kind\":null"));
         assert!(!sweep.contains("\"all\""));
-        assert!(!codes_json("unpack").contains("\"code\":\"download_in_flight\""));
+        assert!(codes_json("unpack").contains("\"code\":\"download_in_flight\""));
     }
 
     /// A contract must not promise a code no code path in that tool produces.
@@ -563,7 +646,7 @@ mod tests {
                 );
             }
         }
-        assert!(!codes_json("stash").contains("\"code\":\"download_in_flight\""));
+        assert!(codes_json("stash").contains("\"code\":\"download_in_flight\""));
         // An unknown id is the same answer from every stash command that takes one.
         let stash = codes_json("stash");
         let unknown = stash
@@ -591,6 +674,25 @@ mod tests {
             r#"{"code":"internal_error","retry":"never"}"#
         );
         assert!(codes_json("unpack").contains("\"code\":\"insufficient_space\""));
+    }
+
+    /// Every refusal code can be built without a panic, and waiting never heals
+    /// a journal problem: the bad key, the damaged record and the failed write.
+    #[test]
+    fn every_code_builds_and_journal_problems_are_not_later() {
+        for code in Code::REFUSAL_CODES {
+            let reason = Reason::of(*code);
+            assert!(reason.json().contains(reason.name()));
+        }
+        for code in [
+            Code::JournalUnreadable,
+            Code::JournalKeyUnavailable,
+            Code::JournalWriteFailed,
+        ] {
+            let json = Reason::of(code).json();
+            assert!(json.contains(r#""retry":"after_change""#), "{json}");
+            assert!(json.contains(r#""subject":{"kind":"journal"}"#), "{json}");
+        }
     }
 
     #[test]

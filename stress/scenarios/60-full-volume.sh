@@ -86,7 +86,7 @@ assert_eq "$BEFORE" "$AFTER" "full volume: no file vanished from a refused apply
 # is nothing to undo (0 moved), or undo can reverse what did happen.
 UNDO_OUT=$("$SWEEP" undo 2>&1)
 UNDO_CODE=$?
-if echo "$UNDO_OUT" | grep -qi "no storage space\|read-only\|permission denied"; then
+if echo "$UNDO_OUT" | grep -qi "no storage space\|disk is full\|read-only\|permission denied"; then
   # Undo itself may be unable to write to a still-full disk. That is a
   # separate, honest failure (see 60-undo-progress-loss.sh) -- the property
   # under test here is narrower: did apply *itself* leave a state undo

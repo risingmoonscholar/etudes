@@ -373,7 +373,7 @@ class Probe:
             # Existing file at the restore path must survive the attempted undo.
             collision = tree / names[0]
             collision.write_bytes(b"occupied restore path")
-            self.run("undo", tree, codes=(0, 2))
+            self.run("undo", tree, codes=(0, 3))
             require(collision.read_bytes() == b"occupied restore path", "undo overwrote a file")
             require((tree / "Screenshots" / names[0]).exists(), "collision deleted held payload")
             collision.unlink()
@@ -397,7 +397,7 @@ class Probe:
             require(snapshot(tree) == held, "early pop moved files")
             collision = tree / names[0]
             collision.write_bytes(b"occupied restore path")
-            self.run("pop", tree, codes=(0, 2))
+            self.run("pop", tree, codes=(3,))
             require(collision.read_bytes() == b"occupied restore path", "pop overwrote a file")
             require((holding[0] / names[0]).exists(), "collision deleted held payload")
             collision.unlink()
@@ -542,9 +542,9 @@ class Probe:
             archive = self.directory / ("unsupported" + suffix)
             archive.write_bytes(b"not a supported format")
             before = snapshot(self.directory)
-            output = self.run(archive, codes=(2,) if suffix == ".dmg" else (3,))
+            output = self.run(archive, codes=(2,))
             text = output.stderr.decode()
-            require("refused" in text if suffix == ".dmg" else "unsupported archive format" in text,
+            require("refused" in text if suffix == ".dmg" else "is not supported" in text,
                     f"{suffix} was not named unsupported")
             require(snapshot(self.directory) == before, "unsupported format had filesystem effects")
 
@@ -594,6 +594,29 @@ def garbage_journal(probe):
     return probe.run("status", "--id", "unreadable", "--json", codes=(3,))
 
 
+def bad_key(probe):
+    """A supplied key that is not 64 hex digits gets one answer from every command."""
+    tree = screenshots(probe.directory / "tree")
+    arguments = ("apply", tree, "--yes", "--since", "0") if probe.tool == "sweep" else (tree,)
+    return probe.run(*arguments, "--json", codes=(2,),
+                     environment={**probe.environment, "ETUDE_JOURNAL_KEY": "not-a-key"})
+
+
+def journal_store_is_a_file(probe):
+    """The journal cannot be written, so nothing moves. It is not called unreadable."""
+    tree = screenshots(probe.directory / "tree")
+    before = snapshot(tree)
+    blocked = probe.directory / "state-file"
+    blocked.write_bytes(b"synthetic file where the journal store belongs")
+    arguments = ("apply", tree, "--yes", "--since", "0") if probe.tool == "sweep" else (tree,)
+    result = probe.run(*arguments, "--json", codes=(3,),
+                       environment={**probe.environment, "ETUDE_STATE_DIR": str(blocked)})
+    require(snapshot(tree) == before, "a failed journal write moved or left something")
+    require(json.loads(result.stdout)["status"] == "refused",
+            "a failed journal write that moved nothing is not refused")
+    return result
+
+
 def restore_into_read_only_folder(probe):
     """A journalled move, then a restore the folder's mode refuses. The restore
     stops part-way; afterwards the same command finishes it."""
@@ -615,8 +638,8 @@ def restore_into_read_only_folder(probe):
 
 def restore_onto_occupied_path(probe):
     """A journalled move, then a restore whose original path is now occupied.
-    The occupying file is kept, the held file stays held, the command still
-    exits 0, and the result must say the restore is not finished."""
+    The occupying file is kept, the held file stays held, and the result must
+    say the restore is not finished, with exit 3."""
     tree = screenshots(probe.directory / "tree")
     before = snapshot(tree)
     name = "Screenshot 2025-01-01 at 1.00.00 PM.png"
@@ -624,7 +647,7 @@ def restore_onto_occupied_path(probe):
     back = "undo" if probe.tool == "sweep" else "pop"
     probe.run(*move, "--json")
     (tree / name).write_bytes(b"occupied restore path")
-    result = probe.run(back, tree, "--json")
+    result = probe.run(back, tree, "--json", codes=(3,))
     require(json.loads(result.stdout)["status"] == "incomplete",
             "a restore that left a file behind is not reported as incomplete")
     require((tree / name).read_bytes() == b"occupied restore path", "a restore overwrote a file")
@@ -637,16 +660,16 @@ def restore_onto_occupied_path(probe):
 
 
 def sweep_unreadable_scan(probe):
-    """A folder the scan cannot read yields a partial plan, not a finished one."""
+    """A folder the scan cannot read at all is an error, not a plan with nothing in it."""
     needs_denied_permissions()
     tree = screenshots(probe.directory / "tree")
     tree.chmod(0)
     try:
-        result = probe.run(tree, "--json", codes=(1,))
+        result = probe.run(tree, "--json", codes=(3,))
     finally:
         tree.chmod(0o700)
-    require(json.loads(result.stdout)["status"] == "incomplete",
-            "a scan that could not read its folder is not reported as incomplete")
+    require(json.loads(result.stdout)["status"] == "error",
+            "a scan that could not read its folder is not reported as an error")
     return result
 
 
@@ -734,14 +757,42 @@ def sweep_destination_exists(probe):
 
 
 def sweep_profile_missing(probe):
+    tree = screenshots(probe.directory / "tree")
+    return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
+
+
+def sweep_profile_invalid(probe):
     (probe.state / "sweep-existing-profile.toml").write_text(
         'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Folder That Is Absent"\n')
     tree = screenshots(probe.directory / "tree")
     return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
 
 
-def sweep_download_in_flight(probe):
+def export_onto_a_file(probe):
+    """A plan is never written over a file that is already there."""
+    tree = screenshots(probe.directory / "tree")
+    taken = probe.directory / "taken"
+    taken.write_bytes(b"synthetic file already at the plan's path")
+    scan = (tree, "--since", "0") if probe.tool == "sweep" else (tree,)
+    result = probe.run(*scan, "--export-plan", taken, "--json", codes=(2,))
+    require(taken.read_bytes() == b"synthetic file already at the plan's path",
+            "a refused export overwrote a file")
+    return result
+
+
+def download_in_flight(probe):
     return probe.run(screenshots(probe.directory / "film.mp4.download"), "--json", codes=(2,))
+
+
+def stash_unknown_item(probe):
+    """An item id the stash does not hold is a mistake to fix, not nothing to do."""
+    tree = screenshots(probe.directory / "tree")
+    before = snapshot(tree)
+    stashed = json.loads(probe.run(tree, "--json").stdout)["details"]["stash_id"]
+    result = probe.run("pop", "--id", stashed, "--item", "item-absent", "--json", codes=(2,))
+    probe.run("pop", "--id", stashed, "--json")
+    require(snapshot(tree) == before, "a refused item pop changed what the stash restored")
+    return result
 
 
 def sweep_unsafe_input(probe):
@@ -763,7 +814,7 @@ def sweep_permission_denied(probe):
     locked.chmod(0o500)
     try:
         return probe.run(screenshots(probe.directory / "tree"), "--since", "0",
-                         "--export-plan", locked / "plan.json", "--json", codes=(2,))
+                         "--export-plan", locked / "plan.json", "--json", codes=(3,))
     finally:
         locked.chmod(0o700)
 
@@ -794,7 +845,7 @@ def unpack_unsupported_format(probe):
     return probe.run(archive, "--json", codes=(2,))
 
 
-def unpack_insufficient_space(probe):
+def unpack_size_limit_exceeded(probe):
     result = probe.run(unpack_archive(probe), "--max-size", "10", "--json", codes=(2,))
     require(not (probe.directory / "payload").exists(), "a refused extraction published a destination")
     return result
@@ -825,7 +876,21 @@ def unpack_permission_denied(probe):
         locked.chmod(0o700)
 
 
-def unpack_operation_incomplete(probe):
+def unpack_archive_unreadable(probe):
+    archive = probe.directory / "damaged.zip"
+    archive.write_bytes(b"not a zip at all")
+    result = probe.run(archive, "--json", codes=(3,))
+    require(not (probe.directory / "damaged").exists(), "an unreadable archive made a destination")
+    return result
+
+
+def unpack_download_in_flight(probe):
+    archive = probe.directory / "payload.zip.part"
+    archive.write_bytes(b"half a download")
+    return probe.run(archive, "--json", codes=(2,))
+
+
+def unpack_extraction_stopped(probe):
     """Stop a real extraction with SIGTERM once its private staging tree exists.
     An extraction that finishes first is a missed window, not a failure."""
     archive = zip_archive(probe.directory / "large.zip",
@@ -864,14 +929,18 @@ CODE_PROBES = {
     "sweep": {
         "invalid_arguments": lambda p: p.run("apply", screenshots(p.directory / "tree"), "--json", codes=(2,)),
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
-        "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
+        "missing_input": (lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
+                          sweep_propose_folder_absent),
         "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
-        "destination_exists": (sweep_destination_exists, sweep_propose_name_taken),
+        "destination_exists": (sweep_destination_exists, sweep_propose_name_taken, export_onto_a_file),
         "destination_outside_root": sweep_propose_outside_root,
         "plan_stale": (stale_plan, sweep_propose_other_plan),
-        "profile_missing": (sweep_profile_missing, sweep_propose_folder_absent),
-        "download_in_flight": sweep_download_in_flight,
+        "profile_missing": sweep_profile_missing,
+        "profile_invalid": sweep_profile_invalid,
+        "download_in_flight": download_in_flight,
         "journal_unreadable": garbage_journal,
+        "journal_key_unavailable": bad_key,
+        "journal_write_failed": journal_store_is_a_file,
         "unknown_operation": lambda p: p.run("status", "--id", "absent", "--json", codes=(1,)),
         "unknown_item": sweep_unknown_item,
         "item_assigned_twice": sweep_item_assigned_twice,
@@ -884,9 +953,14 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
         "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
+        "download_in_flight": download_in_flight,
+        "unknown_item": stash_unknown_item,
+        "destination_exists": export_onto_a_file,
         "plan_stale": stale_plan,
         "not_due_yet": stash_not_due_yet,
         "journal_unreadable": garbage_journal,
+        "journal_key_unavailable": bad_key,
+        "journal_write_failed": journal_store_is_a_file,
         "unknown_operation": tuple(
             (lambda p, command=command: p.run(command, "--id", "absent", "--json", codes=(1,)))
             for command in ("status", "pop", "inspect")),
@@ -900,11 +974,13 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent.zip", "--json", codes=(3,)),
         "unsupported_format": unpack_unsupported_format,
-        "insufficient_space": unpack_insufficient_space,
+        "size_limit_exceeded": unpack_size_limit_exceeded,
+        "archive_unreadable": unpack_archive_unreadable,
+        "download_in_flight": unpack_download_in_flight,
         "destination_exists": unpack_destination_exists,
         "unsafe_input": unpack_unsafe_input,
         "permission_denied": unpack_permission_denied,
-        "operation_incomplete": unpack_operation_incomplete,
+        "extraction_stopped": unpack_extraction_stopped,
     },
 }
 
@@ -913,9 +989,8 @@ CODE_PROBES = {
 # are reported by name on every run. An entry here is a gap, never a pass.
 NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
-    "journal_key_unavailable": "needs the login keychain; every probe supplies a throwaway key",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
-    "destination_exists": "needs a destination to appear inside {tool}'s private holding folder mid-move",
+    "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash) and 109 (unpack) fill a disk image to prove it",
 }
 
 

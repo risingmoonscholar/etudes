@@ -18,7 +18,7 @@
   "30-concurrent-applies": 5,
   "30-graceful-signal-mid-apply": 0,
   "30-interrupted-stash-pop": 0,
-  "30-journal-supplied-key": 227,
+  "30-journal-supplied-key": 237,
   "30-journal-truncation": 24,
   "30-kill-mid-undo": 0,
   "30-same-root-contention": 55,
@@ -65,5 +65,11 @@
   "95-journal-append-failure": 12,
   "96-unpack-large-tar-renames": 11,
   "97-unpack-killed-leaves-no-copy": 16,
-  "98-unpack-parallel-zip": 1
+  "98-unpack-parallel-zip": 1,
+  "105-permission-denied-messages": 48,
+  "106-failure-steps-are-true": 235,
+  "107-sweep-and-plan-messages": 509,
+  "108-stash-messages": 560,
+  "109-unpack-messages": 668,
+  "110-final-message-consistency": 438
 }

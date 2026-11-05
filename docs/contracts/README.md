@@ -68,6 +68,24 @@ Each format domain includes a named unsupported list and an `unlisted:
 unavailable. Archive support is still subject to member safety gates, extractor
 availability and the monitored soft size budget. The supported platform is macOS.
 
+Stash's `home_folder` says it refuses the caller's home folder unless the named
+flag is passed.
+
+`profile_missing` means no saved profile exists; `profile_invalid` means one
+exists and cannot be used. `insufficient_space` and `destination_exists` now also
+cover a full disk and an occupied `--export-plan` path in `sweep` and `stash`.
+`sweep status` adds `counts.not_as_left` and `damaged`.
+
+A missing folder is exit 3 with `missing_input` on `sweep status PATH`, `stash
+status PATH` and `stash pop PATH`. A scan whose plan is blocked by a file holding a
+group folder's name adds `details.blocked_folders` and stays exit 0.
+
+Stash also returns `download_in_flight` for a folder still downloading and
+`unknown_item` for an item id its stash does not hold. `stash pop` exits 3 with
+`operation_incomplete` when any item is left behind, and its details add
+`skipped_occupied`. `stash status --all` lists the stashes that open and adds
+`unreadable`, the ids of those that do not.
+
 The declarations do not enforce an OS sandbox. Network policy is `none`, runtime
 enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.
@@ -76,7 +94,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v11/sweep.json`, `v10/stash.json` and `v6/unpack.json` are the
+later declaration: `v12/sweep.json`, `v11/stash.json` and `v7/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation

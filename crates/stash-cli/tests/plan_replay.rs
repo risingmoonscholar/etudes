@@ -88,7 +88,7 @@ fn stash_rejects_a_changed_tree_instead_of_stashing_a_fresh_plan() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(String::from_utf8_lossy(&out.stderr).contains("replan required"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("changed since this plan was made"));
     assert_eq!(std::fs::read_dir(&f.root).unwrap().count(), 4);
     assert!(!f.base.join("state").exists());
 }

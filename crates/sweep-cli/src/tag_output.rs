@@ -22,8 +22,8 @@ fn banner(p: &Plan, read_contents: bool) {
         "filesystem and Finder organization metadata  ·  no contents read to decide"
     };
     println!(
-        "\nScanned {} items  ·  {basis}  ·  sweep {}\n",
-        p.scanned,
+        "\nScanned {}  ·  {basis}  ·  sweep {}\n",
+        etude_cli_support::counted(p.scanned, "item", "items"),
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -141,8 +141,8 @@ pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
 /// A tag plan that tags no file.
 pub fn nothing_to_tag(p: &Plan) {
     println!(
-        "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
-        p.scanned,
+        "\nScanned {}  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
+        etude_cli_support::counted(p.scanned, "item", "items"),
         env!("CARGO_PKG_VERSION")
     );
     super::print_refused_by_policy_note(p);
@@ -154,7 +154,7 @@ pub fn nothing_to_tag(p: &Plan) {
 }
 
 /// Report a tag apply that ran to the end, and pick its exit.
-pub fn finish_apply(r: &ApplyReport, binding: &str) -> ExitCode {
+pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
     use etude_cli_support::envelope;
     envelope::effect("items_tagged", r.tagged);
     envelope::detail(j::obj(&[
@@ -216,7 +216,7 @@ pub fn finish_apply(r: &ApplyReport, binding: &str) -> ExitCode {
     if r.tagged > 0 {
         match &r.journal_path {
             Some(path) => {
-                println!("Undo with: sweep undo");
+                println!("Undo with: {undo}");
                 println!("Encrypted journal: {}", path.display());
             }
             None => println!("No journal was written. This cannot be undone."),

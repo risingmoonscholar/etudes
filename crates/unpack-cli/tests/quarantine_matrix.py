@@ -77,7 +77,7 @@ def unpack(root,binary,destination_root):
  refused_dest=root/'refused'
  result=subprocess.run([str(binary),str(archive),'--into',str(refused_dest),'--json'],capture_output=True,text=True)
  assert result.returncode==2 and json.loads(result.stdout)['status']=='refused',result.stderr
- assert 'preserve archive quarantine' in result.stderr,'refusal did not exercise attribute preservation'
+ assert 'download warning mark' in result.stderr,'refusal did not exercise attribute preservation'
  assert not refused_dest.exists() and not list(root.glob('.refused.unpack-*.partial')),'failed preservation published or left staging'
  print('unreadable attribute target: refused, no destination, staging removed',flush=True)
  # A deliberately broken counterpart loses the mark on a bare gzip; the same check rejects it.

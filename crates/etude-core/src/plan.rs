@@ -128,7 +128,9 @@ impl Signal {
                 e.dedup();
                 format!(".{}", e.join(", ."))
             }
+            Signal::Collected { count: 1 } => "1 item".to_string(),
             Signal::Collected { count } => format!("{count} items"),
+            Signal::Proposed { count: 1 } => "1 item placed by a proposal".to_string(),
             Signal::Proposed { count } => format!("{count} items placed by a proposal"),
             Signal::Tagged { ext, new, .. } => {
                 if *new {
@@ -1379,6 +1381,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_plan_fault_survives_inside_an_io_error() {
+        let error = std::io::Error::from(PlanFault::NotAPlan);
+        assert_eq!(PlanFault::of(&error), Some(PlanFault::NotAPlan));
+        assert_eq!(
+            PlanFault::of(&std::io::Error::other("something else")),
+            None
+        );
+        assert_eq!(PlanFault::of(&std::io::Error::from_raw_os_error(2)), None);
+    }
+
+    #[test]
     fn decision_classes_are_declared_from_user_choice_to_builtin_grouping() {
         assert_eq!(
             DECISION_PRECEDENCE,
@@ -1745,6 +1758,61 @@ impl BindingContext {
     }
 }
 
+/// Which plan fault an error holds, so a command can name the real cause and
+/// the code that fits it. The text is for logs; a person reads what the command
+/// prints from this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanFault {
+    /// `--plan-digest` is not 64 hex digits.
+    DigestArgument,
+    /// The path is a folder or another object that is not a file.
+    NotAFile,
+    /// The file is empty, too large, or does not start like an exported plan.
+    NotAPlan,
+    /// The file and the digest do not match.
+    DigestMismatch,
+    /// The plan came from another tool version, profile or contract.
+    ToolChanged,
+    /// The folder is not what the plan observed.
+    TreeChanged,
+    /// A plan may not be saved inside the folder it describes.
+    ExportInsideTree,
+    /// `--export-plan` named no file, such as `..`.
+    ExportNoName,
+}
+
+impl std::fmt::Display for PlanFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::DigestArgument => "a 64-digit SHA256 plan digest is required",
+            Self::NotAFile => "plan input must be a regular file",
+            Self::NotAPlan => "plan input is not an exported plan",
+            Self::DigestMismatch => "exported plan digest differs; replan required",
+            Self::ToolChanged => {
+                "plan tool version, profile or observation contract changed; replan required"
+            }
+            Self::TreeChanged => "planned tree changed; replan required",
+            Self::ExportInsideTree => "plan export must be outside the observed tree",
+            Self::ExportNoName => "plan export needs a filename",
+        })
+    }
+}
+
+impl std::error::Error for PlanFault {}
+
+impl PlanFault {
+    /// The fault this error carries, if it is one.
+    pub fn of(error: &std::io::Error) -> Option<Self> {
+        error.get_ref()?.downcast_ref::<Self>().copied()
+    }
+}
+
+impl From<PlanFault> for std::io::Error {
+    fn from(fault: PlanFault) -> Self {
+        Self::other(fault)
+    }
+}
+
 #[derive(Debug)]
 pub struct BoundPlan {
     pub plan: Plan,
@@ -1783,7 +1851,9 @@ impl BoundPlan {
 
     fn bind(plan: Plan, context: BindingContext, live: bool) -> std::io::Result<Self> {
         let snapshot = plan.observations.clone().ok_or_else(|| {
-            std::io::Error::other("plan has incomplete observations; replan required")
+            std::io::Error::other(
+                "the folder could not be read completely, so no plan was saved; run the scan again",
+            )
         })?;
         let allowed_sources = plan
             .groups
@@ -1895,9 +1965,7 @@ impl BoundPlan {
 
     pub fn validate(&self, expected: &BindingContext) -> std::io::Result<()> {
         if &self.context != expected {
-            return Err(std::io::Error::other(
-                "plan tool version, profile or observation contract changed; replan required",
-            ));
+            return Err(PlanFault::ToolChanged.into());
         }
         self.check_members()?;
         if self.digest != codec::digest(&codec::encode(&self.plan, &self.snapshot, &self.context)?)
@@ -1907,7 +1975,7 @@ impl BoundPlan {
             ));
         }
         self.validate_observations()
-            .map_err(|_| std::io::Error::other("planned tree changed; replan required"))
+            .map_err(|_| PlanFault::TreeChanged.into())
     }
 
     pub fn binding_json(&self) -> String {
@@ -1931,7 +1999,9 @@ impl BoundPlan {
     pub fn export(&self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
         self.validate(&self.context)?;
-        self.snapshot.validate()?;
+        self.snapshot
+            .validate()
+            .map_err(|_| std::io::Error::from(PlanFault::TreeChanged))?;
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -1939,12 +2009,10 @@ impl BoundPlan {
             .canonicalize()?;
         let target = parent.join(
             path.file_name()
-                .ok_or_else(|| std::io::Error::other("plan export needs a filename"))?,
+                .ok_or_else(|| std::io::Error::from(PlanFault::ExportNoName))?,
         );
         if target.starts_with(&self.snapshot.root) {
-            return Err(std::io::Error::other(
-                "plan export must be outside the observed tree",
-            ));
+            return Err(PlanFault::ExportInsideTree.into());
         }
         let payload = codec::encode(&self.plan, &self.snapshot, &self.context)?;
         let mut options = std::fs::OpenOptions::new();
@@ -1978,9 +2046,7 @@ impl BoundPlan {
     pub fn load(path: &std::path::Path, expected_digest: &str) -> std::io::Result<Self> {
         use std::io::Read;
         if expected_digest.len() != 64 || !expected_digest.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(std::io::Error::other(
-                "a 64-digit SHA256 plan digest is required",
-            ));
+            return Err(PlanFault::DigestArgument.into());
         }
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
@@ -1996,23 +2062,22 @@ impl BoundPlan {
         }
         let file = crate::scan::observe_read("plan_file_open", options.open(path))?;
         if !file.metadata()?.is_file() {
-            return Err(std::io::Error::other("plan input must be a regular file"));
+            return Err(PlanFault::NotAFile.into());
         }
         let mut bytes = Vec::new();
         crate::scan::observe_read(
             "plan_file_bytes",
             file.take(MAX_PLAN_BYTES + 65).read_to_end(&mut bytes),
         )?;
-        if bytes.len() < 64 || bytes.len() as u64 > MAX_PLAN_BYTES + 64 {
-            return Err(std::io::Error::other(
-                "plan input exceeds its bounded format",
-            ));
+        if bytes.len() < 64
+            || bytes.len() as u64 > MAX_PLAN_BYTES + 64
+            || !codec::looks_like_plan(&bytes)
+        {
+            return Err(PlanFault::NotAPlan.into());
         }
         let checksum = bytes.split_off(bytes.len() - 64);
         if checksum != expected_digest.as_bytes() || codec::digest(&bytes) != expected_digest {
-            return Err(std::io::Error::other(
-                "exported plan digest differs; replan required",
-            ));
+            return Err(PlanFault::DigestMismatch.into());
         }
         let (plan, snapshot, context) = codec::decode(&bytes)?;
         let allowed_sources = plan

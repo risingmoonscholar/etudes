@@ -6,6 +6,8 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
 
@@ -164,25 +166,49 @@ fn review_with_only_held_back_files_explains_why_it_cannot_organise_them() {
     );
 }
 
+// Uses the macOS form of script(1) to give review a real terminal.
+#[cfg(target_os = "macos")]
 #[test]
 fn review_with_groups_discloses_held_back_files_before_reviewing() {
     let root = fixture("review-mixed", true);
 
-    // In an integration test stdin is not a terminal, so review stops at its
-    // terminal guard. Reaching that guard proves the groups-present branch
-    // ran; the disclosure must already be in stdout before interactivity.
+    // With no terminal, review prints only its refusal: a disclosure there
+    // would read as a review starting.
     let out = sweep_bin()
         .arg("review")
         .arg(&root.0)
         .args(["--depth", "2"])
         .output()
         .unwrap();
-    let text = stdout(&out);
-
     assert!(
         stderr(&out).contains("review needs a terminal"),
         "the groups-present review branch did not run: {}",
         stderr(&out)
     );
+    assert_eq!(stdout(&out), "", "only the refusal");
+
+    // In a terminal the disclosure comes before the first question. `script`
+    // gives review one, and its empty stdin quits at that question.
+    let sweep = sweep_bin();
+    let mut terminal = Command::new("/usr/bin/script");
+    terminal
+        .args(["-q", "/dev/null"])
+        .arg(sweep.get_program())
+        .arg("review")
+        .arg(&root.0)
+        .args(["--depth", "2"])
+        .stdin(Stdio::null());
+    for (name, value) in sweep.get_envs() {
+        match value {
+            Some(value) => terminal.env(name, value),
+            None => terminal.env_remove(name),
+        };
+    }
+    let text = stdout(&terminal.output().unwrap());
     assert_mixed_disclosure(&text);
+    let question = text.find("[a]ccept").expect("review asked nothing");
+    assert!(
+        text.find("left alone").unwrap() < question,
+        "the disclosure must come before the first question: {text}"
+    );
 }

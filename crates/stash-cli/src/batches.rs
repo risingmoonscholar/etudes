@@ -120,20 +120,45 @@ pub fn live(journal: &Journal) -> bool {
     !super::journal_is_fully_undone(journal)
 }
 pub fn inventory(sealer: &dyn Sealer) -> Result<Vec<Journal>, JournalError> {
+    let (live, mut unreadable) = survey(sealer)?;
+    match unreadable.pop() {
+        Some(record) => Err(record.error),
+        None => Ok(live),
+    }
+}
+/// A saved record that could not be opened or does not make sense.
+pub struct Unreadable {
+    pub id: String,
+    pub error: JournalError,
+}
+/// Every live batch that opens, and every record that does not. One bad record
+/// must not hide the others: their ids are the way past it.
+pub fn survey(sealer: &dyn Sealer) -> Result<(Vec<Journal>, Vec<Unreadable>), JournalError> {
     let candidates = match journal::candidates_unordered("stash") {
         Ok(value) => value,
-        Err(JournalError::NotFound) => return Ok(vec![]),
+        Err(JournalError::NotFound) => return Ok((vec![], vec![])),
         Err(error) => return Err(error),
     };
-    let mut output = Vec::new();
+    let (mut output, mut unreadable) = (Vec::new(), Vec::new());
     for candidate in candidates {
-        let journal = candidate.load("stash", sealer)?;
-        if live(&journal) {
-            holding(&journal)?;
-            output.push(journal);
+        let opened = candidate.load("stash", sealer).and_then(|journal| {
+            if live(&journal) {
+                holding(&journal)?;
+                Ok(Some(journal))
+            } else {
+                Ok(None)
+            }
+        });
+        match opened {
+            Ok(Some(journal)) => output.push(journal),
+            Ok(None) => {}
+            Err(error) => unreadable.push(Unreadable {
+                id: candidate.id.clone(),
+                error,
+            }),
         }
     }
-    Ok(output)
+    Ok((output, unreadable))
 }
 /// What `select` reports when a folder pop matches more than one live batch.
 pub const AMBIGUOUS: &str = "multiple live batches match; use an id or --latest";
@@ -169,7 +194,15 @@ pub fn select(selector: Selector, sealer: &dyn Sealer) -> Result<Option<Journal>
     let root = match path {
         Some(path) => match path.canonicalize() {
             Ok(path) => Some(path),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            // A path that runs through a file names nothing either.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(None);
+            }
             Err(error) => return Err(JournalError::Io(error)),
         },
         None => None,

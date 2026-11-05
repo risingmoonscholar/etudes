@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 6,
+    "schema_version": 7,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -136,6 +136,16 @@
         "why": "The destination is occupied; choose or make a vacant destination before retrying."
       },
       {
+        "code": "download_in_flight",
+        "retry": "later",
+        "subject_kind": "download_in_flight",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
         "code": "unsafe_input",
         "retry": "after_change",
         "subject_kind": "input",
@@ -155,13 +165,32 @@
         "why": "The request lacks required access; change the relevant permissions before retrying."
       },
       {
-        "code": "operation_incomplete",
+        "code": "archive_unreadable",
         "retry": "after_change",
-        "subject_kind": "journal",
+        "subject_kind": "input",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The archive is damaged, incomplete or not the format its name says; obtain a good copy before retrying."
+      },
+      {
+        "code": "size_limit_exceeded",
+        "retry": "after_change",
+        "subject_kind": "input",
         "operations": [
           "extract"
         ],
-        "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+        "why": "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted."
+      },
+      {
+        "code": "extraction_stopped",
+        "retry": "later",
+        "subject_kind": "input",
+        "operations": [
+          "extract"
+        ],
+        "why": "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names."
       }
     ],
     "contract_query": {

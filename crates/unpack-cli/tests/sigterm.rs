@@ -336,7 +336,7 @@ fn sigterm_stops_extractor_cleans_staging_and_reports_final_result() {
         "final result does not name SIGTERM: {stderr}"
     );
     assert!(
-        stderr.contains("Nothing was left behind") || stderr.contains("staging remains"),
+        stderr.contains("Nothing was left behind") || stderr.contains("partial extraction remains"),
         "cleanup result missing: {stderr}"
     );
     assert!(!dest.exists(), "destination was published after SIGTERM");

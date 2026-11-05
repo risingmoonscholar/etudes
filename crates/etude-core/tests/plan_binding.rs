@@ -713,3 +713,42 @@ fn destination_taken_after_the_plan_check_is_a_recorded_conflict() {
     });
     assert_recorded_conflict(failure);
 }
+
+/// The contender makes the group folder after this attempt saved its journal.
+/// Nothing moved, so that same journal must read refused, with nothing to undo.
+#[cfg(unix)]
+#[test]
+fn group_folder_made_after_the_journal_is_a_recorded_conflict() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-late-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let fixture = Fixture::new();
+    let out = scan::scan(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let mut hook = |_: usize, root: &std::path::Path| {
+        std::fs::create_dir(root.join(&bound.groups[0].name)).unwrap();
+    };
+    let failure = apply::apply_bound_with_faults_for_tests(
+        &bound,
+        &Fixture::context(),
+        Some(&TagSeal),
+        apply::ApplyFaults {
+            after_journal: Some(&mut hook),
+            ..Default::default()
+        },
+    )
+    .expect_err("the beaten apply must not succeed");
+    assert_eq!(failure.moved, 0);
+    assert_recorded_conflict(failure);
+}

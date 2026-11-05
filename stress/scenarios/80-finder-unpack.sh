@@ -138,7 +138,7 @@ for archive in archives:
                 capture_output=True, text=True, timeout=30,
             )
             require(result.returncode == 2, "soft-limit refusal exits 2")
-            match = re.search(r"(\d+) bytes measured after stopping;\s+limit (\d+) bytes; overshoot (\d+) bytes", result.stderr)
+            match = re.search(r"wrote (\d+) bytes?.*?the limit is (\d+) bytes?.*?went (\d+) bytes?", result.stderr)
             require(match is not None, "soft-limit refusal reports exact final total, budget and overshoot")
             total, reported_budget, overshoot = map(int, match.groups())
             require(budget < total <= size and reported_budget == budget and overshoot == total - budget,
@@ -202,8 +202,8 @@ def transaction(tag, injected=None):
     if injected:
         require(process.returncode == 2, "post-extraction audit refuses the injected " + injected)
         kind = "symlink" if injected == "symlink" else "special member"
-        expected = (f"unpack: staging audit failed ({kind} at {injected_path.parent}/<name.txt>); "
-                    "destination was not published. Nothing was left behind.\n")
+        expected = (f"unpack: the extracted files failed a safety check ({kind} at {injected_path.parent}/<name.txt>). "
+                    f"Nothing was placed at {dest}. Nothing was left behind.\n")
         require(stderr == expected,
                 "audit diagnostic gives the exact staging path, member type, redacted name and cleanup result: " + repr(stderr))
         require(not dest.exists() and not leftovers(dest) and "Nothing was left behind." in stderr,

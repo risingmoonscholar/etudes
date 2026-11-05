@@ -26,6 +26,16 @@ use crate::journal::{
 };
 use crate::plan::{BindingContext, BoundPlan, Plan};
 
+const COPY_MISMATCH: &str = "cross-device copy size mismatch";
+
+/// A copy to another disk came out a different size from the original. The
+/// original is kept when this happens.
+pub fn is_copy_mismatch(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.to_string() == COPY_MISMATCH)
+}
+
 #[derive(Debug)]
 pub enum ApplyError {
     Io(io::Error),
@@ -33,6 +43,8 @@ pub enum ApplyError {
     DestinationExists(PathBuf),
     DestinationCollision(PathBuf),
     DestinationIsSynced(PathBuf),
+    /// A file sits where a destination folder has to be made.
+    DestinationBlocked(PathBuf),
     /// A folder was replaced or ceased to be a real directory after planning.
     DestinationDirectoryChanged(PathBuf),
     /// The OS could not tell us a filename's normalized form, so whether two
@@ -53,6 +65,10 @@ pub enum ApplyError {
 pub struct ApplyFailure {
     pub error: ApplyError,
     pub durable_journal_id: Option<String>,
+    /// Items that had left their original place, or files that had a tag
+    /// written, when the apply stopped. Zero means the folder is as it was: any
+    /// empty folder this attempt made has been removed again.
+    pub moved: usize,
 }
 
 impl std::fmt::Display for ApplyError {
@@ -96,6 +112,11 @@ impl std::fmt::Display for ApplyError {
             ApplyError::DestinationCollision(p) => write!(
                 f,
                 "two files in this plan would move to the same destination: {}",
+                crate::redact::path(p)
+            ),
+            ApplyError::DestinationBlocked(p) => write!(
+                f,
+                "a file holds the name of a destination folder: {}",
                 crate::redact::path(p)
             ),
             ApplyError::DestinationDirectoryChanged(p) => write!(
@@ -195,6 +216,8 @@ pub type FaultHook<'a> = &'a mut dyn FnMut(usize, &Path);
 pub struct ApplyFaults<'a> {
     /// Runs after the plan check and before this attempt's journal exists.
     pub after_validate: Option<FaultHook<'a>>,
+    /// Runs after this attempt's journal is saved and before anything moves.
+    pub after_journal: Option<FaultHook<'a>>,
     /// Runs after the move-time tag check and immediately before the rename.
     pub before_rename: Option<FaultHook<'a>>,
     /// Runs after the rename and before the destination's tag is re-read.
@@ -393,8 +416,45 @@ fn apply_bound_with_faults(
             );
             Err(failure)
         }
+        // The contender made a group folder after this attempt's journal was
+        // saved. Nothing moved, so that journal must say refused, not interrupted.
+        Err(mut failure)
+            if failure.moved == 0
+                && failure.durable_journal_id.is_some()
+                && matches!(&failure.error, ApplyError::Io(error)
+                    if error.kind() == io::ErrorKind::AlreadyExists) =>
+        {
+            failure.error = refuse_saved_attempt(bound, context, sealer, &failure);
+            Err(failure)
+        }
         other => other,
     }
+}
+
+/// Empty an attempt's saved journal after a contender beat it before any move.
+fn refuse_saved_attempt(
+    bound: &BoundPlan,
+    context: &BindingContext,
+    sealer: Option<&dyn Sealer>,
+    failure: &ApplyFailure,
+) -> ApplyError {
+    if let (Some(sl), Some(id)) = (sealer, &failure.durable_journal_id) {
+        let journal = Journal {
+            id: id.clone(),
+            tool: context.tool.clone(),
+            root: bound.root.clone(),
+            entries: Vec::new(),
+            created_directories: Vec::new(),
+            validated_directories: Vec::new(),
+            progress_tail_damaged: false,
+        };
+        if let Err(error) = journal.save_sealed(sl) {
+            return ApplyError::Journal(error);
+        }
+    }
+    ApplyError::StalePlan(io::Error::other(
+        "conflict: a folder it needed appeared after the plan was made; no moves from this attempt, existing journals remain recoverable",
+    ))
 }
 
 /// Record a live attempt that a contender beat before it moved anything.
@@ -504,6 +564,7 @@ fn apply_plan_with_structured_progress(
         phase: ProgressPhase::Planning,
     };
     let mut durable_journal_id = None;
+    let mut created_directories = HashMap::new();
     let result = (|| {
         validate(&mut durable_journal_id)?;
         if let Some(hook) = faults.after_validate.as_mut() {
@@ -647,6 +708,9 @@ fn apply_plan_with_structured_progress(
             j.save_sealed(sl).map_err(ApplyError::Journal)?;
             durable_journal_id = Some(id.clone());
         }
+        if let Some(hook) = faults.after_journal.as_mut() {
+            hook(0, &plan.root);
+        }
 
         let mut progress_writer = sealer
             .map(|_| j.progress_writer())
@@ -658,7 +722,6 @@ fn apply_plan_with_structured_progress(
         let mut held_cross_volume = 0usize;
         let mut tagged_not_returned = 0usize;
         let mut hold_record_failed = 0usize;
-        let mut created_directories = HashMap::new();
         for i in 0..j.entries.len() {
             if fail_at == Some(i) {
                 return Err(ApplyError::Injected(i));
@@ -815,10 +878,58 @@ fn apply_plan_with_structured_progress(
         ProgressPhase::Error
     };
     progress(event);
+    let moved = event.completed;
+    if result.is_err() && moved == 0 {
+        remove_folders_of_a_failed_attempt(
+            plan,
+            tool,
+            durable_journal_id.as_deref(),
+            sealer,
+            &created_directories,
+        );
+    }
     result.map_err(|error| ApplyFailure {
         error,
         durable_journal_id,
+        moved,
     })
+}
+
+/// A failure that moved nothing leaves the folder as it found it, so that
+/// "nothing was moved, so there is nothing to undo" stays true. Only a folder
+/// this attempt made, still the same directory, still empty and not relied on by
+/// another live operation, is removed. Anything else stays where it is.
+fn remove_folders_of_a_failed_attempt(
+    plan: &Plan,
+    tool: &str,
+    own_journal: Option<&str>,
+    sealer: Option<&dyn Sealer>,
+    created: &HashMap<PathBuf, (u64, u64)>,
+) {
+    let attempt = Journal {
+        // Its own record must not count as another operation relying on the folder.
+        id: own_journal.unwrap_or_default().to_string(),
+        tool: tool.to_string(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+        created_directories: Vec::new(),
+        validated_directories: Vec::new(),
+        progress_tail_damaged: false,
+    };
+    let mut folders: Vec<_> = created.iter().collect();
+    folders.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+    for (path, (device, inode)) in folders {
+        let folder = CreatedDirectory {
+            path: path.clone(),
+            device: *device,
+            inode: *inode,
+        };
+        if created_directory_is_removable(&attempt, &folder)
+            && sealer.is_none_or(|sl| !created_directory_is_needed(&attempt, &folder, sl))
+        {
+            let _ = fs::remove_dir(path);
+        }
+    }
 }
 
 /// Apply a tag plan: add each tag to its files, in place.
@@ -948,6 +1059,8 @@ fn apply_tags(
             return Err(ineligible_member(error, &mut j, Some(sl)));
         }
         crate::tags::write(&path, &change.written).map_err(ApplyError::Io)?;
+        // Counted at once: a failed read-back below still leaves this file tagged.
+        event.completed = report.tagged + 1;
         let landed = crate::tags::read(&path)
             .map_err(ApplyError::Io)?
             .is_some_and(|now| now == change.written);
@@ -1063,9 +1176,7 @@ fn create_destination_dirs(
                 break;
             }
             Ok(_) => {
-                return Err(ApplyError::Io(io::Error::other(
-                    "destination parent is not a directory",
-                )));
+                return Err(ApplyError::DestinationBlocked(current));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(current.clone()),
             Err(error) => return Err(ApplyError::Io(error)),
@@ -1399,7 +1510,7 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
             let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
             if src_md.len() != dst_md.len() {
                 let _ = fs::remove_file(to);
-                return Err(io::Error::other("cross-device copy size mismatch"));
+                return Err(io::Error::other(COPY_MISMATCH));
             }
             crate::scan::verify_read("cross_device_bytes");
             fs::remove_file(from)?;
@@ -1425,7 +1536,7 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
     if src_md.len() != dst_md.len() {
         let _ = fs::remove_file(to);
-        return Err(io::Error::other("cross-device copy size mismatch"));
+        return Err(io::Error::other(COPY_MISMATCH));
     }
     crate::scan::verify_read("cross_device_bytes");
     #[cfg(test)]
@@ -1498,6 +1609,9 @@ pub struct UndoReport {
     pub reconciled: Vec<PathBuf>,
     /// Entries skipped because the file changed after apply. Never forced.
     pub skipped_changed: Vec<PathBuf>,
+    /// Entries left where apply put them because another file is at the
+    /// original place. The file itself did not change.
+    pub skipped_occupied: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
     pub skipped_missing: Vec<PathBuf>,
     /// Half-moves collapsed: a crash between the link and the unlink left one
@@ -1623,6 +1737,44 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
                 && e.from.symlink_metadata().is_err()
         })
         .count()
+}
+
+/// How many moved items are not as apply left them: the file is gone from its
+/// destination, its original place is taken, or its size or modified time
+/// differ. This asks the file system for metadata only and reads no contents,
+/// so `status` can report it. Tag entries write in place and are not counted.
+pub fn items_not_as_left(j: &Journal) -> usize {
+    j.entries
+        .iter()
+        .filter(|e| e.is_moved() && e.tag.is_none())
+        .filter(|e| match fs::symlink_metadata(&e.to) {
+            Err(_) => true,
+            Ok(metadata) => {
+                e.from.symlink_metadata().is_ok()
+                    || metadata.len() != e.size
+                    || metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .is_none_or(|time| time.as_secs() as i64 != e.mtime_secs)
+            }
+        })
+        .count()
+}
+
+/// The folders holding files a damaged record no longer lists as moved, so the
+/// person can find them. Each is a folder apply made or chose.
+pub fn unrecorded_move_folders(j: &Journal) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = j
+        .entries
+        .iter()
+        .filter(|e| e.tag.is_none() && e.state == EntryState::Planned)
+        .filter(|e| e.to.symlink_metadata().is_ok() && e.from.symlink_metadata().is_err())
+        .filter_map(|e| e.to.parent().map(Path::to_path_buf))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    folders
 }
 
 /// Whether a journal still needs undo, including unrecorded crash recovery.
@@ -2014,7 +2166,7 @@ fn undo_selected_with_progress(
             //
             // The crash case leaves `done` false and is handled above. This
             // stays a refusal.
-            r.skipped_changed.push(e.to.clone());
+            r.skipped_occupied.push(e.to.clone());
             advance!();
             continue;
         }
@@ -2118,8 +2270,12 @@ fn undo_tag_entry(
             return;
         }
         EntryState::Planned => {
-            // Equal bytes cannot distinguish apply from a later manual tag.
-            report.skipped_changed.push(entry.from.clone());
+            // Tags that still read as they did before were never written, so
+            // there is nothing to leave behind. Anything else may be apply's
+            // write: equal bytes cannot distinguish it from a later manual tag.
+            if !crate::tags::read(&entry.from).is_ok_and(|now| now == change.previous) {
+                report.skipped_changed.push(entry.from.clone());
+            }
             j.entries[index].state = EntryState::Reversed;
             if let Err(error) = j.record_undone(index, sealer) {
                 report.error = Some(ApplyError::Journal(error));
@@ -2349,6 +2505,17 @@ mod macos_unicode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_copy_mismatch_is_told_apart_from_other_failures() {
+        assert!(super::is_copy_mismatch(&std::io::Error::other(
+            super::COPY_MISMATCH
+        )));
+        assert!(!super::is_copy_mismatch(&std::io::Error::other("other")));
+        assert!(!super::is_copy_mismatch(
+            &std::io::Error::from_raw_os_error(28)
+        ));
+    }
+
     /// Two claims at once, because the fix for one could break the other.
     ///
     /// An io error must render what the OS said, not Rust's internal

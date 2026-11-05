@@ -51,7 +51,7 @@ fn a_missing_archive_exits_3_not_2() {
 }
 
 #[test]
-fn an_unrecognised_archive_type_exits_3_not_2() {
+fn an_unrecognised_archive_type_is_a_refusal_with_exit_2() {
     let root = std::env::temp_dir().join(format!(
         "unpack-exit-rar-{}-{}",
         std::process::id(),
@@ -75,8 +75,8 @@ fn an_unrecognised_archive_type_exits_3_not_2() {
         .unwrap();
     assert_eq!(
         out.status.code(),
-        Some(3),
-        "unrecognised type must be error 3, not refusal 2: {}",
+        Some(2),
+        "unrecognised type is a refusal, the same as .dmg: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let result = String::from_utf8_lossy(&out.stdout);

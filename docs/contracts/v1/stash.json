@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 10,
+    "schema_version": 11,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -114,6 +114,19 @@
         "why": "The requested input is absent or no longer available; choose an existing input."
       },
       {
+        "code": "insufficient_space",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "stash",
+          "pop",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input."
+      },
+      {
         "code": "internal_error",
         "retry": "never",
         "subject_kind": null,
@@ -143,7 +156,8 @@
         "subject_kind": "destination",
         "operations": [
           "stash",
-          "pop"
+          "pop",
+          "export_plan"
         ],
         "why": "The destination is occupied; choose or make a vacant destination before retrying."
       },
@@ -166,6 +180,15 @@
         "why": "The observed plan is stale; create a fresh plan before applying."
       },
       {
+        "code": "download_in_flight",
+        "retry": "later",
+        "subject_kind": "download_in_flight",
+        "operations": [
+          "stash"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
         "code": "not_due_yet",
         "retry": "later",
         "subject_kind": "journal",
@@ -176,7 +199,7 @@
       },
       {
         "code": "journal_unreadable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "stash",
@@ -185,11 +208,11 @@
           "inspect",
           "select"
         ],
-        "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
+        "why": "A saved journal cannot be read: wrong key, damaged, or denied. Waiting does not help; restore its key or access first."
       },
       {
         "code": "journal_key_unavailable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "stash",
@@ -198,7 +221,19 @@
           "inspect",
           "select"
         ],
-        "why": "The required journal key is unavailable and may become available later."
+        "why": "The journal key is unusable or cannot be reached; fix ETUDE_JOURNAL_KEY or unlock the login keychain."
+      },
+      {
+        "code": "journal_write_failed",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "stash",
+          "pop",
+          "select",
+          "apply_exported_plan"
+        ],
+        "why": "The journal could not be written; free space or fix the state directory before retrying."
       },
       {
         "code": "unknown_operation",
@@ -245,6 +280,15 @@
           "pop"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "unknown_item",
+        "retry": "never",
+        "subject_kind": "item",
+        "operations": [
+          "pop"
+        ],
+        "why": "The request names an item that is not in the plan or the stash it addresses; the same request cannot work."
       }
     ],
     "contract_query": {
@@ -468,6 +512,10 @@
       "limit_bytes": 67108864,
       "opaque_units": "bound_to_observed_metadata_not_unobserved_package_or_directory_contents",
       "concurrency": "metadata_preflight_not_an_os_filesystem_lock"
+    },
+    "home_folder": {
+      "policy": "refused_unless_flag",
+      "flag": "--allow-home"
     },
     "explicit_selection": {
       "command": "select",

@@ -71,15 +71,20 @@ fn prompt(input: &mut dyn BufRead, label: &str) -> io::Result<String> {
     Ok(line.trim().to_string())
 }
 
-/// Entry point used by the CLI: requires a terminal, reads real stdin.
-pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
-    if !io::stdin().is_terminal() {
-        eprintln!(
-            "sweep: review needs a terminal. Use `sweep apply PATH --yes`\n\
-             or `--only NAME` when running non-interactively."
-        );
-        return Ok(Outcome::Cancelled);
+/// Refuse a review that nobody can answer. True means it was refused.
+pub fn refuse_without_terminal() -> bool {
+    if io::stdin().is_terminal() {
+        return false;
     }
+    eprintln!(
+        "sweep: review needs a terminal. Use `sweep apply PATH --yes`\n\
+         or `--only NAME` when running non-interactively."
+    );
+    true
+}
+
+/// Entry point used by the CLI: reads real stdin, which the caller has checked.
+pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
     let stdin = io::stdin();
     let mut locked = stdin.lock();
     run_with(plan, &mut locked)
@@ -90,8 +95,8 @@ pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
 /// demonstrated by hand.
 pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome> {
     println!(
-        "\nReviewing {} group(s). Nothing moves until the end.\n",
-        plan.groups.len()
+        "\nReviewing {}. Nothing moves until the end.\n",
+        etude_cli_support::counted(plan.groups.len(), "group", "groups")
     );
     let mut warned_scrollback = false;
 
@@ -99,9 +104,9 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         loop {
             let g = &plan.groups[i];
             println!(
-                "  {}: {} files, {}",
+                "  {}: {}, {}",
                 g.name,
-                g.members.len(),
+                etude_cli_support::counted(g.members.len(), "file", "files"),
                 g.signal.describe()
             );
             let answer = prompt(input, "  [a]ccept  [s]kip  [r]ename  [d]etails  [q]uit > ")?;
@@ -172,9 +177,16 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         return Ok(Outcome::Cancelled);
     }
 
-    println!("\n  About to move {} files into:", plan.moves());
+    println!(
+        "\n  About to move {} into:",
+        etude_cli_support::counted(plan.moves(), "file", "files")
+    );
     for g in &accepted {
-        println!("    {}/  ({} files)", g.name, g.members.len());
+        println!(
+            "    {}/  ({})",
+            g.name,
+            etude_cli_support::counted(g.members.len(), "file", "files")
+        );
     }
     let personal: usize = plan.sensitive_counts().values().sum();
     if personal == 1 {

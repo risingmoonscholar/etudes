@@ -496,7 +496,7 @@ fn folder_rules_use_the_existing_codes() {
         ("a/b", "destination_outside_root", "destination"),
         ("/tmp", "destination_outside_root", "destination"),
         ("", "destination_outside_root", "destination"),
-        ("Absent", "profile_missing", "profile"),
+        ("Absent", "missing_input", "input"),
         ("Occupied", "destination_exists", "destination"),
     ];
     for (folder, code, subject) in cases {
@@ -570,5 +570,5 @@ fn the_contract_lists_the_two_item_codes_and_the_propose_operation() {
         r#"{"code":"item_assigned_twice","retry":"never","subject_kind":"item","operations":["propose"]"#
     ));
     assert!(stdout.contains(r#"{"operation":"propose","reads":["#));
-    assert!(stdout.contains("\"schema_version\":11"));
+    assert!(stdout.contains("\"schema_version\":12"));
 }

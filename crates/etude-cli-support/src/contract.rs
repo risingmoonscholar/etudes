@@ -141,9 +141,9 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 7,
-                Tool::Stash => 10,
-                Tool::Unpack => SCHEMA_VERSION + 2,
+                Tool::Sweep => SCHEMA_VERSION + 8,
+                Tool::Stash => 11,
+                Tool::Unpack => SCHEMA_VERSION + 3,
             }),
         ),
         ("tool_version", j::str(version)),
@@ -452,6 +452,15 @@ pub fn declaration(
             ]),
         ));
     }
+    if matches!(tool, Tool::Stash) {
+        fields.push((
+            "home_folder",
+            j::obj(&[
+                ("policy", j::str("refused_unless_flag")),
+                ("flag", j::str("--allow-home")),
+            ]),
+        ));
+    }
     if matches!(tool, Tool::Sweep) {
         fields.push(("structured_progress", j::obj(&[
             ("flag", j::str("--progress-json")),
@@ -470,7 +479,8 @@ pub fn declaration(
             ("support", j::str("read_only")),
             ("queries", strings(&["status --id OPERATION", "status PATH"])),
             ("states", strings(&["refused", "completed", "interrupted", "reversed", "partly_reversed"])),
-            ("counts", strings(&["planned", "moved", "reversed"])),
+            ("counts", strings(&["planned", "moved", "reversed", "not_as_left"])),
+            ("damaged", j::str("true_when_the_record_lost_entries_so_its_counts_may_be_low")),
             ("recovery_id", j::str("durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation")),
             ("side_effects", j::str("none;_no_key_creation_migration_pruning_or_file_content_reads")),
             ("disclosure", j::str("path_query_returns_newest_first_without_file_names")),

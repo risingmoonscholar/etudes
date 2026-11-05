@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 11,
+    "schema_version": 12,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -126,6 +126,19 @@
         "why": "The requested input is absent or no longer available; choose an existing input."
       },
       {
+        "code": "insufficient_space",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "apply",
+          "undo",
+          "review",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input."
+      },
+      {
         "code": "internal_error",
         "retry": "never",
         "subject_kind": null,
@@ -161,6 +174,7 @@
         "operations": [
           "apply",
           "undo",
+          "export_plan",
           "propose"
         ],
         "why": "The destination is occupied; choose or make a vacant destination before retrying."
@@ -192,9 +206,9 @@
         "operations": [
           "scan",
           "apply",
-          "propose"
+          "review"
         ],
-        "why": "The selected profile is unavailable; restore or select a valid profile."
+        "why": "No saved profile exists; add one or choose another scheme."
       },
       {
         "code": "download_in_flight",
@@ -207,25 +221,37 @@
       },
       {
         "code": "journal_unreadable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "apply",
           "undo",
           "status"
         ],
-        "why": "The journal cannot be read now; the same read-only request may work after the journal becomes readable."
+        "why": "A saved journal cannot be read: wrong key, damaged, or denied. Waiting does not help; restore its key or access first."
       },
       {
         "code": "journal_key_unavailable",
-        "retry": "later",
+        "retry": "after_change",
         "subject_kind": "journal",
         "operations": [
           "apply",
           "undo",
           "status"
         ],
-        "why": "The required journal key is unavailable and may become available later."
+        "why": "The journal key is unusable or cannot be reached; fix ETUDE_JOURNAL_KEY or unlock the login keychain."
+      },
+      {
+        "code": "journal_write_failed",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "apply",
+          "undo",
+          "review",
+          "apply_exported_plan"
+        ],
+        "why": "The journal could not be written; free space or fix the state directory before retrying."
       },
       {
         "code": "unknown_operation",
@@ -282,7 +308,7 @@
         "operations": [
           "propose"
         ],
-        "why": "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan."
+        "why": "The request names an item that is not in the plan or the stash it addresses; the same request cannot work."
       },
       {
         "code": "item_assigned_twice",
@@ -292,6 +318,18 @@
           "propose"
         ],
         "why": "The proposal names one item more than once; the same proposal cannot work."
+      },
+      {
+        "code": "profile_invalid",
+        "retry": "after_change",
+        "subject_kind": "profile",
+        "operations": [
+          "scan",
+          "apply",
+          "review",
+          "propose"
+        ],
+        "why": "The saved profile exists but cannot be used as written; correct the file before retrying."
       }
     ],
     "contract_query": {
@@ -641,8 +679,10 @@
       "counts": [
         "planned",
         "moved",
-        "reversed"
+        "reversed",
+        "not_as_left"
       ],
+      "damaged": "true_when_the_record_lost_entries_so_its_counts_may_be_low",
       "recovery_id": "durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation",
       "side_effects": "none;_no_key_creation_migration_pruning_or_file_content_reads",
       "disclosure": "path_query_returns_newest_first_without_file_names"

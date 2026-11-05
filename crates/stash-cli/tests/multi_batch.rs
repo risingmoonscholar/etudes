@@ -264,7 +264,7 @@ fn swapped_authenticated_journal_refuses_before_any_restore() {
     let before = f.snapshot();
     let output = f.pop(&b);
     assert_eq!(output.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("identity"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be opened"));
     assert_eq!(before, f.snapshot());
     assert!(!one.exists() && !two.exists());
 }
@@ -512,7 +512,7 @@ fn unreadable_journal_is_named_for_path_and_current_directory_pop() {
     std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600)).unwrap();
     for out in [named, current] {
         assert_eq!(out.status.code(), Some(3));
-        assert!(String::from_utf8_lossy(&out.stderr).contains("unreadable"));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("cannot be opened"));
     }
     assert!(!source.exists());
     assert_eq!(before, f.snapshot());
@@ -542,7 +542,7 @@ fn unreadable_key_history_is_named_for_path_and_current_directory_pop() {
         }
         let output = command.output().unwrap();
         assert_eq!(output.status.code(), Some(3));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("unreadable"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be opened"));
         assert!(!newer.exists());
         assert_eq!(before, f.snapshot());
     }

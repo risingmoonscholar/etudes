@@ -929,7 +929,78 @@ pub enum ScanError {
         found: usize,
         cap: usize,
     },
+    /// The folder exists and the system refused to list it. Without this the
+    /// walk counted one unreadable item and found nothing, so stash called the
+    /// folder clear and review said it needed no organising.
+    RootDenied {
+        root: PathBuf,
+        source: io::Error,
+    },
     Io(io::Error),
+}
+
+/// Whether the file or folder at `path` has the user locked flag, which is
+/// Finder's Locked box and `chflags uchg`. Moving a locked item gives EPERM.
+pub fn is_locked(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::MetadataExt;
+        const UF_IMMUTABLE: u32 = 0x2;
+        fs::symlink_metadata(path).is_ok_and(|meta| meta.st_flags() & UF_IMMUTABLE != 0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// How many entries the count below reads before it stops. It only decides a
+/// remark, so it must never hold up the stash on a very large folder.
+const DOWNLOAD_COUNT_LIMIT: usize = 200_000;
+
+/// How many downloads still in progress are at or under these items. A folder
+/// that is itself a download is one and is not read further. Links are not
+/// followed. Anything unreadable counts as nothing.
+pub fn downloads_in_progress<'a>(items: impl IntoIterator<Item = &'a PathBuf>) -> usize {
+    let mut pending: Vec<PathBuf> = items.into_iter().cloned().collect();
+    let mut found = 0;
+    let mut read = 0;
+    while let Some(path) = pending.pop() {
+        read += 1;
+        if read > DOWNLOAD_COUNT_LIMIT {
+            break;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if IN_FLIGHT_SUFFIXES.iter().any(|end| name.ends_with(end)) {
+            found += 1;
+            continue;
+        }
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir())
+            && let Ok(entries) = fs::read_dir(&path)
+        {
+            pending.extend(entries.flatten().map(|entry| entry.path()));
+        }
+    }
+    found
+}
+
+/// What a person can do about a denied read, by the errno that denied it. macOS
+/// privacy protection gives EPERM, and file modes give EACCES. The settings path
+/// is from Apple's "Control access to files and folders on Mac". A denied move
+/// has one more cause; see `problems::move_denied_advice` in etude-cli-support.
+pub fn permission_advice(error: &io::Error) -> Option<&'static str> {
+    match error.raw_os_error() {
+        Some(1) => Some(
+            "macOS may be blocking the app running this command. Check System Settings > \
+             Privacy & Security > Files & Folders for that app, then run this again.",
+        ),
+        Some(13) => Some("Check the owner and permissions with `ls -ld`, then run this again."),
+        _ => None,
+    }
 }
 
 impl ScanError {
@@ -952,9 +1023,22 @@ impl ScanError {
 
 impl std::fmt::Display for ScanError {
     /// Paths are redacted here. Full paths appear only under `--explain`,
-    /// which formats them deliberately. See THREAT-MODEL § T3.
+    /// which formats them deliberately. See THREAT-MODEL § T3. `RootDenied` is
+    /// the exception: it names the folder the caller typed, because the fix
+    /// depends on which folder was denied.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ScanError::RootDenied { root, source } => {
+                write!(
+                    f,
+                    "cannot read {}: permission denied. Nothing was changed.",
+                    root.display()
+                )?;
+                if let Some(advice) = permission_advice(source) {
+                    write!(f, "\n{advice}")?;
+                }
+                Ok(())
+            }
             ScanError::NotADirectory(p) => {
                 write!(f, "not a directory: {}", crate::redact::path(p))
             }
@@ -1188,8 +1272,15 @@ pub fn is_document_marker(name: &str) -> bool {
 
 /// True when any component of `path` looks like a cloud-sync root.
 pub fn is_synced(path: &Path) -> bool {
+    sync_marker(path).is_some()
+}
+
+/// The text in this path that makes it look cloud-synced. The match is on the
+/// whole path as text, so a local folder named "Dropbox notes" matches too; a
+/// refusal shows this so the person can see why.
+pub fn sync_marker(path: &Path) -> Option<&'static str> {
     let s = path.to_string_lossy();
-    SYNC_MARKERS.iter().any(|m| s.contains(m))
+    SYNC_MARKERS.iter().copied().find(|m| s.contains(m))
 }
 
 fn is_package(name: &str) -> bool {
@@ -1281,6 +1372,37 @@ fn is_refused_system_location(path: &Path) -> bool {
     false
 }
 
+/// Why a path counts as a location that is never organised, in the terms of the
+/// rule itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefusedLocation {
+    /// The path is at or under one of the absolute system roots.
+    SystemRoot(&'static str),
+    /// A component of the path has a refused name, wherever it appears.
+    NamedFolder(String),
+}
+
+/// Which rule refuses `path`, or `None` when none does.
+pub fn refused_location(path: &Path) -> Option<RefusedLocation> {
+    let names = || {
+        path.components().filter_map(|c| match c {
+            Component::Normal(n) => Some(n.to_string_lossy().to_string()),
+            _ => None,
+        })
+    };
+    if let Some(name) = names().find(|name| never_enter(name)) {
+        return Some(RefusedLocation::NamedFolder(name));
+    }
+    if let Some(root) = SYSTEM_ROOTS.iter().find(|r| path.starts_with(r)) {
+        return Some(RefusedLocation::SystemRoot(root));
+    }
+    if is_refused_system_location(path) {
+        let library = names().find(|name| name.eq_ignore_ascii_case("Library"))?;
+        return Some(RefusedLocation::NamedFolder(library));
+    }
+    None
+}
+
 /// Resolve one explicitly chosen object without enumerating its parent or children.
 /// Parent aliases resolve for overlap checks; a terminal symlink remains the chosen link.
 pub fn selected_object(path: &Path) -> Result<(PathBuf, fs::Metadata), ScanError> {
@@ -1328,7 +1450,7 @@ pub fn selected_object(path: &Path) -> Result<(PathBuf, fs::Metadata), ScanError
         use std::os::unix::fs::MetadataExt;
         if (metadata.dev(), metadata.ino()) != (checked.dev(), checked.ino()) {
             return Err(ScanError::Io(io::Error::other(
-                "selected object changed while resolving",
+                "it changed while it was being checked",
             )));
         }
     }
@@ -1441,6 +1563,12 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
     let root_is_synced = is_synced(&root);
     if root_is_synced && !cfg.allow_sync {
         return Err(ScanError::RefusedSyncRoot(root.clone()));
+    }
+
+    if let Err(source) = observe_read("directory_enumeration", fs::read_dir(&root))
+        && source.kind() == io::ErrorKind::PermissionDenied
+    {
+        return Err(ScanError::RootDenied { root, source });
     }
 
     let snapshot = match TreeSnapshot::capture_for_config(&root, cfg) {
@@ -1815,6 +1943,27 @@ unsafe extern "C" {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn permission_advice_depends_on_which_errno_denied_it() {
+        let privacy = permission_advice(&io::Error::from_raw_os_error(1)).unwrap();
+        assert!(privacy.contains("Files & Folders"));
+        let modes = permission_advice(&io::Error::from_raw_os_error(13)).unwrap();
+        assert!(modes.contains("ls -ld"));
+        assert!(permission_advice(&io::Error::from_raw_os_error(2)).is_none());
+    }
+
+    #[test]
+    fn a_denied_root_names_the_folder_it_was_given() {
+        let error = ScanError::RootDenied {
+            root: PathBuf::from("/fixture/Desktop"),
+            source: io::Error::from_raw_os_error(1),
+        };
+        let message = error.to_string();
+        assert!(message.contains("/fixture/Desktop"));
+        assert!(message.contains("Nothing was changed"));
+        assert!(!error.is_refusal());
+    }
+
     use super::*;
 
     #[test]

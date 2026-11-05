@@ -28,7 +28,7 @@ LOSER_OUT="$W/first.out"
 [ "$FIRST_STATUS" -ne 0 ] || [ "$SECOND_STATUS" -ne 0 ] \
   && pass "same-root contender reports a non-success result" \
   || fail "both same-root applies claimed success"
-grep -qiE 'could not move|resumable|conflict|already exists' "$LOSER_OUT" \
+grep -qiE 'could not move|changed just now|already exists|continue from where' "$LOSER_OUT" \
   && pass "same-root loser explains that its partial state is recoverable" \
   || fail "same-root loser gave no recoverability explanation: $(cat "$LOSER_OUT")"
 
@@ -60,7 +60,7 @@ for round in $(seq 1 15); do
   wait "$SECOND"; SECOND_STATUS=$?
   LOSER_OUT="$R/first.out"
   [ "$FIRST_STATUS" -eq 0 ] && LOSER_OUT="$R/second.out"
-  grep -qiE 'could not move|resumable|conflict|already exists' "$LOSER_OUT" \
+  grep -qiE 'could not move|changed just now|already exists|continue from where' "$LOSER_OUT" \
     && pass "round $round: the loser explains itself" \
     || fail "round $round: the loser gave no explanation: $(cat "$LOSER_OUT")"
   JOURNALS=$(find "$R/state" -maxdepth 1 -name 'sweep-*.journal' | wc -l | tr -d ' ')

@@ -71,7 +71,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 620 tests
+cargo test --all                # 646 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -187,7 +187,7 @@ Each route applies only when its destination is already a direct, visible
 folder in the selected directory. If a destination is missing, sweep refuses
 and names it rather than letting a built-in rule send those files elsewhere.
 A route needs at least three eligible files to form a group, and each extension
-needs its own destination. Duplicate or malformed routes refuse before anything
+needs its own destination. Duplicate or invalid routes refuse before anything
 moves. Safety refusals still take precedence over the profile; eligible profile
 routes take precedence over built-in grouping. A routed file is claimed once,
 even when its name also matches a built-in detector such as Screenshots. At
@@ -198,7 +198,7 @@ exported plan, and refuses replay if the profile changes.
 
 | State | Current behavior |
 |---|---|
-| locked | An unreadable subtree is counted and the scan reports incomplete; visible siblings remain usable. |
+| locked | An unreadable subtree is counted and the scan reports incomplete; visible siblings remain usable. A selected folder that cannot be read at all is an error (exit 3, `permission_denied`) that names the folder and what to do next. |
 | immutable | Sweep does not preflight the immutable flag. If the operating system refuses a move, apply reports the failure and leaves recovery to the journal; sweep does not claim it detected the flag. |
 | invisible | Hidden entries are skipped and counted. Unreadable entries are separately reported as incomplete. |
 | alias | Symlinks are skipped during scans; selected parent aliases are resolved for overlap checks. |
@@ -302,8 +302,8 @@ move a file into "left alone". It never influences a destination.
 `stash PATH --export-plan FILE --json` save explicit private metadata artifacts
 without moving anything. Replay with `--plan FILE --plan-digest SHA` binds the
 original root, file identities, configuration, tool version and observation
-contract. Changed observations refuse with a replan requirement before probes,
-journals or moves. Direct apply still creates a fresh proposal in that invocation.
+contract. If those observations changed, it refuses before probes, journals or
+moves and tells you to make a new plan. Direct apply still creates a fresh proposal in that invocation.
 See [plan binding and its metadata limits](docs/plan-binding.md).
 
 **Place individual files.** `sweep propose` reads your folder choice for each
@@ -363,7 +363,9 @@ keys or environment values. Zero counts do not prove absence of access. See [the
 sweep ~/Desktop --json          # the plan, including projects_skipped,
                                 # downloads_skipped, packages_skipped, and
                                 # unknown_extensions -- counts per extension
-                                # sweep has no rule for
+                                # sweep has no rule for. blocked_folders appears
+                                # when a file holds a group folder's name: the
+                                # scan still exits 0, and apply will refuse
 stash ~/Desktop --for 3d --json # what moved, and when it is due
 stash status --json             # what is held, and whether it is overdue
 unpack a.zip --list --json      # inspect an archive without extracting
@@ -383,7 +385,10 @@ names the remaining staging path or explicitly says its state is unverified.
 the default of half the target volume's free space. System extractors write
 directly, so unpack measures logical file bytes every 100 ms and after exit,
 then kills and reaps an over-budget extractor and measures again. Refusals
-report the final exact byte total, limit and overshoot. Read errors stop the
+report the final exact byte total, limit and overshoot, with the code
+`size_limit_exceeded`. `--max-size 0` is refused: the limit must be a whole number
+above 0. Options may come before or after the archive. A relative path gets the
+same free-space floor and limit as an absolute one. Read errors stop the
 transaction instead of silently undercounting. This is not a hard write cap,
 and filesystem allocation, metadata and the private archive copy are outside
 that logical-byte measurement.
@@ -398,7 +403,10 @@ can overshoot further. There is no guaranteed maximum overshoot.
 
 **Meaningful exit codes**, uniform across the tools: `0` done · `1` nothing to
 do · `2` refused · `3` error. "Refused" is distinct from "error" on purpose.
-An agent must be able to tell a safety stop from a crash.
+An agent must be able to tell a safety stop from a crash. Exit 0 means the whole
+request was done. A missing folder gets one answer on every command: `no folder
+at PATH`, exit 3, `missing_input`. `stash` refuses your home folder unless you
+pass `--allow-home`.
 
 ### Whether to try again: `reason`
 
@@ -417,6 +425,14 @@ message text:
   says what: the input, the destination, the plan, the profile or the journal.
 - `later`: the same request may work if you wait, and `subject.kind` says what
   you are waiting for.
+
+Codes worth knowing by name: `journal_unreadable` means a saved undo record
+cannot be opened, and `journal_write_failed` means one cannot be saved.
+`profile_missing` means no saved profile exists, and `profile_invalid` means one
+exists and cannot be used. In unpack, `archive_unreadable` is a damaged or
+mislabelled archive, `size_limit_exceeded` is a limit reached while extracting,
+`extraction_stopped` is a stop signal, and `insufficient_space` is only ever about
+the disk.
 
 Exit codes keep their meaning. `reason` adds the part an exit code cannot
 carry.
@@ -446,10 +462,21 @@ lists file names. An id that no journal holds gives exit 1 with the code
 `unknown_operation`. `reversed` means nothing is still moved; `partly_reversed`
 means some files are back and some are not.
 
+In `sweep status`, `planned`, `moved` and `reversed` are states of each file: each
+is a count of the files now in that state.
+
 A result's `status` and `reason` always agree: when the status is `incomplete`,
 `refused` or `error`, the reason is never `done` or `nothing_to_do`. An undo or
-pop that had to leave a file behind exits 0 as before, with status `incomplete`
-and the code `operation_incomplete`.
+pop that had to leave a file behind exits 3, with status `incomplete` and the
+code `operation_incomplete`. A failure that moved nothing has status `refused`.
+
+When files are not where apply left them, `sweep undo` restores nothing for them
+and says what to do. If you moved that folder, move it back and run the printed
+command. If you deleted them, there is nothing to restore. `sweep undo` with no
+folder keeps stopping at that record rather than reverse a folder you did not
+name, so reach another folder's apply by naming it: `sweep undo FOLDER`. In
+`stash pop --latest` the same case prints the id of another stash, because `stash
+pop --id ID` goes straight to one stash.
 
 Two applies on one folder at once are not held apart. One wins. The other ends
 in one of two ways, and timing decides which:
@@ -511,13 +538,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 67 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 73 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 67 scenarios
+bash stress/run.sh        # 73 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
@@ -581,7 +608,7 @@ Apache-2.0.
 
 Both `sweep` and `stash` accept `ETUDE_JOURNAL_KEY`: exactly 64 ASCII hex
 characters encoding a randomly generated 256-bit key. When set, it is used
-instead of the login keychain. An empty, malformed, or non-Unicode value is
+instead of the login keychain. An empty, invalid, or non-Unicode value is
 refused; it never falls back to another key or to a plaintext journal.
 
 For a temporary session, generate a key with the operating system's secure
@@ -612,8 +639,9 @@ Use a separate `ETUDE_STATE_DIR` for each key if you maintain multiple keys.
 Sweep undo refuses to search past an unreadable newer journal, even for a named
 folder. Stash folder pop authenticates every stash journal before filtering by
 folder. An unreadable older journal also blocks it, even if already completed
-or from another folder: exit 3 says the journal is unreadable and cannot restore,
-with files and journal bytes unchanged. This also applies to `stash pop` in the
+or from another folder: exit 3 names the undo record that cannot be opened and
+restores nothing, with files and journal bytes unchanged. Without that record the
+tool cannot say where its files are now, so it does not claim to. This also applies to `stash pop` in the
 current directory. Restore a known batch with `stash pop --id ID` and its original
 key; exact-ID selection does not search unrelated journals.
 
@@ -687,9 +715,10 @@ checks sort canonical path components; they do not scan a common ancestor.
 Selections require an encrypted journal. `--no-journal` remains available for
 legacy whole-folder stashing and is refused for explicit selections. Each selection
 uses one private operation root and numbered holding slots, so equal basenames
-from different parents cannot collide. `--into PARENT` chooses the holding parent;
-otherwise the first canonical selected object's parent is used. A holding parent
-inside a selected directory is refused.
+from different parents cannot collide. `--into FOLDER` chooses where they are held;
+otherwise the first canonical selected object's parent is used. A folder inside a
+selected directory is refused, and one that does not exist gives `no folder at
+PATH`, exit 3.
 
 The result prints counts and a persistent operation id; it does not list source
 paths, basenames, or the holding path. JSON carries `details.stash_id`; selection

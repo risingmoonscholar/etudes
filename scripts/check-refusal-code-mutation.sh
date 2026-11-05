@@ -95,8 +95,10 @@ echo "with no reason set, sweep itself still exits $tool_status and prints \"rea
 must_reject "unset-reason fault" "mismatched: $code: a refused result has no reason"
 
 # Fault 3: a restore that left a file behind no longer says so in its reason.
-plant 'if !r\.skipped_changed\.is_empty\(\) \{\n        \/\/ Files were left' 'if false {
-        // Files were left'
-must_reject "incomplete-says-done fault" "mismatched: operation_incomplete: a result with status incomplete carries the success reason done"
+plant 'if left_behind \{\n        \/\/ Exit 0 means' 'if false {
+        // Exit 0 means'
+# The witness sees it first as an exit 0 from an undo that left a file behind;
+# the status and reason check behind that reports the same fault in other words.
+must_reject "incomplete-says-done fault" "mismatched: operation_incomplete: (a result with status incomplete carries the success reason done|sweep: undo exited 0, expected \(3,\))"
 
 echo "All three planted refusal-code faults were rejected."

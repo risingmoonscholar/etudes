@@ -383,7 +383,7 @@ fn a_missing_folder_is_refused_and_never_created() {
     let id = id_of(&plan, "report.pdf");
     let before = tree_listing(&fixture.root);
     let err = refused(&plan, &proposal_json(&plan, &move_to(&id, "Absent")));
-    assert!(matches!(err, Refusal::ProfileMissing(_)), "{err}");
+    assert!(matches!(err, Refusal::FolderMissing(_)), "{err}");
     assert_eq!(tree_listing(&fixture.root), before);
 }
 

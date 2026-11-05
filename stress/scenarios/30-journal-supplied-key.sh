@@ -37,18 +37,21 @@ PY
   else fail "$1 journal encryption"; fi
 }
 
-# Establish the unavailable-keychain control on this host. The Rust source
-# test additionally proves that supplied keys never invoke the keychain.
+# The unavailable-keychain control. The real login keychain stays out of this:
+# inside the fence /usr/bin/security cannot start. The Rust source test
+# additionally proves that supplied keys never invoke the keychain.
 make_tree "$W/control"
-out=$(env -u ETUDE_JOURNAL_KEY "$SWEEP" apply "$W/control" --yes 2>&1); code=$?
-if [ "$code" = 2 ] && [[ "$out" == *keychain* ]]; then
-  pass 'login keychain unavailable: unsupplied apply refuses'
-  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'sweep refusal names loss of undo' || fail 'sweep refusal advice'
-  out=$(env -u ETUDE_JOURNAL_KEY "$STASH" "$W/control" 2>&1); code=$?
+if keychain_fence_works; then
+  out=$(keychain_fenced "$SWEEP" apply "$W/control" --yes 2>&1); code=$?
+  assert_eq 2 "$code" 'login keychain unavailable: unsupplied apply refuses'
+  [[ "$out" == *keychain* ]] && pass 'sweep refusal names the keychain' || fail "sweep refusal hides the keychain: $out"
+  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'sweep refusal names loss of undo' || fail "sweep refusal hides loss of undo: $out"
+  out=$(keychain_fenced "$STASH" "$W/control" 2>&1); code=$?
   assert_eq 2 "$code" 'unsupplied stash refuses'
-  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'stash refusal names loss of undo' || fail 'stash refusal advice'
+  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'stash refusal names loss of undo' || fail "stash refusal hides loss of undo: $out"
+  restored "$W/control" 'keychain refusals move nothing'
 else
-  unproven 'host keychain unavailable control' 'this host did not refuse keychain access; deterministic source test covers bypass'
+  unproven 'keychain unavailable control' 'sandbox-exec could not block /usr/bin/security here, and this suite never reaches the real keychain'
 fi
 rm -f "$ETUDE_STATE_DIR"/*.journal
 
@@ -115,7 +118,7 @@ for selection in named current-directory; do
     out=$(cd "$W/stash-mixed" && env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop 2>&1); code=$?
   fi
   assert_eq 3 "$code" "$selection unreadable B blocks completed A"
-  [[ "$out" == *unreadable* && "$out" != *'already popped'* ]] && pass "$selection reports unreadable journal" || fail "$selection hides unreadable journal"
+  [[ "$out" == *'cannot be opened'* && "$out" != *'already popped'* ]] && pass "$selection reports unreadable journal" || fail "$selection hides unreadable journal"
 done
 chmod 600 "$newest"
 assert_eq "$before" "$(find "$W/stash-mixed" -type f -exec shasum {} \; | sort)" 'unreadable newer stash moves nothing'
@@ -130,7 +133,7 @@ for selection in named current-directory; do
     out=$(cd "$W/stash-mixed" && env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop 2>&1); code=$?
   fi
   assert_eq 3 "$code" "$selection B refuses older completed A under another key"
-  [[ "$out" == *'journal is unreadable'* && "$out" == *'cannot restore'* ]] && pass "$selection explains older wrong-key refusal" || fail "$selection hides older wrong-key journal"
+  [[ "$out" == *'cannot be opened'* && "$out" == *'nothing was restored'* ]] && pass "$selection explains older wrong-key refusal" || fail "$selection hides older wrong-key journal"
 done
 assert_eq "$before" "$(find "$W/stash-mixed" -type f -exec shasum {} \; | sort)" 'older wrong-key refusal leaves mixed stash files intact'
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'older wrong-key refusal preserves mixed stash journal bytes'
@@ -157,7 +160,7 @@ assert_eq "$before" "$(find "$W/stash-live-a" "$W/stash-live-b" -type f -exec sh
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'mixed live stash refusal preserves journal bytes'
 out=$(env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop "$W/stash-live-b" 2>&1); code=$?
 assert_eq 3 "$code" 'named B refuses older live A from another root'
-[[ "$out" == *'journal is unreadable'* && "$out" == *'cannot restore'* ]] && pass 'named B explains older live wrong-key refusal' || fail 'named B hides older live wrong-key journal'
+[[ "$out" == *'cannot be opened'* && "$out" == *'nothing was restored'* ]] && pass 'named B explains older live wrong-key refusal' || fail 'named B hides older live wrong-key journal'
 assert_eq "$before" "$(find "$W/stash-live-a" "$W/stash-live-b" -type f -exec shasum {} \; | sort)" 'older live wrong-key refusal moves nothing'
 assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'older live wrong-key refusal preserves journal bytes'
 assert_exit 0 'stash B exact id restores its live operation' -- env ETUDE_JOURNAL_KEY="$KEY_B" "$STASH" pop --id "$live_b_id"
@@ -219,7 +222,7 @@ DENIED
     else
       out=$("$STASH" pop "$first" 2>&1); code=$?
       assert_eq 3 "$code" "$fault stash named refuses"
-      [[ "$out" != *'already popped'* && ( "$out" == *journal* || "$out" == *malformed* ) ]] && pass "$fault stash reports journal failure" || fail "$fault stash hid unreadable state"
+      [[ "$out" != *'already popped'* && "$out" == *'undo record'* ]] && pass "$fault stash reports journal failure" || fail "$fault stash hid unreadable state"
       assert_exit 3 "$fault stash current-directory refuses" -- bash -c 'cd "$1" && "$2" pop' _ "$first" "$STASH"
     fi
     case "$fault" in

@@ -32,8 +32,9 @@ check(len(set(ids)) == 3 and all(value and '/' not in value and '\\' not in valu
       and 'PRIVATE' not in result.stdout + result.stderr and details['paths_shown'] is False,
       'inspection exposes unique path-free ids without source names')
 result = run('pop', '--id', operation, '--item', 'item-does-not-exist')
-check(result.returncode == 1 and json.loads(result.stdout)['status'] == 'nothing_to_do' and not restored(),
-      'a wrong item id reports nothing to do and restores nothing')
+check(result.returncode == 2 and json.loads(result.stdout)['status'] == 'refused'
+      and json.loads(result.stdout)['reason']['code'] == 'unknown_item' and not restored(),
+      'a wrong item id is refused as unknown and restores nothing')
 result = run('pop', '--id', operation, '--item', ids[0])
 first = restored()
 check(result.returncode == 0 and len(first) == 1 and all(original[name] == data for name, data in first.items()),

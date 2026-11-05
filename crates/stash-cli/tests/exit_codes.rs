@@ -361,7 +361,7 @@ fn a_torn_journal_is_reported_as_damaged_not_silently_treated_as_absent() {
         String::from_utf8_lossy(&pop.stdout)
     );
     assert!(
-        stderr.contains("truncated") || stderr.contains("progress record"),
+        stderr.contains("cut short"),
         "the damage report should name a torn progress frame, not some other \
          load failure, or this isn't actually witnessing issue #3's shape: stderr={stderr}"
     );
@@ -494,7 +494,7 @@ fn a_pop_that_leaves_an_item_behind_does_not_say_done() {
     std::fs::write(tree.join("one.txt"), b"occupied restore path").unwrap();
 
     let (code, stdout) = json_result(&root, &[OsStr::new("pop"), tree.as_os_str()]);
-    assert_eq!(code, Some(0), "exit code is unchanged: {stdout}");
+    assert_eq!(code, Some(3), "exit 0 means every item came back: {stdout}");
     assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
     assert!(
         stdout.contains(

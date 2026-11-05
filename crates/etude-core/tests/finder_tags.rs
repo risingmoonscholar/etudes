@@ -279,6 +279,7 @@ fn an_item_tagged_between_the_check_and_the_rename_is_returned_and_counted() {
         Some(&TestSeal),
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -331,6 +332,7 @@ fn an_item_that_cannot_be_returned_stays_counted_and_journaled() {
         Some(&TestSeal),
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: Some(&mut occupy),
         },
@@ -368,7 +370,8 @@ fn an_item_that_cannot_be_returned_stays_counted_and_journaled() {
     let mut journal = journal;
     let undone = apply::undo(&mut journal, &TestSeal);
     assert_eq!(undone.restored, 1);
-    assert_eq!(undone.skipped_changed, vec![stranded.clone()]);
+    assert_eq!(undone.skipped_occupied, vec![stranded.clone()]);
+    assert!(undone.skipped_changed.is_empty());
     assert_eq!(fs::read(&first).unwrap(), b"someone else's file");
     assert!(stranded.exists());
 }
@@ -392,6 +395,7 @@ fn a_failed_journal_write_during_the_return_leaves_the_item_home_and_reported_he
         }),
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -436,6 +440,7 @@ fn a_failed_journal_write_after_a_stranded_item_is_reported() {
         }),
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: Some(&mut occupy),
         },
@@ -460,6 +465,7 @@ fn without_a_journal_the_return_still_happens() {
         None,
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -482,6 +488,7 @@ fn a_tagged_item_in_a_plan_that_included_tagged_items_is_not_returned() {
         Some(&TestSeal),
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
@@ -655,6 +662,7 @@ fn a_single_item_tagged_during_rename_leaves_no_empty_group() {
         Some(&TestSeal),
         ApplyFaults {
             after_validate: None,
+            after_journal: None,
             before_rename: Some(&mut tag_it),
             after_rename: None,
         },
