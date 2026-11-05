@@ -2569,14 +2569,12 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_run_is_not_called_a_failed_check() {
-        // watch() returns the stop before the tool's answer is read.
+    fn a_stopped_run_is_a_refusal_that_says_so() {
         let f = Fixture::new();
-        STOP.store(true, Ordering::Relaxed);
-        let error = check_stop(&f.policy()).unwrap_err();
-        STOP.store(false, Ordering::Relaxed);
+        let error = stopped(&f.policy());
         assert_eq!(error.code, Code::ExtractionStopped);
         assert_eq!(error.exit, 2);
+        assert!(error.message.contains("No archive was made"));
     }
 
     #[test]
