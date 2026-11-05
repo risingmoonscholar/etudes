@@ -325,7 +325,13 @@ pub const CODES: &[CodeSpec] = &[
         name: "operation_incomplete",
         retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
-        operations: &["pack:pack", "sweep:apply", "sweep:undo", "stash:stash", "stash:pop"],
+        operations: &[
+            "pack:pack",
+            "sweep:apply",
+            "sweep:undo",
+            "stash:stash",
+            "stash:pop",
+        ],
         explanation: "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing.",
     },
     CodeSpec {
