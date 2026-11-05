@@ -2617,6 +2617,11 @@ mod tests {
             std::os::unix::fs::PermissionsExt::from_mode(0o4755),
         )
         .unwrap();
+        // The no-network sandbox denies setting the bit, so there is nothing to refuse.
+        let mode = fs::metadata(f.0.join("source/ordinary")).unwrap().mode();
+        if mode & 0o4000 == 0 {
+            return;
+        }
         assert!(
             preflight(&f.policy())
                 .unwrap_err()
