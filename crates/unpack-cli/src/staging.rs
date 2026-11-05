@@ -431,7 +431,18 @@ mod tests {
         assert!(matches!(reclaim(&path), Reclaim::InUse));
         assert!(path.is_dir());
         drop(lock);
-        assert!(matches!(reclaim(&path), Reclaim::Removed));
+        // Another test in this process can be between fork and exec with a
+        // copy of the lock's descriptor. That copy ends at exec, so wait for
+        // it. Only `InUse` is retried, and only for two seconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let last = loop {
+            let seen = reclaim(&path);
+            if !matches!(seen, Reclaim::InUse) || std::time::Instant::now() >= deadline {
+                break seen;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(matches!(last, Reclaim::Removed));
         assert!(!path.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
