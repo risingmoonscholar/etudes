@@ -1400,7 +1400,7 @@ pub fn selected_object(path: &Path) -> Result<(PathBuf, fs::Metadata), ScanError
         use std::os::unix::fs::MetadataExt;
         if (metadata.dev(), metadata.ino()) != (checked.dev(), checked.ino()) {
             return Err(ScanError::Io(io::Error::other(
-                "selected object changed while resolving",
+                "it changed while it was being checked",
             )));
         }
     }

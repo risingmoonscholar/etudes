@@ -907,7 +907,13 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
                         // apply, which reads as "no work" rather than "you
                         // typed it wrong".
                         match args.get(i + 1) {
-                            Some(v) if v.starts_with('-') && v != "--" => {
+                            // `-1` is a bad value, not an option; the flag's
+                            // own parser says so.
+                            Some(v)
+                                if v.starts_with('-')
+                                    && v != "--"
+                                    && !v[1..].starts_with(|c: char| c.is_ascii_digit()) =>
+                            {
                                 return Err(format!(
                                     "{a} needs a value, and `{v}` is another option."
                                 ));

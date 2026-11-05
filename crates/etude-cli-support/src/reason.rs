@@ -207,7 +207,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["sweep:scan"],
+        operations: &["sweep:scan", "stash:stash"],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {
@@ -318,8 +318,8 @@ pub const CODES: &[CodeSpec] = &[
         name: "unknown_item",
         retry: RetryClass::Never,
         subject_kind: Some("item"),
-        operations: &["sweep:propose"],
-        explanation: "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan.",
+        operations: &["sweep:propose", "stash:pop"],
+        explanation: "The request names an item that is not in the plan or the stash it addresses; the same request cannot work.",
     },
     CodeSpec {
         code: Code::ItemAssignedTwice,
@@ -641,7 +641,7 @@ mod tests {
                 );
             }
         }
-        assert!(!codes_json("stash").contains("\"code\":\"download_in_flight\""));
+        assert!(codes_json("stash").contains("\"code\":\"download_in_flight\""));
         // An unknown id is the same answer from every stash command that takes one.
         let stash = codes_json("stash");
         let unknown = stash

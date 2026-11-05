@@ -397,7 +397,7 @@ class Probe:
             require(snapshot(tree) == held, "early pop moved files")
             collision = tree / names[0]
             collision.write_bytes(b"occupied restore path")
-            self.run("pop", tree, codes=(0, 2))
+            self.run("pop", tree, codes=(3,))
             require(collision.read_bytes() == b"occupied restore path", "pop overwrote a file")
             require((holding[0] / names[0]).exists(), "collision deleted held payload")
             collision.unlink()
@@ -639,7 +639,7 @@ def restore_into_read_only_folder(probe):
 def restore_onto_occupied_path(probe):
     """A journalled move, then a restore whose original path is now occupied.
     The occupying file is kept, the held file stays held, and the result must
-    say the restore is not finished. Sweep exits 3 for that; pop still exits 0."""
+    say the restore is not finished, with exit 3."""
     tree = screenshots(probe.directory / "tree")
     before = snapshot(tree)
     name = "Screenshot 2025-01-01 at 1.00.00 PM.png"
@@ -647,9 +647,7 @@ def restore_onto_occupied_path(probe):
     back = "undo" if probe.tool == "sweep" else "pop"
     probe.run(*move, "--json")
     (tree / name).write_bytes(b"occupied restore path")
-    result = probe.run(back, tree, "--json", codes=(0, 3))
-    require(result.returncode == (3 if probe.tool == "sweep" else 0),
-            "a restore that left a file behind has the wrong exit")
+    result = probe.run(back, tree, "--json", codes=(3,))
     require(json.loads(result.stdout)["status"] == "incomplete",
             "a restore that left a file behind is not reported as incomplete")
     require((tree / name).read_bytes() == b"occupied restore path", "a restore overwrote a file")
@@ -782,8 +780,19 @@ def export_onto_a_file(probe):
     return result
 
 
-def sweep_download_in_flight(probe):
+def download_in_flight(probe):
     return probe.run(screenshots(probe.directory / "film.mp4.download"), "--json", codes=(2,))
+
+
+def stash_unknown_item(probe):
+    """An item id the stash does not hold is a mistake to fix, not nothing to do."""
+    tree = screenshots(probe.directory / "tree")
+    before = snapshot(tree)
+    stashed = json.loads(probe.run(tree, "--json").stdout)["details"]["stash_id"]
+    result = probe.run("pop", "--id", stashed, "--item", "item-absent", "--json", codes=(2,))
+    probe.run("pop", "--id", stashed, "--json")
+    require(snapshot(tree) == before, "a refused item pop changed what the stash restored")
+    return result
 
 
 def sweep_unsafe_input(probe):
@@ -914,7 +923,7 @@ CODE_PROBES = {
         "plan_stale": (stale_plan, sweep_propose_other_plan),
         "profile_missing": sweep_profile_missing,
         "profile_invalid": sweep_profile_invalid,
-        "download_in_flight": sweep_download_in_flight,
+        "download_in_flight": download_in_flight,
         "journal_unreadable": garbage_journal,
         "journal_key_unavailable": bad_key,
         "journal_write_failed": journal_store_is_a_file,
@@ -930,6 +939,8 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
         "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
+        "download_in_flight": download_in_flight,
+        "unknown_item": stash_unknown_item,
         "destination_exists": export_onto_a_file,
         "plan_stale": stale_plan,
         "not_due_yet": stash_not_due_yet,

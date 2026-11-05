@@ -180,6 +180,15 @@
         "why": "The observed plan is stale; create a fresh plan before applying."
       },
       {
+        "code": "download_in_flight",
+        "retry": "later",
+        "subject_kind": "download_in_flight",
+        "operations": [
+          "stash"
+        ],
+        "why": "The input appears to still be downloading and may be checked later."
+      },
+      {
         "code": "not_due_yet",
         "retry": "later",
         "subject_kind": "journal",
@@ -271,6 +280,15 @@
           "pop"
         ],
         "why": "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing."
+      },
+      {
+        "code": "unknown_item",
+        "retry": "never",
+        "subject_kind": "item",
+        "operations": [
+          "pop"
+        ],
+        "why": "The request names an item that is not in the plan or the stash it addresses; the same request cannot work."
       }
     ],
     "contract_query": {

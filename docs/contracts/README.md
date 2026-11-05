@@ -76,6 +76,12 @@ exists and cannot be used. `insufficient_space` and `destination_exists` now als
 cover a full disk and an occupied `--export-plan` path in `sweep` and `stash`.
 `sweep status` adds `counts.not_as_left` and `damaged`.
 
+Stash also returns `download_in_flight` for a folder still downloading and
+`unknown_item` for an item id its stash does not hold. `stash pop` exits 3 with
+`operation_incomplete` when any item is left behind, and its details add
+`skipped_occupied`. `stash status --all` lists the stashes that open and adds
+`unreadable`, the ids of those that do not.
+
 The declarations do not enforce an OS sandbox. Network policy is `none`, runtime
 enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.

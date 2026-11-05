@@ -308,7 +308,7 @@
         "operations": [
           "propose"
         ],
-        "why": "The proposal names an item that is not in the plan's eligible list; the same proposal cannot work against this plan."
+        "why": "The request names an item that is not in the plan or the stash it addresses; the same request cannot work."
       },
       {
         "code": "item_assigned_twice",

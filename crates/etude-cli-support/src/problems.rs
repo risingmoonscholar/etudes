@@ -21,7 +21,7 @@ pub struct Problem {
 }
 
 impl Problem {
-    fn refused(text: String, code: Code) -> Self {
+    pub fn refused(text: String, code: Code) -> Self {
         Self {
             text,
             code,
@@ -29,7 +29,7 @@ impl Problem {
         }
     }
 
-    fn failed(text: String, code: Code) -> Self {
+    pub fn failed(text: String, code: Code) -> Self {
         Self {
             text,
             code,
@@ -313,12 +313,15 @@ pub fn scan_problem(tool: &str, typed: &Path, error: &ScanError) -> String {
             } else {
                 format!("{} is in it", shown_text(marker))
             };
-            let what = match tool {
-                "sweep" => "so sorting them into type folders would break it. Sweep",
-                _ => "so taking them away would break it. Stash",
+            let next = match tool {
+                "sweep" => "so sorting them into type folders would break it. Sweep the folder that contains it instead.".to_owned(),
+                _ => format!(
+                    "so moving them out would break it. Nothing was moved. To stash the whole folder in one piece, run: stash select {}",
+                    quoted_path(typed)
+                ),
             };
             format!(
-                "{tool}: refused: {folder} looks like a project ({because}). Its files reference each other by relative path, {what} the folder that contains it instead."
+                "{tool}: refused: {folder} looks like a project ({because}). Its files reference each other by relative path, {next}"
             )
         }
         ScanError::TooManyEntries { found, cap } => format!(
@@ -361,7 +364,7 @@ pub fn record_folder_problem(tool: &str, error: &JournalError) -> String {
 pub fn record_open_problem(tool: &str, id: &str, error: &JournalError) -> String {
     let path = etude_core::journal::state_dir().join(format!("{tool}-{id}.journal"));
     let fix = match error {
-        JournalError::Seal(_) => "Use the key from when you applied.",
+        JournalError::Seal(_) => "Use the key it was made with.",
         JournalError::Io(source) if source.kind() == std::io::ErrorKind::PermissionDenied => {
             "Check that file with `ls -l`."
         }
