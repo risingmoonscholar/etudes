@@ -1997,11 +1997,26 @@ fn measure(
     planned: &PlannedMembers,
     writer_running: bool,
 ) -> Result<Measurement, String> {
+    measure_with(root, planned, writer_running, &|path| {
+        path.symlink_metadata()
+    })
+}
+
+/// `measure`, with the metadata call passed in. A name can vanish between the
+/// directory read and the metadata call only by a race, so the tests pass a
+/// call that loses the race every time instead of waiting for it.
+fn measure_with(
+    root: &Path,
+    planned: &PlannedMembers,
+    writer_running: bool,
+    lstat: &dyn Fn(&Path) -> std::io::Result<std::fs::Metadata>,
+) -> Result<Measurement, String> {
     fn walk(
         dir: &Path,
         root: &Path,
         planned: &PlannedMembers,
         writer_running: bool,
+        lstat: &dyn Fn(&Path) -> std::io::Result<std::fs::Metadata>,
         seen: &mut Measurement,
     ) -> Result<(), String> {
         let moved = |error: &std::io::Error| {
@@ -2020,7 +2035,7 @@ fn measure(
             if dir == root && staging::lock_path(root).as_deref() == Some(path.as_path()) {
                 continue; // Internal ownership bytes are not extracted payload.
             }
-            let md = match path.symlink_metadata() {
+            let md = match lstat(&path) {
                 Ok(md) => md,
                 Err(error) if writer_running && error.kind() == std::io::ErrorKind::NotFound => {
                     continue;
@@ -2034,7 +2049,7 @@ fn measure(
                 seen.planned_present += 1;
             }
             if md.is_dir() {
-                walk(&path, root, planned, writer_running, seen)?;
+                walk(&path, root, planned, writer_running, lstat, seen)?;
             } else {
                 seen.bytes = seen
                     .bytes
@@ -2045,7 +2060,7 @@ fn measure(
         Ok(())
     }
     let mut seen = Measurement::default();
-    walk(root, root, planned, writer_running, &mut seen)?;
+    walk(root, root, planned, writer_running, lstat, &mut seen)?;
     Ok(seen)
 }
 
@@ -2645,6 +2660,29 @@ mod tests {
         let seen = measure(&root, &planned, false).unwrap();
         assert_eq!(seen.planned_present, 1);
         assert_eq!(seen.bytes, 6);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_vanishes_during_the_walk_is_skipped_only_while_a_writer_runs() {
+        let root = std::env::temp_dir().join(format!("unpack-vanish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("kept.txt"), b"123").unwrap();
+        std::fs::write(root.join("gone.txt"), b"1").unwrap();
+        let planned = PlannedMembers::from_listing(&["kept.txt".into(), "gone.txt".into()]);
+        let lstat = |path: &Path| {
+            if path.file_name().is_some_and(|name| name == "gone.txt") {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            } else {
+                path.symlink_metadata()
+            }
+        };
+        let seen = measure_with(&root, &planned, true, &lstat)
+            .expect("a name that went while the extractor wrote must not fail the walk");
+        assert_eq!((seen.planned_present, seen.bytes), (1, 3));
+        // With no writer running a missing name is a real fault.
+        assert!(measure_with(&root, &planned, false, &lstat).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

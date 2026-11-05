@@ -57,8 +57,8 @@ reject "counting a member that is still being written" crates/unpack-cli/src/mai
   -- -p unpack-cli --test structured_progress a_bare_gzip
 
 reject "a vanished name failing the walk again" crates/unpack-cli/src/main.rs \
-  'Err\(error\) if writer_running && error\.kind\(\) == std::io::ErrorKind::NotFound => \{\n\s*continue;\n\s*\}' '' '[Nn]o such file' \
-  -- -p unpack-cli --test structured_progress a_tar_of_many_files
+  'Err\(error\) if writer_running && error\.kind\(\) == std::io::ErrorKind::NotFound => \{\n\s*continue;\n\s*\}' '' 'must not fail the walk' \
+  -- -p unpack-cli --bin unpack a_name_that_vanishes
 
 reject "an extra field in schema 1" crates/etude-cli-support/src/progress.rs \
   '\("journalled", j::num\(journalled\)\),' '("journalled", j::num(journalled)), ("extra", j::num(1)),' 'fields differ from schema 1' \
