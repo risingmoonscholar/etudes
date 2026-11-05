@@ -546,13 +546,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 73 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 74 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 73 scenarios
+bash stress/run.sh        # 74 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
