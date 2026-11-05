@@ -968,7 +968,14 @@ fn an_apply_whose_first_move_fails_moved_nothing_and_says_so() {
     std::fs::set_permissions(tree.join("sub"), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(code, Some(3), "{stdout}");
     assert!(stdout.contains(r#""status":"refused""#), "{stdout}");
-    assert!(!tree.join("Screenshots").exists());
+    assert!(
+        !tree.join("Screenshots").exists(),
+        "{stdout}\nrecords: {:?}",
+        std::fs::read_dir(&state)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>()
+    );
 }
 
 /// A member that stops being eligible after the apply has moved another is
