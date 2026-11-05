@@ -89,9 +89,12 @@ reads file contents to decide. When it moves a file it reads the first and last
 file's tag list, never its contents, and adds to the list.";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match etude_cli_support::args::collect("sweep", env!("CARGO_PKG_VERSION")) {
+        Ok(args) => args,
+        Err(code) => return code,
+    };
     etude_cli_support::envelope::begin("sweep", env!("CARGO_PKG_VERSION"), &args);
-    let code = std::panic::catch_unwind(run_main).unwrap_or_else(|_| {
+    let code = std::panic::catch_unwind(|| run_main(args)).unwrap_or_else(|_| {
         set_reason(etude_cli_support::reason::Code::InternalError, None);
         ExitCode::from(3)
     });
@@ -99,9 +102,7 @@ fn main() -> ExitCode {
     code
 }
 
-fn run_main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
+fn run_main(args: Vec<String>) -> ExitCode {
     if args.first().is_some_and(|arg| arg == "contract") {
         return etude_cli_support::contract::command(
             etude_cli_support::contract::Tool::Sweep,

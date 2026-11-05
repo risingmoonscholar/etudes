@@ -82,14 +82,17 @@ macro_rules! println {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match etude_cli_support::args::collect("stash", env!("CARGO_PKG_VERSION")) {
+        Ok(args) => args,
+        Err(code) => return code,
+    };
     let receipt_args = if args.first().is_some_and(|arg| arg == "select") {
         selection::receipt_arguments(&args)
     } else {
         args.clone()
     };
     etude_cli_support::envelope::begin("stash", env!("CARGO_PKG_VERSION"), &receipt_args);
-    let code = std::panic::catch_unwind(run_main).unwrap_or_else(|_| {
+    let code = std::panic::catch_unwind(|| run_main(args)).unwrap_or_else(|_| {
         refusal_reason(etude_cli_support::reason::Code::InternalError);
         etude_cli_support::envelope::status("error");
         ExitCode::from(3)
@@ -98,9 +101,7 @@ fn main() -> ExitCode {
     code
 }
 
-fn run_main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-
+fn run_main(args: Vec<String>) -> ExitCode {
     if args.first().is_some_and(|arg| arg == "contract") {
         return etude_cli_support::contract::command(
             etude_cli_support::contract::Tool::Stash,

@@ -681,16 +681,18 @@ fn plain_text(message: &str) -> String {
 
 fn main() -> ExitCode {
     install_sigterm_handler();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match etude_cli_support::args::collect("unpack", env!("CARGO_PKG_VERSION")) {
+        Ok(args) => args,
+        Err(code) => return code,
+    };
     etude_cli_support::envelope::begin("unpack", env!("CARGO_PKG_VERSION"), &args);
-    let code = std::panic::catch_unwind(run_main)
+    let code = std::panic::catch_unwind(|| run_main(args))
         .unwrap_or_else(|_| failure(ReasonCode::InternalError, None));
     etude_cli_support::envelope::finish(code);
     code
 }
 
-fn run_main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn run_main(args: Vec<String>) -> ExitCode {
     if args.first().is_some_and(|arg| arg == "contract") {
         let code = etude_cli_support::contract::command(
             etude_cli_support::contract::Tool::Unpack,

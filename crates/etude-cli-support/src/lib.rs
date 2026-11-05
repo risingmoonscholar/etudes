@@ -1,5 +1,6 @@
 //! Small presentation helpers shared by the command-line tools.
 
+pub mod args;
 pub mod contract;
 pub mod envelope;
 pub mod problems;
