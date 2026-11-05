@@ -34,6 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use etude_cli_support::contract::{ARCHIVE_SUFFIXES, ArchiveFormat as Format};
 use etude_cli_support::reason::{Code as ReasonCode, Reason, Subject};
+use etude_cli_support::shown;
 use safety::Unsafe;
 
 // `unpack` deliberately targets the macOS system extractors.  Do not replace
@@ -123,17 +124,6 @@ struct ArchiveAnchor {
     /// never supply a name or reach the user.
     name: PathBuf,
     quarantine: Option<Vec<u8>>,
-}
-
-/// A path the caller named, for an error message. It is their own input, so the
-/// name stays; names from inside an archive stay redacted. Control characters are
-/// replaced so a hostile filename cannot send escape codes to the terminal.
-fn shown(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .chars()
-        .map(|c| if c.is_control() { '?' } else { c })
-        .collect()
 }
 
 /// These errors reach here as text, so the errno is read back from what the
@@ -562,6 +552,14 @@ fn value(args: &[String], f: &str) -> Option<String> {
 /// recognized option or the value consumed by one.
 fn validate_args(args: &[String]) -> Result<(), String> {
     let _ = max_size_flag(args)?;
+    for option in ["--into", "--max-size"] {
+        if args.iter().filter(|arg| *arg == option).count() > 1 {
+            return Err(format!(
+                "{option} (given more than once, and only the first would have been used. \
+                 Remove the ones you do not mean)"
+            ));
+        }
+    }
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -888,11 +886,20 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     let staging = match staging_destination(&dest) {
         Ok(path) => path,
         Err(e) => {
-            eprintln!("unpack: cannot prepare the target ({e})");
             if let Some(advice) = permission_advice_for(&e) {
-                eprintln!("{advice}");
-                return failure(ReasonCode::PermissionDenied, None);
+                let folder = dest
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."));
+                eprintln!(
+                    "unpack: cannot write to {}: permission denied. Nothing was extracted.\n\
+                     {advice}\n\
+                     Or choose another place with --into DIR.",
+                    shown(folder)
+                );
+                return failure(ReasonCode::PermissionDenied, input_subject(&dest));
             }
+            eprintln!("unpack: cannot prepare the target ({e})");
             return failure(ReasonCode::InternalError, None);
         }
     };

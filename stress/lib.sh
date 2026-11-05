@@ -73,6 +73,14 @@ assert_exit() {
   else fail "$label: wanted exit $want, got $got (${out%%$'\n'*})"; fi
 }
 
+# assert_no_panic LABEL OUTPUT: a crash is never a message, whatever the exit code.
+assert_no_panic() {
+  case "$2" in
+    *panicked*) fail "$1 panicked: ${2%%$'\n'*}" ;;
+    *) pass "$1 did not panic" ;;
+  esac
+}
+
 # assert_intact DIR N LABEL: nothing was destroyed. Count directory entries,
 # never printed paths: a filename containing a newline is one file, not two.
 assert_intact() {
