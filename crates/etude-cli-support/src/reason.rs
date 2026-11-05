@@ -49,6 +49,7 @@ pub enum Code {
     ItemAssignedTwice,
     ArchiveUnreadable,
     SizeLimitExceeded,
+    ExtractionStopped,
     ProfileInvalid,
 }
 
@@ -78,6 +79,7 @@ impl Code {
         Self::ItemAssignedTwice,
         Self::ArchiveUnreadable,
         Self::SizeLimitExceeded,
+        Self::ExtractionStopped,
         Self::ProfileInvalid,
     ];
 }
@@ -207,7 +209,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["sweep:scan", "stash:stash"],
+        operations: &["sweep:scan", "stash:stash", "unpack:extract", "unpack:list"],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {
@@ -304,13 +306,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "operation_incomplete",
         retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
-        operations: &[
-            "sweep:apply",
-            "sweep:undo",
-            "stash:stash",
-            "stash:pop",
-            "unpack:extract",
-        ],
+        operations: &["sweep:apply", "sweep:undo", "stash:stash", "stash:pop"],
         explanation: "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing.",
     },
     CodeSpec {
@@ -344,6 +340,14 @@ pub const CODES: &[CodeSpec] = &[
         subject_kind: Some("input"),
         operations: &["unpack:extract"],
         explanation: "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted.",
+    },
+    CodeSpec {
+        code: Code::ExtractionStopped,
+        name: "extraction_stopped",
+        retry: RetryClass::Later,
+        subject_kind: Some("input"),
+        operations: &["unpack:extract"],
+        explanation: "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names.",
     },
     CodeSpec {
         code: Code::ProfileInvalid,
@@ -495,6 +499,7 @@ impl Reason {
             Code::ItemAssignedTwice => "item_assigned_twice",
             Code::ArchiveUnreadable => "archive_unreadable",
             Code::SizeLimitExceeded => "size_limit_exceeded",
+            Code::ExtractionStopped => "extraction_stopped",
             Code::ProfileInvalid => "profile_invalid",
         }
     }
@@ -620,7 +625,7 @@ mod tests {
         assert!(sweep.contains("\"subject_kind\":\"download_in_flight\""));
         assert!(sweep.contains("\"subject_kind\":null"));
         assert!(!sweep.contains("\"all\""));
-        assert!(!codes_json("unpack").contains("\"code\":\"download_in_flight\""));
+        assert!(codes_json("unpack").contains("\"code\":\"download_in_flight\""));
     }
 
     /// A contract must not promise a code no code path in that tool produces.

@@ -116,28 +116,24 @@ impl std::fmt::Display for Unsafe {
             Unsafe::TooDeep(p) => write!(f, "nested deeper than {MAX_DEPTH}: {p}"),
             Unsafe::Symlink(p) => write!(
                 f,
-                "symlink: {p}\n       a dispatched extractor cannot be stopped from \
-                 writing through a link, and the link itself points wherever the \
-                 archive says. This build unpacks regular files and directories.\n       \
-                 `unpack ARCHIVE --list` shows every member without writing"
+                "symlink: {p}. A link inside an archive can point anywhere on your disk, so \
+                 unpack only makes plain files and folders."
             ),
             Unsafe::Hardlink(p) => write!(
                 f,
-                "hard link: {p}\n       a hard link can name a file outside the target, \
-                 so writing inside the extraction would change data outside it.\n       \
-                 `unpack ARCHIVE --list` shows every member without writing"
+                "hard link: {p}. A hard link can name a file outside the new folder, so writing \
+                 to it could change that file."
             ),
             Unsafe::SpecialNode(p) => write!(
                 f,
-                "device, FIFO or socket: {p}\n       an archive of files has no need of \
-                 one, and creating it is a surface this tool will not open.\n       \
-                 `unpack ARCHIVE --list` shows every member without writing"
+                "device, FIFO or socket: {p}. An archive of files has no need of one, so unpack \
+                 will not make it."
             ),
             Unsafe::SetuidBit(p) => write!(
                 f,
-                "setuid or setgid: {p}\n       an extracted file must not carry authority \
-                 its extractor did not have.\n       \
-                 extract it yourself with `tar -xf` if you trust the source"
+                "setuid or setgid: {p}. An extracted file must not carry powers the person \
+                 extracting it did not choose to give. If you trust the source, extract it \
+                 yourself with `tar -xf`."
             ),
         }
     }
@@ -445,13 +441,11 @@ mod type_tests {
         assert!(judge_mode("-rw-r--r--", "lrwxr-xr-x").is_none());
     }
 
-    /// Every refusal names the member, states the rule, and gives a recourse.
-    ///
-    /// The operator's contract, asserted rather than assumed: a refusal that
-    /// only blocks is a dead end, and an agent branching on exit 2 needs a
-    /// next move in the text.
+    /// Every refusal names the member and states the rule, in one line. The
+    /// next step comes once, after the whole list, and names the real archive:
+    /// tests/symlink_escape.rs pins that.
     #[test]
-    fn every_refusal_carries_member_rule_and_recourse() {
+    fn every_refusal_carries_member_and_rule_in_one_line() {
         let cases = vec![
             Unsafe::Symlink("shortcut".into()),
             Unsafe::Hardlink("hl".into()),
@@ -471,10 +465,7 @@ mod type_tests {
                 msg.contains(&member),
                 "refusal does not name the member: {msg}"
             );
-            assert!(
-                msg.contains("unpack ARCHIVE --list") || msg.contains("tar -xf"),
-                "refusal offers no recourse: {msg}"
-            );
+            assert!(!msg.contains('\n'), "refusal spans lines: {msg}");
             assert!(msg.len() > 60, "refusal states no rule: {msg}");
         }
     }

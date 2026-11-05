@@ -542,9 +542,9 @@ class Probe:
             archive = self.directory / ("unsupported" + suffix)
             archive.write_bytes(b"not a supported format")
             before = snapshot(self.directory)
-            output = self.run(archive, codes=(2,) if suffix == ".dmg" else (3,))
+            output = self.run(archive, codes=(2,))
             text = output.stderr.decode()
-            require("refused" in text if suffix == ".dmg" else "unsupported archive format" in text,
+            require("refused" in text if suffix == ".dmg" else "is not supported" in text,
                     f"{suffix} was not named unsupported")
             require(snapshot(self.directory) == before, "unsupported format had filesystem effects")
 
@@ -845,7 +845,7 @@ def unpack_unsupported_format(probe):
     return probe.run(archive, "--json", codes=(2,))
 
 
-def unpack_insufficient_space(probe):
+def unpack_size_limit_exceeded(probe):
     result = probe.run(unpack_archive(probe), "--max-size", "10", "--json", codes=(2,))
     require(not (probe.directory / "payload").exists(), "a refused extraction published a destination")
     return result
@@ -876,7 +876,21 @@ def unpack_permission_denied(probe):
         locked.chmod(0o700)
 
 
-def unpack_operation_incomplete(probe):
+def unpack_archive_unreadable(probe):
+    archive = probe.directory / "damaged.zip"
+    archive.write_bytes(b"not a zip at all")
+    result = probe.run(archive, "--json", codes=(3,))
+    require(not (probe.directory / "damaged").exists(), "an unreadable archive made a destination")
+    return result
+
+
+def unpack_download_in_flight(probe):
+    archive = probe.directory / "payload.zip.part"
+    archive.write_bytes(b"half a download")
+    return probe.run(archive, "--json", codes=(2,))
+
+
+def unpack_extraction_stopped(probe):
     """Stop a real extraction with SIGTERM once its private staging tree exists.
     An extraction that finishes first is a missed window, not a failure."""
     archive = zip_archive(probe.directory / "large.zip",
@@ -960,11 +974,13 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent.zip", "--json", codes=(3,)),
         "unsupported_format": unpack_unsupported_format,
-        "insufficient_space": unpack_insufficient_space,
+        "size_limit_exceeded": unpack_size_limit_exceeded,
+        "archive_unreadable": unpack_archive_unreadable,
+        "download_in_flight": unpack_download_in_flight,
         "destination_exists": unpack_destination_exists,
         "unsafe_input": unpack_unsafe_input,
         "permission_denied": unpack_permission_denied,
-        "operation_incomplete": unpack_operation_incomplete,
+        "extraction_stopped": unpack_extraction_stopped,
     },
 }
 
@@ -974,7 +990,7 @@ CODE_PROBES = {
 NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
-    "insufficient_space": "needs a full disk; stress scenario 107 fills a disk image to prove it for {tool}",
+    "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash) and 109 (unpack) fill a disk image to prove it",
 }
 
 

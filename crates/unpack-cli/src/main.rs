@@ -21,9 +21,9 @@ mod quarantine;
 mod safety;
 
 use std::collections::HashMap;
-use std::io::{BufRead, Read, Seek, Write};
+use std::io::{BufRead, Read, Seek};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -31,10 +31,11 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use etude_cli_support::contract::{ARCHIVE_SUFFIXES, ArchiveFormat as Format};
 use etude_cli_support::reason::{Code as ReasonCode, Reason, Subject};
-use etude_cli_support::shown;
+use etude_cli_support::{counted, plain_io_error, quoted_path, shown, shown_text};
 use safety::Unsafe;
 
 // `unpack` deliberately targets the macOS system extractors.  Do not replace
@@ -73,8 +74,9 @@ unpack: stop thinking about archive formats
 USAGE
     unpack ARCHIVE [--into DIR]    extract safely into its own directory
     unpack ARCHIVE --list          show what is inside, extract nothing
+                                   options may also come before ARCHIVE
     unpack contract --json         print the versioned capability contract
-    --max-size N[G|M]              set the monitored soft limit in bytes
+    --max-size N[G|M]              set the size limit: a whole number above 0
     --json                         machine-readable output (for agents)
     --version                      print the version and exit
     unpack help
@@ -90,15 +92,16 @@ covers it. `hdiutil attach` does it if you decide to.
 Every archive is listed and judged BEFORE anything is written. Paths that
 escape the target, absolute paths and drive paths are refused outright.
 
-Extraction uses private staging beside the destination. Every extracted path
-and member type is audited before the complete tree is published by rename.
-Failed runs remove staging, or report its location if cleanup fails.
+Extraction uses a private folder beside the destination. Every extracted path
+and member type is checked before the complete folder moves into place with one
+rename. Failed runs remove that folder, or say where it is if they cannot.
 
-The monitored soft limit defaults to half the free space on the target volume.
-Bytes on disk are checked every 100 ms and after exit, independently of archive
-headers. This is not a hard write cap: extraction can overshoot between checks
-and while stopping. Refusals report the final measured bytes and overshoot.
---max-size changes this soft limit; README.md records measured overshoot.";
+The size limit defaults to half the free space on the target disk, kept between
+1 GB and 64 GB. Bytes on disk are checked every 100 ms and after exit,
+independently of archive headers. This is a soft limit, not a hard write cap:
+extraction can go over between checks and while stopping. Refusals report the
+final measured bytes and how far they went over. --max-size changes this limit;
+README.md records how far over it has been measured to go.";
 
 /// A private byte-for-byte copy of the archive we judged.
 ///
@@ -142,12 +145,14 @@ fn permission_advice_for(message: &str) -> Option<&'static str> {
 #[derive(Debug)]
 enum ArchiveAnchorError {
     Io(String),
+    Symlink,
     QuarantineChanged,
 }
 impl std::fmt::Display for ArchiveAnchorError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(message) => formatter.write_str(message),
+            Self::Symlink => formatter.write_str("the archive path is a link"),
             Self::QuarantineChanged => {
                 formatter.write_str("archive quarantine changed while copying")
             }
@@ -185,7 +190,7 @@ impl ArchiveAnchor {
         match etude_core::scan::observe_read("archive_metadata", std::fs::symlink_metadata(archive))
         {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err("the archive path is a symlink".into());
+                return Err(ArchiveAnchorError::Symlink);
             }
             Ok(_) => {}
             Err(error) => return Err(error.into()),
@@ -292,6 +297,26 @@ impl ArchiveAnchor {
 
     fn name(&self) -> &Path {
         &self.name
+    }
+
+    fn len(&self) -> std::io::Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+
+    /// Up to `limit` bytes from the start of the copy. Reading at an offset
+    /// leaves the descriptor where a child expects to find it.
+    fn head(&self, limit: usize) -> std::io::Result<Vec<u8>> {
+        let mut bytes = vec![0; limit];
+        let mut filled = 0;
+        while filled < limit {
+            let got = self.file.read_at(&mut bytes[filled..], filled as u64)?;
+            if got == 0 {
+                break;
+            }
+            filled += got;
+        }
+        bytes.truncate(filled);
+        Ok(bytes)
     }
 
     /// Give one child the copy, at its start.
@@ -438,8 +463,220 @@ fn destination_subject(path: &Path) -> Option<Subject> {
     ))
 }
 
-fn unknown_option(input: &str) -> bool {
-    input.starts_with('-') && !input.contains(char::is_whitespace)
+/// An argument mistake: what to say, and whether it is an unknown option.
+#[derive(Debug, PartialEq, Eq)]
+enum BadArgument {
+    UnknownOption(String),
+    Invalid(String),
+}
+
+impl BadArgument {
+    fn refuse(&self) -> ExitCode {
+        match self {
+            Self::UnknownOption(option) => {
+                eprintln!(
+                    "unpack: unknown option {}. It handles --list, --json, --into DIR and \
+                     --max-size SIZE. Run `unpack help`.",
+                    shown_text(option)
+                );
+                refusal(ReasonCode::UnknownOption, None)
+            }
+            Self::Invalid(message) => {
+                eprintln!("unpack: {message}");
+                refusal(ReasonCode::InvalidArguments, None)
+            }
+        }
+    }
+}
+
+/// What this format is called in a sentence, with its article.
+fn format_name(fmt: Format) -> &'static str {
+    match fmt {
+        Format::Zip => "a ZIP",
+        Format::Tar => "a tar archive",
+        Format::TarGz => "a .tar.gz archive",
+        Format::TarBz2 => "a .tar.bz2 archive",
+        Format::TarXz => "a .tar.xz archive",
+        Format::Gz => "a gzip file",
+        Format::Dmg => "a disk image",
+    }
+}
+
+/// The command that extracts this archive without unpack, for an archive the
+/// person trusts and unpack will not take.
+fn by_hand(fmt: Format, archive: &Path, dest: &Path) -> String {
+    let (archive, dest) = (quoted_path(archive), quoted_path(dest));
+    match fmt {
+        Format::Zip => format!("unzip {archive} -d {dest}"),
+        Format::Gz => format!("gunzip -k {archive}"),
+        _ => format!("mkdir {dest} && tar -xf {archive} -C {dest}"),
+    }
+}
+
+/// The command that shows what is inside without unpack.
+fn look_by_hand(fmt: Format, archive: &Path) -> String {
+    let archive = quoted_path(archive);
+    match fmt {
+        Format::Zip => format!("unzip -l {archive}"),
+        _ => format!("tar -tf {archive}"),
+    }
+}
+
+/// A file that cannot be read as what its name says.
+fn unreadable_message(archive: &Path, fmt: Format) -> String {
+    let kind = format_name(fmt);
+    format!(
+        "unpack: {} could not be read as {kind}. It may be damaged, incomplete, or not {kind}. \
+         Nothing was extracted. If you downloaded it, try downloading it again.",
+        shown(archive)
+    )
+}
+
+fn unreadable(archive: &Path, fmt: Format) -> ExitCode {
+    eprintln!("{}", unreadable_message(archive, fmt));
+    failure(ReasonCode::ArchiveUnreadable, input_subject(archive))
+}
+
+/// The whole file is one end-of-central-directory record that counts no
+/// entries, on one disk, with a central directory of no bytes at offset 0. Any
+/// other bytes around it mean a damaged file rather than an empty archive.
+fn is_empty_zip(bytes: &[u8]) -> bool {
+    const RECORD: usize = 22;
+    bytes.len() >= RECORD
+        && bytes.starts_with(b"PK\x05\x06")
+        && bytes[4..20].iter().all(|byte| *byte == 0)
+        && usize::from(u16::from_le_bytes([bytes[20], bytes[21]])) == bytes.len() - RECORD
+}
+
+/// The largest empty ZIP: its record plus the longest comment one can hold.
+const EMPTY_ZIP_MAX_BYTES: usize = 22 + 65_535;
+
+/// Does this start like something `gunzip` can read? Besides gzip, the macOS
+/// `gunzip` also reads compress, bzip2 and xz data under a .gz name, measured on
+/// macOS 27.0. Calling those unreadable would be false, since extraction works.
+fn gunzip_reads(head: &[u8]) -> bool {
+    head.starts_with(&[0x1f, 0x8b, 0x08])
+        || head.starts_with(&[0x1f, 0x9d])
+        || head.starts_with(b"BZh")
+        || head.starts_with(&[0xfd, b'7', b'z', b'X', b'Z', 0x00])
+}
+
+fn type_unknown_message(archive: &Path, fmt: Format, dest: &Path) -> String {
+    format!(
+        "unpack: REFUSED. {} lists its names but not what kind of item each one is, so unpack \
+         cannot tell whether it holds links or device files. Nothing was extracted.\n\
+         To look inside: {}\n\
+         If you trust this archive, extract it by hand: {}",
+        shown(archive),
+        look_by_hand(fmt, archive),
+        by_hand(fmt, archive, dest)
+    )
+}
+
+fn untyped_member_message(archive: &Path, fmt: Format, dest: &Path, member: &str) -> String {
+    format!(
+        "unpack: REFUSED. {} lists {} without saying what kind of item it is, so unpack will \
+         not extract it. Nothing was extracted.\n\
+         If you trust this archive, extract it by hand: {}",
+        shown(archive),
+        shown_text(&format!("{member:?}")),
+        by_hand(fmt, archive, dest)
+    )
+}
+
+fn too_many_entries_message(archive: &Path, fmt: Format, dest: &Path, count: usize) -> String {
+    format!(
+        "unpack: {} holds {count} entries, and unpack stops at {}. Nothing was extracted.\n\
+         If you trust this archive, extract it by hand: {}",
+        shown(archive),
+        safety::MAX_ENTRIES,
+        by_hand(fmt, archive, dest)
+    )
+}
+
+fn quarantine_changed_message(archive: &Path) -> String {
+    format!(
+        "unpack: the download warning mark on {} changed while unpack was copying it. \
+         Nothing was extracted. Run unpack again.",
+        shown(archive)
+    )
+}
+
+fn quarantine_failed_message(
+    error: &std::io::Error,
+    dest: &Path,
+    cleanup: &str,
+    by_hand: &str,
+) -> String {
+    let next = if permission_denied(error) {
+        format!(
+            "A file in the archive may be locked. If you trust this archive, extract it by \
+             hand: {by_hand}"
+        )
+    } else {
+        "Try another place with --into DIR.".into()
+    };
+    format!(
+        "unpack: could not carry the download warning mark onto the extracted files: {}. \
+         Nothing was placed at {}. {cleanup}\n{next}",
+        plain_io_error(error),
+        shown(dest)
+    )
+}
+
+fn permission_denied(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(1 | 13))
+}
+
+fn limit_message(
+    written: u64,
+    limit: u64,
+    chosen: bool,
+    cleanup: &str,
+    archive: &Path,
+    into: Option<&Path>,
+) -> String {
+    let opening = if chosen {
+        "stopped at your --max-size limit"
+    } else {
+        "stopped at the default size limit"
+    };
+    let why = if chosen {
+        String::new()
+    } else {
+        "\nThe default is half the free space on this disk, kept between 1 GB and 64 GB. A big \
+         project and a decompression bomb look the same from here, so this says nothing about \
+         the archive being hostile."
+            .into()
+    };
+    let into = into
+        .map(|folder| format!(" --into {}", quoted_path(folder)))
+        .unwrap_or_default();
+    format!(
+        "unpack: {opening}. It wrote {} before stopping; the limit is {}, so it went {} over. \
+         {cleanup}{why}\n\
+         To allow more, if you trust this archive: unpack {}{into} --max-size SIZE\n\
+         SIZE is a whole number, optionally with M or G.",
+        exact_bytes(written),
+        exact_bytes(limit),
+        exact_bytes(written.saturating_sub(limit)),
+        quoted_path(archive)
+    )
+}
+
+/// An operating system error that reached here as text, without its number.
+fn plain_text(message: &str) -> String {
+    let mut plain = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(start) = rest.find(" (os error ") {
+        plain.push_str(&rest[..start]);
+        rest = match rest[start..].find(')') {
+            Some(end) => &rest[start + end + 1..],
+            None => "",
+        };
+    }
+    plain.push_str(rest);
+    plain
 }
 
 fn main() -> ExitCode {
@@ -474,16 +711,9 @@ fn run_main() -> ExitCode {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    if let Err(input) = validate_args(&args) {
-        eprintln!("unpack: refused invalid input {input}");
-        return refusal(
-            if unknown_option(&input) {
-                ReasonCode::UnknownOption
-            } else {
-                ReasonCode::InvalidArguments
-            },
-            None,
-        );
+    let args = archive_first(args);
+    if let Err(problem) = validate_args(&args) {
+        return problem.refuse();
     }
     match args.first().map(String::as_str) {
         None | Some("help" | "--help" | "-h") => {
@@ -494,39 +724,38 @@ fn run_main() -> ExitCode {
             println!("unpack {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        // A leading flag is never an archive name. Without this, `unpack
-        // --frobnicate` took the typo as a filename and reported "not a file"
-        // with exit 3, so a caller could not tell a usage mistake from a
-        // missing archive. Same defect stash had with `--version`, and the
-        // same answer: refuse with 2, which is what the exit-code contract
-        // reserves for a refusal.
+        // Every option was recognized above and no archive was found among the
+        // words, so the archive is the one thing missing.
         Some(p) if p.starts_with('-') => {
-            // A real flag with no archive is a different mistake from a typo,
-            // and saying "unknown option" to a flag that exists is its own
-            // small lie.
-            const KNOWN: &[&str] = &["--list", "--json", "--into"];
-            if KNOWN.contains(&p) {
-                eprintln!(
-                    "unpack: {p} describes what to do with an archive, so it \
-                     needs one.\n     unpack ARCHIVE {p}"
-                );
-            } else {
-                eprintln!(
-                    "unpack: unknown option {p}.\n\
-                     Handles: --list, --json, --into DIR. Run `unpack help`."
-                );
-            }
-            refusal(
-                if KNOWN.contains(&p) {
-                    ReasonCode::InvalidArguments
-                } else {
-                    ReasonCode::UnknownOption
-                },
-                None,
-            )
+            eprintln!(
+                "unpack: {p} describes what to do with an archive, so it needs one.\n     \
+                 unpack ARCHIVE {p}"
+            );
+            refusal(ReasonCode::InvalidArguments, None)
         }
         Some(p) => run(&PathBuf::from(expand_tilde(p)), &args),
     }
+}
+
+/// Move the archive to the front when options came first, so the checks below
+/// see one order. A value belonging to --into or --max-size is never taken for
+/// the archive, and a word this stops at stays where it is, to be refused.
+fn archive_first(mut args: Vec<String>) -> Vec<String> {
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--list" | "--json" => i += 1,
+            "--into" | "--max-size" => i += 2,
+            "help" | "version" | "contract" => break,
+            word if word.starts_with('-') => break,
+            _ => {
+                let archive = args.remove(i);
+                args.insert(0, archive);
+                break;
+            }
+        }
+    }
+    args
 }
 
 fn expand_tilde(p: &str) -> String {
@@ -548,42 +777,55 @@ fn value(args: &[String], f: &str) -> Option<String> {
 }
 
 /// Reject typos and incomplete options before reading the archive or creating
-/// output. The archive is the first argument; every later argument must be a
-/// recognized option or the value consumed by one.
-fn validate_args(args: &[String]) -> Result<(), String> {
+/// output. Every argument after the archive must be a recognized option or the
+/// value consumed by one. Without an archive, every argument must be one too.
+fn validate_args(args: &[String]) -> Result<(), BadArgument> {
     let _ = max_size_flag(args)?;
     for option in ["--into", "--max-size"] {
         if args.iter().filter(|arg| *arg == option).count() > 1 {
-            return Err(format!(
-                "{option} (given more than once, and only the first would have been used. \
-                 Remove the ones you do not mean)"
-            ));
+            return Err(BadArgument::Invalid(format!(
+                "{option} was given more than once, and only the first would have been used. \
+                 Remove the ones you do not mean."
+            )));
         }
     }
-    let mut i = 1;
+    let no_archive = args.first().is_some_and(|first| first.starts_with('-'))
+        && !matches!(args[0].as_str(), "--version" | "-V");
+    let mut i = usize::from(!no_archive);
     while i < args.len() {
         match args[i].as_str() {
             "--list" | "--json" => i += 1,
             "--into" => {
                 let Some(directory) = args.get(i + 1) else {
-                    return Err("--into (missing directory)".into());
+                    return Err(BadArgument::Invalid(
+                        "--into needs a folder: --into DIR.".into(),
+                    ));
                 };
+                // With no archive at all, that is the mistake to report first.
+                if no_archive && directory.starts_with('-') {
+                    i += 1;
+                    continue;
+                }
                 if directory.starts_with('-') {
-                    return Err(format!("{directory} (value for --into)"));
+                    return Err(BadArgument::Invalid(format!(
+                        "--into needs a folder, got \"{}\".",
+                        shown_text(directory)
+                    )));
                 }
                 i += 2;
             }
-            "--max-size" => {
-                let Some(size) = args.get(i + 1) else {
-                    return Err("--max-size (missing size)".into());
-                };
-                if size.starts_with('-') {
-                    return Err(format!("{size} (value for --max-size)"));
-                }
-                i += 2;
+            // max_size_flag has already judged the value.
+            "--max-size" => i += 2,
+            option if option.starts_with('-') && !option.contains(char::is_whitespace) => {
+                return Err(BadArgument::UnknownOption(option.into()));
             }
-            option if option.starts_with('-') => return Err(option.into()),
-            value => return Err(format!("{value} (unexpected argument)")),
+            word => {
+                return Err(BadArgument::Invalid(format!(
+                    "unexpected word \"{}\". Give one archive and any options. \
+                     Run `unpack help`.",
+                    shown_text(word)
+                )));
+            }
         }
     }
     Ok(())
@@ -594,7 +836,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Ok(metadata) if metadata.is_file() => {}
         Ok(_) => {
             eprintln!("unpack: not a file: {}", shown(archive));
-            return failure(ReasonCode::UnsafeInput, input_subject(archive));
+            return failure(ReasonCode::MissingInput, input_subject(archive));
         }
         // "Not a directory" is a path that runs through a regular file: it
         // names nothing, exactly as a missing archive does.
@@ -615,20 +857,43 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             return failure(ReasonCode::PermissionDenied, input_subject(archive));
         }
         Err(error) => {
-            eprintln!("unpack: cannot read {}: {error}", shown(archive));
+            eprintln!(
+                "unpack: cannot read {}: {}.",
+                shown(archive),
+                plain_io_error(&error)
+            );
             return failure(ReasonCode::InternalError, None);
         }
     }
-    let Some(fmt) = detect(archive) else {
+    let lowercase = archive.to_string_lossy().to_ascii_lowercase();
+    if etude_core::scan::IN_FLIGHT_SUFFIXES
+        .iter()
+        .any(|suffix| lowercase.ends_with(suffix))
+    {
         eprintln!(
-            "unpack: unsupported archive format: {}.\n\
-             Run `unpack contract --json` for the exact supported suffixes.",
-            archive
-                .extension()
-                .map(|ext| format!(".{}", ext.to_string_lossy()))
-                .unwrap_or_else(|| "(no suffix)".into())
+            "unpack: {} looks like a download still in progress. Try again when it finishes.",
+            shown(archive)
         );
-        return failure(ReasonCode::UnsupportedFormat, None);
+        return refusal(
+            ReasonCode::DownloadInFlight,
+            Some(Subject::path(
+                "download_in_flight",
+                &etude_core::redact::path(archive),
+            )),
+        );
+    }
+    let Some(fmt) = detect(archive) else {
+        let handled = ARCHIVE_SUFFIXES
+            .iter()
+            .filter(|(_, format)| *format != Format::Dmg)
+            .map(|(suffix, _)| *suffix)
+            .collect::<Vec<_>>();
+        let not_handled = archive
+            .extension()
+            .map(|ext| format!(".{} is not supported", shown_text(&ext.to_string_lossy())))
+            .unwrap_or_else(|| format!("{} has no archive suffix", shown(archive)));
+        eprintln!("unpack: {not_handled}. It handles {}.", handled.join(" "));
+        return refusal(ReasonCode::UnsupportedFormat, None);
     };
 
     if fmt == Format::Dmg {
@@ -667,42 +932,94 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     let pinned = match ArchiveAnchor::create(archive) {
         Ok(pinned) => pinned,
         Err(ArchiveAnchorError::QuarantineChanged) => {
-            eprintln!(
-                "unpack: REFUSED. Archive quarantine changed while copying. Nothing was extracted."
-            );
+            eprintln!("{}", quarantine_changed_message(archive));
             return refusal(ReasonCode::UnsafeInput, input_subject(archive));
         }
+        Err(ArchiveAnchorError::Symlink) => {
+            let real = archive
+                .canonicalize()
+                .map(|path| format!(": unpack {}", quoted_path(&path)))
+                .unwrap_or_default();
+            eprintln!(
+                "unpack: {} is a link, and unpack works only on the real file. \
+                 Name the file it points to{real}",
+                shown(archive)
+            );
+            return failure(ReasonCode::UnsafeInput, input_subject(archive));
+        }
         Err(e) => {
-            eprintln!("unpack: could not secure the archive for checking ({e})");
-            if let Some(advice) = permission_advice_for(&e.to_string()) {
+            let text = e.to_string();
+            eprintln!(
+                "unpack: cannot read {}: {}. Nothing was extracted.",
+                shown(archive),
+                plain_text(&text)
+            );
+            if let Some(advice) = permission_advice_for(&text) {
                 eprintln!("{advice}");
+                return failure(ReasonCode::PermissionDenied, input_subject(archive));
             }
-            return match e {
-                ArchiveAnchorError::Io(message) if message == "the archive path is a symlink" => {
-                    failure(ReasonCode::UnsafeInput, input_subject(archive))
-                }
-                _ => failure(ReasonCode::InternalError, None),
-            };
+            return failure(ReasonCode::InternalError, None);
         }
     };
+
+    // Decided here so a refusal below can print a command that works. Nothing
+    // is created at this path until step 4.
+    let dest = match value(args, "--into") {
+        Some(d) => PathBuf::from(expand_tilde(&d)),
+        None => archive
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(stem(archive)),
+    };
+
+    // A file of no bytes reads as an empty tar and as an empty stream, and says
+    // nothing true about what it was meant to hold.
+    if pinned.len().is_ok_and(|len| len == 0) {
+        eprintln!(
+            "unpack: {} is 0 bytes, so it is not {}. Nothing was extracted. \
+             If you downloaded it, try downloading it again.",
+            shown(archive),
+            format_name(fmt)
+        );
+        return failure(ReasonCode::ArchiveUnreadable, input_subject(archive));
+    }
+    let listing_only = flag(args, "--list");
+    if fmt == Format::Gz && listing_only && !pinned.head(6).is_ok_and(|head| gunzip_reads(&head)) {
+        return unreadable(archive, fmt);
+    }
 
     // --- 1. list -----------------------------------------------------------
     let entries = match list(&pinned, fmt) {
         Ok(e) => e,
-        Err(e) => {
-            eprintln!("unpack: could not read the archive ({e})");
-            return failure(ReasonCode::UnsafeInput, input_subject(archive));
+        Err(ListError::Unreadable) => {
+            // unzip answers an empty ZIP as a failure. The record decides it,
+            // so a damaged file never gets this answer.
+            let empty = fmt == Format::Zip
+                && pinned
+                    .head(EMPTY_ZIP_MAX_BYTES + 1)
+                    .is_ok_and(|bytes| is_empty_zip(&bytes));
+            if !empty {
+                return unreadable(archive, fmt);
+            }
+            Vec::new()
+        }
+        Err(ListError::Tool(e)) => {
+            eprintln!(
+                "unpack: could not check {}: {}. Nothing was extracted.",
+                shown(archive),
+                plain_text(&e)
+            );
+            return failure(ReasonCode::InternalError, None);
         }
     };
     if entries.is_empty() {
-        eprintln!("unpack: the archive appears to be empty");
+        eprintln!("unpack: the archive is empty. Nothing was extracted.");
         return ExitCode::from(1);
     }
     if entries.len() > safety::MAX_ENTRIES {
         eprintln!(
-            "unpack: refused, {} entries exceeds the {} cap",
-            entries.len(),
-            safety::MAX_ENTRIES
+            "{}",
+            too_many_entries_message(archive, fmt, &dest, entries.len())
         );
         return refusal(ReasonCode::UnsafeInput, input_subject(archive));
     }
@@ -713,17 +1030,13 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // TYPE, from the verbose listing's mode string -- symlink, hard link,
     // device node, setuid. A member is refused if either says so.
     let mut blocked: Vec<Unsafe> = entries.iter().filter_map(|p| safety::judge(p)).collect();
-    let members = match list_members(&pinned, fmt) {
-        Ok(members) => {
-            if let Err(missing) = typed_rows_cover_entries(&entries, &members) {
-                eprintln!(
-                    "unpack: REFUSED. The plain listing names {missing:?}, but the typed\n\
-                     listing has no corresponding member row. Refusing rather than extract\n\
-                     an entry whose type was never checked."
-                );
+    let TypedListing { members, encrypted } = match list_members(&pinned, fmt) {
+        Ok(listing) => {
+            if let Err(missing) = typed_rows_cover_entries(&entries, &listing.members) {
+                eprintln!("{}", untyped_member_message(archive, fmt, &dest, &missing));
                 return refusal(ReasonCode::UnsafeInput, input_subject(archive));
             }
-            members
+            listing
         }
         Err(_) => {
             // The verbose listing failed where the plain one worked. That is
@@ -731,13 +1044,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             // The rule is: never treat agreement as proof, and never
             // treat a failed check as a pass. Refuse rather than extract with
             // one of the two judgements missing.
-            eprintln!(
-                "unpack: REFUSED. This archive lists its names but not its member\n\
-                 types, so whether it contains links or device nodes cannot be\n\
-                 established. Refusing rather than extracting half-checked.\n       \
-                 `unpack {} --list` shows the names it does report.",
-                archive.display()
-            );
+            eprintln!("{}", type_unknown_message(archive, fmt, &dest));
             return refusal(ReasonCode::UnsafeInput, input_subject(archive));
         }
     };
@@ -751,8 +1058,9 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         }
     }
     let junk = entries.iter().filter(|p| safety::is_junk(p)).count();
+    let password_protected = encrypted > 0;
 
-    if flag(args, "--list") && flag(args, "--json") {
+    if listing_only && flag(args, "--json") {
         // Lets an agent inspect an archive and decide, without extracting.
         use etude_core::json as j;
         println!(
@@ -761,7 +1069,9 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 ("archive", j::path(archive)),
                 ("entries", j::num(entries.len())),
                 ("junk", j::num(junk)),
-                ("safe", j::bool(blocked.is_empty())),
+                ("safe", j::bool(blocked.is_empty() && !password_protected)),
+                ("password_protected", j::bool(password_protected)),
+                ("contents_verified", j::bool(fmt != Format::Gz)),
                 (
                     "blocked",
                     j::arr(blocked.iter().map(|b| j::str(&b.to_string())))
@@ -778,8 +1088,21 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if flag(args, "--list") {
-        println!("\n{} entries in {}", entries.len(), stem(archive));
+    if listing_only {
+        if fmt == Format::Gz {
+            println!(
+                "\n{} would extract to one file named {}.",
+                shown(pinned.name()),
+                shown_text(&entries[0])
+            );
+            println!("Its contents are not verified: gzip has no member list.");
+            return ExitCode::SUCCESS;
+        }
+        println!(
+            "\n{} in {}",
+            counted(entries.len(), "entry", "entries"),
+            stem(archive)
+        );
         for p in entries.iter().take(40) {
             println!("  {p}");
         }
@@ -787,10 +1110,20 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             println!("  … {} more", entries.len() - 40);
         }
         if !blocked.is_empty() {
-            println!("\n  {} unsafe path(s) would be refused:", blocked.len());
+            println!(
+                "\n  {} would be refused:",
+                counted(blocked.len(), "unsafe path", "unsafe paths")
+            );
             for b in &blocked {
-                println!("    {b}");
+                println!("    {}", shown_text(&b.to_string()));
             }
+        }
+        if password_protected {
+            println!(
+                "\n  This archive is password-protected, so unpack would not extract it.\n  \
+                 Open it with unzip, which asks for the password: {}",
+                by_hand(fmt, archive, &dest)
+            );
         }
         return ExitCode::SUCCESS;
     }
@@ -816,32 +1149,37 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     if !blocked.is_empty() {
         // Refuse the whole archive. Extracting the safe subset of a hostile
         // archive gives the attacker a partial success and the user a mess.
-        eprintln!(
-            "\nunpack: REFUSED. This archive contains members this tool will not\n\
-             create.\n"
-        );
+        eprintln!("\nunpack: REFUSED. This archive holds items unpack will not create.\n");
         for b in blocked.iter().take(10) {
-            eprintln!("  {b}");
+            eprintln!("  {}", shown_text(&b.to_string()));
         }
         if blocked.len() > 10 {
             eprintln!("  … and {} more", blocked.len() - 10);
         }
         eprintln!(
-            "\nNothing was extracted. Inspect it with: unpack {} --list",
-            archive.display()
+            "\nNothing was extracted. See everything inside it with: unpack {} --list",
+            quoted_path(archive)
         );
         return refusal(ReasonCode::UnsafeInput, input_subject(archive));
+    }
+
+    // Asked only after the safety judgement, so an archive that is both is
+    // refused for the graver reason.
+    if password_protected {
+        eprintln!(
+            "unpack: {} is password-protected, which unpack does not handle. Nothing was \
+             extracted.\nOpen it with unzip, which asks for the password: {}",
+            shown(archive),
+            by_hand(fmt, archive, &dest)
+        );
+        return refusal(ReasonCode::UnsupportedFormat, None);
     }
 
     after_preflight_for_test();
 
     // --- 3. choose a destination that cannot explode into the cwd ----------
-    let parent = archive.parent().unwrap_or(Path::new("."));
-    let dest = match value(args, "--into") {
-        Some(d) => PathBuf::from(expand_tilde(&d)),
-        None => parent.join(stem(archive)),
-    };
-    if dest.exists() {
+    // Not `exists()`: that follows a link, so a broken one would look vacant.
+    if dest.symlink_metadata().is_ok() {
         eprintln!(
             "unpack: {} already exists. Pass --into DIR to choose another.",
             shown(&dest)
@@ -856,20 +1194,18 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // 4 GB refuses an ordinary project on a roomy disk and permits filling a
     // full one.
     let free = dest.parent().and_then(free_bytes);
-    let budget = match max_size_flag(args) {
-        Ok(Some(n)) => n,
-        Ok(None) => safety::budget(free),
-        Err(input) => {
-            eprintln!("unpack: refused invalid input {input}");
-            return refusal(ReasonCode::InvalidArguments, None);
-        }
+    let chosen_limit = match max_size_flag(args) {
+        Ok(limit) => limit,
+        Err(problem) => return problem.refuse(),
     };
+    let budget = chosen_limit.unwrap_or_else(|| safety::budget(free));
     match free {
         Some(f) if f < MIN_FREE_BYTES => {
             eprintln!(
-                "unpack: refused. Only {} free on this volume, and extracting needs room\n\
-                 to work. Nothing was written.",
-                human(f)
+                "unpack: only {} free on this disk, and unpack needs {} free to start. \
+                 Nothing was written. Free some space, or choose another disk with --into DIR.",
+                human(f),
+                human(MIN_FREE_BYTES)
             );
             return refusal(
                 ReasonCode::InsufficientSpace,
@@ -886,11 +1222,11 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     let staging = match staging_destination(&dest) {
         Ok(path) => path,
         Err(e) => {
-            if let Some(advice) = permission_advice_for(&e) {
-                let folder = dest
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                    .unwrap_or(Path::new("."));
+            let folder = dest
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            if let Some(advice) = etude_core::scan::permission_advice(&e) {
                 eprintln!(
                     "unpack: cannot write to {}: permission denied. Nothing was extracted.\n\
                      {advice}\n\
@@ -899,22 +1235,74 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
                 );
                 return failure(ReasonCode::PermissionDenied, input_subject(&dest));
             }
-            eprintln!("unpack: cannot prepare the target ({e})");
-            return failure(ReasonCode::InternalError, None);
+            let missing = match e.kind() {
+                std::io::ErrorKind::NotFound => format!(
+                    "the folder {} does not exist, so {} cannot be made there. \
+                     Nothing was extracted. Make the folder first: mkdir -p {}",
+                    shown(folder),
+                    shown(&dest),
+                    quoted_path(folder)
+                ),
+                std::io::ErrorKind::NotADirectory => format!(
+                    "part of {} is a file, not a folder, so {} cannot be made there. \
+                     Nothing was extracted. Choose another place with --into DIR.",
+                    shown(folder),
+                    shown(&dest)
+                ),
+                _ => {
+                    eprintln!(
+                        "unpack: cannot write in {}: {}. Nothing was extracted. \
+                         Choose another place with --into DIR.",
+                        shown(folder),
+                        plain_io_error(&e)
+                    );
+                    return failure(ReasonCode::InternalError, None);
+                }
+            };
+            eprintln!("unpack: {missing}");
+            return failure(ReasonCode::MissingInput, input_subject(&dest));
         }
     };
     match extract(&pinned, fmt, &staging, budget) {
-        Err(e) => {
+        Err(ExtractError::Stopped) => {
             let cleanup = cleanup_destination(&staging);
-            if e == "stopped after SIGTERM" {
-                etude_cli_support::envelope::status("refused");
-                eprintln!("unpack: stopped after SIGTERM. {}", cleanup.message());
-                return refusal(
-                    ReasonCode::OperationIncomplete,
-                    Some(Subject::wait("journal", None)),
+            etude_cli_support::envelope::status("refused");
+            eprintln!("unpack: stopped after SIGTERM. {}", cleanup.message());
+            return refusal(ReasonCode::ExtractionStopped, input_subject(archive));
+        }
+        Err(ExtractError::ToolFailed(output)) => {
+            let cleanup = cleanup_destination(&staging);
+            if output.disk_full {
+                eprintln!(
+                    "unpack: the disk ran out of room while extracting {}. {} \
+                     Free some space, or choose another disk with --into DIR.",
+                    shown(archive),
+                    cleanup.message()
+                );
+                output.print("Detail from the system tool");
+                return failure(
+                    ReasonCode::InsufficientSpace,
+                    Some(Subject::wait("destination", None)),
                 );
             }
-            eprintln!("unpack: extraction failed ({e}). {}", cleanup.message());
+            eprintln!(
+                "unpack: {} could not be fully extracted. It may be damaged, incomplete, or not \
+                 {}. {} If you downloaded it, try downloading it again.",
+                shown(archive),
+                format_name(fmt),
+                cleanup.message()
+            );
+            output.print("Detail from the system tool");
+            return failure(ReasonCode::ArchiveUnreadable, input_subject(archive));
+        }
+        Err(ExtractError::Other(e)) => {
+            let cleanup = cleanup_destination(&staging);
+            eprintln!(
+                "unpack: could not finish extracting {}: {}. {}",
+                shown(archive),
+                plain_text(&e),
+                cleanup.message()
+            );
             return failure(ReasonCode::InternalError, None);
         }
         Ok(Err(breach)) => {
@@ -923,31 +1311,40 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             // worse here than usual: the user did not choose to start it.
             let cleanup = cleanup_destination(&staging);
             let Breach::Total(n) = breach;
+            // The limit was not the problem if the disk could not have held
+            // that much anyway: a larger limit would not help.
+            if free.is_some_and(|f| n >= f) {
+                eprintln!(
+                    "unpack: the disk ran out of room while extracting {}. {} \
+                     Free some space, or choose another disk with --into DIR.",
+                    shown(archive),
+                    cleanup.message()
+                );
+                return failure(
+                    ReasonCode::InsufficientSpace,
+                    Some(Subject::wait("destination", None)),
+                );
+            }
+            let into = value(args, "--into").map(|d| PathBuf::from(expand_tilde(&d)));
             eprintln!(
-                "unpack: monitored soft limit exceeded: {n} bytes measured after stopping;\n\
-                 limit {budget} bytes; overshoot {} bytes.\n\
-                 {}\n\n\
-                 The budget is half the free space on the target volume, so a large\n\
-                 archive on a roomy disk is fine and the same archive on a full one is\n\
-                 not. This says nothing about the archive being hostile: a big project\n\
-                 and a decompression bomb look identical from here, which is why the\n\
-                 soft limit watches bytes written rather than intent; it is not a hard cap.\n\n\
-                 To allow more:  unpack ARCHIVE --max-size {}G",
-                n - budget,
-                cleanup.message(),
-                (n / (1024 * 1024 * 1024)) + 2
+                "{}",
+                limit_message(
+                    n,
+                    budget,
+                    chosen_limit.is_some(),
+                    &cleanup.message(),
+                    archive,
+                    into.as_deref(),
+                )
             );
-            return refusal(
-                ReasonCode::InsufficientSpace,
-                Some(Subject::wait("destination", None)),
-            );
+            return refusal(ReasonCode::SizeLimitExceeded, input_subject(archive));
         }
         Ok(Ok(())) => {}
     }
 
     // Audit before tidying, so discarded metadata cannot hide unsafe members.
     if let Err(error) = audit_staging(&staging) {
-        return audit_refusal(&staging, &error);
+        return audit_refusal(&staging, &dest, archive, &error);
     }
 
     // --- 5. tidy -----------------------------------------------------------
@@ -962,37 +1359,46 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         Err(error) => {
             etude_cli_support::envelope::status("refused");
             eprintln!(
-                "unpack: REFUSED. Could not preserve archive quarantine ({error}). {}",
-                cleanup_destination(&staging).message()
+                "{}",
+                quarantine_failed_message(
+                    &error,
+                    &dest,
+                    &cleanup_destination(&staging).message(),
+                    &by_hand(fmt, archive, &dest),
+                )
             );
-            return refusal(ReasonCode::InternalError, None);
+            return if permission_denied(&error) {
+                refusal(ReasonCode::PermissionDenied, input_subject(archive))
+            } else {
+                refusal(ReasonCode::InternalError, None)
+            };
         }
     };
     etude_cli_support::envelope::effect("quarantine_paths_verified", quarantined);
     // Audit the final tree as well: this is the tree the rename publishes.
     let audited = match audit_staging(&staging) {
         Ok(count) => count,
-        Err(error) => return audit_refusal(&staging, &error),
+        Err(error) => return audit_refusal(&staging, &dest, archive, &error),
     };
     if let Err(error) = publish_staging(&staging, &dest) {
-        eprintln!(
-            "unpack: REFUSED. Could not publish the extracted tree ({error}). {} Choose another destination with --into DIR.",
-            cleanup_destination(&staging).message()
-        );
+        let cleanup = cleanup_destination(&staging);
         etude_cli_support::envelope::status("refused");
-        let destination_exists = dest.exists();
-        return refusal(
-            if destination_exists {
-                ReasonCode::DestinationExists
-            } else {
-                ReasonCode::InternalError
-            },
-            if destination_exists {
-                destination_subject(&dest)
-            } else {
-                None
-            },
+        if dest.symlink_metadata().is_ok() {
+            eprintln!(
+                "unpack: {} appeared while unpack was working, so the extracted files were not \
+                 put there. {} Pass --into DIR to choose another.",
+                shown(&dest),
+                cleanup.message()
+            );
+            return refusal(ReasonCode::DestinationExists, destination_subject(&dest));
+        }
+        eprintln!(
+            "unpack: could not put the extracted files at {}: {error}. {} \
+             Choose another place with --into DIR.",
+            shown(&dest),
+            cleanup.message()
         );
+        return refusal(ReasonCode::InternalError, None);
     }
 
     etude_cli_support::envelope::effect("entries_published", entries.len() - junk);
@@ -1024,16 +1430,29 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    let kept = entries.len() - junk;
     println!("\n  Extracted to {}/", dest.display());
-    println!("  {} entries", entries.len() - junk);
+    println!("  {}", counted(kept, "entry", "entries"));
     if flattened {
         println!("  Removed a duplicate wrapper folder");
     }
     if removed > 0 {
-        println!("  Dropped {removed} metadata file(s)");
+        println!(
+            "  Dropped {}",
+            counted(removed, "metadata file", "metadata files")
+        );
     }
-    println!("  Checked {} paths before writing anything", members.len());
-    println!("  Audited {audited} extracted paths before publication");
+    if kept == 0 {
+        println!("  The archive held only system metadata, so the folder is empty.");
+    }
+    println!(
+        "  Checked {} before writing anything",
+        counted(members.len(), "path", "paths")
+    );
+    println!(
+        "  Audited {} before moving anything into place",
+        counted(audited, "extracted path", "extracted paths")
+    );
     ExitCode::SUCCESS
 }
 
@@ -1043,6 +1462,31 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
 pub struct Member {
     pub mode: Option<String>,
     pub path: String,
+}
+
+/// What the typed listing found.
+struct TypedListing {
+    members: Vec<Member>,
+    /// How many ZIP members say they are encrypted.
+    encrypted: usize,
+}
+
+/// Why a plain listing gave no names.
+enum ListError {
+    /// The tool ran and could not read this file.
+    Unreadable,
+    /// The tool could not be run at all, which says nothing about the file.
+    Tool(String),
+}
+
+/// zipinfo's fifth column starts with `t` or `b`, in upper case when the member
+/// is encrypted (zipinfo(1)). Columns come before the name, so a name cannot
+/// imitate this. It only decides which refusal is printed: extraction of such a
+/// member fails without its password anyway.
+fn zip_row_is_encrypted(line: &str) -> bool {
+    line.split_whitespace()
+        .nth(4)
+        .is_some_and(|flags| flags.starts_with(['T', 'B']))
 }
 
 /// Every plain-list member must have a typed row before extraction can start.
@@ -1080,26 +1524,33 @@ fn typed_rows_cover_entries(entries: &[String], members: &[Member]) -> Result<()
 /// member was a symlink, so `unpack` printed "Checked 2 paths before writing
 /// anything" and then landed `shortcut -> /etc/passwd` in the target.
 /// Measured on both formats before this existed.
-fn list_members(anchor: &ArchiveAnchor, fmt: Format) -> Result<Vec<Member>, String> {
+fn list_members(anchor: &ArchiveAnchor, fmt: Format) -> Result<TypedListing, String> {
     if fmt == Format::Gz {
-        return Ok(vec![Member {
-            mode: None,
-            path: stem(anchor.name()),
-        }]);
+        return Ok(TypedListing {
+            members: vec![Member {
+                mode: None,
+                path: stem(anchor.name()),
+            }],
+            encrypted: 0,
+        });
     }
     let mut command = listing_command(fmt, anchor.path(), true)?;
     anchor.prepare(&mut command)?;
     let out = command.output().map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err("listing failed".into());
+        return Err("the typed listing failed".into());
     }
     let mut members = Vec::new();
+    let mut encrypted = 0;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Some(member) = member_from_typed_line(line) {
+            if fmt == Format::Zip && zip_row_is_encrypted(line) {
+                encrypted += 1;
+            }
             members.push(member);
         }
     }
-    Ok(members)
+    Ok(TypedListing { members, encrypted })
 }
 
 /// Construct either of the two archive listing commands.
@@ -1154,11 +1605,16 @@ fn member_from_typed_line(line: &str) -> Option<Member> {
     }
     let rest = t[first.len()..].trim_start();
     let mut p = after_first_time_column(rest)?.to_string();
-    // The tools append a symlink target after the name. A regular filename
-    // may itself contain ` -> `, so only a symlink row gets that suffix cut.
-    if first.starts_with('l')
-        && let Some(cut) = p.rfind(" -> ")
-    {
+    // The tools append a link target after the name. A regular filename may
+    // itself contain ` -> ` or ` link to `, so only a link row gets that suffix
+    // cut. A target that holds the words leaves a name that fails to match the
+    // plain listing, which is refused too.
+    let target = match first.as_bytes()[0] {
+        b'l' => p.rfind(" -> "),
+        b'h' => p.rfind(" link to "),
+        _ => None,
+    };
+    if let Some(cut) = target {
         p.truncate(cut);
     }
     let p = p.trim_end_matches('/').to_string();
@@ -1220,15 +1676,17 @@ fn after_first_time_column(rest: &str) -> Option<&str> {
     None
 }
 
-fn list(anchor: &ArchiveAnchor, fmt: Format) -> Result<Vec<String>, String> {
+fn list(anchor: &ArchiveAnchor, fmt: Format) -> Result<Vec<String>, ListError> {
     if fmt == Format::Gz {
         return Ok(vec![stem(anchor.name())]);
     }
-    let mut command = listing_command(fmt, anchor.path(), false)?;
-    anchor.prepare(&mut command)?;
-    let out = command.output().map_err(|e| e.to_string())?;
+    let mut command = listing_command(fmt, anchor.path(), false).map_err(ListError::Tool)?;
+    anchor.prepare(&mut command).map_err(ListError::Tool)?;
+    let out = command
+        .output()
+        .map_err(|e| ListError::Tool(e.to_string()))?;
     if !out.status.success() {
-        return Err("listing failed".into());
+        return Err(ListError::Unreadable);
     }
     Ok(String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -1243,24 +1701,36 @@ fn list(anchor: &ArchiveAnchor, fmt: Format) -> Result<Vec<String>, String> {
 /// indistinguishable from a 6 GB bomb from here. A refusal with no way past it
 /// is a wall rather than a safety feature, so the way past it is named in the
 /// refusal itself.
-fn max_size_flag(args: &[String]) -> Result<Option<u64>, String> {
+fn max_size_flag(args: &[String]) -> Result<Option<u64>, BadArgument> {
     let Some(i) = args.iter().position(|a| a == "--max-size") else {
         return Ok(None);
     };
     let Some(raw) = args.get(i + 1) else {
-        return Err("--max-size (missing size)".into());
+        return Err(BadArgument::Invalid(
+            "--max-size needs a size, such as 500M or 2G.".into(),
+        ));
+    };
+    let bad = || {
+        BadArgument::Invalid(format!(
+            "--max-size needs a whole number above 0, optionally with M or G, got \"{}\".",
+            shown_text(raw)
+        ))
     };
     let (digits, mult) = match raw.chars().last() {
         Some('G' | 'g') => (&raw[..raw.len() - 1], 1024 * 1024 * 1024),
         Some('M' | 'm') => (&raw[..raw.len() - 1], 1024 * 1024),
         _ => (raw.as_str(), 1),
     };
-    let amount = digits
-        .parse::<u64>()
-        .map_err(|_| format!("{raw} (invalid --max-size value)"))?;
-    let bytes = amount
-        .checked_mul(mult)
-        .ok_or_else(|| format!("{raw} (overflowing --max-size value)"))?;
+    let amount = digits.parse::<u64>().map_err(|_| bad())?;
+    let bytes = amount.checked_mul(mult).ok_or_else(|| {
+        BadArgument::Invalid(format!(
+            "--max-size {} is too large to count.",
+            shown_text(raw)
+        ))
+    })?;
+    if bytes == 0 {
+        return Err(bad());
+    }
     Ok(Some(bytes))
 }
 
@@ -1278,6 +1748,16 @@ fn human(n: u64) -> String {
         n if n >= K * K => format!("{:.1} MB", n as f64 / (K * K) as f64),
         n if n >= K => format!("{:.1} KB", n as f64 / K as f64),
         n => format!("{n} bytes"),
+    }
+}
+
+/// An exact byte count, with the readable size beside any that needs one.
+fn exact_bytes(n: u64) -> String {
+    let exact = counted(n as usize, "byte", "bytes");
+    if n >= 1024 {
+        format!("{exact} ({})", human(n))
+    } else {
+        exact
     }
 }
 
@@ -1319,12 +1799,17 @@ impl Cleanup {
         match self {
             Self::Removed => "Nothing was left behind.".into(),
             Self::Remains { path, error } => format!(
-                "The partial extraction remains at {}: cleanup failed ({error}).",
-                etude_core::redact::path(path)
+                "The partial extraction remains at {}: could not remove it ({}). \
+                 To delete it: chmod -R u+w {quoted} && rm -rf {quoted}",
+                shown(path),
+                plain_io_error(error),
+                quoted = quoted_path(path)
             ),
             Self::Unverified { path, error } => format!(
-                "Cleanup failed ({error}); could not verify the partial extraction at {}.",
-                etude_core::redact::path(path)
+                "Could not remove the partial extraction at {} ({}), and could not check \
+                 whether it is still there. Look for it in that folder.",
+                shown(path),
+                plain_io_error(error)
             ),
         }
     }
@@ -1410,7 +1895,11 @@ fn measure(dir: &Path, root: &Path, writer_running: bool) -> Result<u64, String>
 }
 
 fn tree_error(path: &Path, error: std::io::Error) -> String {
-    format!("cannot inspect {}: {error}", etude_core::redact::path(path))
+    format!(
+        "cannot inspect {}: {}",
+        etude_core::redact::path(path),
+        plain_io_error(&error)
+    )
 }
 
 /// Inspect the actual tree, including implicit directories and junk, without
@@ -1421,7 +1910,7 @@ fn audit_staging(staging: &Path) -> Result<usize, String> {
         .symlink_metadata()
         .map_err(|e| tree_error(staging, e))?;
     if !md.is_dir() || md.file_type().is_symlink() {
-        return Err("staging root is not an ordinary directory".into());
+        return Err("the working folder is not an ordinary folder".into());
     }
     let root = staging.canonicalize().map_err(|e| tree_error(staging, e))?;
     fn walk(dir: &Path, root: &Path) -> Result<usize, String> {
@@ -1460,7 +1949,7 @@ fn audit_staging(staging: &Path) -> Result<usize, String> {
             let resolved = path.canonicalize().map_err(|e| tree_error(&path, e))?;
             if !resolved.starts_with(root) {
                 return Err(format!(
-                    "path escaped staging: {}",
+                    "a path left the working folder: {}",
                     etude_core::redact::path(&path)
                 ));
             }
@@ -1476,12 +1965,13 @@ fn audit_staging(staging: &Path) -> Result<usize, String> {
     walk(staging, &root)
 }
 
-fn audit_refusal(staging: &Path, error: &str) -> ExitCode {
+fn audit_refusal(staging: &Path, dest: &Path, archive: &Path, error: &str) -> ExitCode {
     eprintln!(
-        "unpack: staging audit failed ({error}); destination was not published. {}",
+        "unpack: the extracted files failed a safety check ({error}). Nothing was placed at {}. {}",
+        shown(dest),
         cleanup_destination(staging).message()
     );
-    refusal(ReasonCode::UnsafeInput, Some(Subject::wait("input", None)))
+    refusal(ReasonCode::UnsafeInput, input_subject(archive))
 }
 
 /// Final measured total on a monitored soft-limit refusal.
@@ -1492,16 +1982,87 @@ pub enum Breach {
 /// System extractors write directly. Poll every 100 ms and after exit; this
 /// monitors a soft limit, with no fixed maximum overshoot. After killing and
 /// reaping the extractor, recount to include writes made while stopping.
-/// Copy one extractor stream to ours, naming the archive as the user knows it.
-///
-/// The extractor only knows `/dev/fd/N`, and that must never reach the user.
-fn relay_output(
+/// How many of the system tool's lines a person is shown. Member names reach
+/// these lines, and a hostile archive can make any number of them.
+const TOOL_LINES_SHOWN: usize = 5;
+/// The longest such line shown, in characters.
+const TOOL_LINE_CHARS: usize = 300;
+
+/// What the system tool said, held back so it is printed under a label after
+/// unpack's own verdict, with private paths and control characters taken out.
+#[derive(Debug, Default)]
+struct ToolOutput {
+    lines: Vec<String>,
+    hidden: usize,
+    disk_full: bool,
+}
+
+impl ToolOutput {
+    fn add(&mut self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        // tar and gunzip print strerror; unzip prints its own words.
+        if line.contains("No space left") || line.contains("disk full") {
+            self.disk_full = true;
+        }
+        if self.lines.len() < TOOL_LINES_SHOWN {
+            self.lines
+                .push(shown_text(line).chars().take(TOOL_LINE_CHARS).collect());
+        } else {
+            self.hidden += 1;
+        }
+    }
+
+    fn print(&self, label: &str) {
+        for line in &self.lines {
+            eprintln!("{label}: {line}");
+        }
+        if self.hidden > 0 {
+            eprintln!(
+                "{label}: and {} more.",
+                counted(self.hidden, "line", "lines")
+            );
+        }
+    }
+}
+
+/// Why extraction did not finish.
+#[derive(Debug)]
+enum ExtractError {
+    /// SIGTERM arrived.
+    Stopped,
+    /// The system tool ran and reported failure, usually over this archive.
+    ToolFailed(ToolOutput),
+    /// Something else stopped the run, which says nothing about the archive.
+    Other(String),
+}
+
+impl From<String> for ExtractError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
+
+/// Read one extractor stream, naming the archive as the user knows it and the
+/// private folder not at all. The extractor only knows `/dev/fd/N` and that
+/// folder, and neither must reach the user.
+fn collect_output(
     mut reader: impl BufRead + Send + 'static,
-    mut writer: impl Write + Send + 'static,
+    output: Arc<Mutex<ToolOutput>>,
     anchor: &ArchiveAnchor,
+    private_folder: &Path,
 ) -> std::thread::JoinHandle<()> {
     let path = anchor.path().as_os_str().as_encoded_bytes().to_vec();
     let name = anchor.name().as_os_str().as_encoded_bytes().to_vec();
+    // unzip prints the resolved path of a folder it was given, so remove both
+    // spellings, the longer one first.
+    let resolved = private_folder.canonicalize().ok();
+    let mut folders = vec![private_folder.as_os_str().as_encoded_bytes().to_vec()];
+    if let Some(resolved) = resolved {
+        folders.insert(0, resolved.as_os_str().as_encoded_bytes().to_vec());
+    }
     std::thread::spawn(move || {
         let mut line = Vec::new();
         loop {
@@ -1510,10 +2071,17 @@ fn relay_output(
             match reader.by_ref().take(64 * 1024).read_until(b'\n', &mut line) {
                 Ok(0) | Err(_) => return,
                 Ok(_) => {
-                    // Keep draining if the write fails: the extractor must not
-                    // block on a full pipe because our own stream closed.
-                    let _ = writer.write_all(&replace_bytes(&line, &path, &name));
-                    let _ = writer.flush();
+                    // Keep draining: the extractor must not block on a full pipe.
+                    let named = replace_bytes(&line, &path, &name);
+                    let clean = folders.iter().fold(named, |text, folder| {
+                        let mut inside = folder.clone();
+                        inside.push(b'/');
+                        let text = replace_bytes(&text, &inside, b"");
+                        replace_bytes(&text, folder, b"the new folder")
+                    });
+                    if let Ok(mut output) = output.lock() {
+                        output.add(&String::from_utf8_lossy(&clean));
+                    }
                 }
             }
         }
@@ -1540,24 +2108,27 @@ fn run_bounded(
     anchor: &ArchiveAnchor,
     dest: &Path,
     budget: u64,
-) -> Result<Result<(), Breach>, String> {
+) -> Result<Result<(), Breach>, ExtractError> {
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let mut relays = Vec::new();
+    let output = Arc::new(Mutex::new(ToolOutput::default()));
+    let mut readers = Vec::new();
     if let Some(stdout) = child.stdout.take() {
-        relays.push(relay_output(
+        readers.push(collect_output(
             std::io::BufReader::new(stdout),
-            std::io::stdout(),
+            output.clone(),
             anchor,
+            dest,
         ));
     }
     if let Some(stderr) = child.stderr.take() {
-        relays.push(relay_output(
+        readers.push(collect_output(
             std::io::BufReader::new(stderr),
-            std::io::stderr(),
+            output.clone(),
             anchor,
+            dest,
         ));
     }
-    let result = (|| {
+    let result = (|| -> Result<Result<(), Breach>, ExtractError> {
         loop {
             #[cfg(unix)]
             if SIGTERM_REQUESTED.swap(false, AtomicOrdering::Relaxed) {
@@ -1569,7 +2140,7 @@ fn run_bounded(
                 child
                     .wait()
                     .map_err(|e| format!("could not reap extractor after SIGTERM: {e}"))?;
-                return Err("stopped after SIGTERM".into());
+                return Err(ExtractError::Stopped);
             }
             let status = child.try_wait().map_err(|e| e.to_string())?;
             let total = measure(dest, dest, status.is_none())?;
@@ -1588,7 +2159,7 @@ fn run_bounded(
                 return if status.success() {
                     Ok(Ok(()))
                 } else {
-                    Err("extractor reported failure".into())
+                    Err(ExtractError::ToolFailed(ToolOutput::default()))
                 };
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1599,13 +2170,26 @@ fn run_bounded(
         let _ = child.kill();
         let _ = child.wait();
     }
-    // Print what the extractor said before our verdict. A grandchild can hold
-    // a pipe open after the extractor exits, so this wait has a limit.
+    // A grandchild can hold a pipe open after the extractor exits, so this wait
+    // has a limit.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-    while relays.iter().any(|relay| !relay.is_finished()) && std::time::Instant::now() < deadline {
+    while readers.iter().any(|reader| !reader.is_finished()) && std::time::Instant::now() < deadline
+    {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    result
+    let said = output
+        .lock()
+        .map(|mut output| std::mem::take(&mut *output))
+        .unwrap_or_default();
+    match result {
+        Err(ExtractError::ToolFailed(_)) => Err(ExtractError::ToolFailed(said)),
+        Ok(Ok(())) => {
+            // A warning on a run that worked is still worth seeing.
+            said.print("Note from the system tool");
+            Ok(Ok(()))
+        }
+        other => other,
+    }
 }
 
 fn extract(
@@ -1613,7 +2197,7 @@ fn extract(
     fmt: Format,
     dest: &Path,
     budget: u64,
-) -> Result<Result<(), Breach>, String> {
+) -> Result<Result<(), Breach>, ExtractError> {
     let mut cmd = extractor_command(fmt, anchor.path(), dest);
     anchor.prepare(&mut cmd)?;
     cmd.stderr(Stdio::piped());
@@ -1644,7 +2228,8 @@ fn publish_staging_with(
                 || (cfg!(target_os = "macos") && error.raw_os_error() == Some(45)) => {}
         Err(error) => {
             return Err(format!(
-                "{error}; destination {} was not replaced",
+                "{}; {} was not replaced",
+                plain_io_error(&error),
                 shown(dest)
             ));
         }
@@ -1653,17 +2238,21 @@ fn publish_staging_with(
     // an existing folder, even an empty one, must never be replaced.
     std::fs::create_dir(dest).map_err(|error| {
         format!(
-            "could not claim destination ({error}); destination {} was not replaced",
+            "could not make the folder ({}); {} was not replaced",
+            plain_io_error(&error),
             shown(dest)
         )
     })?;
     after_claim();
     // If someone added a file after the claim, rename refuses the nonempty
     // folder. Never clean this folder up: its contents belong to that writer.
-    std::fs::rename(staging, dest).map_err(|error| format!(
-        "{error}; the claimed destination remains at {} and any files added there were left intact",
-        shown(dest)
-    ))
+    std::fs::rename(staging, dest).map_err(|error| {
+        format!(
+            "{}; the claimed destination remains at {} and any files added there were left intact",
+            plain_io_error(&error),
+            shown(dest)
+        )
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -1697,7 +2286,7 @@ fn rename_no_replace(_staging: &Path, _dest: &Path) -> std::io::Result<()> {
 /// The directory is created, rather than merely named, before the extractor
 /// starts. That makes uniqueness an OS-enforced property and gives a crash a
 /// harmless place to strand an orphaned system extractor.
-fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
+fn staging_destination(dest: &Path) -> std::io::Result<PathBuf> {
     let parent = dest.parent().unwrap_or(Path::new("."));
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
     for _ in 0..128 {
@@ -1706,8 +2295,7 @@ fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
             "os_random_bytes",
             std::fs::File::open("/dev/urandom")
                 .and_then(|mut random| random.read_exact(&mut nonce)),
-        )
-        .map_err(|error| format!("could not generate staging name: {error}"))?;
+        )?;
         let candidate = parent.join(format!(
             ".{name}.unpack-{}.partial",
             nonce
@@ -1724,10 +2312,12 @@ fn staging_destination(dest: &Path) -> Result<PathBuf, String> {
         match builder.create(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(error),
         }
     }
-    Err("could not reserve a unique staging directory".into())
+    Err(std::io::Error::other(
+        "could not make a unique private folder",
+    ))
 }
 
 /// Construct the complete extractor command.
@@ -2031,7 +2621,7 @@ mod tests {
         assert_eq!(anchor.file.metadata().unwrap().nlink(), 0);
         assert_eq!(anchor.file.metadata().unwrap().mode() & 0o777, 0o600);
         assert_eq!(anchor.name(), Path::new("input.tar.gz"));
-        assert!((&anchor.file).write_all(b"x").is_err());
+        assert!(std::io::Write::write_all(&mut &anchor.file, b"x").is_err());
         drop(anchor);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2416,7 +3006,11 @@ mod tests {
         );
         let alias = fixture.0.join("alias");
         symlink(&staging, &alias).unwrap();
-        assert!(audit_staging(&alias).unwrap_err().contains("staging root"));
+        assert!(
+            audit_staging(&alias)
+                .unwrap_err()
+                .contains("working folder")
+        );
     }
 
     #[cfg(unix)]
@@ -2527,15 +3121,176 @@ mod tests {
             "cleanup failure still claimed the partial extraction was gone: {message}"
         );
         assert!(
-            message.contains(&etude_core::redact::path(&dest)),
+            message.contains(&shown(&dest)),
             "cleanup failure did not name where the partial extraction remains: {message}"
         );
         assert!(
-            message.contains("cleanup failed"),
+            message.contains("could not remove it (not a directory)"),
             "cleanup failure discarded the operating-system reason: {message}"
         );
 
         std::fs::remove_file(&dest).expect("remove test file");
+    }
+
+    #[test]
+    fn an_empty_zip_is_only_its_end_record() {
+        let mut empty = b"PK\x05\x06".to_vec();
+        empty.extend([0; 18]);
+        assert!(is_empty_zip(&empty));
+        // A comment the record declares is still an empty archive.
+        let mut commented = empty.clone();
+        commented[20] = 2;
+        commented.extend(b"hi");
+        assert!(is_empty_zip(&commented));
+        // Damage is not emptiness: wrong length, entries counted, junk around.
+        let mut counted = empty.clone();
+        counted[8] = 1;
+        assert!(!is_empty_zip(&counted));
+        let mut cut = empty.clone();
+        cut[20] = 5;
+        assert!(!is_empty_zip(&cut));
+        let mut trailing = empty.clone();
+        trailing.push(0);
+        assert!(!is_empty_zip(&trailing));
+        let mut leading = vec![0];
+        leading.extend(&empty);
+        assert!(!is_empty_zip(&leading));
+        assert!(!is_empty_zip(&empty[..21]));
+        assert!(!is_empty_zip(b""));
+    }
+
+    #[test]
+    fn only_a_zip_row_with_an_upper_case_flag_is_encrypted() {
+        assert!(zip_row_is_encrypted(
+            "-rw-r--r--  3.0 unx        6 TX stor 26-Nov-04 20:12 p.txt"
+        ));
+        assert!(zip_row_is_encrypted(
+            "-rw-r--r--  3.0 unx        6 Bl defN 26-Nov-04 20:12 p.txt"
+        ));
+        assert!(!zip_row_is_encrypted(
+            "-rw-r--r--  3.0 unx        6 tx stor 26-Nov-04 20:12 Tx Tx Tx"
+        ));
+    }
+
+    #[test]
+    fn a_hard_link_row_names_the_link_and_is_judged_by_kind() {
+        let member =
+            member_from_typed_line("hrw-r--r--  0 0      0           0 Dec 31  1969 hl link to f")
+                .unwrap();
+        assert_eq!(member.path, "hl");
+        assert!(matches!(
+            safety::judge_mode(member.mode.as_deref().unwrap(), &member.path),
+            Some(Unsafe::Hardlink(_))
+        ));
+        // A plain file may hold the same words in its name.
+        let plain =
+            member_from_typed_line("-rw-r--r--  0 0      0           0 Dec 31  1969 a link to b")
+                .unwrap();
+        assert_eq!(plain.path, "a link to b");
+    }
+
+    #[test]
+    fn options_may_come_before_the_archive_and_no_value_is_taken_for_it() {
+        let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        for (given, expected) in [
+            (vec!["--list", "a.zip"], vec!["a.zip", "--list"]),
+            (
+                vec!["--into", "o", "--json", "a.zip"],
+                vec!["a.zip", "--into", "o", "--json"],
+            ),
+            (vec!["--into", "a.zip"], vec!["--into", "a.zip"]),
+            (vec!["--frob", "a.zip"], vec!["--frob", "a.zip"]),
+            (vec!["--json", "contract"], vec!["--json", "contract"]),
+            (vec!["a.zip", "--list"], vec!["a.zip", "--list"]),
+        ] {
+            assert_eq!(archive_first(args(&given)), args(&expected));
+        }
+        // Every refusal survives the move.
+        assert!(validate_args(&archive_first(args(&["--list", "a.zip", "b.zip"]))).is_err());
+        assert!(validate_args(&archive_first(args(&["--into", "--json", "a.zip"]))).is_err());
+        assert!(matches!(
+            validate_args(&archive_first(args(&["--frob", "a.zip"]))),
+            Err(BadArgument::UnknownOption(_))
+        ));
+        assert!(validate_args(&archive_first(args(&["--max-size", "0", "a.zip"]))).is_err());
+        assert!(validate_args(&archive_first(args(&["a.zip", "--max-size", "0G"]))).is_err());
+    }
+
+    /// The default limit cannot be reached in a test without writing over a GB.
+    #[test]
+    fn each_size_limit_explains_only_itself() {
+        let archive = Path::new("a b.zip");
+        let chosen = limit_message(200_000, 10, true, "Nothing was left behind.", archive, None);
+        assert!(chosen.contains("your --max-size limit"), "{chosen}");
+        assert!(chosen.contains("200000 bytes (195.3 KB)"), "{chosen}");
+        assert!(chosen.contains("the limit is 10 bytes"), "{chosen}");
+        assert!(!chosen.contains("half the free space"), "{chosen}");
+        assert!(
+            chosen.contains("unpack 'a b.zip' --max-size SIZE"),
+            "{chosen}"
+        );
+        let default = limit_message(
+            2 << 30,
+            1 << 30,
+            false,
+            "Nothing was left behind.",
+            archive,
+            Some(Path::new("o")),
+        );
+        assert!(default.contains("the default size limit"), "{default}");
+        assert!(default.contains("half the free space"), "{default}");
+        assert!(!default.contains("your --max-size"), "{default}");
+        assert!(default.contains("--into 'o' --max-size SIZE"), "{default}");
+    }
+
+    #[test]
+    fn refusals_read_only_from_code_say_what_to_do() {
+        let (archive, dest) = (Path::new("a.zip"), Path::new("a"));
+        let typeless = type_unknown_message(archive, Format::Zip, dest);
+        assert!(typeless.contains("unzip -l 'a.zip'"), "{typeless}");
+        assert!(typeless.contains("unzip 'a.zip' -d 'a'"), "{typeless}");
+        assert!(
+            !typeless.contains("--list"),
+            "--list stops here too: {typeless}"
+        );
+        let tar = type_unknown_message(Path::new("a.tar"), Format::Tar, dest);
+        assert!(tar.contains("mkdir 'a' && tar -xf 'a.tar' -C 'a'"), "{tar}");
+        let changed = quarantine_changed_message(archive);
+        assert!(changed.contains("Run unpack again."), "{changed}");
+        let denied = quarantine_failed_message(
+            &std::io::Error::from_raw_os_error(13),
+            dest,
+            "Nothing was left behind.",
+            "unzip 'a.zip' -d 'a'",
+        );
+        assert!(denied.contains(": permission denied."), "{denied}");
+        assert!(denied.contains("unzip 'a.zip' -d 'a'"), "{denied}");
+        let other = quarantine_failed_message(
+            &std::io::Error::from_raw_os_error(45),
+            dest,
+            "Nothing was left behind.",
+            "unzip 'a.zip' -d 'a'",
+        );
+        assert!(other.contains("--into DIR"), "{other}");
+        assert!(!other.contains("os error"), "{other}");
+    }
+
+    #[test]
+    fn tool_output_is_bounded_and_notices_a_full_disk() {
+        let mut output = ToolOutput::default();
+        for number in 0..8 {
+            output.add(&format!("line {number}\u{1b}[31m\n"));
+        }
+        assert_eq!(output.lines.len(), TOOL_LINES_SHOWN);
+        assert_eq!(output.hidden, 3);
+        assert!(output.lines.iter().all(|line| !line.contains('\u{1b}')));
+        assert!(!output.disk_full);
+        output.add("unzip: write error (disk full?)");
+        assert!(output.disk_full, "counted even when past the lines shown");
+        assert_eq!(
+            plain_text("cannot inspect x: Denied (os error 13)"),
+            "cannot inspect x: Denied"
+        );
     }
 
     #[test]
