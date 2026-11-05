@@ -143,7 +143,9 @@ if [ -n "$KEYCHAIN_FAIL_LIM" ]; then
   else
     pass "rlimit: apply moved nothing when the keychain-backed sealer could not be acquired"
   fi
-  if echo "$KEYCHAIN_FAIL_OUT" | grep -qi "refus"; then
+  if echo "$KEYCHAIN_FAIL_OUT" | grep -q "the journal key is unusable" \
+    && echo "$KEYCHAIN_FAIL_OUT" | grep -q "Nothing was changed" \
+    && ! echo "$KEYCHAIN_FAIL_OUT" | grep -q "os error"; then
     pass "rlimit: apply's failure message is an honest refusal, not a bare crash trace"
   else
     fail "rlimit: apply failed without an honest refusal message: $KEYCHAIN_FAIL_OUT"

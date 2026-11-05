@@ -152,7 +152,7 @@ for include in (False, True):
         assert tagged.exists(), 'the late-tagged file moved'
         assert all((folder / f'report-{i}.pdf').exists() for i in range(6)), 'a file moved from a stale plan'
         assert 'private-late-tag' not in text, 'the tag text reached the output'
-        print('    ok       a tag added after review planned stops the move ('
+        print('    checked  a tag added after review planned stops the move ('
               + ('with' if include else 'without') + ' --include-tagged): exit 2, nothing moved')
     except Exception as error:
         print(f'    FAIL     late Finder tag review: {error}')

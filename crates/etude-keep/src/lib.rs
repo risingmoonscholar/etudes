@@ -153,11 +153,22 @@ fn security() -> Result<Command, KeepError> {
     Ok(Command::new(SECURITY_BIN))
 }
 
+/// An I/O failure in a person's words, without the system's error number.
+fn plain(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    let text = text.split(" (os error").next().unwrap_or_default();
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
     let out = security()?
         .args(["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"])
         .output()
-        .map_err(|e| KeepError::Keychain(format!("could not be read: {e}")))?;
+        .map_err(|e| KeepError::Keychain(format!("could not be read: {}", plain(&e))))?;
     if !out.status.success() {
         return Ok(None); // not found is not an error; it means first run
     }
@@ -189,21 +200,25 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
+        .map_err(|e| {
+            KeepError::Keychain(format!("would not save the journal key: {}", plain(&e)))
+        })?;
 
     let encoded = hex(k);
     {
         let stdin = child.stdin.as_mut().ok_or(KeepError::Keychain(
             "would not save the journal key: the save command took no input".into(),
         ))?;
-        writeln!(stdin, "{encoded}")
-            .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
-        writeln!(stdin, "{encoded}")
-            .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
+        writeln!(stdin, "{encoded}").map_err(|e| {
+            KeepError::Keychain(format!("would not save the journal key: {}", plain(&e)))
+        })?;
+        writeln!(stdin, "{encoded}").map_err(|e| {
+            KeepError::Keychain(format!("would not save the journal key: {}", plain(&e)))
+        })?;
     }
-    let status = child
-        .wait()
-        .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
+    let status = child.wait().map_err(|e| {
+        KeepError::Keychain(format!("would not save the journal key: {}", plain(&e)))
+    })?;
     if !status.success() {
         return Err(KeepError::Keychain("would not save the journal key".into()));
     }
@@ -283,6 +298,12 @@ mod tests {
     use super::*;
 
     const K: [u8; 32] = [7u8; 32];
+
+    #[test]
+    fn a_keychain_failure_has_no_system_error_number() {
+        let error = std::io::Error::from_raw_os_error(24);
+        assert_eq!(plain(&error), "too many open files");
+    }
 
     #[test]
     fn round_trips() {
