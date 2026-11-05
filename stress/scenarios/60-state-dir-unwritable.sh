@@ -14,7 +14,12 @@ chmod 0500 "$W_PARENT"
 
 # Restore permissions before removing the unwritable parent. Also remove
 # the original harness state directory, bound before the override changed.
-cleanup_extra() { chmod 0700 "$W_PARENT" 2>/dev/null; rm -rf "$ETUDE_STATE_DIR" "$W_PARENT" 2>/dev/null; }
+# Also remove the work folder and its two snapshot files, which sit beside it.
+cleanup_extra() {
+  chmod 0700 "$W_PARENT" 2>/dev/null
+  rm -rf "$ETUDE_STATE_DIR" "$W_PARENT" 2>/dev/null
+  [ -z "${D:-}" ] || rm -rf "$D" "${D}.before.json" "${D}.after.json"
+}
 trap "cleanup_extra; $_stress_state_cleanup" EXIT
 
 if [ ! -d "$W_PARENT" ] || [ -w "$W_PARENT" ]; then

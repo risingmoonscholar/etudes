@@ -72,7 +72,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all
+      - name: The temp-folder check can tell a leak from a clean run
+        run: bash scripts/check-temp-leak.sh --self-test
+      # In a private TMPDIR, so a test that forgets its folder fails here
+      # instead of filling the disk a run at a time.
+      - name: cargo test --all, leaving nothing in the temp folder
+        run: bash scripts/check-temp-leak.sh -- cargo test --all
       # The suite again with sockets denied by the OS. sandbox-exec is macOS
       # only; the script exits 2 elsewhere, so the linux job does not run it.
       - run: bash scripts/no-network-test.sh
@@ -237,9 +242,9 @@ jobs:
           STRESS_BASE_REF: ${{ github.event.pull_request.base.sha || 'HEAD^' }}
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            STRESS_TIER=fast bash scripts/stress-ratchet.sh
+            STRESS_TIER=fast bash scripts/check-temp-leak.sh -- bash scripts/stress-ratchet.sh
           else
-            STRESS_TIER=all bash scripts/stress-ratchet.sh
+            STRESS_TIER=all bash scripts/check-temp-leak.sh -- bash scripts/stress-ratchet.sh
           fi
 
       # Results are written for every case. Failure-only evidence carries the

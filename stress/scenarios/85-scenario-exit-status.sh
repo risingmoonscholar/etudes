@@ -13,14 +13,14 @@ if [ -n "${EXIT_STATUS_ARM:-}" ]; then
     subshell) (fail 'subshell deliberate failure'); pass 'continued after subshell';;
     captured) captured=$(fail 'captured deliberate failure'); pass 'continued after captured failure';;
     closed_fd) captured=$(exec 199>&-; fail 'closed-fd deliberate failure'); pass 'continued after closed fd';;
-    pass_exec) pass 'a passing scenario may exec'; exec true;;
-    fail_exec) fail 'failure before exec'; exec true;;
-    killed) pass 'started before SIGKILL'; kill -9 $$;;
+    pass_exec) pass 'a passing scenario may exec'; eval "$_stress_state_cleanup"; exec true;;
+    fail_exec) fail 'failure before exec'; eval "$_stress_state_cleanup"; exec true;;
+    killed) pass 'started before SIGKILL'; eval "$_stress_state_cleanup"; kill -9 $$;;
     false_tail) pass 'assertion passed before false conditional'; false; exit $?;;
     abort_after_pass) pass 'setup passed before deliberate abort'; exit 42;;
     only_unproven) unproven 'requires unavailable host capability' 'deliberate';;
     mixed) pass 'available check'; unproven 'unavailable check' 'deliberate';;
-    cleanup_exit) trap 'FAILED=0; exit 0' EXIT; fail 'cleanup must not hide failure';;
+    cleanup_exit) trap 'FAILED=0; eval "$_stress_state_cleanup"; exit 0' EXIT; fail 'cleanup must not hide failure';;
     resource) test -d "$ETUDE_STATE_DIR" && test -n "$(env | grep '^ETUDE_STATE_DIR=')" && pass 'state exported before any helper';;
     newline_name) d="$ETUDE_STATE_DIR/newline"; mkdir -p "$d"; : > "$d/one
 two.txt"; assert_intact "$d" 1 'newline-containing filename counts as one file';;

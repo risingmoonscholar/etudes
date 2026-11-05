@@ -215,8 +215,35 @@ export SWEEP_GRACE_SECS=0
 
 export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
 # Bind the chosen directory now: scenarios may later change the override.
+# Sourcing this file again (a scenario that reloads it) makes a second state
+# folder. Keep the first one's removal in the list, or it is left behind.
+_stress_earlier_state_cleanup=${_stress_state_cleanup:-}
 printf -v _stress_state_cleanup 'rm -rf -- %q' "$ETUDE_STATE_DIR"
-trap "$_stress_state_cleanup" EXIT
+[ -z "$_stress_earlier_state_cleanup" ] || _stress_state_cleanup="$_stress_earlier_state_cleanup; $_stress_state_cleanup"
+builtin trap "$_stress_state_cleanup" EXIT
+
+# Almost every scenario sets its own EXIT trap to remove its work folder, and
+# that replaces the line above. 46 of 77 scenarios then left their state folder
+# in the temp folder on every run, because the trap they wrote never mentioned
+# it. Rather than ask each scenario (and every future one) to remember, any
+# EXIT trap set from here on also removes the state folder, after the
+# scenario's own commands. A trap set in a subshell is left alone: the subshell
+# ending must not take the state folder away from the scenario still running.
+# Only the `trap CMD EXIT` and `trap - EXIT` forms are rewritten; every other
+# use passes straight through to the builtin.
+#
+# A scenario whose trap ends in `exit` must run "$_stress_state_cleanup" itself
+# before that `exit`; a later command in the same trap never runs.
+trap() {
+  if [ "$#" -eq 2 ] && { [ "$2" = EXIT ] || [ "$2" = 0 ]; }; then
+    local _stress_user_trap=$1
+    [ "$_stress_user_trap" != - ] || _stress_user_trap=
+    builtin trap "$_stress_user_trap
+[ \"\$BASH_SUBSHELL\" != 0 ] || { $_stress_state_cleanup; }" EXIT
+    return 0
+  fi
+  builtin trap "$@"
+}
 
 # A scratch tree, unique per scenario, removed on exit.
 workdir() {
