@@ -325,16 +325,16 @@ fresh_state nothing
 ALL="See all of them with: stash status --all"
 say "unknown id" 1 unknown_operation "no stash with id 1-2-3-abc. $ALL" -- "$STASH" pop --id 1-2-3-abc
 say "bare unknown id" 1 unknown_operation "no stash with id 1-2-3-abc. $ALL" -- "$STASH" pop 1-2-3-abc
-say "no such folder" 1 missing_input "no stash from $W/absent. $ALL" -- "$STASH" pop "$W/absent"
-say "through a file" 1 missing_input "no stash from $W/plain/a.txt/x. $ALL" -- "$STASH" pop "$W/plain/a.txt/x"
-say "a file" 1 missing_input "$W/plain/a.txt is a file. Give the folder you stashed. $ALL" -- "$STASH" pop "$W/plain/a.txt"
+say "no such folder" 3 missing_input "no folder at $W/absent. See what is stashed with: stash status --all" -- "$STASH" pop "$W/absent"
+say "through a file" 3 missing_input "no folder at $W/plain/a.txt/x. See what is stashed with: stash status --all" -- "$STASH" pop "$W/plain/a.txt/x"
+say "a file" 3 missing_input "$W/plain/a.txt is a file. Give the folder you stashed. See what is stashed with: stash status --all" -- "$STASH" pop "$W/plain/a.txt"
 say "nothing latest" 1 missing_input "nothing is stashed" -- "$STASH" pop --latest
 OUT=$(cd "$W/plain" && "$STASH" pop 2>&1 </dev/null)
 clean "here" "$OUT"
 has "here: names the folder it looked at" "$OUT" "no stash from $W/plain."
 hasnt "here: no here" "$OUT" "stashed here"
 D="$W/roots"; files "$D"; ID=$(stashed "$D"); mv "$D" "$W/roots2"
-say "moved root" 1 missing_input "no stash from $D. $ALL" -- "$STASH" pop "$D"
+say "moved root" 3 missing_input "no folder at $D. See what is stashed with: stash status --all" -- "$STASH" pop "$D"
 OUT=$("$STASH" status --all 2>&1 </dev/null)
 has "moved root: the printed step finds it" "$OUT" "$ID"
 mv "$W/roots2" "$D"
