@@ -37,18 +37,21 @@ PY
   else fail "$1 journal encryption"; fi
 }
 
-# Establish the unavailable-keychain control on this host. The Rust source
-# test additionally proves that supplied keys never invoke the keychain.
+# The unavailable-keychain control. The real login keychain stays out of this:
+# inside the fence /usr/bin/security cannot start. The Rust source test
+# additionally proves that supplied keys never invoke the keychain.
 make_tree "$W/control"
-out=$(env -u ETUDE_JOURNAL_KEY "$SWEEP" apply "$W/control" --yes 2>&1); code=$?
-if [ "$code" = 2 ] && [[ "$out" == *keychain* ]]; then
-  pass 'login keychain unavailable: unsupplied apply refuses'
-  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'sweep refusal names loss of undo' || fail 'sweep refusal advice'
-  out=$(env -u ETUDE_JOURNAL_KEY "$STASH" "$W/control" 2>&1); code=$?
+if keychain_fence_works; then
+  out=$(keychain_fenced "$SWEEP" apply "$W/control" --yes 2>&1); code=$?
+  assert_eq 2 "$code" 'login keychain unavailable: unsupplied apply refuses'
+  [[ "$out" == *keychain* ]] && pass 'sweep refusal names the keychain' || fail "sweep refusal hides the keychain: $out"
+  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'sweep refusal names loss of undo' || fail "sweep refusal hides loss of undo: $out"
+  out=$(keychain_fenced "$STASH" "$W/control" 2>&1); code=$?
   assert_eq 2 "$code" 'unsupplied stash refuses'
-  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'stash refusal names loss of undo' || fail 'stash refusal advice'
+  [[ "$out" == *'only alternative is --no-journal'* && "$out" == *'removes undo'* ]] && pass 'stash refusal names loss of undo' || fail "stash refusal hides loss of undo: $out"
+  restored "$W/control" 'keychain refusals move nothing'
 else
-  unproven 'host keychain unavailable control' 'this host did not refuse keychain access; deterministic source test covers bypass'
+  unproven 'keychain unavailable control' 'sandbox-exec could not block /usr/bin/security here, and this suite never reaches the real keychain'
 fi
 rm -f "$ETUDE_STATE_DIR"/*.journal
 

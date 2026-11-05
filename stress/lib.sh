@@ -43,11 +43,33 @@ SWEEP="$BIN/sweep"; STASH="$BIN/stash"; UNPACK="$BIN/unpack"; MKFX="$BIN/mkfx"
 
 # Most scenarios are about filesystem behaviour, not whether this machine's
 # login keychain is unlocked. Exercise real sealed journals with one ephemeral
-# supplied key by default. The dedicated journal/keychain scenario explicitly
-# unsets or replaces this value for its own controls.
+# supplied key by default.
+#
+# No scenario may run a tool without a key except through keychain_fenced below.
+# With no key the tools use the login keychain of whoever runs the suite, and can
+# add a key to it. A fake HOME is not proof against that, and a `security` stub on
+# PATH does nothing, because the tools call /usr/bin/security by its full path.
+# scripts/check-stress-catalog.py refuses a scenario that drops the key another way.
 if [ -z "${ETUDE_JOURNAL_KEY:-}" ]; then
   export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 fi
+
+KEYCHAIN_FENCE='(version 1)(allow default)(deny process-exec (literal "/usr/bin/security"))'
+
+# True only if the fence is proven here: a command runs inside it, and
+# /usr/bin/security does not. `security -h` only prints help if the proof fails.
+keychain_fence_works() {
+  command -v sandbox-exec >/dev/null 2>&1 || return 1
+  sandbox-exec -p "$KEYCHAIN_FENCE" /usr/bin/true >/dev/null 2>&1 || return 1
+  ! sandbox-exec -p "$KEYCHAIN_FENCE" /usr/bin/security -h >/dev/null 2>&1
+}
+
+# keychain_fenced COMMAND...: run a command with no journal key, in a sandbox
+# where /usr/bin/security cannot start, so the keychain looks unavailable and is
+# never reached. If the sandbox cannot be applied, the command does not run.
+keychain_fenced() {
+  sandbox-exec -p "$KEYCHAIN_FENCE" env -u ETUDE_JOURNAL_KEY "$@"
+}
 
 _stress_record() {
   # FD 199 is opened and immediately unlinked by the direct-run wrapper.

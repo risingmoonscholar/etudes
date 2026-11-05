@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # A lowered RLIMIT_NOFILE against a large tree. The core scan/apply loop
 # opens and closes one file at a time (see etude-core's fingerprint()), so it
-# should tolerate an extremely low descriptor budget -- but the journal path
-# also talks to the macOS keychain (a separate subsystem, over XPC, with its
-# own descriptor needs), and that is the part actually worth stress-testing:
-# if the keychain call fails under fd pressure, the tool must refuse to
-# proceed rather than silently falling back to an unsealed journal or
-# half-applying.
+# should tolerate an extremely low descriptor budget. The journal path also
+# talks to the macOS keychain (a separate subsystem, over XPC, with its own
+# descriptor needs): if that fails, the tool must refuse to proceed rather than
+# silently fall back to an unsealed journal or half-apply.
+#
+# The real login keychain is never strained here. A run could add a key to it, so
+# the journal trials use the supplied key, the refusal is checked with the
+# keychain fenced off, and the real keychain under pressure is reported unproven.
 #
 # bash's own `ulimit -n` cannot go arbitrarily low in-process (the shell
 # needs descriptors too, and a value below what's already open is rejected),
 # so each trial execs the binary directly from a fresh `bash -c`, minimising
 # the shell's own descriptor footprint before the limit is applied.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-# This scenario deliberately strains the keychain, not the supplied-key path.
-unset ETUDE_JOURNAL_KEY
 
 D=$(workdir)
 # Kept under 1040 so no filename accidentally contains "1040" or "1099" --
@@ -96,17 +96,15 @@ find "$D" -mindepth 1 -type d -empty -delete 2>/dev/null
 RESET_COUNT=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
 assert_eq "$N" "$RESET_COUNT" "rlimit: fixture reset cleanly between trials"
 
-# --- apply (with journal) at a limit low enough to strain the keychain -----
-# Search downward from the lowest workable shell limit for the point where
-# the keychain (a separate OS subsystem with its own fd needs) starts to
-# fail. Either point reachable is fine to report on; the property under test
-# is that whichever happens, it happens honestly.
-KEYCHAIN_FAIL_LIM=""
-KEYCHAIN_OK_LIM=""
+# --- apply (with journal, supplied key) under each limit -----------------------
+# Sealing and writing the journal needs descriptors of its own. Whichever way each
+# limit goes, it must go honestly.
+JOURNAL_FAIL_LIM=""
+JOURNAL_OK_LIM=""
 for lim in $(seq "$LOWEST_WORKABLE" -1 4); do
   bash -c "ulimit -n $lim 2>/dev/null" >/dev/null 2>&1 || continue
   LOG=$(mktemp "${TMPDIR:-/tmp}/etudes-rlimit-kc-XXXXXX")
-  bash -c "export ETUDE_STATE_DIR='$ETUDE_STATE_DIR'; ulimit -n $lim 2>/dev/null; exec \"$SWEEP\" apply \"$D\" --yes > \"$LOG\" 2>&1" 2>/dev/null
+  bash -c "ulimit -n $lim 2>/dev/null; exec \"$SWEEP\" apply \"$D\" --yes > \"$LOG\" 2>&1" 2>/dev/null
   code=$?
   out=$(cat "$LOG"); rm -f "$LOG"
 
@@ -117,42 +115,56 @@ for lim in $(seq "$LOWEST_WORKABLE" -1 4); do
 
   moved=$(find "$D" -mindepth 2 -type f 2>/dev/null | wc -l | tr -d ' ')
   if [ "$moved" -gt 0 ]; then
-    KEYCHAIN_OK_LIM=$lim
+    JOURNAL_OK_LIM=$lim
     # Undo to reset for the next iteration.
-    bash -c "export ETUDE_STATE_DIR='$ETUDE_STATE_DIR'; \"$SWEEP\" undo" >/dev/null 2>&1
+    "$SWEEP" undo >/dev/null 2>&1
     find "$D" -mindepth 2 -type f -exec mv {} "$D/" \; 2>/dev/null
     find "$D" -mindepth 1 -type d -empty -delete 2>/dev/null
+  elif [ "$code" = 0 ]; then
+    fail "rlimit: apply (with journal) reported success (exit 0) under ulimit -n $lim but moved nothing: $out"
   else
-    if [ "$code" = 0 ]; then
-      fail "rlimit: apply (with journal) reported success (exit 0) under ulimit -n $lim but moved nothing: $out"
+    JOURNAL_FAIL_LIM=$lim
+    if grep -q "os error\|panicked" <<<"$out"; then
+      fail "rlimit: apply (with journal) failed without plain words under ulimit -n $lim: $out"
     else
-      KEYCHAIN_FAIL_LIM=$lim
-      KEYCHAIN_FAIL_OUT=$out
-      break
+      pass "rlimit: apply (with journal) moved nothing and said why under ulimit -n $lim (exit $code)"
     fi
+    break
   fi
 done
 
 RESET_COUNT2=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
-assert_eq "$N" "$RESET_COUNT2" "rlimit: fixture intact after the keychain-limit search"
+assert_eq "$N" "$RESET_COUNT2" "rlimit: fixture intact after the journal-limit search"
+[ -n "$JOURNAL_OK_LIM" ] && pass "rlimit: apply (with journal) still worked at ulimit -n $JOURNAL_OK_LIM"
 
-if [ -n "$KEYCHAIN_FAIL_LIM" ]; then
-  pass "rlimit: found the fd limit where the keychain-backed journal path starts to fail (ulimit -n $KEYCHAIN_FAIL_LIM)"
-  if echo "$KEYCHAIN_FAIL_OUT" | grep -qi "moved [1-9]"; then
-    fail "rlimit: apply claimed files were moved despite failing to get a keychain key: $KEYCHAIN_FAIL_OUT"
+# --- apply with the keychain out of reach, under the lowest limit -----------------
+# The fence makes every limit fail, so this proves the refusal is honest. It does
+# not find the limit where the real keychain starts to fail.
+if keychain_fence_works; then
+  LOG=$(mktemp "${TMPDIR:-/tmp}/etudes-rlimit-kc-XXXXXX")
+  ( ulimit -n "$LOWEST_WORKABLE" 2>/dev/null; keychain_fenced "$SWEEP" apply "$D" --yes > "$LOG" 2>&1 ) 2>/dev/null
+  code=$?
+  out=$(cat "$LOG"); rm -f "$LOG"
+  if [ "$code" = 71 ]; then
+    unproven "rlimit: apply refuses honestly when the keychain cannot be reached under a low limit" \
+      "the sandbox itself could not start under ulimit -n $LOWEST_WORKABLE"
   else
-    pass "rlimit: apply moved nothing when the keychain-backed sealer could not be acquired"
-  fi
-  if echo "$KEYCHAIN_FAIL_OUT" | grep -q "the journal key is unusable" \
-    && echo "$KEYCHAIN_FAIL_OUT" | grep -q "Nothing was changed" \
-    && ! echo "$KEYCHAIN_FAIL_OUT" | grep -q "os error"; then
-    pass "rlimit: apply's failure message is an honest refusal, not a bare crash trace"
-  else
-    fail "rlimit: apply failed without an honest refusal message: $KEYCHAIN_FAIL_OUT"
+    assert_eq 2 "$code" "rlimit: apply refuses when the keychain cannot be reached"
+    assert_eq "$N" "$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')" \
+      "rlimit: apply moved nothing when the keychain could not be reached"
+    if grep -q "the journal key is unusable" <<<"$out" && grep -q "Nothing was changed" <<<"$out" \
+      && ! grep -q "os error" <<<"$out"; then
+      pass "rlimit: apply's failure message is an honest refusal, not a bare crash trace"
+    else
+      fail "rlimit: apply failed without an honest refusal message: $out"
+    fi
   fi
 else
-  unproven "rlimit: apply (with journal) fails honestly when the keychain cannot be reached under fd pressure" \
-    "every fd limit from $LOWEST_WORKABLE down to 4 that this shell could set still let the keychain call succeed on this host"
+  unproven "rlimit: apply refuses honestly when the keychain cannot be reached" \
+    "sandbox-exec could not block /usr/bin/security here, and this suite never reaches the real keychain"
 fi
+
+unproven "rlimit: the real login keychain fails honestly under descriptor pressure" \
+  "this suite never reaches the login keychain, because a run could add a key to it"
 
 exit 0

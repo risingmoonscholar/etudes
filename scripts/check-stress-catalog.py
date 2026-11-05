@@ -2,6 +2,7 @@
 """Verify that every tracked stress scenario has one actionable catalog row."""
 import json
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,24 @@ if tracked - seen:
     errors.append("missing catalog rows: " + ", ".join(sorted(tracked - seen)))
 if seen - tracked:
     errors.append("catalog rows without tracked scenario: " + ", ".join(sorted(seen - tracked)))
+# With no journal key a tool uses the login keychain of whoever runs the suite,
+# and can add a key to it. A scenario may drop the key only through
+# keychain_fenced in stress/lib.sh, which is why that file alone may say this.
+KEY_DROPPED = re.compile(
+    r"\bunset\b[^\n#]*\bETUDE_JOURNAL_KEY\b"
+    r"|\benv\b[^\n#]*(-u\s*|--unset[=\s])ETUDE_JOURNAL_KEY\b"
+    r"|\benv\s+(-\w+\s+)*-i\b"
+    r"|\benv\s+--ignore-environment\b"
+    r"|\bexport\s+-n\b[^\n#]*\bETUDE_JOURNAL_KEY\b"
+    r"|(\bpop|\bdel\b|\bremove)[^\n#]*\bETUDE_JOURNAL_KEY\b"
+)
+for scenario in sorted((root / "stress/scenarios").glob("*.sh")):
+    for number, line in enumerate(scenario.read_text().splitlines(), 1):
+        if not line.lstrip().startswith("#") and KEY_DROPPED.search(line):
+            errors.append(
+                f"{scenario.name}:{number}: drops ETUDE_JOURNAL_KEY outside keychain_fenced; "
+                "a run could reach the login keychain"
+            )
 if errors:
     print("FAIL stress catalog")
     print("\n".join("  " + error for error in errors))
