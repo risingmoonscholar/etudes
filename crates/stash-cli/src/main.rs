@@ -56,6 +56,8 @@ USAGE
     --no-journal                    folder mode only; removes undo. stash select needs undo
     --allow-home                    stash your whole home folder; refused without it
     --json                          machine-readable output (for agents)
+    --progress-json                 bounded versioned progress on stderr while
+                                    items move or restore
     --export-plan FILE               save a private bound plan, without moving
     --plan FILE --plan-digest SHA     apply exactly what was exported
     --version                       print the version and exit
@@ -239,6 +241,7 @@ const STASH_FLAGS: &[&str] = &[
     "--export-plan",
     "--plan",
     "--plan-digest",
+    "--progress-json",
 ];
 
 /// Every command, and every flag reachable from it. Same construction as
@@ -258,9 +261,20 @@ const COMMAND_FLAGS: &[(&str, &[&str])] = &[
             "--export-plan",
             "--plan",
             "--plan-digest",
+            "--progress-json",
         ],
     ),
-    ("pop", &["--id", "--item", "--latest", "--if-due", "--json"]),
+    (
+        "pop",
+        &[
+            "--id",
+            "--item",
+            "--latest",
+            "--if-due",
+            "--json",
+            "--progress-json",
+        ],
+    ),
     ("inspect", &["--id", "--json"]),
     ("status", &["--json", "--all", "--paths", "--id"]),
 ];
@@ -786,6 +800,7 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                 etude_cli_support::shown(path)
             );
         }
+        etude_cli_support::progress::finish_without_work("stash", "stash", ExitCode::from(1));
         return ExitCode::from(1);
     }
 
@@ -869,7 +884,6 @@ fn execute_stash(
         return etude_cli_support::problems::plan_check_problem("stash", &bound.root, &error)
             .report();
     }
-    let count = bound.moves();
     let deadline = bound
         .groups
         .first()
@@ -892,16 +906,15 @@ fn execute_stash(
         );
     }
     let downloads = downloads_in_plan(&bound.plan);
-    let mut progress = etude_cli_support::ProgressReporter::stderr("stash", count);
-    let result = etude_core::apply::apply_with_progress_outcome(
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash", "stash");
+    let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
         &bound,
         &context,
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
-        |p| progress.update(p.completed, p.total),
+        |event| progress.update(event),
     );
-    drop(progress);
-    match result {
+    let code = (|| match result {
         Ok(r) => {
             if sl.is_some() {
                 etude_cli_support::envelope::recovery_operation(&r.journal_id);
@@ -1059,7 +1072,9 @@ fn execute_stash(
             }
             apply_exit_code(&e)
         }
-    }
+    })();
+    progress.finish(code);
+    code
 }
 
 /// Downloads still arriving that this plan is about to move, counted while they
@@ -1175,6 +1190,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
     };
     if prepared.sources.is_empty() {
         println!("Nothing selected to stash.");
+        etude_cli_support::progress::finish_without_work("stash", "stash", ExitCode::from(1));
         return ExitCode::from(1);
     }
     let Some(sealer) = sealer(false) else {
@@ -1186,20 +1202,15 @@ fn cmd_select(args: &[String]) -> ExitCode {
     };
     let plan = selection::plan(&prepared, root.clone(), &holding_name(deadline));
     let downloads = downloads_in_plan(&plan);
-    let mut progress = etude_cli_support::ProgressReporter::stderr("stash", prepared.sources.len());
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash", "stash");
     let result = etude_core::apply::apply_with_structured_progress_outcome(
         &plan,
         "stash",
         Some(&sealer),
         None,
-        |event| {
-            if event.phase == etude_core::apply::ProgressPhase::Advancing {
-                progress.update(event.completed, event.planned);
-            }
-        },
+        |event| progress.update(event),
     );
-    drop(progress);
-    match result {
+    let code = (|| match result {
         Ok(report) => {
             if report.moved > 0 {
                 etude_cli_support::envelope::recovery_operation(&report.journal_id);
@@ -1302,7 +1313,9 @@ fn cmd_select(args: &[String]) -> ExitCode {
             }
             apply_exit_code(&error)
         }
-    }
+    })();
+    progress.finish(code);
+    code
 }
 
 /// The folders a locked selected item sits in. `--into` holds none of them.
@@ -1894,6 +1907,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
                 etude_cli_support::reason::Code::MissingInput
             });
             etude_cli_support::envelope::status("nothing_to_do");
+            etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
             return ExitCode::from(1);
         }
         Err(etude_core::journal::JournalError::Malformed(batches::AMBIGUOUS)) => {
@@ -1930,6 +1944,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if journal_is_fully_undone(&j) {
         println!("\nNothing to restore. This stash was already popped.");
+        etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
         return ExitCode::from(1);
     }
     // Before the counts, because it changes what they mean. A journal cut
@@ -1956,11 +1971,11 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         );
     }
 
-    let mut progress = etude_cli_support::ProgressReporter::stderr("stash pop", j.entries.len());
-    let r = etude_core::apply::undo_with_progress(&mut j, &sl, |p| {
-        progress.update(p.completed, p.total)
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash pop", "pop");
+    let r = etude_core::apply::undo_with_structured_progress(&mut j, &sl, |event| {
+        progress.update(event)
     });
-    drop(progress);
+    let code = (|| {
     if r.unrecorded_moves > 1 {
         return refuse_missing_entries(&j, r.unrecorded_moves);
     }
@@ -2080,6 +2095,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         return fail(etude_cli_support::reason::Code::OperationIncomplete);
     }
     ExitCode::SUCCESS
+    })();
+    progress.finish(code);
+    code
 }
 
 fn pop_item_args(args: &[String]) -> Result<(Vec<String>, Option<String>), &'static str> {
@@ -2166,7 +2184,13 @@ fn pop_one_item(
         .parent()
         .map(etude_cli_support::shown)
         .unwrap_or_default();
-    let report = match etude_core::apply::undo_entry(journal, index, sealer) {
+    let mut progress = etude_cli_support::progress::Reporter::for_operation("stash pop", "pop");
+    let report = match etude_core::apply::undo_entry_with_structured_progress(
+        journal,
+        index,
+        sealer,
+        |event| progress.update(event),
+    ) {
         Ok(report) => report,
         Err(_) => {
             eprintln!(
@@ -2175,6 +2199,7 @@ fn pop_one_item(
             return fail(etude_cli_support::reason::Code::OperationIncomplete);
         }
     };
+    let code = (|| {
     if report.unrecorded_moves > 1 {
         return refuse_missing_entries(journal, report.unrecorded_moves);
     }
@@ -2265,6 +2290,9 @@ fn pop_one_item(
         selection::remove_empty_root(journal);
         ExitCode::SUCCESS
     }
+    })();
+    progress.finish(code);
+    code
 }
 
 fn cmd_inspect(args: &[String]) -> ExitCode {
@@ -3154,7 +3182,8 @@ mod tests {
                 "--allow-home",
                 "--export-plan",
                 "--plan",
-                "--plan-digest"
+                "--plan-digest",
+                "--progress-json"
             ]
         );
         for typo in ["--dry-run", "--yes", "-n", "--all", "--force"] {

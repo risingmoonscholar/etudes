@@ -588,7 +588,7 @@ crates/
   etude-core/    scan, plan, apply, journal-first undo, zero dependencies
   etude-keep/    journal encryption (XChaCha20-Poly1305, keychain or supplied key)
   etude-read/    content inspection, mlock'd, zeroed, never persisted
-  etude-cli-support/ bounded progress presentation shared by the CLIs
+  etude-cli-support/ the progress layer, result envelope, refusal codes and contracts shared by the CLIs
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
   unpack-cli/    bin: unpack, dispatches to system tools, parses nothing
@@ -695,11 +695,11 @@ Sources: Apple's [getxattr(2)](https://developer.apple.com/library/archive/docum
 and [fsetxattr(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsetxattr.2.html)
 document descriptor access, absent attributes, and unsupported storage. Extractor
 propagation and exFAT storage are measured behavior, rather than promises inferred
-from these manuals. The unpack capability declaration is version 6 and the result
-envelope is version 4. `docs/contracts/v6/unpack.json` is the canonical pin and
+from these manuals. The unpack capability declaration is version 7 and the result
+envelope is version 4. `docs/contracts/v7/unpack.json` is the canonical pin and
 `v1/unpack.json` mirrors it; earlier pins stay immutable.
 
-Opt in to versioned stderr progress with `sweep apply PATH --yes --progress-json` (also available during review). Records distinguish planned entries, successful moves, and durable journal acknowledgements; `--json` stdout remains one result envelope. See [structured progress](docs/sweep-progress.md) for the schema and failure counts. Journal persistence is unchanged; no speed improvement is claimed.
+Every operation that takes time or writes takes `--progress-json`: `sweep apply`, `review` and `undo`, `stash`, `stash select`, `stash pop` and `restore`, and `unpack` extraction and `--list`. One shared layer writes versioned, bounded records on stderr; `--json` stdout remains one result envelope. Records distinguish planned entries, completed steps and durable journal acknowledgements, say so when a count is not known yet, and never state a count nobody observed. Unpack still parses nothing while extracting: it counts planned members in its private staging, from the walk its soft limit already makes. See [structured progress](docs/progress.md) for the schema, what a killed run leaves, and measured cost. Journal persistence is unchanged; no speed improvement is claimed.
 
 ### Stash exactly the selected objects
 

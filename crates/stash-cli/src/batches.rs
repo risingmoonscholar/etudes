@@ -27,7 +27,7 @@ pub fn selector(args: &[String]) -> Result<Selector, &'static str> {
                 }
                 latest = true;
             }
-            "--json" | "--if-due" => {}
+            "--json" | "--if-due" | etude_cli_support::progress::FLAG => {}
             value if value.starts_with('-') => return Err("unknown pop option"),
             value => {
                 if named.replace(value.to_owned()).is_some() {

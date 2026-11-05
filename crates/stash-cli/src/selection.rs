@@ -35,8 +35,8 @@ pub fn receipt_arguments(args: &[String]) -> Vec<String> {
                     1
                 };
             }
-            "--json" => {
-                receipt.push("--json".into());
+            flag @ ("--json" | etude_cli_support::progress::FLAG) => {
+                receipt.push(flag.into());
                 i += 1;
             }
             _ => i += 1,
@@ -100,6 +100,10 @@ pub fn parse(args: &[String]) -> Result<Options, Problem> {
         }
         if !positional && token == "--json" {
             options.json = true;
+            i += 1;
+            continue;
+        }
+        if !positional && token == etude_cli_support::progress::FLAG {
             i += 1;
             continue;
         }

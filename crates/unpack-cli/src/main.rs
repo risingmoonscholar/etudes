@@ -20,7 +20,7 @@
 mod quarantine;
 mod safety;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Seek};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
@@ -34,8 +34,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use etude_cli_support::contract::{ARCHIVE_SUFFIXES, ArchiveFormat as Format};
+use etude_cli_support::progress::Reporter;
 use etude_cli_support::reason::{Code as ReasonCode, Reason, Subject};
 use etude_cli_support::{counted, plain_io_error, quoted_path, shown, shown_text};
+use etude_core::apply::{ProgressPhase, StructuredProgress};
 use safety::Unsafe;
 
 // `unpack` deliberately targets the macOS system extractors.  Do not replace
@@ -78,6 +80,7 @@ USAGE
     unpack contract --json         print the versioned capability contract
     --max-size N[G|M]              set the size limit: a whole number above 0
     --json                         machine-readable output (for agents)
+    --progress-json                bounded versioned progress on stderr
     --version                      print the version and exit
     unpack help
 
@@ -798,7 +801,7 @@ fn validate_args(args: &[String]) -> Result<(), BadArgument> {
     let mut i = usize::from(!no_archive);
     while i < args.len() {
         match args[i].as_str() {
-            "--list" | "--json" => i += 1,
+            "--list" | "--json" | etude_cli_support::progress::FLAG => i += 1,
             "--into" => {
                 let Some(directory) = args.get(i + 1).filter(|value| !value.is_empty()) else {
                     return Err(BadArgument::Invalid(
@@ -929,6 +932,27 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
         return refusal(ReasonCode::UnsupportedFormat, None);
     }
 
+    // Every path below here does work that takes time, so it is reported.
+    let mut progress = Reporter::for_operation(
+        "unpack",
+        if flag(args, "--list") {
+            "list"
+        } else {
+            "extract"
+        },
+    );
+    progress.indeterminate();
+    let code = unpack_checked(archive, fmt, args, &mut progress);
+    progress.finish(code);
+    code
+}
+
+fn unpack_checked(
+    archive: &Path,
+    fmt: Format,
+    args: &[String],
+    progress: &mut Reporter<std::io::Stderr>,
+) -> ExitCode {
     // Copy the input once, before either listing. From this point onward no
     // process is handed the caller-controlled pathname: both preflights and
     // extraction consume the same private bytes, even if that pathname is
@@ -1063,6 +1087,23 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     }
     let junk = entries.iter().filter(|p| safety::is_junk(p)).count();
     let password_protected = encrypted > 0;
+
+    if listing_only {
+        // A listing has no parts to watch: the count arrives whole.
+        let listed = entries.len();
+        for phase in [ProgressPhase::Planning, ProgressPhase::Done] {
+            progress.update(StructuredProgress {
+                planned: listed,
+                completed: if phase == ProgressPhase::Done {
+                    listed
+                } else {
+                    0
+                },
+                journalled: 0,
+                phase,
+            });
+        }
+    }
 
     if listing_only && flag(args, "--json") {
         // Lets an agent inspect an archive and decide, without extracting.
@@ -1264,7 +1305,21 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
             return failure(ReasonCode::MissingInput, input_subject(&dest));
         }
     };
-    match extract(&pinned, fmt, &staging, budget) {
+    // The judged listing is the plan. Nothing was validated until this point,
+    // so the count stays indeterminate until now.
+    let planned = PlannedMembers::from_listing(&entries);
+    let event = |phase, completed| StructuredProgress {
+        planned: planned.len(),
+        completed,
+        journalled: 0,
+        phase,
+    };
+    progress.update(event(ProgressPhase::Planning, 0));
+    let extracted = extract(&pinned, fmt, &staging, budget, &planned, |completed| {
+        progress.update(event(ProgressPhase::Advancing, completed))
+    });
+    progress.settle();
+    match extracted {
         Err(ExtractError::Stopped) => {
             let cleanup = cleanup_destination(&staging);
             etude_cli_support::envelope::status("refused");
@@ -1857,50 +1912,116 @@ fn cleanup_destination_with(
     }
 }
 
+/// The members a judged listing says extraction should produce: distinct
+/// paths, without metadata this tool drops anyway. Parents the extractor makes
+/// implicitly are not on the list, so they can never inflate a count.
+struct PlannedMembers(HashSet<String>);
+
+impl PlannedMembers {
+    fn from_listing(entries: &[String]) -> Self {
+        Self(
+            entries
+                .iter()
+                .filter(|entry| !safety::is_junk(entry))
+                .filter_map(|entry| {
+                    let mut parts = Path::new(entry).components().filter_map(|c| match c {
+                        std::path::Component::Normal(part) => part.to_str(),
+                        _ => None,
+                    });
+                    let mut key = parts.next()?.to_string();
+                    for part in parts {
+                        key.push('/');
+                        key.push_str(part);
+                    }
+                    Some(key)
+                })
+                .collect(),
+        )
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// What one walk of staging saw. The walk reads directory entries and
+/// metadata only: the same calls the soft limit already needs.
+#[derive(Default)]
+struct Measurement {
+    bytes: u64,
+    planned_present: usize,
+}
+
+/// The count a progress record may state. The extractors write one member at a
+/// time and a member exists before it is complete, so while one may still be
+/// writing, the newest present member does not count. After a successful exit,
+/// everything present is finished.
+fn finished_members(planned_present: usize, extractor_finished: bool) -> usize {
+    if extractor_finished {
+        planned_present
+    } else {
+        planned_present.saturating_sub(1)
+    }
+}
+
+fn measure(
+    root: &Path,
+    planned: &PlannedMembers,
+    writer_running: bool,
+) -> Result<Measurement, String> {
+    fn walk(
+        dir: &Path,
+        root: &Path,
+        planned: &PlannedMembers,
+        writer_running: bool,
+        seen: &mut Measurement,
+    ) -> Result<(), String> {
+        let moved = |error: &std::io::Error| {
+            writer_running && dir != root && error.kind() == std::io::ErrorKind::NotFound
+        };
+        let rd = match etude_core::scan::observe_read(
+            "staging_tree_enumeration",
+            std::fs::read_dir(dir),
+        ) {
+            Ok(rd) => rd,
+            Err(error) if moved(&error) => return Ok(()),
+            Err(error) => return Err(tree_error(dir, error)),
+        };
+        for entry in rd {
+            let path = entry.map_err(|e| tree_error(dir, e))?.path();
+            let md = match path.symlink_metadata() {
+                Ok(md) => md,
+                Err(error) if writer_running && error.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Err(error) => return Err(tree_error(&path, error)),
+            };
+            if !planned.0.is_empty()
+                && let Some(name) = path.strip_prefix(root).ok().and_then(Path::to_str)
+                && planned.0.contains(name)
+            {
+                seen.planned_present += 1;
+            }
+            if md.is_dir() {
+                walk(&path, root, planned, writer_running, seen)?;
+            } else {
+                seen.bytes = seen
+                    .bytes
+                    .checked_add(md.len())
+                    .ok_or("measured byte total overflowed")?;
+            }
+        }
+        Ok(())
+    }
+    let mut seen = Measurement::default();
+    walk(root, root, planned, writer_running, &mut seen)?;
+    Ok(seen)
+}
+
 /// Total logical bytes observed under `dir`, without following links.
 /// An unreadable entry makes the measurement fail, never silently smaller.
 fn written(dir: &Path) -> Result<u64, String> {
-    measure(dir, dir, false)
-}
-
-/// One walk of staging. While an extractor is running, a name can vanish
-/// between being listed and being examined: macOS tar writes each file under a
-/// temporary name and renames it into place. That is a member moving, seen again
-/// on the next poll, and not an unreadable entry. With no writer running, every
-/// failure stays a failure, so the final measurement is never silently smaller.
-fn measure(dir: &Path, root: &Path, writer_running: bool) -> Result<u64, String> {
-    let rd =
-        match etude_core::scan::observe_read("staging_tree_enumeration", std::fs::read_dir(dir)) {
-            Ok(rd) => rd,
-            Err(error)
-                if writer_running
-                    && dir != root
-                    && error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                return Ok(0);
-            }
-            Err(error) => return Err(tree_error(dir, error)),
-        };
-    let mut total = 0_u64;
-    for entry in rd {
-        let path = entry.map_err(|e| tree_error(dir, e))?.path();
-        let md = match path.symlink_metadata() {
-            Ok(md) => md,
-            Err(error) if writer_running && error.kind() == std::io::ErrorKind::NotFound => {
-                continue;
-            }
-            Err(error) => return Err(tree_error(&path, error)),
-        };
-        let bytes = if md.is_dir() {
-            measure(&path, root, writer_running)?
-        } else {
-            md.len()
-        };
-        total = total
-            .checked_add(bytes)
-            .ok_or("measured byte total overflowed")?;
-    }
-    Ok(total)
+    Ok(measure(dir, &PlannedMembers(HashSet::new()), false)?.bytes)
 }
 
 fn tree_error(path: &Path, error: std::io::Error) -> String {
@@ -2117,6 +2238,8 @@ fn run_bounded(
     anchor: &ArchiveAnchor,
     dest: &Path,
     budget: u64,
+    planned: &PlannedMembers,
+    mut on_poll: impl FnMut(usize),
 ) -> Result<Result<(), Breach>, ExtractError> {
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let output = Arc::new(Mutex::new(ToolOutput::default()));
@@ -2152,7 +2275,12 @@ fn run_bounded(
                 return Err(ExtractError::Stopped);
             }
             let status = child.try_wait().map_err(|e| e.to_string())?;
-            let total = measure(dest, dest, status.is_none())?;
+            let seen = measure(dest, planned, status.is_none())?;
+            let total = seen.bytes;
+            on_poll(finished_members(
+                seen.planned_present,
+                status.is_some_and(|status| status.success()),
+            ));
             if total > budget {
                 if status.is_none() {
                     child
@@ -2206,6 +2334,8 @@ fn extract(
     fmt: Format,
     dest: &Path,
     budget: u64,
+    planned: &PlannedMembers,
+    on_poll: impl FnMut(usize),
 ) -> Result<Result<(), Breach>, ExtractError> {
     let mut cmd = extractor_command(fmt, anchor.path(), dest);
     anchor.prepare(&mut cmd)?;
@@ -2217,7 +2347,7 @@ fn extract(
     } else {
         cmd.stdout(Stdio::piped());
     }
-    run_bounded(cmd, anchor, dest, budget)
+    run_bounded(cmd, anchor, dest, budget, planned, on_poll)
 }
 
 fn publish_staging(staging: &Path, dest: &Path) -> Result<(), String> {
@@ -2435,10 +2565,52 @@ mod tests {
     }
 
     #[test]
+    fn planned_members_are_distinct_normalized_and_exclude_dropped_metadata() {
+        let entries: Vec<String> = [
+            "./a/b.txt",
+            "a/b.txt",
+            "a/./c.txt",
+            ".",
+            "__MACOSX/._b.txt",
+            "a/.DS_Store",
+            "name with  spaces",
+        ]
+        .iter()
+        .map(|entry| entry.to_string())
+        .collect();
+        let planned = PlannedMembers::from_listing(&entries);
+        let mut names: Vec<&str> = planned.0.iter().map(String::as_str).collect();
+        names.sort();
+        assert_eq!(names, ["a/b.txt", "a/c.txt", "name with  spaces"]);
+    }
+
+    #[test]
+    fn only_a_finished_extractor_can_vouch_for_the_newest_member() {
+        assert_eq!(finished_members(0, false), 0);
+        assert_eq!(finished_members(1, false), 0);
+        assert_eq!(finished_members(5, false), 4);
+        assert_eq!(finished_members(5, true), 5);
+    }
+
+    #[test]
+    fn a_measurement_counts_planned_members_and_never_an_implicit_parent() {
+        let root = std::env::temp_dir().join(format!("unpack-measure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/b/c.txt"), b"12345").unwrap();
+        std::fs::write(root.join("unplanned.txt"), b"1").unwrap();
+        let planned = PlannedMembers::from_listing(&["a/b/c.txt".into(), "absent.txt".into()]);
+        let seen = measure(&root, &planned, false).unwrap();
+        assert_eq!(seen.planned_present, 1);
+        assert_eq!(seen.bytes, 6);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_missing_root_fails_whether_or_not_a_writer_is_running() {
         let missing = std::env::temp_dir().join(format!("unpack-absent-{}", std::process::id()));
-        assert!(measure(&missing, &missing, true).is_err());
-        assert!(measure(&missing, &missing, false).is_err());
+        assert!(measure(&missing, &PlannedMembers(HashSet::new()), true).is_err());
+        assert!(measure(&missing, &PlannedMembers(HashSet::new()), false).is_err());
     }
 
     #[test]

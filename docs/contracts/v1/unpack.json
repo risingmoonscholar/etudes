@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 7,
+    "schema_version": 8,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -337,6 +337,41 @@
       "kind": "declaration_not_receipt",
       "access_verified": false,
       "witness": "scripts/check-tool-contracts.py"
+    },
+    "structured_progress": {
+      "flag": "--progress-json",
+      "stream": "stderr_ndjson_alongside_diagnostics",
+      "schema_version": 1,
+      "fields": [
+        "schema_version",
+        "event",
+        "tool_version",
+        "operation_id",
+        "operation",
+        "phase",
+        "planned",
+        "completed",
+        "journalled"
+      ],
+      "maximum_events": 12,
+      "counts": [
+        {
+          "operation": "extract",
+          "planned": "distinct_judged_listing_members_without_dropped_metadata",
+          "completed": "planned_members_observed_in_private_staging_by_the_engine;_the_newest_is_not_counted_until_the_extractor_exits_successfully",
+          "journalled": "zero;_no_journal"
+        },
+        {
+          "operation": "list",
+          "planned": "members_in_the_plain_listing",
+          "completed": "members_in_the_plain_listing_once_it_returned",
+          "journalled": "zero;_no_journal"
+        }
+      ],
+      "indeterminate": "phase_planning_with_planned_zero;_the_count_is_not_known_yet",
+      "terminal": "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
+      "ordering": "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
+      "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
     },
     "status_lookup": {
       "support": "unsupported",
