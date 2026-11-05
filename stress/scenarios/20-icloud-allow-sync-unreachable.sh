@@ -57,7 +57,7 @@ fi
 # input, not just a wording coincidence.
 if [ "$icloud_code" != "0" ]; then
   case "$icloud_out" in
-    *"system or credential location"*)
+    *"inside a folder named Library"*|*"a folder named Library"*)
       pass "diagnostic: confirmed as RefusedSystemLocation, not RefusedSyncRoot. allow_sync structurally cannot reach this branch" ;;
     *)
       fail "diagnostic: refusal text changed shape ('$icloud_out'). re-check whether this is still the same root cause" ;;

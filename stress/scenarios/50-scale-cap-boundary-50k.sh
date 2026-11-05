@@ -52,7 +52,7 @@ t1=$(date +%s.%N)
 OVER_S=$(echo "$t1-$t0"|bc)
 printf '    scan at 20,001 (one over): exit=%s  %ss\n' "$EC_OVER" "$OVER_S" >&2
 assert_eq 2 "$EC_OVER" "one item over the cap is refused, not silently truncated"
-if grep -q "20001 items exceeds the 20000 item cap" <<<"$OUT_OVER"; then
+if grep -q "has 20001 items, and sweep handles 20000 at a time" <<<"$OUT_OVER"; then
   pass "the refusal message states the real count and the real cap"
 else
   fail "refusal message did not match expected wording: ${OUT_OVER:0:200}"
