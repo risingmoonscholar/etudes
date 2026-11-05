@@ -5,6 +5,7 @@ require pgrep "the surviving extractor must be stopped" || exit 0
 W=$(workdir); trap 'rm -rf "$W"' EXIT
 python3 - "$UNPACK" "$W" >"$W/assertions" 2>"$W/errors" <<'PY'
 import fcntl
+import json
 import os
 from pathlib import Path
 import shutil
@@ -67,8 +68,25 @@ def candidate(n, name="out"):
 def ready(stage):
     stage.mkdir()
     lock = stage / (".unpack-" + stage.name[-40:-8] + ".lock")
-    lock.write_bytes(b"unpack staging lock v1\n")
+    metadata = stage.stat()
+    lock.write_bytes(f"unpack staging lock v1\n{metadata.st_dev}:{metadata.st_ino}\n".encode())
     return lock
+
+def removed(path):
+    return f"removed {path}, a folder left by an interrupted extraction" in text
+
+def plain_words(text, label):
+    words = ("staging", "candidate", "os error", "panicked", "journal")
+    # The work folder's own name holds the scenario's name, so judge the rest.
+    rest = "\n".join(line for line in text.replace(str(root), "").splitlines() if not line.startswith("{"))
+    check(not any(word in rest for word in words), label + ": messages use plain words")
+
+def step_works(text, path, label):
+    # The printed step is the last line naming the folder. Run it as printed.
+    step = [line for line in text.splitlines() if "rm -rf" in line and str(path) in line][-1]
+    command = step.split(": ", 1)[1]
+    code = subprocess.run(["bash", "-c", command]).returncode
+    check(code == 0 and not os.path.lexists(path), label + ": the printed step removes it")
 
 try:
     victim = start(archive, "victim")
@@ -107,15 +125,18 @@ try:
     other = candidate(8, "another-destination"); ready(other)
     failed_cleanup = candidate(10); ready(failed_cleanup); failed_cleanup.chmod(0o500)
     text = run("live")
-    check(stage.is_dir() and str(stage) in text and "left staging candidate" in text,
-          "live run's staging remains and is reported by path")
+    plain_words(text, "live")
+    check(stage.is_dir() and f"left {stage} in place: another extraction is still using it" in text,
+          "live run's staging remains and is reported by path as in use")
+    check(similar.read_bytes() == b"similar" and str(similar) not in text,
+          "a file whose name only resembles a leftover is left alone and not mentioned")
     for path, label in [(legacy, "legacy folder without a lock"), (link, "matching symlink"),
-                        (similar, "similar file"), (ordinary, "matching ordinary file"),
+                        (ordinary, "matching ordinary file"),
                         (bad, "uninitialized lock"), (lock_link, "symlink lock"),
                         (fifo, "FIFO lock"), (blocked, "unreadable lock"),
                         (failed_cleanup, "failed recursive cleanup")]:
-        check(os.path.lexists(path) and str(path) in text and
-              f"removed abandoned staging {path}" not in text, label + " remains and is reported by path")
+        check(os.path.lexists(path) and str(path) in text and not removed(path),
+              label + " remains and is reported by path")
     check((legacy / "keep").read_bytes() == b"legacy" and (outside / "keep").read_bytes() == b"outside"
           and similar.read_bytes() == b"similar" and ordinary.read_bytes() == b"ordinary file",
           "retained candidates and symlink target keep their exact bytes")
@@ -125,7 +146,7 @@ try:
     check(victim.wait(timeout=10) == -signal.SIGKILL, "real SIGKILL ended unpack")
     check(stage.is_dir() and not dest.exists(), "SIGKILL leaves staging until a later run")
     text = run("orphan")
-    check(stage.is_dir() and str(stage) in text and f"removed abandoned staging {stage}" not in text,
+    check(stage.is_dir() and f"left {stage} in place" in text and not removed(stage),
           "a surviving stopped extractor retains its inherited lock and staging")
     for kid in kids:
         os.kill(kid, signal.SIGKILL)
@@ -142,9 +163,44 @@ try:
                     if time.monotonic() >= deadline:
                         raise RuntimeError("extractor did not release lock after SIGKILL")
                     time.sleep(0.01)
-    text = run("recovered", archive)
-    check(not stage.exists() and f"removed abandoned staging {stage}" in text,
+    # A copy of that real leftover, as a backup or a copied folder would bring it,
+    # is someone's copy now. Only the original may go.
+    elsewhere = root / "elsewhere"; elsewhere.mkdir()
+    copy = elsewhere / stage.name
+    shutil.copytree(stage, copy)
+    (copy / "added-by-a-person").write_bytes(b"keep")
+    done = subprocess.run([binary, str(small), "--into", str(elsewhere / "out")], capture_output=True, text=True)
+    check(done.returncode == 0 and (copy / "added-by-a-person").read_bytes() == b"keep",
+          "a copy of a real leftover is not removed")
+    check(str(copy) in done.stderr and "cannot prove it made it" in done.stderr,
+          "a copy of a real leftover is reported by path")
+    plain_words(done.stderr, "copy")
+    step_works(done.stderr, copy, "copy")
+
+    # The real leftover goes, is named, and is counted in the one JSON result.
+    done = subprocess.run([binary, str(archive), "--into", str(dest), "--json", "--progress-json"],
+                          capture_output=True, text=True)
+    text = done.stderr
+    result = json.loads(done.stdout)
+    check(done.returncode == 0 and not stage.exists() and removed(stage),
           "retry removes the killed extraction's abandoned staging and reports removal")
+    counters = {row["name"]: row["count"] for row in result["effects"]["counters"]}
+    check(counters.get("leftover_folders_removed") == 1, "the JSON result counts the folder it removed")
+    check(counters.get("leftover_folders_kept", 0) >= 8, "the JSON result counts the folders it kept")
+    records = [json.loads(line) for line in text.splitlines() if line.startswith("{")]
+    check(records and all(r["event"] == "progress" and str(root) not in json.dumps(r) for r in records)
+          and records[-1]["phase"] == "done", "progress records stay whole and path-free beside these messages")
+    plain_words(text, "recovered")
+    shutil.rmtree(dest)
+
+    # A folder that was proved abandoned but cannot be removed says so, and its step works.
+    failed_cleanup.chmod(0o500)
+    text = run("failed-removal")
+    plain_words(text, "failed removal")
+    check(failed_cleanup.is_dir() and not removed(failed_cleanup) and "could not finish removing" in text,
+          "a removal that failed says it failed")
+    step_works(text, failed_cleanup, "failed removal")
+    failed_cleanup = root / "absent"
 
     dead = candidate(9); ready(dead)
     first, second = start(small, "race-a"), start(small, "race-b")
@@ -164,7 +220,7 @@ finally:
         log.close()
     if 'blocked' in locals():
         blocked.chmod(0o700)
-    if 'failed_cleanup' in locals():
+    if 'failed_cleanup' in locals() and failed_cleanup.exists():
         failed_cleanup.chmod(0o700)
 PY
 code=$?

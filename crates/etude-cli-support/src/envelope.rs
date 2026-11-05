@@ -99,7 +99,10 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
             scope,
             journal_enabled: !args.iter().any(|arg| arg == "--no-journal"),
             no_undo_needed: false,
-            progress_json: args.iter().any(|arg| arg == crate::progress::FLAG),
+            progress_json: args
+                .iter()
+                .take_while(|arg| *arg != "--")
+                .any(|arg| arg == crate::progress::FLAG),
             effects: std::collections::BTreeMap::new(),
             reason: None,
         }
@@ -310,6 +313,28 @@ mod tests {
                 Some("sweep-journal-123")
             );
         });
+    }
+
+    #[test]
+    fn the_progress_flag_after_a_double_dash_is_a_name_and_not_a_request() {
+        let args = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| word.to_string())
+                .collect::<Vec<_>>()
+        };
+        super::begin(
+            "stash",
+            "0.5.4",
+            &args(&["select", "--progress-json", "--", "a"]),
+        );
+        assert!(super::progress_json());
+        super::begin(
+            "stash",
+            "0.5.4",
+            &args(&["select", "--", "--progress-json"]),
+        );
+        assert!(!super::progress_json());
     }
 
     #[test]

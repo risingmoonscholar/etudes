@@ -5,7 +5,7 @@ Every operation that takes time or writes takes one flag, `--progress-json`, and
 | Operation | Command | `planned` | `completed` | `journalled` |
 | --- | --- | --- | --- | --- |
 | `apply`, `review` | `sweep apply PATH --yes`, `sweep apply --plan`, `sweep review PATH` | entries after full preflight validation | successful moves or tag writes, including one whose done record failed | durable done records; zero with `--no-journal` |
-| `undo` | `sweep undo [PATH]` | journal entries | entries fully examined, including ones left alone or already restored | reversals this run made durable |
+| `undo` | `sweep undo [PATH]`, `sweep undo --id ID` | journal entries | entries fully examined, including ones left alone or already restored | reversals this run made durable |
 | `stash` | `stash PATH`, `stash --plan`, `stash select` | entries after full preflight validation | successful moves | durable done records; zero with `--no-journal` |
 | `pop` | `stash pop`, `stash restore`, with `--id`; one with `--item` | journal entries, or one | entries fully examined | reversals this run made durable |
 | `extract` | `unpack ARCHIVE` | distinct members of the judged listing, without metadata unpack drops | planned members seen in private staging, see below | zero |
@@ -20,7 +20,7 @@ A record has exactly these fields: `schema_version`, `event` (`progress`), `tool
 The version is still 1: no field, type or phase changed, and sweep's stream is the same for the same run. Two things are newly defined, and neither reaches a run that schema 1 could already describe:
 
 - **Not known yet.** `planning` with `planned` zero means work has started and the count is not known. Schema 1 never wrote that combination, and `planned` has always counted what had been validated so far. A count of nothing is `done` with `planned` zero, and a failure before any count is `error` with `planned` zero. No sentinel appears in `completed`.
-- **A terminal record agrees with the result.** `done` means the result status is `done` or `nothing_to_do`, and anything else is `error`. An apply that reached the end of its plan but held items back, whose result reads `incomplete`, used to end in `done`. A pop that left a changed item exits 0, reads `incomplete` and ends in `error`.
+- **A terminal record agrees with the result.** `done` means the result status is `done` or `nothing_to_do`, and anything else is `error`. An apply that reached the end of its plan but held items back, whose result reads `incomplete`, used to end in `done`. A pop that left a changed item exits 3, reads `incomplete` and ends in `error`.
 
 There are at most twelve records per run: one `planning` with a count, at most ten `advancing` milestones and one terminal. A run that starts indeterminate spends one milestone on that record. Each record is written whole in one call and is shorter than the 512 bytes POSIX guarantees a pipe writes atomically, so a kill cannot tear one and an extractor sharing the stream cannot land inside one. Twelve short records also cannot fill a pipe, so a reader that never reads cannot stall a run through this layer.
 
@@ -43,7 +43,7 @@ Unpack runs system tools and does not parse what they print while they run. Its 
 
 This adds no system call, no read of file contents and no contract domain: `staging_tree_metadata` already covers the walk, and receipts list the same categories with and without the flag. A hash lookup per entry is the whole addition.
 
-Original branch measurements, before the tar-rename fix now on `main`: 100,000 files of 4,096 bytes in 100 folders, wall time of a complete run, median of five, on one APFS volume. These measurements were not repeated for the transplant:
+Original branch measurements, before the tar-rename fix now on `main`: 100,000 files of 4,096 bytes in 100 folders, wall time of a complete run, median of five, on one APFS volume. These measurements were not repeated on the current code:
 
 | Archive | System tool alone | Unpack before this change | Unpack, no flag | Unpack, `--progress-json` |
 | --- | --- | --- | --- | --- |
@@ -60,4 +60,4 @@ The ZIP difference is inside the spread of the runs in both directions, so no sl
 
 A new tool calls `Reporter::for_operation(label, operation)`, feeds it `StructuredProgress` values it observed, and calls `finish(exit_code)`. `indeterminate()` covers the time before it can count. It declares its operations through `structured_progress` in the contract, and its counts belong in the table above. A tool that cannot observe members while a system tool runs writes `planning` and the terminal record and no `advancing`. Bytes are not in schema 1: nothing on main has a denominator for them that does not come from an archive header. A byte count would need schema 2.
 
-`scripts/check-progress-records.py` is the independent reader used by every tool's tests and by `stress/scenarios/99-shared-progress.sh`. `scripts/check-progress-mutation.sh` plants faults that those tests must reject.
+`scripts/check-progress-records.py` is the independent reader used by every tool's tests and by `stress/scenarios/113-shared-progress.sh`. `scripts/check-progress-mutation.sh` plants faults that those tests must reject.

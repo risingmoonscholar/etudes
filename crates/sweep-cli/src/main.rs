@@ -824,7 +824,11 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
     ("forget", &[("--yes", false)]),
     (
         "undo",
-        &[("--json", false), ("--id", true), ("--progress-json", false)],
+        &[
+            ("--json", false),
+            ("--id", true),
+            ("--progress-json", false),
+        ],
     ),
     ("status", &[("--json", false), ("--id", true)]),
     ("verify", &[]),
@@ -2729,6 +2733,7 @@ fn run_apply(
         None,
         |event| progress.update(event),
     );
+    progress.settle();
     let code = report_apply(result, p, operation, sl.is_some());
     progress.finish(code);
     code
@@ -3738,6 +3743,7 @@ fn run_undo(
 
     let tag_journal = j.entries.iter().any(|entry| entry.tag.is_some());
     let r = etude_core::apply::undo_with_structured_progress(j, sl, |event| progress.update(event));
+    progress.settle();
     let root = j.root.clone();
     let folder = etude_cli_support::shown(&root);
     let retry = if asked == UndoAsked::Id {

@@ -89,8 +89,9 @@ considered. Removal requires all of:
 - `symlink_metadata` proving a real directory owned by the effective user.
 - A real, singly linked lock file owned by that user, opened without following
   a symlink and without blocking on a substituted FIFO.
-- The complete `unpack staging lock v1` marker, written only after the creator
-  already holds the exclusive lock.
+- The complete `unpack staging lock v1` marker naming this directory's device
+  and inode, written only after the creator already holds the exclusive lock.
+  A copy of a leftover has another inode, so it proves nothing and stays.
 - A nonblocking exclusive lock, followed by directory and lock identity checks.
 
 The initialized marker closes the race between creating the lock file and
@@ -108,10 +109,17 @@ also leaves an unprovable candidate. These conservative limits are deliberate.
 
 **SIGKILL itself still leaves staging until a later extraction into the same
 destination under the same parent.** A live inherited writer postpones recovery
-until its descriptor is released. Lockless, linked, unreadable, malformed or
-otherwise unverified candidates remain and are reported by path. Recursive
-removal failures are reported without blocking the new extraction or claiming
-that cleanup succeeded. No process is killed by recovery.
+until its descriptor is released. Lockless, linked, unreadable, malformed,
+copied or otherwise unverified folders with the exact name remain and are
+reported by path. A name that only resembles a leftover is neither touched nor
+mentioned. Recursive removal failures are reported without blocking the new
+extraction or claiming that cleanup succeeded. A run that finds a folder another
+run has just removed says nothing about it. No process is killed by recovery.
+
+A volume that answers `flock` with ENOTSUP, EOPNOTSUPP or ENOLCK still extracts,
+as it did before locks existed. Its folder has no lock file, so a later run
+cannot prove it abandoned and leaves it in place. No such volume was mounted for
+this: a unit test injects the error at the lock call.
 
 The reusable advisory guard lives in `etude-cli-support`; staging policy and
 recovery are unpack-specific. Pack is unchanged. Unpack declaration version 8
@@ -120,7 +128,7 @@ retained. The result-envelope and progress schemas are unchanged.
 
 ## Regression witnesses
 
-`stress/scenarios/100-unpack-staging-recovery.sh` makes a 5,000-member stored
+`stress/scenarios/114-unpack-staging-recovery.sh` makes a 5,000-member stored
 ZIP, witnesses partial extraction, stops the supervisor and extractor, and
 retries while each holds the lock. It uses real SIGKILL and later checks every
 published path and byte. All generated subprocess groups are terminated on
@@ -142,10 +150,9 @@ the complete result. A unit test covers the empty-lock initialization window.
 Both negative controls fail the killed-staging removal and competing-recovery
 assertions, as well as the required retained-candidate path diagnostics. No
 scenario or assertion was weakened. The final measured test count is 666 and
-the tracked scenario count is 65 (46 fast, 9 load, 10 platform).
+the tracked scenario count was 65 (46 fast, 9 load, 10 platform) at that commit.
 
-The first full fast-tier run exited 1: its structured result recorded 1,016
-passed, one failed and five unproven assertions. Scenario 97 killed unpack
+Scenario 97 killed unpack
 after seeing staging but before its writer could be reliably enumerated, then
 raced that writer during fixture removal. Its start witness now requires a
 real fixture member and freezes the supervisor before enumerating children.
@@ -156,32 +163,4 @@ three additional shutdown assertions. A direct run passed all 19 assertions.
 The load-tier interrupted-extraction scenario's timing helpers now count its
 `chunk_*.bin` payload rather than the internal lock file. This makes both its
 partial-progress and completion witnesses refer to archived payload, with all
-existing assertions retained. That load scenario was not run, as requested.
-
-## Final verification
-
-Every Cargo command used
-`DEVELOPER_DIR=/Library/Developer/CommandLineTools`. No `CARGO_TARGET_DIR` was set.
-
-| Check | Exit | Observed result |
-| --- | --- | --- |
-| `cargo fmt --all --check` | 0 | Formatting passed |
-| `cargo clippy --all-targets --all-features -- -D warnings` | 0 | No warnings |
-| `cargo test --all` | 0 | 666 passed, zero failed, one benchmark ignored |
-| `STRESS_TIER=fast bash scripts/stress-ratchet.sh` | 0 | 46 scenarios; 1,019 recorded passes, zero failures, five unproven |
-| `python3 scripts/check-stress-catalog.py` | 0 | 65 scenarios: 46 fast, nine load, ten platform |
-| `python3 scripts/check-agent-demo.py --base origin/main` | 0 | Sweep, stash and unpack covered |
-| `bash scripts/check-claims.sh` | 0 | README and demo match 666 tests and 65 scenarios; all other checked claims passed |
-
-The final fast result is
-`stress/results/20261104T024357Z-16361/summary.json`. The ratchet's stdout-based
-footer prints 1,021 passed lines, while the structured assertion records count
-1,019. Scenario 86 prints two extra `ok` lines that are not assertion records.
-That separate reporting discrepancy is unchanged.
-
-The five unproven assertions concern host keychain unavailability (one), the
-link/unlink fallback not exercised by an atomic same-volume rename (one), and
-absence of all reads and subprocess networking (three). None is counted as a
-pass. Nine load and ten platform scenarios were not run. exFAT behavior and
-automatic macOS cleanup after SIGKILL remain unproved. No further product
-decision was required for this implementation.
+existing assertions retained. That load scenario was not run.

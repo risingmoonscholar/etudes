@@ -1322,7 +1322,7 @@ fn unpack_checked(
         &pinned,
         fmt,
         staging,
-        &staged.lock,
+        staged.lock.as_ref(),
         budget,
         &planned,
         |completed| progress.update(event(ProgressPhase::Advancing, completed)),
@@ -1361,7 +1361,7 @@ fn unpack_checked(
             return failure(ReasonCode::ArchiveUnreadable, input_subject(archive));
         }
         Err(ExtractError::Other(e)) => {
-            let cleanup = cleanup_destination(&staging);
+            let cleanup = cleanup_destination(staging);
             eprintln!(
                 "unpack: could not finish extracting {}: {}. {}",
                 shown(archive),
@@ -1446,10 +1446,13 @@ fn unpack_checked(
     etude_cli_support::envelope::effect("quarantine_paths_verified", quarantined);
     // Audit the final tree as well: this is the tree the rename publishes.
     let audited = match audit_staging(staging) {
+        // The private lock file is counted here and is not published.
+        Ok(count) if staged.lock.is_none() => count,
         Ok(count) => match count.checked_sub(1) {
-            // The internal lock is not published.
             Some(count) => count,
-            None => return audit_refusal(staging, &dest, archive, "staging lock is missing"),
+            None => {
+                return audit_refusal(staging, &dest, archive, "the private lock file is missing");
+            }
         },
         Err(error) => return audit_refusal(staging, &dest, archive, &error),
     };
@@ -1458,7 +1461,7 @@ fn unpack_checked(
             staging,
             &dest,
             archive,
-            &format!("could not remove staging lock: {error}"),
+            &format!("could not remove the private lock file: {error}"),
         );
     }
     if let Err(error) = publish_staging(staging, &dest) {
@@ -2361,14 +2364,16 @@ fn extract(
     anchor: &ArchiveAnchor,
     fmt: Format,
     dest: &Path,
-    lock: &etude_cli_support::lock::ExclusiveLock,
+    lock: Option<&etude_cli_support::lock::ExclusiveLock>,
     budget: u64,
     planned: &PlannedMembers,
     on_poll: impl FnMut(usize),
 ) -> Result<Result<(), Breach>, ExtractError> {
     let mut cmd = extractor_command(fmt, anchor.path(), dest);
     anchor.prepare(&mut cmd)?;
-    lock.inherit(&mut cmd);
+    if let Some(lock) = lock {
+        lock.inherit(&mut cmd);
+    }
     cmd.stderr(Stdio::piped());
     if fmt == Format::Gz {
         let out_path = dest.join(stem(anchor.name()));

@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 12,
+    "schema_version": 13,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",

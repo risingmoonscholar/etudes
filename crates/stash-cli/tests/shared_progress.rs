@@ -246,7 +246,7 @@ fn nothing_to_stash_and_nothing_to_pop_end_with_zero() {
 }
 
 #[test]
-fn a_changed_item_turns_a_pop_terminal_into_an_error_with_exit_zero() {
+fn a_changed_item_turns_a_pop_terminal_into_an_error() {
     let (dir, root) = fixture("changed", 3);
     let held = stash(&dir, &[root.to_str().unwrap(), "--json"]);
     let id = stash_id(&held);
@@ -265,7 +265,7 @@ fn a_changed_item_turns_a_pop_terminal_into_an_error_with_exit_zero() {
         .path();
     std::fs::write(member, b"changed while held, and longer").unwrap();
     let run = stash(&dir, &["pop", "--id", &id, "--json", "--progress-json"]);
-    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(run.status.code(), Some(3));
     witness(
         "pop",
         &run.stdout,

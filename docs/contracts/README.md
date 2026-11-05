@@ -342,7 +342,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 11 and its surrounding result envelope is version 4.
+declaration is version 13 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -373,7 +373,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 11 in `v11/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 13 in `v13/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
@@ -402,10 +402,13 @@ versioned declarations remain unchanged.
 
 ## Unpack staging recovery, declaration version 8
 
-`staging_recovery_metadata_and_lock_marker` covers enumeration of matching
-sibling staging candidates, ownership and identity checks, and the initialized
-lock marker. `verified_abandoned_staging_for_same_destination` is a write scope
-and an owned artifact that may be deleted. Recovery does not read archived
-payloads to decide whether a candidate is abandoned. `v8/unpack.json` pins this
+`staging_recovery_metadata_and_lock_marker` covers listing the destination's
+parent, ownership and identity checks on folders with the exact leftover name, and
+the lock marker. `verified_abandoned_staging_for_same_destination` is a write
+scope and an owned artifact that may be deleted. Recovery does not read archived
+payloads to decide whether a folder is abandoned. `v8/unpack.json` pins this
 declaration and `v1/unpack.json` mirrors it; `v7/unpack.json` remains retained.
-Recovery diagnostics name candidate paths, including those left in place.
+Stderr names every folder removed and every folder with the exact name left in
+place. The result's `effects.counters` add `leftover_folders_removed` and
+`leftover_folders_kept`, present only when not zero. See
+[staging recovery evidence](../release-evidence/unpack-staging-recovery.md).
