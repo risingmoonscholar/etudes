@@ -98,12 +98,13 @@ clean "a folder called --id" "$OUT"
 assert_eq 1 "$RC" "a folder called --id: exit, nothing on record"
 
 # An empty name is refused, not shown as a blank.
-for TOOL in sweep stash unpack; do
-  OUT=$("$BIN/$TOOL" '' 2>&1 </dev/null); RC=$?
+for DRIVEN in "$SWEEP" "$STASH" "$UNPACK"; do
+  TOOL=$(basename "$DRIVEN")
+  OUT=$("$DRIVEN" '' 2>&1 </dev/null); RC=$?
   clean "empty name: $TOOL" "$OUT"
   assert_eq 2 "$RC" "empty name: $TOOL: exit"
   has "empty name: $TOOL: says it is empty" "$OUT" "name is empty"
-  "$BIN/$TOOL" '' --json >"$W/out.json" 2>/dev/null </dev/null
+  "$DRIVEN" '' --json >"$W/out.json" 2>/dev/null </dev/null
   assert_eq invalid_arguments "$(field reason.code "$W/out.json")" "empty name: $TOOL: reason"
 done
 
