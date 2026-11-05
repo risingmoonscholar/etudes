@@ -368,7 +368,8 @@ fn an_item_that_cannot_be_returned_stays_counted_and_journaled() {
     let mut journal = journal;
     let undone = apply::undo(&mut journal, &TestSeal);
     assert_eq!(undone.restored, 1);
-    assert_eq!(undone.skipped_changed, vec![stranded.clone()]);
+    assert_eq!(undone.skipped_occupied, vec![stranded.clone()]);
+    assert!(undone.skipped_changed.is_empty());
     assert_eq!(fs::read(&first).unwrap(), b"someone else's file");
     assert!(stranded.exists());
 }

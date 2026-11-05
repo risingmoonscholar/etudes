@@ -24,7 +24,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-const SERVICE: &str = "sweep-journal-key";
+/// The name the journal key has in the login keychain, as Keychain Access shows it.
+pub const SERVICE: &str = "sweep-journal-key";
 const ACCOUNT: &str = "sweep";
 const MAGIC: &[u8] = b"SWEEPJ1\0";
 const PAD_TO: usize = 4096;
@@ -48,7 +49,7 @@ impl std::fmt::Display for KeepError {
                 f,
                 "ETUDE_JOURNAL_KEY must contain exactly 64 ASCII hex digits (32 random bytes)"
             ),
-            KeepError::Keychain(m) => write!(f, "keychain: {m}"),
+            KeepError::Keychain(m) => write!(f, "the login keychain {m}"),
             // Never distinguish "wrong key" from "tampered" to a caller that
             // might print it; both mean the same thing operationally.
             KeepError::Crypto(m) => write!(f, "cannot decrypt journal: {m}"),
@@ -119,7 +120,7 @@ fn keychain_key() -> Result<[u8; 32], KeepError> {
     match read_key()? {
         Some(k) if k == fresh => Ok(k),
         _ => Err(KeepError::Keychain(
-            "key did not survive a write/read round trip".into(),
+            "would not read back the journal key it just saved".into(),
         )),
     }
 }
@@ -145,7 +146,9 @@ fn getrandom_fill(buf: &mut [u8]) -> Result<(), KeepError> {
 fn security() -> Result<Command, KeepError> {
     // exists() rather than is_file(): /usr/bin/security may be a symlink.
     if !Path::new(SECURITY_BIN).exists() {
-        return Err(KeepError::Keychain("/usr/bin/security not found".into()));
+        return Err(KeepError::Keychain(
+            "cannot be reached: /usr/bin/security is missing".into(),
+        ));
     }
     Ok(Command::new(SECURITY_BIN))
 }
@@ -154,15 +157,17 @@ fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
     let out = security()?
         .args(["find-generic-password", "-a", ACCOUNT, "-s", SERVICE, "-w"])
         .output()
-        .map_err(|e| KeepError::Keychain(e.to_string()))?;
+        .map_err(|e| KeepError::Keychain(format!("could not be read: {e}")))?;
     if !out.status.success() {
         return Ok(None); // not found is not an error; it means first run
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let bytes = unhex(&text).ok_or(KeepError::Keychain("stored key is not hex".into()))?;
+    let bytes = unhex(&text).ok_or(KeepError::Keychain(
+        "holds a journal key that is not hex digits".into(),
+    ))?;
     let arr: [u8; 32] = bytes
         .try_into()
-        .map_err(|_| KeepError::Keychain("stored key is the wrong length".into()))?;
+        .map_err(|_| KeepError::Keychain("holds a journal key of the wrong length".into()))?;
     Ok(Some(arr))
 }
 
@@ -184,22 +189,23 @@ fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| KeepError::Keychain(e.to_string()))?;
+        .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
 
     let encoded = hex(k);
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or(KeepError::Keychain("no stdin".into()))?;
-        writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.to_string()))?;
-        writeln!(stdin, "{encoded}").map_err(|e| KeepError::Keychain(e.to_string()))?;
+        let stdin = child.stdin.as_mut().ok_or(KeepError::Keychain(
+            "would not save the journal key: the save command took no input".into(),
+        ))?;
+        writeln!(stdin, "{encoded}")
+            .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
+        writeln!(stdin, "{encoded}")
+            .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
     }
     let status = child
         .wait()
-        .map_err(|e| KeepError::Keychain(e.to_string()))?;
+        .map_err(|e| KeepError::Keychain(format!("would not save the journal key: {e}")))?;
     if !status.success() {
-        return Err(KeepError::Keychain("could not store the key".into()));
+        return Err(KeepError::Keychain("would not save the journal key".into()));
     }
     Ok(())
 }
@@ -392,6 +398,15 @@ mod tests {
 #[cfg(test)]
 mod supplied_key_tests {
     use super::*;
+
+    #[test]
+    fn a_keychain_failure_reads_as_a_sentence() {
+        let error = KeepError::Keychain("would not save the journal key".into());
+        assert_eq!(
+            error.to_string(),
+            "the login keychain would not save the journal key"
+        );
+    }
 
     #[test]
     fn supplied_key_works_with_unavailable_keychain() {

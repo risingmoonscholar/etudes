@@ -115,7 +115,7 @@ fn saved_plan_is_actually_replayed_without_replanning_changed_trees() {
             "{change}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert!(String::from_utf8_lossy(&out.stderr).contains("replan required"));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("changed since this plan was made"));
         assert!(String::from_utf8_lossy(&out.stdout).contains("\"status\":\"refused\""));
         assert_eq!(std::fs::read_dir(&fixture.root).unwrap().count(), before);
         assert!(

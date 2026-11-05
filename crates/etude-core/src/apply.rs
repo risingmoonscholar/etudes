@@ -26,6 +26,16 @@ use crate::journal::{
 };
 use crate::plan::{BindingContext, BoundPlan, Plan};
 
+const COPY_MISMATCH: &str = "cross-device copy size mismatch";
+
+/// A copy to another disk came out a different size from the original. The
+/// original is kept when this happens.
+pub fn is_copy_mismatch(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.to_string() == COPY_MISMATCH)
+}
+
 #[derive(Debug)]
 pub enum ApplyError {
     Io(io::Error),
@@ -33,6 +43,8 @@ pub enum ApplyError {
     DestinationExists(PathBuf),
     DestinationCollision(PathBuf),
     DestinationIsSynced(PathBuf),
+    /// A file sits where a destination folder has to be made.
+    DestinationBlocked(PathBuf),
     /// A folder was replaced or ceased to be a real directory after planning.
     DestinationDirectoryChanged(PathBuf),
     /// The OS could not tell us a filename's normalized form, so whether two
@@ -100,6 +112,11 @@ impl std::fmt::Display for ApplyError {
             ApplyError::DestinationCollision(p) => write!(
                 f,
                 "two files in this plan would move to the same destination: {}",
+                crate::redact::path(p)
+            ),
+            ApplyError::DestinationBlocked(p) => write!(
+                f,
+                "a file holds the name of a destination folder: {}",
                 crate::redact::path(p)
             ),
             ApplyError::DestinationDirectoryChanged(p) => write!(
@@ -1117,9 +1134,7 @@ fn create_destination_dirs(
                 break;
             }
             Ok(_) => {
-                return Err(ApplyError::Io(io::Error::other(
-                    "destination parent is not a directory",
-                )));
+                return Err(ApplyError::DestinationBlocked(current));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(current.clone()),
             Err(error) => return Err(ApplyError::Io(error)),
@@ -1453,7 +1468,7 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
             let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
             if src_md.len() != dst_md.len() {
                 let _ = fs::remove_file(to);
-                return Err(io::Error::other("cross-device copy size mismatch"));
+                return Err(io::Error::other(COPY_MISMATCH));
             }
             crate::scan::verify_read("cross_device_bytes");
             fs::remove_file(from)?;
@@ -1479,7 +1494,7 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
     if src_md.len() != dst_md.len() {
         let _ = fs::remove_file(to);
-        return Err(io::Error::other("cross-device copy size mismatch"));
+        return Err(io::Error::other(COPY_MISMATCH));
     }
     crate::scan::verify_read("cross_device_bytes");
     #[cfg(test)]
@@ -1552,6 +1567,9 @@ pub struct UndoReport {
     pub reconciled: Vec<PathBuf>,
     /// Entries skipped because the file changed after apply. Never forced.
     pub skipped_changed: Vec<PathBuf>,
+    /// Entries left where apply put them because another file is at the
+    /// original place. The file itself did not change.
+    pub skipped_occupied: Vec<PathBuf>,
     /// Entries whose destination no longer exists.
     pub skipped_missing: Vec<PathBuf>,
     /// Half-moves collapsed: a crash between the link and the unlink left one
@@ -1677,6 +1695,44 @@ pub fn unrecorded_moves(j: &Journal) -> usize {
                 && e.from.symlink_metadata().is_err()
         })
         .count()
+}
+
+/// How many moved items are not as apply left them: the file is gone from its
+/// destination, its original place is taken, or its size or modified time
+/// differ. This asks the file system for metadata only and reads no contents,
+/// so `status` can report it. Tag entries write in place and are not counted.
+pub fn items_not_as_left(j: &Journal) -> usize {
+    j.entries
+        .iter()
+        .filter(|e| e.is_moved() && e.tag.is_none())
+        .filter(|e| match fs::symlink_metadata(&e.to) {
+            Err(_) => true,
+            Ok(metadata) => {
+                e.from.symlink_metadata().is_ok()
+                    || metadata.len() != e.size
+                    || metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .is_none_or(|time| time.as_secs() as i64 != e.mtime_secs)
+            }
+        })
+        .count()
+}
+
+/// The folders holding files a damaged record no longer lists as moved, so the
+/// person can find them. Each is a folder apply made or chose.
+pub fn unrecorded_move_folders(j: &Journal) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = j
+        .entries
+        .iter()
+        .filter(|e| e.tag.is_none() && e.state == EntryState::Planned)
+        .filter(|e| e.to.symlink_metadata().is_ok() && e.from.symlink_metadata().is_err())
+        .filter_map(|e| e.to.parent().map(Path::to_path_buf))
+        .collect();
+    folders.sort();
+    folders.dedup();
+    folders
 }
 
 /// Whether a journal still needs undo, including unrecorded crash recovery.
@@ -2068,7 +2124,7 @@ fn undo_selected_with_progress(
             //
             // The crash case leaves `done` false and is handled above. This
             // stays a refusal.
-            r.skipped_changed.push(e.to.clone());
+            r.skipped_occupied.push(e.to.clone());
             advance!();
             continue;
         }
@@ -2403,6 +2459,17 @@ mod macos_unicode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_copy_mismatch_is_told_apart_from_other_failures() {
+        assert!(super::is_copy_mismatch(&std::io::Error::other(
+            super::COPY_MISMATCH
+        )));
+        assert!(!super::is_copy_mismatch(&std::io::Error::other("other")));
+        assert!(!super::is_copy_mismatch(
+            &std::io::Error::from_raw_os_error(28)
+        ));
+    }
+
     /// Two claims at once, because the fix for one could break the other.
     ///
     /// An io error must render what the OS said, not Rust's internal

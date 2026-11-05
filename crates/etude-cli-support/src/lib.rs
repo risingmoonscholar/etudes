@@ -2,6 +2,7 @@
 
 pub mod contract;
 pub mod envelope;
+pub mod problems;
 pub mod progress;
 pub mod reason;
 

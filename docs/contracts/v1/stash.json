@@ -114,6 +114,19 @@
         "why": "The requested input is absent or no longer available; choose an existing input."
       },
       {
+        "code": "insufficient_space",
+        "retry": "after_change",
+        "subject_kind": "destination",
+        "operations": [
+          "stash",
+          "pop",
+          "select",
+          "export_plan",
+          "apply_exported_plan"
+        ],
+        "why": "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input."
+      },
+      {
         "code": "internal_error",
         "retry": "never",
         "subject_kind": null,
@@ -143,7 +156,8 @@
         "subject_kind": "destination",
         "operations": [
           "stash",
-          "pop"
+          "pop",
+          "export_plan"
         ],
         "why": "The destination is occupied; choose or make a vacant destination before retrying."
       },

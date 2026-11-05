@@ -440,7 +440,7 @@ mod on_macos {
         set_tags(&s.root.join("report-2.pdf"), &["Work", "Added By Hand"]);
         let undone = sweep(&s, &["undo", root(&s)]);
         let text = out(&undone);
-        assert!(undone.status.success(), "{text}{}", err(&undone));
+        assert_eq!(undone.status.code(), Some(3), "{text}{}", err(&undone));
         assert!(
             text.contains("Restored the previous tags on 2 files"),
             "{text}"
@@ -480,7 +480,11 @@ mod on_macos {
             out(&applied),
             err(&applied)
         );
-        assert!(err(&applied).contains("replan"), "{}", err(&applied));
+        assert!(
+            err(&applied).contains("changed since this plan was made"),
+            "{}",
+            err(&applied)
+        );
         assert_eq!(tree(&s.root), before);
     }
 

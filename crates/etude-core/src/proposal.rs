@@ -104,7 +104,7 @@ pub enum Refusal {
     /// A folder is not one plain name.
     DestinationOutsideRoot(String),
     /// The folder does not exist.
-    ProfileMissing(String),
+    FolderMissing(String),
     /// A non-folder holds the folder's name, or the file's name is taken.
     DestinationExists(String),
 }
@@ -116,7 +116,7 @@ impl std::fmt::Display for Refusal {
         | Self::UnknownItem(m)
         | Self::ItemAssignedTwice(m)
         | Self::DestinationOutsideRoot(m)
-        | Self::ProfileMissing(m)
+        | Self::FolderMissing(m)
         | Self::DestinationExists(m)) = self;
         f.write_str(m)
     }
@@ -265,8 +265,9 @@ pub fn propose(plan: &BoundPlan, proposal: &[u8]) -> Result<Proposed, Refusal> {
     }
     next.untouched
         .sort_by_key(|(path, _)| TreeSnapshot::path_commitment(path));
-    let bound = BoundPlan::from_plan(next, plan.context().clone())
-        .map_err(|error| Refusal::PlanStale(format!("{error}; export a fresh plan")))?;
+    let bound = BoundPlan::from_plan(next, plan.context().clone()).map_err(|_| {
+        Refusal::PlanStale("the plan or its folder changed; export a fresh plan".into())
+    })?;
     Ok(Proposed {
         plan: bound,
         moves,
@@ -309,7 +310,7 @@ fn check_folder_exists(plan: &BoundPlan, root: &Path, folder: &str) -> Result<()
     let metadata = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Refusal::ProfileMissing(format!(
+            return Err(Refusal::FolderMissing(format!(
                 "folder {folder:?} does not exist; this proposal never creates one"
             )));
         }
@@ -382,15 +383,19 @@ fn parse(bytes: &[u8]) -> Result<Parsed, Refusal> {
         return Err(invalid("a proposal holds at most 5,000 decisions"));
     }
     let mut decisions = Vec::with_capacity(list.len());
-    for entry in list {
-        decisions.push(decision(entry)?);
+    for (index, entry) in list.into_iter().enumerate() {
+        decisions.push(decision(entry, index + 1)?);
     }
     Ok(Parsed { digest, decisions })
 }
 
-fn decision(value: Json) -> Result<Decision, Refusal> {
+/// `number` counts from 1. A proposal holds up to 5,000 decisions, so a refusal
+/// says which one.
+fn decision(value: Json, number: usize) -> Result<Decision, Refusal> {
     let Json::Object(fields) = value else {
-        return Err(invalid("a decision must be an object"));
+        return Err(invalid(format!(
+            "decision {number}: a decision must be an object"
+        )));
     };
     let mut item = None;
     let mut folder = None;
@@ -402,14 +407,20 @@ fn decision(value: Json) -> Result<Decision, Refusal> {
             "folder" => &mut folder,
             "mode" => &mut mode,
             "skip" => &mut skip,
-            other => return Err(invalid(format!("unknown decision field {other:?}"))),
+            other => {
+                return Err(invalid(format!(
+                    "decision {number}: unknown decision field {other:?}"
+                )));
+            }
         };
         if slot.replace(value).is_some() {
-            return Err(invalid(format!("decision field {key:?} appears twice")));
+            return Err(invalid(format!(
+                "decision {number}: field {key:?} appears twice"
+            )));
         }
     }
     let Some(Json::String(item)) = item else {
-        return Err(invalid("a decision needs an item id"));
+        return Err(invalid(format!("decision {number}: it needs an item id")));
     };
     match (folder, mode, skip) {
         (None, None, Some(Json::Bool(true))) => Ok(Decision::Skip { item }),
@@ -418,9 +429,9 @@ fn decision(value: Json) -> Result<Decision, Refusal> {
         {
             Ok(Decision::Move { item, folder })
         }
-        _ => Err(invalid(
-            "a decision is either {item, skip: true} or {item, folder, mode: \"require_existing\"}",
-        )),
+        _ => Err(invalid(format!(
+            "decision {number} (item {item}): a decision is either {{item, skip: true}} or {{item, folder, mode: \"require_existing\"}}"
+        ))),
     }
 }
 

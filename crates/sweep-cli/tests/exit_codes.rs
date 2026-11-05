@@ -675,12 +675,12 @@ fn a_refusal_names_the_operation_not_only_the_reason() {
          reached and this test proved nothing"
     );
     assert!(
-        stderr.contains("could not read that folder"),
+        stderr.contains("cannot read "),
         "the refusal must name what sweep was attempting, got: {stderr}"
     );
     assert!(
-        stderr.contains("os error"),
-        "and must still carry the OS's own reason, got: {stderr}"
+        stderr.contains("permission denied") && !stderr.contains("os error"),
+        "and must carry the reason in plain words, got: {stderr}"
     );
 }
 
@@ -782,7 +782,7 @@ fn an_undo_that_leaves_a_file_behind_does_not_say_done() {
     std::fs::write(tree.join(&names[0]), b"occupied restore path").unwrap();
 
     let (code, stdout) = sweep_json(&state, &[OsStr::new("undo"), tree.as_os_str()]);
-    assert_eq!(code, Some(0), "exit code is unchanged: {stdout}");
+    assert_eq!(code, Some(3), "an unfinished undo is not exit 0: {stdout}");
     assert!(stdout.contains(r#""status":"incomplete""#), "{stdout}");
     assert!(
         stdout.contains(

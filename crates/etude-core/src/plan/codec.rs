@@ -335,6 +335,11 @@ pub(super) fn encode(
     Ok(w.0)
 }
 
+/// Whether these bytes start the way an exported plan starts.
+pub(super) fn looks_like_plan(data: &[u8]) -> bool {
+    data.starts_with(MAGIC)
+}
+
 pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingContext)> {
     if data.len() > MAX_BYTES {
         return Err(invalid());

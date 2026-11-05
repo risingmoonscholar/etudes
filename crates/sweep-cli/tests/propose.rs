@@ -496,7 +496,7 @@ fn folder_rules_use_the_existing_codes() {
         ("a/b", "destination_outside_root", "destination"),
         ("/tmp", "destination_outside_root", "destination"),
         ("", "destination_outside_root", "destination"),
-        ("Absent", "profile_missing", "profile"),
+        ("Absent", "missing_input", "input"),
         ("Occupied", "destination_exists", "destination"),
     ];
     for (folder, code, subject) in cases {

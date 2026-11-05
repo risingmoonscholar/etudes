@@ -71,6 +71,11 @@ availability and the monitored soft size budget. The supported platform is macOS
 Stash's `home_folder` says it refuses the caller's home folder unless the named
 flag is passed.
 
+`profile_missing` means no saved profile exists; `profile_invalid` means one
+exists and cannot be used. `insufficient_space` and `destination_exists` now also
+cover a full disk and an occupied `--export-plan` path in `sweep` and `stash`.
+`sweep status` adds `counts.not_as_left` and `damaged`.
+
 The declarations do not enforce an OS sandbox. Network policy is `none`, runtime
 enforcement is `none`, and subprocess network behaviour is unverified. Consumers
 must treat declarations separately from observed or independently verified access.

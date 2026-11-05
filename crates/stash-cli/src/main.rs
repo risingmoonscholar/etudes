@@ -317,8 +317,15 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
         StalePlan(_) | DestinationDirectoryChanged(_) => Code::PlanStale,
         DestinationExists(_) | DestinationCollision(_) => Code::DestinationExists,
         DestinationIsSynced(_) | CannotCompareNames(_) => Code::UnsafeInput,
+        DestinationBlocked(_) => Code::DestinationExists,
+        Io(error) if etude_cli_support::problems::disk_full(error) => Code::InsufficientSpace,
         Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Code::DestinationExists,
-        Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Code::PermissionDenied,
+        Io(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || etude_cli_support::problems::disk_read_only(error) =>
+        {
+            Code::PermissionDenied
+        }
         Io(error) if error.kind() == std::io::ErrorKind::NotFound => Code::MissingInput,
         Io(_) => Code::InternalError,
         Journal(_) => Code::JournalWriteFailed,
@@ -612,15 +619,17 @@ fn refuse_home_folder(path: &Path) -> ExitCode {
 }
 
 fn replay_stash(args: &[String], file: &str) -> ExitCode {
+    use etude_cli_support::problems;
     if positional_path(args).is_some() {
-        eprintln!("stash: exported plan fixes its original root; do not supply another path");
-        return refuse(etude_cli_support::reason::Code::InvalidArguments);
+        etude_cli_support::envelope::status("refused");
+        return problems::plan_path_problem("stash").report();
     }
-    if flag(args, "--for") || flag(args, "--export-plan") {
-        eprintln!(
-            "stash: exported plan fixes its holding deadline; replan instead of overriding it"
-        );
-        return refuse(etude_cli_support::reason::Code::PlanStale);
+    if let Some(name) = ["--for", "--export-plan"]
+        .into_iter()
+        .find(|name| flag(args, name))
+    {
+        etude_cli_support::envelope::status("refused");
+        return problems::plan_flag_problem("stash", name).report();
     }
     let Some(digest) = value(args, "--plan-digest") else {
         eprintln!("stash: --plan requires the digest printed with the exported plan");
@@ -629,15 +638,18 @@ fn replay_stash(args: &[String], file: &str) -> ExitCode {
     let bound = match etude_core::plan::BoundPlan::load(Path::new(file), &digest) {
         Ok(plan) => plan,
         Err(error) => {
-            eprintln!("stash: {}", etude_core::plan::replan_message(&error));
-            return refuse(etude_cli_support::reason::Code::PlanStale);
+            return problems::plan_load_problem("stash", Path::new(file), &error).report();
         }
     };
+    let maker = bound.context().tool.clone();
+    if maker != "stash" {
+        return problems::plan_of_another_tool("stash", &maker).report();
+    }
     if !bound.context().profile.starts_with("stash-metadata-v1;")
         || bound.groups.len() != 1
         || !bound.groups[0].name.starts_with(".stash-")
     {
-        eprintln!("stash: plan scheme changed; replan required");
+        eprintln!("{}", problems::plan_stale_text("stash", &bound.root));
         return refuse(etude_cli_support::reason::Code::PlanStale);
     }
     if is_home_folder(&bound.root) && !flag(args, "--allow-home") {
@@ -685,7 +697,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     let outcome = match scan::scan(path, &cfg) {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("stash: {e}");
+            eprintln!(
+                "{}",
+                etude_cli_support::problems::scan_problem("stash", path, &e)
+            );
             return if e.is_refusal() {
                 refuse(scan_reason(&e))
             } else {
@@ -739,14 +754,28 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
     let bound = match etude_core::plan::BoundPlan::from_plan(proposal, context.clone()) {
         Ok(plan) => plan,
         Err(error) => {
-            eprintln!("stash: {}", etude_core::plan::replan_message(&error));
+            // The one bind failure that is not a changed folder says so itself.
+            let text = error.to_string();
+            if text.ends_with("run the scan again") {
+                eprintln!("stash: {text}");
+            } else {
+                eprintln!(
+                    "{}",
+                    etude_cli_support::problems::folder_changed_just_now("stash", path)
+                );
+            }
             return refuse(etude_cli_support::reason::Code::PlanStale);
         }
     };
     if let Some(file) = value(args, "--export-plan") {
         if let Err(error) = bound.export(Path::new(&file)) {
-            eprintln!("stash: cannot export plan ({error})");
-            return fail(etude_cli_support::reason::Code::PermissionDenied);
+            return etude_cli_support::problems::plan_export_problem(
+                "stash",
+                Path::new(&file),
+                &bound.root,
+                &error,
+            )
+            .report();
         }
         if flag(args, "--json") {
             let mut detail = bound.plan.to_json();
@@ -770,8 +799,8 @@ fn execute_stash(
     args: &[String],
 ) -> ExitCode {
     if let Err(error) = bound.validate(&context) {
-        eprintln!("stash: {}", etude_core::plan::replan_message(&error));
-        return refuse(etude_cli_support::reason::Code::PlanStale);
+        return etude_cli_support::problems::plan_check_problem("stash", &bound.root, &error)
+            .report();
     }
     let count = bound.moves();
     let deadline = bound
@@ -889,7 +918,18 @@ fn execute_stash(
                 etude_cli_support::envelope::recovery_operation(id);
             }
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
-                eprintln!("stash: {e}");
+                let root = &bound.root;
+                if bound.is_live() {
+                    eprintln!(
+                        "{}",
+                        etude_cli_support::problems::folder_changed_just_now("stash", root)
+                    );
+                } else {
+                    eprintln!(
+                        "{}",
+                        etude_cli_support::problems::plan_stale_text("stash", root)
+                    );
+                }
                 etude_cli_support::envelope::status("refused");
                 return refuse_preserving_status(apply_reason(&e));
             }
@@ -925,6 +965,13 @@ fn print_stash_failure(error: &etude_core::apply::ApplyError, root: &Path, moved
     let folder = etude_cli_support::shown(root);
     let scope = if moved == 0 { "anything" } else { "everything" };
     match error {
+        E::Io(source) if etude_cli_support::problems::disk_full(source) => {
+            eprintln!("stash: could not move {scope} out of {folder}: the disk is full.");
+            eprintln!("       Free some space, then run this again.");
+        }
+        E::Io(source) if etude_cli_support::problems::disk_read_only(source) => {
+            eprintln!("stash: could not move {scope} out of {folder}: the disk is read-only.");
+        }
         E::Io(source) => {
             eprintln!(
                 "stash: could not move {scope} out of {folder}: {}",
@@ -1154,6 +1201,7 @@ fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
         DestinationExists(_) => "destination exists",
         DestinationCollision(_) => "destination names collide",
         DestinationIsSynced(_) => "destination is synced",
+        DestinationBlocked(_) => "a file holds the name of the holding folder",
         DestinationDirectoryChanged(_) => "destination folder identity changed or was unavailable",
         CannotCompareNames(_) => "destination names cannot be compared",
         Io(_) => "I/O failure",
@@ -1170,6 +1218,7 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         | DestinationExists(_)
         | DestinationCollision(_)
         | DestinationIsSynced(_)
+        | DestinationBlocked(_)
         | DestinationDirectoryChanged(_)
         | CannotCompareNames(_) => refuse_preserving_status(apply_reason(e)),
         Io(_) | Journal(_) | Injected(_) => fail(apply_reason(e)),
@@ -1372,10 +1421,12 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
 
     let mut progress = etude_cli_support::ProgressReporter::stderr("stash pop", j.entries.len());
-    let r = etude_core::apply::undo_with_progress(&mut j, &sl, |p| {
+    let mut r = etude_core::apply::undo_with_progress(&mut j, &sl, |p| {
         progress.update(p.completed, p.total)
     });
     drop(progress);
+    // Pop reports a taken original place with the items left alone.
+    r.skipped_changed.append(&mut r.skipped_occupied);
     if r.unrecorded_moves > 1 {
         eprintln!(
             "stash: refused. This journal is missing more than one record: {n} items are\n\
@@ -1551,13 +1602,15 @@ fn pop_one_item(
         return ExitCode::from(1);
     }
 
-    let report = match etude_core::apply::undo_entry(journal, index, sealer) {
+    let mut report = match etude_core::apply::undo_entry(journal, index, sealer) {
         Ok(report) => report,
         Err(_) => {
             eprintln!("stash: item index is outside the operation");
             return fail(etude_cli_support::reason::Code::OperationIncomplete);
         }
     };
+    // Pop reports a taken original place with the items left alone.
+    report.skipped_changed.append(&mut report.skipped_occupied);
     if report.unrecorded_moves > 1 {
         eprintln!("stash: journal has multiple unrecorded moves; refusing partial restore");
         return fail(etude_cli_support::reason::Code::OperationIncomplete);
@@ -1819,6 +1872,13 @@ fn cmd_status(args: &[String]) -> ExitCode {
         .map(|p| PathBuf::from(expand_tilde(p)))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
+    if root.is_file() {
+        eprintln!(
+            "stash: {} is a file. Give the folder you stashed.",
+            etude_cli_support::shown(&root)
+        );
+        return fail(etude_cli_support::reason::Code::MissingInput);
+    }
     let Ok(root) = root.canonicalize() else {
         eprintln!("stash: cannot read that folder");
         return refuse(etude_cli_support::reason::Code::MissingInput);

@@ -1222,8 +1222,15 @@ pub fn is_document_marker(name: &str) -> bool {
 
 /// True when any component of `path` looks like a cloud-sync root.
 pub fn is_synced(path: &Path) -> bool {
+    sync_marker(path).is_some()
+}
+
+/// The text in this path that makes it look cloud-synced. The match is on the
+/// whole path as text, so a local folder named "Dropbox notes" matches too; a
+/// refusal shows this so the person can see why.
+pub fn sync_marker(path: &Path) -> Option<&'static str> {
     let s = path.to_string_lossy();
-    SYNC_MARKERS.iter().any(|m| s.contains(m))
+    SYNC_MARKERS.iter().copied().find(|m| s.contains(m))
 }
 
 fn is_package(name: &str) -> bool {
@@ -1313,6 +1320,37 @@ fn is_refused_system_location(path: &Path) -> bool {
         }
     }
     false
+}
+
+/// Why a path counts as a location that is never organised, in the terms of the
+/// rule itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefusedLocation {
+    /// The path is at or under one of the absolute system roots.
+    SystemRoot(&'static str),
+    /// A component of the path has a refused name, wherever it appears.
+    NamedFolder(String),
+}
+
+/// Which rule refuses `path`, or `None` when none does.
+pub fn refused_location(path: &Path) -> Option<RefusedLocation> {
+    let names = || {
+        path.components().filter_map(|c| match c {
+            Component::Normal(n) => Some(n.to_string_lossy().to_string()),
+            _ => None,
+        })
+    };
+    if let Some(name) = names().find(|name| never_enter(name)) {
+        return Some(RefusedLocation::NamedFolder(name));
+    }
+    if let Some(root) = SYSTEM_ROOTS.iter().find(|r| path.starts_with(r)) {
+        return Some(RefusedLocation::SystemRoot(root));
+    }
+    if is_refused_system_location(path) {
+        let library = names().find(|name| name.eq_ignore_ascii_case("Library"))?;
+        return Some(RefusedLocation::NamedFolder(library));
+    }
+    None
 }
 
 /// Resolve one explicitly chosen object without enumerating its parent or children.

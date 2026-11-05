@@ -373,7 +373,7 @@ class Probe:
             # Existing file at the restore path must survive the attempted undo.
             collision = tree / names[0]
             collision.write_bytes(b"occupied restore path")
-            self.run("undo", tree, codes=(0, 2))
+            self.run("undo", tree, codes=(3,))
             require(collision.read_bytes() == b"occupied restore path", "undo overwrote a file")
             require((tree / "Screenshots" / names[0]).exists(), "collision deleted held payload")
             collision.unlink()
@@ -638,8 +638,8 @@ def restore_into_read_only_folder(probe):
 
 def restore_onto_occupied_path(probe):
     """A journalled move, then a restore whose original path is now occupied.
-    The occupying file is kept, the held file stays held, the command still
-    exits 0, and the result must say the restore is not finished."""
+    The occupying file is kept, the held file stays held, and the result must
+    say the restore is not finished. Sweep exits 3 for that; pop still exits 0."""
     tree = screenshots(probe.directory / "tree")
     before = snapshot(tree)
     name = "Screenshot 2025-01-01 at 1.00.00 PM.png"
@@ -647,7 +647,9 @@ def restore_onto_occupied_path(probe):
     back = "undo" if probe.tool == "sweep" else "pop"
     probe.run(*move, "--json")
     (tree / name).write_bytes(b"occupied restore path")
-    result = probe.run(back, tree, "--json")
+    result = probe.run(back, tree, "--json", codes=(0, 3))
+    require(result.returncode == (3 if probe.tool == "sweep" else 0),
+            "a restore that left a file behind has the wrong exit")
     require(json.loads(result.stdout)["status"] == "incomplete",
             "a restore that left a file behind is not reported as incomplete")
     require((tree / name).read_bytes() == b"occupied restore path", "a restore overwrote a file")
@@ -757,10 +759,27 @@ def sweep_destination_exists(probe):
 
 
 def sweep_profile_missing(probe):
+    tree = screenshots(probe.directory / "tree")
+    return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
+
+
+def sweep_profile_invalid(probe):
     (probe.state / "sweep-existing-profile.toml").write_text(
         'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Folder That Is Absent"\n')
     tree = screenshots(probe.directory / "tree")
     return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
+
+
+def export_onto_a_file(probe):
+    """A plan is never written over a file that is already there."""
+    tree = screenshots(probe.directory / "tree")
+    taken = probe.directory / "taken"
+    taken.write_bytes(b"synthetic file already at the plan's path")
+    scan = (tree, "--since", "0") if probe.tool == "sweep" else (tree,)
+    result = probe.run(*scan, "--export-plan", taken, "--json", codes=(2,))
+    require(taken.read_bytes() == b"synthetic file already at the plan's path",
+            "a refused export overwrote a file")
+    return result
 
 
 def sweep_download_in_flight(probe):
@@ -786,7 +805,7 @@ def sweep_permission_denied(probe):
     locked.chmod(0o500)
     try:
         return probe.run(screenshots(probe.directory / "tree"), "--since", "0",
-                         "--export-plan", locked / "plan.json", "--json", codes=(2,))
+                         "--export-plan", locked / "plan.json", "--json", codes=(3,))
     finally:
         locked.chmod(0o700)
 
@@ -887,12 +906,14 @@ CODE_PROBES = {
     "sweep": {
         "invalid_arguments": lambda p: p.run("apply", screenshots(p.directory / "tree"), "--json", codes=(2,)),
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
-        "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
+        "missing_input": (lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
+                          sweep_propose_folder_absent),
         "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
-        "destination_exists": (sweep_destination_exists, sweep_propose_name_taken),
+        "destination_exists": (sweep_destination_exists, sweep_propose_name_taken, export_onto_a_file),
         "destination_outside_root": sweep_propose_outside_root,
         "plan_stale": (stale_plan, sweep_propose_other_plan),
-        "profile_missing": (sweep_profile_missing, sweep_propose_folder_absent),
+        "profile_missing": sweep_profile_missing,
+        "profile_invalid": sweep_profile_invalid,
         "download_in_flight": sweep_download_in_flight,
         "journal_unreadable": garbage_journal,
         "journal_key_unavailable": bad_key,
@@ -909,6 +930,7 @@ CODE_PROBES = {
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
         "missing_input": lambda p: p.run(p.directory / "absent", "--json", codes=(3,)),
         "project_folder": lambda p: p.run(project(p.directory / "tree"), "--json", codes=(2,)),
+        "destination_exists": export_onto_a_file,
         "plan_stale": stale_plan,
         "not_due_yet": stash_not_due_yet,
         "journal_unreadable": garbage_journal,
@@ -941,7 +963,7 @@ CODE_PROBES = {
 NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
-    "destination_exists": "needs a destination to appear inside {tool}'s private holding folder mid-move",
+    "insufficient_space": "needs a full disk; stress scenario 107 fills a disk image to prove it for {tool}",
 }
 
 
