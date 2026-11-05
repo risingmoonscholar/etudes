@@ -2511,10 +2511,11 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError, moved: usize) -> ExitCode 
             Code::DestinationExists,
             Some(Subject::wait("destination", None)),
         ),
-        Io(error) if moved == 0 && error.kind() == std::io::ErrorKind::AlreadyExists => refusal(
-            Code::DestinationExists,
-            Some(Subject::wait("destination", None)),
-        ),
+        // The folder appeared after the plan was made, so the plan is out of date.
+        // This is how the loser of two applies on one folder can end.
+        Io(error) if moved == 0 && error.kind() == std::io::ErrorKind::AlreadyExists => {
+            refusal(Code::PlanStale, Some(Subject::wait("plan", None)))
+        }
         Journal(_) => failure(
             Code::JournalWriteFailed,
             Some(Subject::wait("journal", None)),

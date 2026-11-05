@@ -164,6 +164,8 @@ fn review_with_only_held_back_files_explains_why_it_cannot_organise_them() {
     );
 }
 
+// Uses the macOS form of script(1) to give review a real terminal.
+#[cfg(target_os = "macos")]
 #[test]
 fn review_with_groups_discloses_held_back_files_before_reviewing() {
     let root = fixture("review-mixed", true);
