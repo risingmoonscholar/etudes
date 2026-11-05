@@ -185,6 +185,9 @@ pub struct Plan {
     pub locked_skipped: usize,
     /// How many of those carry the system flag, or wait on a folder that does.
     pub locked_system: usize,
+    /// The recent files would form a group if the window were ignored, so
+    /// waiting can change the answer. Decided while planning; never stored.
+    pub recent_would_group: bool,
     /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
@@ -265,6 +268,7 @@ impl Plan {
             aliases_skipped: 0,
             locked_skipped: 0,
             locked_system: 0,
+            recent_would_group: false,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -300,6 +304,7 @@ impl Plan {
             aliases_skipped: scan.aliases_skipped,
             locked_skipped: scan.locked_skipped,
             locked_system: scan.locked_system,
+            recent_would_group: false,
             skipped_system: scan.skipped_system,
             skipped_project: scan.skipped_project,
             skipped_in_flight: scan.skipped_in_flight,
@@ -335,12 +340,14 @@ impl Plan {
             .count()
     }
 
-    /// Waiting alone can release every candidate in this otherwise empty plan.
-    /// Other holds make that promise unsafe. Hidden files, links and aliases
-    /// are never candidates, so they do not change it.
+    /// Waiting alone can turn this otherwise empty plan into one with groups.
+    /// Other holds make that promise unsafe, and so do files that would not
+    /// group once the window passes. Hidden files, links and aliases are never
+    /// candidates, so they do not change it.
     pub fn only_too_recent(&self) -> bool {
         let recent = self.too_recent();
-        recent > 0
+        self.recent_would_group
+            && recent > 0
             && recent == self.scanned
             && recent == self.untouched.len()
             && self.groups.is_empty()
@@ -844,9 +851,30 @@ pub fn build_with_maps(
 
 fn build_with_policy(
     scan: &ScanOutcome,
+    inspector: Option<&mut dyn Inspector>,
+    maps: &[MapSpec],
+    profile_routes: bool,
+) -> Plan {
+    let mut plan = group_entries(scan, inspector, maps, profile_routes, false);
+    if plan.groups.is_empty() && plan.too_recent() > 0 {
+        let unwindowed = group_entries(scan, None, maps, profile_routes, true);
+        plan.recent_would_group = would_group(&unwindowed);
+    }
+    plan
+}
+
+/// The same plan with the window ignored. Files still held as too recent have
+/// an unreadable mtime, and waiting cannot change that.
+fn would_group(unwindowed: &Plan) -> bool {
+    !unwindowed.groups.is_empty() && unwindowed.too_recent() == 0
+}
+
+fn group_entries(
+    scan: &ScanOutcome,
     mut inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
     profile_routes: bool,
+    ignore_window: bool,
 ) -> Plan {
     let mut untouched: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
     let mut remaining: Vec<&Entry> = Vec::new();
@@ -940,7 +968,8 @@ fn build_with_policy(
             untouched.push((e.path.clone(), Untouched::TooRecent));
             continue;
         }
-        if let Some(window) = scan.grace
+        if !ignore_window
+            && let Some(window) = scan.grace
             && !window.is_zero()
             && let Some(modified) = e.modified
             && modified
@@ -1189,6 +1218,7 @@ fn build_with_policy(
         aliases_skipped: scan.aliases_skipped,
         locked_skipped,
         locked_system,
+        recent_would_group: false,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
@@ -1289,8 +1319,21 @@ pub fn build_tags(
     specs: &[TagSpec],
     inspector: Option<&mut dyn Inspector>,
 ) -> Plan {
+    let mut plan = tag_entries(scan, specs, inspector, false);
+    if plan.groups.is_empty() && plan.too_recent() > 0 {
+        plan.recent_would_group = would_group(&tag_entries(scan, specs, None, true));
+    }
+    plan
+}
+
+fn tag_entries(
+    scan: &ScanOutcome,
+    specs: &[TagSpec],
+    inspector: Option<&mut dyn Inspector>,
+    ignore_window: bool,
+) -> Plan {
     use std::collections::{BTreeMap, HashSet};
-    let mut plan = build_with_policy(scan, inspector, &[], false);
+    let mut plan = group_entries(scan, inspector, &[], false, ignore_window);
     let refused: HashSet<PathBuf> = plan
         .untouched
         .iter()
@@ -1541,6 +1584,10 @@ mod tests {
         assert!(
             p.groups.is_empty(),
             "an unreadable timestamp must not be the most permissive case"
+        );
+        assert!(
+            !p.only_too_recent(),
+            "waiting cannot make an unreadable timestamp readable"
         );
 
         // With the window off, they are eligible again -- zero means zero.

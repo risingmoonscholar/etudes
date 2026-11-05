@@ -70,6 +70,10 @@ fn out(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
+fn both(o: &Output) -> String {
+    format!("{}{}", out(o), String::from_utf8_lossy(&o.stderr))
+}
+
 #[test]
 fn a_locked_item_is_counted_without_its_name_and_never_moved() {
     let s = scene("count");
@@ -149,4 +153,105 @@ fn an_item_locked_after_planning_refuses_the_exported_plan_and_moves_nothing() {
             "nothing moved"
         );
     }
+}
+
+/// A tag undo moves nothing, so the lock message must not talk about moving.
+#[test]
+fn a_tag_undo_on_a_locked_file_says_it_cannot_take_back_its_tags() {
+    let s = scene("tag-undo");
+    let root = s.root.to_str().unwrap();
+    let plan = s.state.join("tags.bin");
+    let exported = sweep(
+        &s,
+        &[
+            root,
+            "--since",
+            "0",
+            "--scheme",
+            "tags",
+            "--map",
+            "pdf=Work",
+            "--export-plan",
+            plan.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let exported_json = out(&exported);
+    assert!(exported.status.success(), "{exported_json}");
+    let digest = exported_json
+        .split("\"plan_digest\":\"")
+        .nth(1)
+        .expect("plan digest")
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    let applied = sweep(
+        &s,
+        &[
+            "apply",
+            "--plan",
+            plan.to_str().unwrap(),
+            "--plan-digest",
+            &digest,
+            "--yes",
+        ],
+    );
+    assert!(applied.status.success(), "{}", out(&applied));
+    lock(&s.root.join("document-3.pdf"));
+    let undone = sweep(&s, &["undo", root]);
+    let text = both(&undone);
+    assert_eq!(undone.status.code(), Some(3), "{text}");
+    assert!(text.contains("1 file is locked"), "{text}");
+    assert!(text.contains("cannot take back its old tags"), "{text}");
+    assert!(!text.contains("cannot be moved"), "{text}");
+    assert!(!text.contains("put every file back"), "{text}");
+    assert!(text.contains("chflags nouchg"), "{text}");
+}
+
+#[test]
+fn a_locked_root_prints_a_sweep_command_that_works_after_unlocking() {
+    let s = scene("root-step");
+    let root = s.root.to_str().unwrap();
+    lock(&s.root);
+    let refused = sweep(&s, &["apply", root, "--since", "0", "--yes"]);
+    let text = both(&refused);
+    assert_eq!(refused.status.code(), Some(2), "{text}");
+    let step = text
+        .split("Then plan again with: ")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no step in {text}"))
+        .lines()
+        .next()
+        .unwrap();
+    assert_eq!(step, format!("sweep '{root}'"));
+    Command::new("chflags")
+        .arg("nouchg")
+        .arg(&s.root)
+        .status()
+        .unwrap();
+    let scanned = sweep(&s, &[root, "--since", "0"]);
+    assert!(scanned.status.success(), "{}", out(&scanned));
+}
+
+#[test]
+fn an_apply_with_nothing_to_move_needs_no_undo() {
+    let s = scene("nothing");
+    let folder = s.root.join("lonely");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("notes.xyz"), b"x").unwrap();
+    let applied = sweep(
+        &s,
+        &[
+            "apply",
+            folder.to_str().unwrap(),
+            "--since",
+            "0",
+            "--yes",
+            "--json",
+        ],
+    );
+    let text = out(&applied);
+    assert_eq!(applied.status.code(), Some(1), "{text}");
+    assert!(text.contains("no_operation_undo_needed"), "{text}");
 }

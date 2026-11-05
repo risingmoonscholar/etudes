@@ -31,6 +31,7 @@ struct ResultState {
     status: Option<&'static str>,
     scope: String,
     journal_enabled: bool,
+    no_undo_needed: bool,
     effects: std::collections::BTreeMap<&'static str, usize>,
     reason: Option<crate::reason::Reason>,
 }
@@ -96,6 +97,7 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
             status: None,
             scope,
             journal_enabled: !args.iter().any(|arg| arg == "--no-journal"),
+            no_undo_needed: false,
             effects: std::collections::BTreeMap::new(),
             reason: None,
         }
@@ -164,6 +166,11 @@ pub fn recovery_operation(id: &str) {
     RESULT.with(|state| state.borrow_mut().recovery_operation = Some(id.to_owned()));
 }
 
+/// Nothing moved, so there is nothing to restore, whatever the command was.
+pub fn no_undo_needed() {
+    RESULT.with(|state| state.borrow_mut().no_undo_needed = true);
+}
+
 fn resolved_reason(
     code: ExitCode,
     reason: Option<crate::reason::Reason>,
@@ -188,6 +195,7 @@ pub fn finish(code: ExitCode) {
         let status = state.status.unwrap_or(if code == ExitCode::from(1) { "nothing_to_do" } else if code == ExitCode::from(2) { "refused" } else if code != ExitCode::SUCCESS { "error" } else { "done" });
         let id = &state.operation_id;
         let recovery = match state.operation.as_str() {
+            _ if state.no_undo_needed => "no_operation_undo_needed",
             "apply" | "stash" | "review" | "apply_exported_plan" if !state.journal_enabled => "manual_restore_required",
             "apply" | "stash" | "review" | "apply_exported_plan" => "conditional_journal_restore",
             "undo" | "pop" => "retry_remaining_journal_entries_after_resolving_refusals",
@@ -216,7 +224,7 @@ pub fn finish(code: ExitCode) {
                 ("unproven", j::arr([j::str("effects outside reported operation accounting; zero counters do not prove no effects")])),
             ])),
             ("verification", j::arr([claim("command_completed", if code == ExitCode::SUCCESS || code == ExitCode::from(1) { "pass" } else { "fail" }), claim("complete_read_coverage", "unproven"), claim("subprocess_network_absence", "unproven")])),
-            ("recovery", j::obj(&[("mode", j::str(recovery)), ("conditions", j::arr(if state.journal_enabled && matches!(state.operation.as_str(), "apply" | "stash" | "review" | "undo" | "pop" | "apply_exported_plan") { vec![j::str("readable_journal_and_same_key"), j::str("unchanged_items_and_vacant_original_paths"), j::str("journal_not_expired_and_progress_writable")] } else { vec![] })), ("verification", j::str("unproven; consult operation details and filesystem before retrying")), ("operation", j::str(state.recovery_operation.as_deref().unwrap_or("")))])),
+            ("recovery", j::obj(&[("mode", j::str(recovery)), ("conditions", j::arr(if state.journal_enabled && !state.no_undo_needed && matches!(state.operation.as_str(), "apply" | "stash" | "review" | "undo" | "pop" | "apply_exported_plan") { vec![j::str("readable_journal_and_same_key"), j::str("unchanged_items_and_vacant_original_paths"), j::str("journal_not_expired_and_progress_writable")] } else { vec![] })), ("verification", j::str("unproven; consult operation details and filesystem before retrying")), ("operation", j::str(state.recovery_operation.as_deref().unwrap_or("")))])),
             ("disclosure", j::obj(&[("receipt_contains", j::str("read categories and outcomes only; no contents, keys or environment values")), ("zero_counters", j::str("not evidence of no access")), ("details", j::str("may contain operation paths; treat as sensitive"))])),
             ("details", details),
             ("reason", reason),

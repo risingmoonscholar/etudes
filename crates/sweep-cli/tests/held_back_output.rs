@@ -231,10 +231,12 @@ fn reason_of(out: &Output) -> (String, String) {
 fn a_folder_held_only_by_recency_says_retry_later_on_scan_and_apply() {
     let root = TestDir(unique_temp("only-recent"));
     fs::create_dir_all(&root.0).unwrap();
-    write_file(&root.0.join("photo.jpg"));
+    for n in 1..=5 {
+        write_file(&root.0.join(format!("document-{n}.pdf")));
+    }
     write_file(&root.0.join(".DS_Store"));
     #[cfg(unix)]
-    std::os::unix::fs::symlink(root.0.join("photo.jpg"), root.0.join("link.jpg")).unwrap();
+    std::os::unix::fs::symlink(root.0.join("document-1.pdf"), root.0.join("link.pdf")).unwrap();
 
     let later = (String::from("nothing_to_do"), String::from("later"));
     let scan = sweep_bin().arg(&root.0).arg("--json").output().unwrap();
@@ -257,4 +259,24 @@ fn a_folder_held_only_by_recency_says_retry_later_on_scan_and_apply() {
         .output()
         .unwrap();
     assert_eq!(reason_of(&mixed), not_needed, "{}", stdout(&mixed));
+}
+
+/// Waiting cannot help a file that would not group anyway: the answer with the
+/// window must match the answer without it.
+#[test]
+fn a_recent_file_that_would_not_group_does_not_say_retry_later() {
+    for name in ["notes.xyz", "one.pdf"] {
+        let root = TestDir(unique_temp("lone-recent"));
+        fs::create_dir_all(&root.0).unwrap();
+        write_file(&root.0.join(name));
+        let not_needed = (String::from("nothing_to_do"), String::from("not_needed"));
+        for since in ["3600", "0"] {
+            let scan = sweep_bin()
+                .arg(&root.0)
+                .args(["--since", since, "--json"])
+                .output()
+                .unwrap();
+            assert_eq!(reason_of(&scan), not_needed, "{name} --since {since}");
+        }
+    }
 }

@@ -1506,6 +1506,7 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
             .report();
     }
     if bound.moves() == 0 {
+        etude_cli_support::envelope::no_undo_needed();
         eprintln!("sweep: nothing to apply.");
         return ExitCode::from(1);
     }
@@ -2456,7 +2457,13 @@ fn refuse_scan(path: &Path, e: &etude_core::scan::ScanError) {
 /// apart from the moves because it is raised after a move or restore has already
 /// succeeded: the files moved, the record of them did not. The caller's own
 /// follow-up line says what that means for the files.
-fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, items: &[PathBuf]) {
+fn refuse_apply(
+    e: &etude_core::apply::ApplyError,
+    root: &Path,
+    doing: &str,
+    items: &[PathBuf],
+    work: etude_cli_support::problems::LockedWork,
+) {
     use etude_cli_support::problems::{disk_full, disk_read_only};
     use etude_cli_support::{plain_io_error, shown, shown_text};
     use etude_core::apply::ApplyError as E;
@@ -2484,7 +2491,7 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, ite
         ),
         E::Io(source) => {
             eprintln!("sweep: {doing} in {folder}: {}.", plain_io_error(source));
-            let advice = etude_cli_support::problems::move_denied_advice(source, items, root);
+            let advice = etude_cli_support::problems::denied_advice(source, items, root, work);
             if let Some(advice) = advice {
                 eprintln!("       {advice}");
             }
@@ -2527,7 +2534,11 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, ite
         ),
         E::DestinationLocked(path) => eprintln!(
             "{}",
-            etude_cli_support::problems::locked_folder_message("sweep", path)
+            etude_cli_support::problems::locked_folder_message(
+                "sweep",
+                path,
+                &format!("sweep {}", etude_cli_support::quoted_path(root))
+            )
         ),
         E::DestinationDirectoryChanged(path) => {
             eprintln!(
@@ -2720,7 +2731,12 @@ fn run_apply(
                 .iter()
                 .flat_map(|group| group.members.iter().cloned())
                 .collect();
-            refuse_apply(&e, &p.root, doing, &items);
+            let work = if p.adds_tags {
+                etude_cli_support::problems::LockedWork::TagApply
+            } else {
+                etude_cli_support::problems::LockedWork::Move
+            };
+            refuse_apply(&e, &p.root, doing, &items, work);
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
                 etude_cli_support::envelope::status("refused");
@@ -3052,6 +3068,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     print_left_alone_notes(&p, false);
     print_agent_named_note(&p);
     if p.moves() == 0 {
+        etude_cli_support::envelope::no_undo_needed();
         eprintln!("sweep: nothing to apply.{}", hold_hint(&p));
         if p.only_too_recent() {
             etude_cli_support::envelope::reason(
@@ -3973,7 +3990,19 @@ fn finish_undo(
             .filter(|entry| entry.is_moved())
             .flat_map(|entry| [entry.to.clone(), entry.from.clone()])
             .collect();
-        refuse_apply(&err, &root, "could not put every file back", &items);
+        let tag_undo = j.entries.iter().any(|entry| entry.tag.is_some());
+        let (doing, work) = if tag_undo {
+            (
+                "could not put back every file's old tags",
+                etude_cli_support::problems::LockedWork::TagUndo,
+            )
+        } else {
+            (
+                "could not put every file back",
+                etude_cli_support::problems::LockedWork::Move,
+            )
+        };
+        refuse_apply(&err, &root, doing, &items, work);
         match saved {
             Ok(()) => {
                 if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path) = &err {

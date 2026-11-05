@@ -302,7 +302,8 @@ class Probe:
         if self.tool == "sweep":
             recent = self.directory / "recent-tree"
             recent.mkdir()
-            (recent / "photo.jpg").write_bytes(b"recent fixture")
+            for i in range(5):
+                (recent / f"report-{i}.pdf").write_bytes(b"recent fixture")
             result = self.run(recent, "--since", "3600", "--json", codes=(1,))
             value = json.loads(result.stdout)
             require(value["reason"]["retry"] == "later",
@@ -313,6 +314,12 @@ class Probe:
             result = self.run(recent, "--since", "3600", "--json", codes=(1,))
             require(json.loads(result.stdout)["reason"]["retry"] == "not_needed",
                     "mixed holds must not promise waiting alone will release the folder")
+            lone = self.directory / "lone-recent-tree"
+            lone.mkdir()
+            (lone / "notes.xyz").write_bytes(b"would not group")
+            result = self.run(lone, "--since", "3600", "--json", codes=(1,))
+            require(json.loads(result.stdout)["reason"]["retry"] == "not_needed",
+                    "a file that would not group must not be told to wait")
             if sys.platform == "darwin":
                 self.finder_aliases()
                 self.locked_items()

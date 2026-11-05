@@ -757,10 +757,18 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
                 ),
             ]));
         }
-        etude_cli_support::envelope::status("incomplete");
+        // A locked item is a refusal when nothing moved. An unreadable item
+        // alone keeps its own status: the scan itself was incomplete.
+        etude_cli_support::envelope::status(if outcome.locked_skipped > 0 {
+            "refused"
+        } else {
+            "incomplete"
+        });
+        etude_cli_support::envelope::no_undo_needed();
         return fail(etude_cli_support::reason::Code::PermissionDenied);
     }
     if outcome.entries.is_empty() {
+        etude_cli_support::envelope::no_undo_needed();
         let hidden = outcome.skipped_hidden;
         etude_cli_support::envelope::detail(etude_core::json::obj(&[(
             "skipped_hidden",
@@ -945,7 +953,12 @@ fn execute_stash(
                 println!("The selected folder is clear.\n");
             } else {
                 print_locked_skipped(bound.locked_skipped, bound.locked_system, &bound.root);
-                print_stash_holds(&r, true, bound.locked_skipped, &bound.root);
+                print_stash_holds(
+                    &r,
+                    true,
+                    bound.locked_skipped,
+                    std::slice::from_ref(&bound.root),
+                );
                 if bound.skipped_unreadable > 0 {
                     println!(
                         "{}. The selected folder is NOT clear.\n",
@@ -1023,6 +1036,7 @@ fn execute_stash(
                 ),
                 &bound.plan,
                 &bound.root,
+                &format!("stash {}", etude_cli_support::quoted_path(&bound.root)),
             );
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
@@ -1076,6 +1090,7 @@ fn print_stash_failure(
     doing: &str,
     plan: &etude_core::plan::Plan,
     within: &Path,
+    again: &str,
 ) {
     use etude_core::apply::ApplyError as E;
     match error {
@@ -1112,10 +1127,24 @@ fn print_stash_failure(
         }
         E::DestinationLocked(path) => eprintln!(
             "{}",
-            etude_cli_support::problems::locked_folder_message("stash", path)
+            etude_cli_support::problems::locked_folder_message("stash", path, again)
         ),
         other => eprintln!("stash: {doing}: {}", apply_error_reason(other)),
     }
+}
+
+/// The select command as it was typed, so it can be run again.
+fn select_command(args: &[String]) -> String {
+    let mut command = String::from("stash select");
+    for arg in args.iter().filter(|arg| *arg != "select") {
+        command.push(' ');
+        if arg.starts_with('-') {
+            command.push_str(arg);
+        } else {
+            command.push_str(&etude_cli_support::quoted_path(Path::new(arg)));
+        }
+    }
+    command
 }
 
 fn cmd_select(args: &[String]) -> ExitCode {
@@ -1174,6 +1203,8 @@ fn cmd_select(args: &[String]) -> ExitCode {
         Ok(report) => {
             if report.moved > 0 {
                 etude_cli_support::envelope::recovery_operation(&report.journal_id);
+            } else {
+                etude_cli_support::envelope::no_undo_needed();
             }
             etude_cli_support::envelope::effect("items_moved", report.moved);
             let held = report.held_tagged
@@ -1211,7 +1242,12 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     );
                 }
                 if held > 0 {
-                    print_stash_holds(&report, false, 0, &prepared.parent);
+                    print_stash_holds(
+                        &report,
+                        false,
+                        0,
+                        &folders_holding_locked(&prepared.sources),
+                    );
                 }
             }
             print_downloads_note(downloads);
@@ -1240,6 +1276,7 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 },
                 &plan,
                 &prepared.parent,
+                &select_command(args),
             );
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
@@ -1268,20 +1305,40 @@ fn cmd_select(args: &[String]) -> ExitCode {
     }
 }
 
+/// The folders a locked selected item sits in. `--into` holds none of them.
+fn folders_holding_locked(sources: &[PathBuf]) -> Vec<PathBuf> {
+    let parents = |locked_only: bool| {
+        let mut folders: Vec<PathBuf> = sources
+            .iter()
+            .filter(|source| !locked_only || etude_core::scan::is_locked(source))
+            .filter_map(|source| source.parent().map(Path::to_path_buf))
+            .collect();
+        folders.sort();
+        folders.dedup();
+        folders
+    };
+    let locked = parents(true);
+    if locked.is_empty() {
+        parents(false)
+    } else {
+        locked
+    }
+}
+
 /// What stash left in the folder, with the reason. Counts only: no names, no
 /// paths. A held item means the folder is not clear, and this says so.
 fn print_stash_holds(
     r: &etude_core::apply::ApplyReport,
     folder: bool,
     locked_skipped: usize,
-    within: &Path,
+    within: &[PathBuf],
 ) {
     if r.held_locked > 0 {
         println!(
             "{} locked and {} in place. {}",
             etude_cli_support::counted(r.held_locked, "item is", "items are"),
             if r.held_locked == 1 { "stays" } else { "stay" },
-            etude_cli_support::problems::unlock_step(within),
+            etude_cli_support::problems::unlock_step_in(within),
         );
     }
     if r.held_cross_volume > 0 {
@@ -3464,5 +3521,21 @@ mod tests {
         ] {
             assert!(!folder_is_clear(&left_behind), "{left_behind:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod select_command_tests {
+    use super::select_command;
+
+    #[test]
+    fn the_select_command_can_be_pasted_back() {
+        let args: Vec<String> = ["select", "--into", "/a b", "/c/d's.pdf"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            select_command(&args),
+            r"stash select --into '/a b' '/c/d'\''s.pdf'"
+        );
     }
 }

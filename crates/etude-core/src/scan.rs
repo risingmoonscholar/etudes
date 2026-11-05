@@ -1895,7 +1895,9 @@ fn hold_for_tag_probe(probe: io::Result<bool>, out: &mut ScanOutcome) -> bool {
     }
 }
 
+#[cfg(target_os = "macos")]
 const UF_IMMUTABLE: u32 = 0x0000_0002;
+#[cfg(target_os = "macos")]
 const SF_IMMUTABLE: u32 = 0x0002_0000;
 
 /// Whether the immutable flag is set: user (Finder's Locked box, `chflags uchg`)
@@ -1907,10 +1909,12 @@ pub fn has_lock_flag(meta: &fs::Metadata) -> bool {
     flags_lock(meta.st_flags())
 }
 
+#[cfg(target_os = "macos")]
 fn flags_lock(flags: u32) -> bool {
     flags & (UF_IMMUTABLE | SF_IMMUTABLE) != 0
 }
 
+#[cfg(target_os = "macos")]
 fn flags_system_lock(flags: u32) -> bool {
     flags & SF_IMMUTABLE != 0
 }
@@ -2640,7 +2644,7 @@ mod tests {
 #[path = "project_document_hold.rs"]
 mod project_document_hold;
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod lock_flag_tests {
     use super::*;
 

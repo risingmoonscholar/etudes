@@ -192,8 +192,8 @@ pins remain unchanged. The binary probe checks flagged and unflagged files,
 separate symlink accounting, the human summary and unchanged fixture bytes.
 Plan artifacts append optional section 4 for a nonzero alias count; older plans
 load with zero and plans without aliases retain their earlier encoding. A folder
-held back only because its files are too recent reports `nothing_to_do` with
-retry `later` and an `input` subject, on a scan and on apply; `nothing_to_do` keeps
+held back only because its files are too recent, where those files would form a
+group once the window passes, reports `nothing_to_do` with retry `later` and an `input` subject, on a scan and on apply; `nothing_to_do` keeps
 retry `not_needed` everywhere else.
 The same version also declares `locked_items`: the immutable flag is read from
 the `st_flags` of the per-entry `lstat` the scan already takes (no further

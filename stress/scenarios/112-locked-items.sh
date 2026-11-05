@@ -112,7 +112,7 @@ else
   fail "stash called a folder with a locked item clear"
 fi
 "$STASH" "$O" --json >"$W/only.json"
-assert_eq incomplete "$(json_get "$W/only.json" 'd["status"]')" "the result is incomplete"
+assert_eq refused "$(json_get "$W/only.json" 'd["status"]')" "nothing moved, so the result is refused"
 assert_eq 1 "$(json_get "$W/only.json" 'd["details"]["locked_skipped"]')" "the locked item is counted"
 # The printed step finds the item, and clearing the flag lets stash finish.
 assert_eq "$O/only.txt" "$(find "$O" -flags +uchg)" "the printed find step names the locked item"
@@ -148,6 +148,15 @@ done
 snapshot_tree "$R" "$W/root-after.json"
 assert_snapshot_eq "$W/root-before.json" "$W/root-after.json" "a locked root moves nothing"
 chflags nouchg "$R"
+# The printed step makes a new plan once the lock is cleared.
+STEP=$(sed -n 's/.*Then plan again with: sweep //p' "$W/root-apply.txt")
+eval "\"\$SWEEP\" $STEP --since 0" >"$W/root-step.txt" 2>&1
+assert_eq 0 "$?" "the printed sweep step runs"
+if grep -q '^Apply:' "$W/root-step.txt"; then
+  pass "the printed sweep step offers the apply"
+else
+  fail "the printed sweep step did not plan"
+fi
 assert_exit 0 "apply works once the flag is cleared" -- "$SWEEP" apply "$R" --since 0 --yes
 
 # --- sweep undo: an item locked after apply gets the move denial's step ---
