@@ -128,7 +128,9 @@ impl Signal {
                 e.dedup();
                 format!(".{}", e.join(", ."))
             }
+            Signal::Collected { count: 1 } => "1 item".to_string(),
             Signal::Collected { count } => format!("{count} items"),
+            Signal::Proposed { count: 1 } => "1 item placed by a proposal".to_string(),
             Signal::Proposed { count } => format!("{count} items placed by a proposal"),
             Signal::Tagged { ext, new, .. } => {
                 if *new {

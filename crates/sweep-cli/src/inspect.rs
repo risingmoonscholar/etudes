@@ -85,8 +85,11 @@ pub fn consent_interactive() -> io::Result<bool> {
 /// The disclosure the brief requires: what was inspected, and what was kept.
 pub fn report(stats: &Stats) {
     println!(
-        "\n  Contents read:  {} files  ({} skipped as non-text, {} as binary, {} too slow)",
-        stats.inspected, stats.skipped_not_text, stats.skipped_binary, stats.skipped_slow
+        "\n  Contents read:  {}  ({} skipped as non-text, {} as binary, {} too slow)",
+        etude_cli_support::counted(stats.inspected, "file", "files"),
+        stats.skipped_not_text,
+        stats.skipped_binary,
+        stats.skipped_slow
     );
     println!(
         "  Newly left alone because of what was read: {}",
@@ -96,10 +99,10 @@ pub fn report(stats: &Stats) {
 
     if stats.had_unlocked_reads() {
         println!(
-            "\n  Note: {} read(s) could not be locked against swap on this machine\n  \
+            "\n  Note: {} could not be locked against swap on this machine\n  \
              (RLIMIT_MEMLOCK is small on macOS). Contents were still erased after\n  \
              use and never written by sweep, but the OS may have paged them.",
-            stats.unlocked_reads
+            etude_cli_support::counted(stats.unlocked_reads, "read", "reads")
         );
     }
 }

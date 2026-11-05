@@ -1193,7 +1193,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     // header can answer, and the reason the bound is not a constant: a fixed
     // 4 GB refuses an ordinary project on a roomy disk and permits filling a
     // full one.
-    let free = dest.parent().and_then(free_bytes);
+    let free = free_bytes(folder_of(&dest));
     let chosen_limit = match max_size_flag(args) {
         Ok(limit) => limit,
         Err(problem) => return problem.refuse(),
@@ -1222,10 +1222,7 @@ fn run(archive: &Path, args: &[String]) -> ExitCode {
     let staging = match staging_destination(&dest) {
         Ok(path) => path,
         Err(e) => {
-            let folder = dest
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
+            let folder = folder_of(&dest);
             if let Some(advice) = etude_core::scan::permission_advice(&e) {
                 eprintln!(
                     "unpack: cannot write to {}: permission denied. Nothing was extracted.\n\
@@ -1767,6 +1764,14 @@ fn exact_bytes(n: u64) -> String {
 /// statvfs because unpack's whole design is to use what the machine already
 /// ships rather than take a dependency, and it is already shelling out to
 /// unzip and tar.
+/// The folder a destination will sit in. A bare relative name has an empty parent,
+/// which no command can look at, so it means the current folder.
+fn folder_of(dest: &Path) -> &Path {
+    dest.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
 fn free_bytes(p: &Path) -> Option<u64> {
     let out = Command::new("df").arg("-Pk").arg(p).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -2415,6 +2420,15 @@ fn flatten(dest: &Path, wrapper: &str) -> bool {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[test]
+    fn a_bare_relative_destination_has_a_folder_that_df_can_read() {
+        // Its parent is the empty string. Asked of that, `df` fails, the free-space
+        // floor is skipped and the size limit becomes the ceiling.
+        assert_eq!(folder_of(Path::new("a")), Path::new("."));
+        assert_eq!(folder_of(Path::new("o/a")), Path::new("o"));
+        assert!(free_bytes(folder_of(Path::new("a"))).is_some());
+    }
 
     #[test]
     fn a_missing_root_fails_whether_or_not_a_writer_is_running() {

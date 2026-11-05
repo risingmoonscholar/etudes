@@ -92,8 +92,8 @@ pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
 /// demonstrated by hand.
 pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome> {
     println!(
-        "\nReviewing {} group(s). Nothing moves until the end.\n",
-        plan.groups.len()
+        "\nReviewing {}. Nothing moves until the end.\n",
+        etude_cli_support::counted(plan.groups.len(), "group", "groups")
     );
     let mut warned_scrollback = false;
 
@@ -101,9 +101,9 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         loop {
             let g = &plan.groups[i];
             println!(
-                "  {}: {} files, {}",
+                "  {}: {}, {}",
                 g.name,
-                g.members.len(),
+                etude_cli_support::counted(g.members.len(), "file", "files"),
                 g.signal.describe()
             );
             let answer = prompt(input, "  [a]ccept  [s]kip  [r]ename  [d]etails  [q]uit > ")?;
@@ -174,9 +174,16 @@ pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome>
         return Ok(Outcome::Cancelled);
     }
 
-    println!("\n  About to move {} files into:", plan.moves());
+    println!(
+        "\n  About to move {} into:",
+        etude_cli_support::counted(plan.moves(), "file", "files")
+    );
     for g in &accepted {
-        println!("    {}/  ({} files)", g.name, g.members.len());
+        println!(
+            "    {}/  ({})",
+            g.name,
+            etude_cli_support::counted(g.members.len(), "file", "files")
+        );
     }
     let personal: usize = plan.sensitive_counts().values().sum();
     if personal == 1 {

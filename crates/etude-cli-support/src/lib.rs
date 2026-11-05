@@ -177,11 +177,13 @@ impl<W: Write> ProgressReporter<W> {
         }
 
         if self.terminal {
-            let _ = write!(self.writer, "\r{}: {completed}/{total} items", self.label);
+            let noun = if total == 1 { "item" } else { "items" };
+            let _ = write!(self.writer, "\r{}: {completed}/{total} {noun}", self.label);
             let _ = self.writer.flush();
             self.line_open = true;
         } else {
-            let _ = writeln!(self.writer, "{}: {completed}/{total} items", self.label);
+            let noun = if total == 1 { "item" } else { "items" };
+            let _ = writeln!(self.writer, "{}: {completed}/{total} {noun}", self.label);
         }
 
         self.next_report = self.next_report.saturating_add(self.interval);

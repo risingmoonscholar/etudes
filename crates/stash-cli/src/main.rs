@@ -1402,12 +1402,6 @@ fn no_stash_text(selector: &batches::Selector) -> String {
         batches::Selector::Id(id) => {
             format!("stash: no stash with id {}. {SEE_ALL}", shown_text(id))
         }
-        batches::Selector::Root(path) | batches::Selector::Latest(Some(path)) if path.is_file() => {
-            format!(
-                "stash: {} is a file. Give the folder you stashed. {SEE_ALL}",
-                shown(path)
-            )
-        }
         batches::Selector::Root(path) | batches::Selector::Latest(Some(path)) => {
             format!("stash: no stash from {}. {SEE_ALL}", shown(path))
         }
@@ -1568,7 +1562,19 @@ fn print_restore_failure(error: &etude_core::apply::ApplyError, folders: &str) {
 
 /// What pop left behind and how to finish. Names of files stash found by itself
 /// stay redacted; the folder that holds them is its own.
-fn print_pop_left(journal: &etude_core::Journal, r: &etude_core::apply::UndoReport) {
+/// The newest other stash, for a step past one whose items are gone.
+fn other_stash(sealer: &dyn etude_core::journal::Sealer, id: &str) -> Option<etude_core::Journal> {
+    let (live, _) = batches::survey(sealer).ok()?;
+    live.into_iter()
+        .filter(|journal| journal.id != id)
+        .max_by_key(|journal| batches::creation(&journal.id))
+}
+
+fn print_pop_left(
+    journal: &etude_core::Journal,
+    r: &etude_core::apply::UndoReport,
+    sealer: &dyn etude_core::journal::Sealer,
+) {
     use etude_cli_support::counted;
     let holding = holding_shown(journal);
     let step = format!("stash pop --id {}", journal.id);
@@ -1613,6 +1619,17 @@ fn print_pop_left(journal: &etude_core::Journal, r: &etude_core::apply::UndoRepo
             if one { "it" } else { "them" },
         );
         println!("  If you moved that folder, move it back and run: {step}");
+        println!(
+            "  If you deleted {}, there is nothing to restore.",
+            if one { "it" } else { "them" }
+        );
+        if let Some(other) = other_stash(sealer, &journal.id) {
+            println!(
+                "  To restore the stash from {} instead, run: stash pop --id {}",
+                etude_cli_support::shown(&other.root),
+                other.id
+            );
+        }
     }
 }
 
@@ -1634,6 +1651,22 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     if item_id.is_some() && !matches!(&selector, batches::Selector::Id(_)) {
         eprintln!("stash: --item requires --id OPERATION");
         return refuse(etude_cli_support::reason::Code::InvalidArguments);
+    }
+    if let batches::Selector::Root(path) | batches::Selector::Latest(Some(path)) = &selector {
+        const SEE_ALL: &str = "See what is stashed with: stash status --all";
+        if path.is_file() {
+            eprintln!(
+                "stash: {} is a file. Give the folder you stashed. {SEE_ALL}",
+                etude_cli_support::shown(path)
+            );
+            return fail(etude_cli_support::reason::Code::MissingInput);
+        }
+        if let Err(error) = path.canonicalize() {
+            let mut problem =
+                etude_cli_support::problems::folder_open_problem("stash", path, &error);
+            problem.text = format!("{} {SEE_ALL}", problem.text);
+            return problem.report();
+        }
     }
     let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
@@ -1773,7 +1806,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     if no_deadline {
         println!("{NO_DEADLINE}");
     }
-    print_pop_left(&j, &r);
+    print_pop_left(&j, &r, &sl);
     if r.already_reversed > 0 {
         println!(
             "  {} already restored by an earlier run that did not finish.",
@@ -2017,7 +2050,7 @@ fn pop_one_item(
     }
     if !report.skipped_missing.is_empty() {
         println!(
-            "  That item is not where stash left it ({holding}). If you moved that folder, move it back and run: {this_item}"
+            "  That item is not where stash left it ({holding}). If you moved that folder, move it back and run: {this_item}\n  If you deleted it, there is nothing to restore."
         );
     }
     if report.restored == 0 {
@@ -2103,9 +2136,14 @@ fn cmd_inspect(args: &[String]) -> ExitCode {
         );
     } else {
         println!(
-            "Operation {}: {held} of {} items remain held.",
+            "Operation {}: {held} of {} {} held.",
             journal.id,
-            items.len()
+            items.len(),
+            if items.len() == 1 {
+                "item remains"
+            } else {
+                "items remain"
+            }
         );
         for (id, state) in &items {
             println!("  {id}  {state}");
@@ -2285,9 +2323,12 @@ fn cmd_status(args: &[String]) -> ExitCode {
         );
         return fail(etude_cli_support::reason::Code::MissingInput);
     }
-    let Ok(root) = root.canonicalize() else {
-        eprintln!("stash: cannot read that folder");
-        return refuse(etude_cli_support::reason::Code::MissingInput);
+    let root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            return etude_cli_support::problems::folder_open_problem("stash", &root, &error)
+                .report();
+        }
     };
 
     let Some(sealer) = sealer(false) else {
@@ -2477,7 +2518,11 @@ fn cmd_status(args: &[String]) -> ExitCode {
                 );
                 return ExitCode::SUCCESS;
             }
-            println!("\n{n} items stashed from {}.", root.display());
+            println!(
+                "\n{} stashed from {}.",
+                etude_cli_support::counted(n, "item", "items"),
+                root.display()
+            );
             match deadline_of(name) {
                 Some(t) if t <= now_secs() => {
                     println!(

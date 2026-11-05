@@ -187,7 +187,10 @@ fn run_main() -> ExitCode {
     let expired = etude_core::journal::prune_expired();
     etude_cli_support::envelope::effect("expired_journals_removed", expired);
     if expired > 0 {
-        eprintln!("sweep: dropped {expired} journal(s) older than 30 days");
+        eprintln!(
+            "sweep: dropped {} older than 30 days",
+            etude_cli_support::counted(expired, "undo record", "undo records")
+        );
     }
 
     match args.first().map(String::as_str) {
@@ -252,6 +255,11 @@ fn cmd_status(args: &[String]) -> ExitCode {
     }
     if let Some(file) = path.as_deref().filter(|path| path.is_file()) {
         return path_is_a_file(file);
+    }
+    if let Some(folder) = path.as_deref()
+        && let Err(error) = std::fs::canonicalize(folder)
+    {
+        return etude_cli_support::problems::folder_open_problem("sweep", folder, &error).report();
     }
     let candidates = match etude_core::journal::candidates_by_recency("sweep") {
         Ok(candidates) => candidates,
@@ -1669,6 +1677,14 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             json.pop();
             json.push_str(&format!(",\"items\":{items}}}"));
         }
+        // Only when there is one, so a plan that can apply reads as it always did.
+        let blocked = blocked_folders(&plan);
+        if !blocked.is_empty() {
+            json.pop();
+            let names =
+                etude_core::json::arr(blocked.iter().map(|name| etude_core::json::str(name)));
+            json.push_str(&format!(",\"blocked_folders\":{names}}}"));
+        }
         json
     };
     if plan.skipped_unreadable > 0 {
@@ -1690,8 +1706,8 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     if plan.groups.is_empty() {
         println!(
-            "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
-            plan.scanned,
+            "\nScanned {}  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
+            etude_cli_support::counted(plan.scanned, "item", "items"),
             env!("CARGO_PKG_VERSION")
         );
         print_refused_by_policy_note(&plan);
@@ -2030,6 +2046,24 @@ fn next_commands(args: &[String], quiet: bool, exported: Option<&(String, String
     next
 }
 
+/// Groups whose folder cannot be made, because something that is not a folder
+/// already holds the name. Apply refuses these, so the scan says so first.
+fn blocked_folders(p: &plan::Plan) -> Vec<&str> {
+    if p.adds_tags {
+        return Vec::new();
+    }
+    p.groups
+        .iter()
+        .filter(|g| {
+            p.root
+                .join(&g.name)
+                .symlink_metadata()
+                .is_ok_and(|found| !found.is_dir())
+        })
+        .map(|g| g.name.as_str())
+        .collect()
+}
+
 fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next: &[String]) {
     // This line must never claim more restraint than actually happened.
     let basis = if read_contents {
@@ -2038,8 +2072,8 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next:
         "filesystem and Finder organization metadata  ·  no contents read to decide"
     };
     println!(
-        "\nScanned {} items  ·  {basis}  ·  sweep {}\n",
-        p.scanned,
+        "\nScanned {}  ·  {basis}  ·  sweep {}\n",
+        etude_cli_support::counted(p.scanned, "item", "items"),
         env!("CARGO_PKG_VERSION")
     );
 
@@ -2052,9 +2086,14 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next:
         .max(12);
     for g in &p.groups {
         println!(
-            "  {:<width$}  {:>3} files   {}",
+            "  {:<width$}  {:>3} {:<5}   {}",
             g.name,
             g.members.len(),
+            if g.members.len() == 1 {
+                "file"
+            } else {
+                "files"
+            },
             g.signal.describe(),
             width = width
         );
@@ -2099,6 +2138,27 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next:
     println!("\nNothing has been moved.  Nothing left this machine.");
     if !quiet {
         println!("Note: this listing is in your terminal scrollback.");
+    }
+    // A scan must not offer an apply it already knows will refuse.
+    let blocked = blocked_folders(p);
+    if !blocked.is_empty() {
+        for name in &blocked {
+            let link = p
+                .root
+                .join(name)
+                .symlink_metadata()
+                .is_ok_and(|found| found.is_symlink());
+            println!(
+                "\nNot ready to apply: a {} named \"{}\" is where sweep would make that folder.",
+                if link { "link" } else { "file" },
+                etude_cli_support::shown_text(name)
+            );
+        }
+        println!(
+            "Rename {}, then scan again.",
+            if blocked.len() == 1 { "it" } else { "them" }
+        );
+        return;
     }
     for command in next {
         println!("{command}");
@@ -2671,7 +2731,10 @@ fn finish_apply(
                 .unwrap_or_else(|| "null".into()),
         ),
     ]));
-    println!("\nMoved {} files.", r.moved);
+    println!(
+        "\nMoved {}.",
+        etude_cli_support::counted(r.moved, "file", "files")
+    );
     print_apply_holds(r);
     if r.moved > 0 {
         match &r.journal_path {
@@ -3020,8 +3083,9 @@ fn cmd_propose(args: &[String]) -> ExitCode {
         ("binding", proposed.plan.binding_json()),
     ]));
     println!(
-        "Proposal accepted: {} files to move, {} skipped. Nothing has been moved.",
-        proposed.moves, proposed.skipped
+        "Proposal accepted: {} to move, {} skipped. Nothing has been moved.",
+        etude_cli_support::counted(proposed.moves, "file", "files"),
+        proposed.skipped
     );
     println!("Plan written to {out}. Digest: {}", proposed.plan.digest());
     println!("Apply with: sweep apply --plan {out} --plan-digest DIGEST --yes");
@@ -3066,6 +3130,17 @@ fn newest_undoable(
     sweep_journal_matching(sl, |_| true)
 }
 
+/// The newest other folder with an apply left to reverse. A record that will not
+/// open is passed over here: naming the folder then gives its own honest answer.
+fn other_folder_to_undo(sl: &dyn etude_core::journal::Sealer, root: &Path) -> Option<PathBuf> {
+    etude_core::journal::candidates_by_recency("sweep")
+        .ok()?
+        .into_iter()
+        .filter_map(|id| id.load("sweep", sl).ok())
+        .find(|j| j.root != root && j.root.is_dir() && !journal_is_fully_undone(j, sl))
+        .map(|j| j.root)
+}
+
 /// An undo record that could not be opened. No id means the folder of records
 /// itself could not be used.
 struct RecordError {
@@ -3083,7 +3158,7 @@ fn refuse_unreadable_record(record: &RecordError) -> ExitCode {
                 problems::record_open_problem("sweep", id, &record.error)
             );
             eprintln!(
-                "The files from that apply are still where it put them, and you can move them back by hand."
+                "Without that record sweep cannot say where the files from that apply are now, and cannot move them back for you. Look in the folder you applied."
             );
         }
         None => eprintln!(
@@ -3173,12 +3248,12 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         if path.is_file() {
             return path_is_a_file(&path);
         }
-        let Ok(target) = path.canonicalize() else {
-            eprintln!("sweep: no folder at {}", etude_cli_support::shown(&path));
-            return failure(
-                etude_cli_support::reason::Code::MissingInput,
-                Some(etude_cli_support::reason::Subject::wait("input", None)),
-            );
+        let target = match path.canonicalize() {
+            Ok(target) => target,
+            Err(error) => {
+                return etude_cli_support::problems::folder_open_problem("sweep", &path, &error)
+                    .report();
+            }
         };
         return match sweep_journal_for_root(&sl, &target) {
             Err(record) => refuse_unreadable_record(&record),
@@ -3305,8 +3380,12 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     // count is real even when `r.error` is set below.
     if r.directories_left_for_journals > 0 {
         println!(
-            "Left {} empty folders needed by another live or unreadable journal.",
-            r.directories_left_for_journals
+            "Left {} that another undo record still needs.",
+            etude_cli_support::counted(
+                r.directories_left_for_journals,
+                "empty folder",
+                "empty folders"
+            )
         );
     }
     if tag_journal {
@@ -3351,7 +3430,13 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     } else {
         let left = r.skipped_changed.len() + r.skipped_occupied.len() + r.skipped_missing.len();
         if left > 0 {
-            println!("\nRestored {} of {} files.", r.restored, r.restored + left);
+            let total = r.restored + left;
+            println!(
+                "\nRestored {} of {} {}.",
+                r.restored,
+                total,
+                if total == 1 { "file" } else { "files" }
+            );
         } else {
             println!(
                 "\nRestored {}.",
@@ -3362,8 +3447,12 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
     if !r.skipped_changed.is_empty() {
         if tag_journal {
             println!(
-                "  {} tag files were left because identity or write ownership could not be verified:",
-                r.skipped_changed.len()
+                "  {} left because identity or write ownership could not be verified:",
+                etude_cli_support::counted(
+                    r.skipped_changed.len(),
+                    "tag file was",
+                    "tag files were"
+                )
             );
         } else {
             println!(
@@ -3436,11 +3525,22 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
             "  If you moved that folder, move it back and run: {}",
             undo_step(&root)
         );
+        println!(
+            "  If you deleted {}, there is nothing to restore.",
+            if one { "it" } else { "them" }
+        );
+        if let Some(older) = other_folder_to_undo(sl, &root) {
+            println!(
+                "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
+                etude_cli_support::shown(&older),
+                undo_step(&older)
+            );
+        }
     }
     if r.already_reversed > 0 {
         println!(
-            "  {} were already restored by an earlier run that did not finish.",
-            r.already_reversed
+            "  {} already restored by an earlier run that did not finish.",
+            etude_cli_support::counted(r.already_reversed, "file was", "files were")
         );
     }
     if !r.reconciled.is_empty() {
@@ -3448,8 +3548,8 @@ fn finish_undo(j: &mut etude_core::Journal, sl: &dyn etude_core::journal::Sealer
         // earlier undo moved these home and was killed before it could write
         // that down, so this run only had to agree with the disk.
         println!(
-            "  {} were already home from an interrupted restore; the journal now says so.",
-            r.reconciled.len()
+            "  {} already home from an interrupted restore; the undo record now says so.",
+            etude_cli_support::counted(r.reconciled.len(), "file was", "files were")
         );
     }
     if !r.healed.is_empty() {

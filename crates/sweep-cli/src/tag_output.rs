@@ -22,8 +22,8 @@ fn banner(p: &Plan, read_contents: bool) {
         "filesystem and Finder organization metadata  ·  no contents read to decide"
     };
     println!(
-        "\nScanned {} items  ·  {basis}  ·  sweep {}\n",
-        p.scanned,
+        "\nScanned {}  ·  {basis}  ·  sweep {}\n",
+        etude_cli_support::counted(p.scanned, "item", "items"),
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -141,8 +141,8 @@ pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
 /// A tag plan that tags no file.
 pub fn nothing_to_tag(p: &Plan) {
     println!(
-        "\nScanned {} items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
-        p.scanned,
+        "\nScanned {}  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep {}",
+        etude_cli_support::counted(p.scanned, "item", "items"),
         env!("CARGO_PKG_VERSION")
     );
     super::print_refused_by_policy_note(p);

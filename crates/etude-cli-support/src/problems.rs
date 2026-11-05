@@ -247,6 +247,29 @@ pub fn plan_export_problem(
     }
 }
 
+/// A folder named on the command line that cannot be opened. One condition, one
+/// answer, on every command of both tools.
+pub fn folder_open_problem(tool: &str, typed: &Path, error: &std::io::Error) -> Problem {
+    let folder = shown(typed);
+    match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => Problem::failed(
+            format!("{tool}: no folder at {folder}."),
+            Code::MissingInput,
+        ),
+        std::io::ErrorKind::PermissionDenied => {
+            let advice = scan::permission_advice(error).unwrap_or("Check who may open it.");
+            Problem::failed(
+                format!("{tool}: cannot open {folder}: permission denied. {advice}"),
+                Code::PermissionDenied,
+            )
+        }
+        _ => Problem::failed(
+            format!("{tool}: cannot open {folder}: {}.", plain_io_error(error)),
+            Code::MissingInput,
+        ),
+    }
+}
+
 /// A scan failure, naming the folder the person gave. Files the tool found by
 /// itself are never named here.
 pub fn scan_problem(tool: &str, typed: &Path, error: &ScanError) -> String {
@@ -381,6 +404,20 @@ pub fn record_open_problem(tool: &str, id: &str, error: &JournalError) -> String
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_missing_folder_has_one_answer_and_a_denied_one_does_not_share_it() {
+        let folder = Path::new("/o/gone");
+        for errno in [2, 20] {
+            let problem =
+                folder_open_problem("sweep", folder, &std::io::Error::from_raw_os_error(errno));
+            assert_eq!(problem.text, "sweep: no folder at /o/gone.");
+            assert_eq!((problem.code, problem.exit), (Code::MissingInput, 3));
+        }
+        let denied = folder_open_problem("stash", folder, &std::io::Error::from_raw_os_error(13));
+        assert!(denied.text.contains("permission denied"), "{}", denied.text);
+        assert_eq!((denied.code, denied.exit), (Code::PermissionDenied, 3));
+    }
 
     #[test]
     fn a_full_disk_and_a_read_only_disk_get_their_own_code_when_a_plan_cannot_be_saved() {
