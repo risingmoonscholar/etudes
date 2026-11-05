@@ -44,9 +44,27 @@ KEY_DROPPED = re.compile(
     r"|\benv\b[^\n#]*(-u\s*|--unset[=\s])ETUDE_JOURNAL_KEY\b"
     r"|\benv\s+(-\w+\s+)*-i\b"
     r"|\benv\s+--ignore-environment\b"
+    r"|\benv\s+(-\w+\s+)*-(\s|$)"
+    r"|\bexec\s+(-\w+\s+)*-\w*c\w*(\s|$)"
     r"|\bexport\s+-n\b[^\n#]*\bETUDE_JOURNAL_KEY\b"
     r"|(\bpop|\bdel\b|\bremove)[^\n#]*\bETUDE_JOURNAL_KEY\b"
 )
+# The check must catch each way of dropping the key, and leave alone lines that
+# keep it. A planted line that slips through fails the run.
+for planted in (
+    "unset ETUDE_JOURNAL_KEY",
+    "env -u ETUDE_JOURNAL_KEY sweep",
+    "env -i sweep",
+    "env - sweep",
+    "env -0 - sweep",
+    "exec -c sweep",
+    "exec -cl sweep",
+):
+    if not KEY_DROPPED.search(planted):
+        errors.append(f"self-test: dropping the key by {planted!r} is not caught")
+for kept in ("env FOO=1 sweep", "exec sweep status", "ls -c"):
+    if KEY_DROPPED.search(kept):
+        errors.append(f"self-test: {kept!r} is flagged but keeps the key")
 for scenario in sorted((root / "stress/scenarios").glob("*.sh")):
     for number, line in enumerate(scenario.read_text().splitlines(), 1):
         if not line.lstrip().startswith("#") and KEY_DROPPED.search(line):
