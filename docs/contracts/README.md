@@ -74,7 +74,8 @@ flag is passed.
 `profile_missing` means no saved profile exists; `profile_invalid` means one
 exists and cannot be used. `insufficient_space` and `destination_exists` now also
 cover a full disk and an occupied `--export-plan` path in `sweep` and `stash`.
-`sweep status` adds `counts.not_as_left` and `damaged`.
+`sweep status` adds `counts.not_as_left` and `damaged`, and its `command` is now
+`sweep undo --id ID` for that row. `undo_lookup` declares `sweep undo --id OPERATION`.
 
 A missing folder is exit 3 with `missing_input` on `sweep status PATH`, `stash
 status PATH` and `stash pop PATH`. A scan whose plan is blocked by a file holding a

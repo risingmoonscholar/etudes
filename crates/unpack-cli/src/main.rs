@@ -733,6 +733,10 @@ fn run_main() -> ExitCode {
             );
             refusal(ReasonCode::InvalidArguments, None)
         }
+        Some("") => {
+            eprintln!("unpack: the archive name is empty. Give the archive: unpack ARCHIVE.");
+            refusal(ReasonCode::InvalidArguments, None)
+        }
         Some(p) => run(&PathBuf::from(expand_tilde(p)), &args),
     }
 }

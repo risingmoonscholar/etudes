@@ -59,24 +59,7 @@ pub fn selector(args: &[String]) -> Result<Selector, &'static str> {
     })))
 }
 pub fn creation(id: &str) -> Option<u128> {
-    let parts: Vec<_> = id.split('-').collect();
-    if !journal::valid_journal_id(id)
-        || parts
-            .iter()
-            .take(3)
-            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
-    {
-        return None;
-    }
-    if parts.len() != 4
-        || parts[3].is_empty()
-        || !parts[3].bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return None;
-    }
-    parts[1].parse::<u32>().ok()?;
-    parts[2].parse::<u64>().ok()?;
-    parts[0].parse().ok()
+    journal::creation_time(id)
 }
 pub fn holding(journal: &Journal) -> Result<PathBuf, JournalError> {
     let first = journal

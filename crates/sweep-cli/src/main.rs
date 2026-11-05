@@ -38,6 +38,7 @@ USAGE
                                  check per-file decisions against an exported
                                  plan and write a new plan; moves nothing
     sweep undo [PATH]            reverse the most recent apply, or that folder's
+    sweep undo --id ID           reverse exactly one apply, opening only its record
     sweep status --id ID --json  report one encrypted journal without names
     sweep status PATH --json     report that folder's journals, newest first
     sweep forget                 remove sweep's journals; ask before destroying
@@ -127,6 +128,10 @@ fn run_main() -> ExitCode {
                 etude_cli_support::reason::Code::InvalidArguments
             };
             return refusal(code, None);
+        }
+        if let Err(msg) = check_positionals("status", &args) {
+            eprintln!("sweep: {msg}");
+            return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
         }
         disable_core_dumps();
         return cmd_status(&args);
@@ -318,7 +323,13 @@ fn cmd_status(args: &[String]) -> ExitCode {
         }
         let journal = match candidate.load("sweep", &sealer) {
             Ok(journal) => journal,
-            Err(error) => return status_journal_error(Some(&candidate.id), error),
+            Err(error) => {
+                let code = status_journal_error(Some(&candidate.id), error);
+                if id_arg.is_none() {
+                    print_other_records(&candidate.id, &sealer);
+                }
+                return code;
+            }
         };
         if id_arg.is_none() && selected_root.as_deref() != Some(journal.root.as_path()) {
             continue;
@@ -326,7 +337,12 @@ fn cmd_status(args: &[String]) -> ExitCode {
         let not_as_left = etude_core::apply::items_not_as_left(&journal);
         let damaged =
             journal.progress_tail_damaged || etude_core::apply::unrecorded_moves(&journal) > 0;
-        summaries.push((journal.summary(), journal.root, not_as_left, damaged));
+        summaries.push((
+            journal.summary(),
+            not_as_left,
+            damaged,
+            journal.root.clone(),
+        ));
         if id_arg.is_some() {
             break;
         }
@@ -345,7 +361,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
     }
     etude_cli_support::envelope::reason(Reason::completed());
     etude_cli_support::envelope::status("done");
-    for (summary, root, not_as_left, damaged) in summaries {
+    for (summary, not_as_left, damaged, folder) in summaries {
         let state = match summary.state {
             etude_core::journal::JournalState::Refused => "refused",
             etude_core::journal::JournalState::Completed => "completed",
@@ -354,7 +370,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
             etude_core::journal::JournalState::PartlyReversed => "partly_reversed",
         };
         let command = if summary.moved > summary.reversed {
-            format!("sweep undo {}", shell_quote(&root.to_string_lossy()))
+            undo_id_step(&summary.id)
         } else {
             String::new()
         };
@@ -372,6 +388,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
                 ]),
             ),
             ("damaged", etude_core::json::bool(damaged)),
+            (
+                "folder",
+                etude_core::json::str(&etude_cli_support::shown(&folder)),
+            ),
             (
                 "command",
                 if command.is_empty() {
@@ -396,6 +416,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     format!("; {command}")
                 }
             );
+            println!("  folder: {}", etude_cli_support::shown(&folder));
             if not_as_left > 0 {
                 println!(
                     "  {} not as apply left {}: gone from where it put {}, changed, or the original place is taken.",
@@ -424,10 +445,6 @@ fn path_is_a_file(path: &Path) -> ExitCode {
         etude_cli_support::reason::Code::MissingInput,
         Some(etude_cli_support::reason::Subject::wait("input", None)),
     )
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn status_unknown(id: &str) -> ExitCode {
@@ -805,7 +822,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         ],
     ),
     ("forget", &[("--yes", false)]),
-    ("undo", &[("--json", false)]),
+    ("undo", &[("--json", false), ("--id", true)]),
     ("status", &[("--json", false), ("--id", true)]),
     ("verify", &[]),
     ("lesson", &[]),
@@ -1021,6 +1038,14 @@ fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
     }
     let found = positionals(cmd, args);
     let quoted = |word: &str| format!("`{}`", etude_cli_support::shown_text(word));
+    if matches!(cmd, "" | "apply" | "undo" | "review" | "status")
+        && found.first().is_some_and(|folder| folder.is_empty())
+    {
+        return Err(
+            "the folder name is empty. Give a folder, or leave it out to use the current folder. Nothing was changed."
+                .to_string(),
+        );
+    }
     match cmd {
         "forget" | "verify" => match found.first() {
             Some(extra) if cmd == "forget" => Err(format!(
@@ -1040,6 +1065,17 @@ fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
                 quoted(extra)
             )),
             None => Ok(()),
+        },
+        "undo" if undo_id(args).is_some() => match (found.first(), undo_id(args)) {
+            (Some(extra), _) => Err(format!(
+                "undo --id takes no folder, and got {}. Give the id or the folder, not both. Nothing was moved.",
+                quoted(extra)
+            )),
+            (None, Some(id)) if !etude_core::journal::valid_journal_id(id) => Err(format!(
+                "{} is not an undo record id. `sweep status FOLDER` lists the ids. Nothing was moved.",
+                quoted(id)
+            )),
+            _ => Ok(()),
         },
         "apply" | "undo" | "review" => match found.get(1) {
             Some(extra) => Err(format!(
@@ -1120,6 +1156,13 @@ fn path_arg(cmd: &str, args: &[String]) -> Result<Option<PathBuf>, String> {
         i += 1;
     }
     Ok(path)
+}
+
+/// The id given to `undo --id`. A word after `--` is a folder, however it looks.
+fn undo_id(args: &[String]) -> Option<&str> {
+    let flags = args.split(|arg| arg == "--").next()?;
+    let at = flags.iter().position(|arg| arg == "--id")?;
+    flags.get(at + 1).map(String::as_str)
 }
 
 fn apply_path(args: &[String]) -> Result<PathBuf, String> {
@@ -2378,8 +2421,11 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, ite
         E::Io(source) if disk_read_only(source) => {
             eprintln!("sweep: {doing} in {folder}: the disk is read-only.")
         }
-        E::Io(source) if source.kind() == std::io::ErrorKind::AlreadyExists => eprintln!(
+        E::Io(source) if etude_core::apply::is_folder_appeared(source) => eprintln!(
             "sweep: {doing} in {folder}: a folder it needed to make appeared after the plan was made. Scan and apply again."
+        ),
+        E::Io(source) if source.kind() == std::io::ErrorKind::AlreadyExists => eprintln!(
+            "sweep: {doing} in {folder}: a file appeared at the destination after the plan was made. Scan and apply again."
         ),
         E::Io(source) => {
             eprintln!("sweep: {doing} in {folder}: {}.", plain_io_error(source));
@@ -2579,13 +2625,7 @@ fn run_apply(
     };
     match result {
         Ok(r) => {
-            if let Some(path) = r.journal_path.as_deref()
-                && let Some(id) = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_prefix("sweep-"))
-                    .and_then(|name| name.strip_suffix(".journal"))
-            {
+            if let Some(id) = r.journal_path.as_deref().and_then(undo_record_id) {
                 etude_cli_support::envelope::recovery_operation(id);
             }
             finish_apply(&r, &p.binding_json(), p.adds_tags, &undo_step(&p.root))
@@ -2659,6 +2699,14 @@ fn run_apply(
     }
 }
 
+/// The id in an undo record's file name.
+pub(crate) fn undo_record_id(path: &Path) -> Option<&str> {
+    path.file_name()?
+        .to_str()?
+        .strip_prefix("sweep-")?
+        .strip_suffix(".journal")
+}
+
 /// Why a note about a refused attempt could not be saved.
 fn undo_record_write_reason(error: &etude_core::apply::ApplyError) -> String {
     match error {
@@ -2698,6 +2746,11 @@ fn stale_apply_text(
 fn undo_step(root: &Path) -> String {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     format!("sweep undo {}", etude_cli_support::quoted_path(&root))
+}
+
+/// The undo command for one record. It cannot reverse any other apply.
+fn undo_id_step(id: &str) -> String {
+    format!("sweep undo --id {id}")
 }
 
 /// Report an apply that ran to the end, and pick its exit.
@@ -2751,6 +2804,9 @@ fn finish_apply(
         match &r.journal_path {
             Some(jp) => {
                 println!("Undo with: {undo}");
+                if let Some(id) = undo_record_id(jp) {
+                    println!("Undo record id: {id}");
+                }
                 println!("Encrypted journal: {}", jp.display());
             }
             None => println!("No journal was written. This cannot be undone."),
@@ -3160,7 +3216,11 @@ struct RecordError {
 }
 
 /// Print why undo stopped before moving anything, and pick its code.
-fn refuse_unreadable_record(record: &RecordError) -> ExitCode {
+fn refuse_unreadable_record(
+    record: &RecordError,
+    sl: &dyn etude_core::journal::Sealer,
+    asked: UndoAsked,
+) -> ExitCode {
     use etude_cli_support::problems;
     match &record.id {
         Some(id) => {
@@ -3168,9 +3228,19 @@ fn refuse_unreadable_record(record: &RecordError) -> ExitCode {
                 "sweep: cannot undo: {} Nothing was moved.",
                 problems::record_open_problem("sweep", id, &record.error)
             );
-            eprintln!(
-                "Without that record sweep cannot say where the files from that apply are now, and cannot move them back for you. Look in the folder you applied."
-            );
+            let lost = "sweep cannot say where the files from that apply are now, and cannot move them back for you. Look in the folder you applied.";
+            if matches!(record.error, etude_core::journal::JournalError::Seal(_)) {
+                eprintln!(
+                    "Keep that record: if the key is wrong, the right key opens it again. If it was altered, {lost}"
+                );
+            } else {
+                eprintln!("Without that record {lost}");
+            }
+            // An id asked for one record, so nothing else is opened to answer it.
+            if asked != UndoAsked::Id {
+                eprintln!("That record may be the newest apply, so undo stops there.");
+                print_other_records(id, sl);
+            }
         }
         None => eprintln!(
             "{}",
@@ -3182,6 +3252,108 @@ fn refuse_unreadable_record(record: &RecordError) -> ExitCode {
         etude_cli_support::reason::Code::JournalUnreadable,
         Some(etude_cli_support::reason::Subject::wait("journal", None)),
     )
+}
+
+/// How many records that open are listed with their own step.
+const RECORDS_LISTED: usize = 5;
+/// How many more records that do not open are named, after the one that stopped undo.
+const UNOPENED_LISTED: usize = 2;
+
+/// The way past a record that will not open: every other record that does, each
+/// with a step that opens only it. Opening a record changes nothing, and one
+/// that is good under another key is left for that key.
+fn print_other_records(blocked: &str, sl: &dyn etude_core::journal::Sealer) {
+    use etude_cli_support::counted;
+    use etude_core::json as j;
+    let Ok(candidates) = etude_core::journal::candidates_unordered("sweep") else {
+        eprintln!("The other undo records could not be listed, so none are shown here.");
+        return;
+    };
+    let (mut live, mut unopened, mut opened) = (Vec::new(), Vec::new(), 0usize);
+    for candidate in candidates.iter().filter(|c| c.id != blocked) {
+        match candidate.load("sweep", sl) {
+            Ok(journal) => {
+                opened += 1;
+                if !journal_is_fully_undone(&journal, sl) {
+                    live.push(journal);
+                }
+            }
+            Err(error) => unopened.push((candidate.id.clone(), error)),
+        }
+    }
+    let newest_first = |id: &str| {
+        (
+            std::cmp::Reverse(etude_core::journal::creation_time(id)),
+            id.to_owned(),
+        )
+    };
+    live.sort_by_key(|journal| newest_first(&journal.id));
+    unopened.sort_by_key(|(id, _)| newest_first(id));
+    for (id, error) in unopened.iter().take(UNOPENED_LISTED) {
+        eprintln!(
+            "sweep: {}",
+            etude_cli_support::problems::record_open_problem("sweep", id, error)
+        );
+    }
+    if unopened.len() > UNOPENED_LISTED {
+        eprintln!(
+            "sweep: {} cannot be opened.",
+            counted(
+                unopened.len() - UNOPENED_LISTED,
+                "more record",
+                "more records"
+            )
+        );
+    }
+    let listed = &live[..live.len().min(RECORDS_LISTED)];
+    let more = live.len() - listed.len();
+    if listed.is_empty() {
+        eprintln!(
+            "{}",
+            if opened == 0 {
+                "No other undo record opens with this key."
+            } else {
+                "The other undo records that open have nothing left to undo."
+            }
+        );
+    } else {
+        eprintln!(
+            "{} {}. Each step reverses only that apply:",
+            if live.len() == 1 {
+                "This undo record"
+            } else {
+                "These undo records"
+            },
+            if live.len() == 1 { "opens" } else { "open" },
+        );
+        for journal in listed {
+            eprintln!(
+                "  {}\n    {}",
+                etude_cli_support::shown(&journal.root),
+                undo_id_step(&journal.id)
+            );
+        }
+        if more > 0 {
+            eprintln!(
+                "  {} not listed.",
+                counted(more, "more undo record opens,", "more undo records open,")
+            );
+        }
+    }
+    etude_cli_support::envelope::detail(j::obj(&[
+        (
+            "records_that_open",
+            j::arr(listed.iter().map(|journal| {
+                j::obj(&[
+                    ("operation_id", j::str(&journal.id)),
+                    ("folder", j::path(&journal.root)),
+                    ("command", j::str(&undo_id_step(&journal.id))),
+                ])
+            })),
+        ),
+        ("more_records_that_open", j::num(more)),
+        ("other_records_that_do_not_open", j::num(unopened.len())),
+    ]));
 }
 
 fn sweep_journal_matching(
@@ -3238,10 +3410,47 @@ fn sweep_journal_for_root(
     })
 }
 
+/// One record, opened by its id. No other record is searched to choose it, so
+/// one that will not open cannot stand in the way.
+fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
+    use etude_core::journal::{Journal, JournalError};
+    let mut journal = match Journal::load_sealed_exact("sweep", id, sl) {
+        Ok(journal) => journal,
+        Err(JournalError::NotFound) => {
+            let code = status_unknown(id);
+            eprintln!("Nothing was moved. `sweep status FOLDER` lists the ids for a folder.");
+            return code;
+        }
+        Err(error) => {
+            return refuse_unreadable_record(
+                &RecordError {
+                    id: Some(id.to_owned()),
+                    error,
+                },
+                sl,
+                UndoAsked::Id,
+            );
+        }
+    };
+    etude_cli_support::envelope::recovery_operation(&journal.id);
+    if journal_is_fully_undone(&journal, sl) {
+        println!("\nNothing to undo. That apply was already restored, or moved nothing.");
+        etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
+        etude_cli_support::envelope::status("nothing_to_do");
+        return ExitCode::from(1);
+    }
+    finish_undo(&mut journal, sl, UndoAsked::Id)
+}
+
 fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return ExitCode::from(2);
     };
+
+    // check_positionals has already refused a folder beside it and a bad id.
+    if let Some(id) = undo_id(args) {
+        return undo_by_id(id, &sl);
+    }
 
     // A named path reverses that folder's apply, whichever one it was.
     // Correct by coincidence before this: `undo` reads no value-bearing flag,
@@ -3267,8 +3476,8 @@ fn cmd_undo(args: &[String]) -> ExitCode {
             }
         };
         return match sweep_journal_for_root(&sl, &target) {
-            Err(record) => refuse_unreadable_record(&record),
-            Ok(Some(mut j)) => finish_undo(&mut j, &sl, false),
+            Err(record) => refuse_unreadable_record(&record, &sl, UndoAsked::Folder),
+            Ok(Some(mut j)) => finish_undo(&mut j, &sl, UndoAsked::Folder),
             Ok(None) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
@@ -3286,16 +3495,22 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
     match newest_undoable(&sl) {
-        Ok(Some(mut j)) => return finish_undo(&mut j, &sl, true),
+        Ok(Some(mut j)) => return finish_undo(&mut j, &sl, UndoAsked::Newest),
         Ok(None) => {}
-        Err(record) => return refuse_unreadable_record(&record),
+        Err(record) => return refuse_unreadable_record(&record, &sl, UndoAsked::Newest),
     }
     // Everything readable has been reversed, or nothing is on record. Which of
     // the two decides the answer below.
     let candidates = match etude_core::journal::candidates_by_recency("sweep") {
         Ok(candidates) => candidates,
         Err(etude_core::journal::JournalError::NotFound) => Vec::new(),
-        Err(error) => return refuse_unreadable_record(&RecordError { id: None, error }),
+        Err(error) => {
+            return refuse_unreadable_record(
+                &RecordError { id: None, error },
+                &sl,
+                UndoAsked::Newest,
+            );
+        }
     };
     let Some(newest) = candidates.into_iter().next() else {
         eprintln!("sweep: nothing to undo. No apply is on record.");
@@ -3305,10 +3520,14 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let mut j = match newest.load("sweep", &sl) {
         Ok(j) => j,
         Err(error) => {
-            return refuse_unreadable_record(&RecordError {
-                id: Some(newest.id.clone()),
-                error,
-            });
+            return refuse_unreadable_record(
+                &RecordError {
+                    id: Some(newest.id.clone()),
+                    error,
+                },
+                &sl,
+                UndoAsked::Newest,
+            );
         }
     };
     if journal_is_fully_undone(&j, &sl) {
@@ -3323,14 +3542,23 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    finish_undo(&mut j, &sl, true)
+    finish_undo(&mut j, &sl, UndoAsked::Newest)
+}
+
+/// How the person chose the record. It decides which step can be printed: a
+/// retry by folder could land on another apply of that folder.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UndoAsked {
+    Newest,
+    Folder,
+    Id,
 }
 
 /// The part of undo that is the same whether a path was named or not.
 fn finish_undo(
     j: &mut etude_core::Journal,
     sl: &dyn etude_core::journal::Sealer,
-    no_folder_named: bool,
+    asked: UndoAsked,
 ) -> ExitCode {
     // Pass the sealer: undo persists each reversal as it happens now, so a
     // kill partway through leaves a journal that agrees with the disk.
@@ -3358,6 +3586,11 @@ fn finish_undo(
     drop(progress);
     let root = j.root.clone();
     let folder = etude_cli_support::shown(&root);
+    let retry = if asked == UndoAsked::Id {
+        undo_id_step(&j.id)
+    } else {
+        undo_step(&root)
+    };
     if r.unrecorded_moves > 1 && tag_journal {
         eprintln!(
             "sweep: cannot undo: this undo record is missing more than one entry. {n} files in {folder}\n\
@@ -3395,13 +3628,28 @@ fn finish_undo(
     // count is real even when `r.error` is set below.
     if r.directories_left_for_journals > 0 {
         println!(
-            "Left {} that another undo record still needs.",
+            "Left {} that another undo record may still need.",
             etude_cli_support::counted(
                 r.directories_left_for_journals,
                 "empty folder",
                 "empty folders"
             )
         );
+        if asked == UndoAsked::Id {
+            println!(
+                "When that other record is done with {}, remove {} with: {retry}",
+                if r.directories_left_for_journals == 1 {
+                    "it"
+                } else {
+                    "them"
+                },
+                if r.directories_left_for_journals == 1 {
+                    "it"
+                } else {
+                    "them"
+                },
+            );
+        }
     }
     if tag_journal {
         tag_output::undo_detail(&r);
@@ -3491,8 +3739,24 @@ fn finish_undo(
     tag_output::print_undo_refusals(&r);
     if !r.skipped_occupied.is_empty() {
         let one = r.skipped_occupied.len() == 1;
+        let folders: Vec<&PathBuf> = r
+            .skipped_occupied_origins
+            .iter()
+            .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir()))
+            .collect();
+        let taker = if folders.len() == r.skipped_occupied.len() {
+            if one {
+                "another folder"
+            } else {
+                "other folders"
+            }
+        } else if folders.is_empty() {
+            if one { "another file" } else { "other files" }
+        } else {
+            "other files or folders"
+        };
         println!(
-            "  {} not put back because {} original {} taken by another file. {} still at:",
+            "  {} not put back because {} original {} taken by {taker}. {} still at:",
             etude_cli_support::counted(r.skipped_occupied.len(), "file was", "files were"),
             if one { "its" } else { "their" },
             if one { "place is" } else { "places are" },
@@ -3501,11 +3765,35 @@ fn finish_undo(
         for p in &r.skipped_occupied {
             println!("    {}", etude_core::redact::path(p));
         }
-        println!(
-            "  Move the other {} away, then run: {}",
-            if one { "file" } else { "files" },
-            undo_step(&root)
-        );
+        if folders.len() < r.skipped_occupied.len() {
+            println!(
+                "  Move the other {} away, then run: {retry}",
+                if r.skipped_occupied.len() - folders.len() == 1 {
+                    "file"
+                } else {
+                    "files"
+                },
+            );
+        }
+        if !folders.is_empty() {
+            for p in folders.iter().take(3) {
+                println!(
+                    "  Another folder holds a file's original place, in {}, under the name {}.",
+                    p.parent().map(etude_cli_support::shown).unwrap_or_default(),
+                    etude_core::redact::path(Path::new(p.file_name().unwrap_or_default())),
+                );
+            }
+            println!(
+                "  If {} empty, remove {}. If not, move {} away. Then run: {retry}",
+                if folders.len() == 1 {
+                    "that folder is"
+                } else {
+                    "those folders are"
+                },
+                if folders.len() == 1 { "it" } else { "them" },
+                if folders.len() == 1 { "it" } else { "them" },
+            );
+        }
     }
     if !r.skipped_missing.is_empty() {
         let mut folders: Vec<&Path> = r
@@ -3536,9 +3824,11 @@ fn finish_undo(
                 String::new()
             },
         );
+        println!("  If you moved that folder, move it back and run: {retry}");
         println!(
-            "  If you moved that folder, move it back and run: {}",
-            undo_step(&root)
+            "  If a later apply moved {}, undo that apply first, then run the same step. `sweep status {}` lists only the applies of that folder, not of a folder inside it or around it.",
+            if one { "it" } else { "them" },
+            etude_cli_support::quoted_path(&root),
         );
         println!(
             "  If you deleted {}, there is nothing to restore.",
@@ -3546,7 +3836,9 @@ fn finish_undo(
         );
         // Only `sweep undo` with no folder keeps stopping at this record. Anyone
         // who named a folder is not held up by it.
-        if no_folder_named && let Some(older) = other_folder_to_undo(sl, &root) {
+        if asked == UndoAsked::Newest
+            && let Some(older) = other_folder_to_undo(sl, &root)
+        {
             println!(
                 "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
                 etude_cli_support::shown(&older),
@@ -3600,15 +3892,11 @@ fn finish_undo(
             Ok(()) => {
                 if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path) = &err {
                     eprintln!(
-                        "Move it back to {}, then run: {}",
+                        "Move it back to {}, then run: {retry}",
                         etude_cli_support::shown(path),
-                        undo_step(&root)
                     );
                 } else {
-                    eprintln!(
-                        "To continue from where this stopped, run: {}",
-                        undo_step(&root)
-                    );
+                    eprintln!("To continue from where this stopped, run: {retry}");
                 }
             }
             Err(save_err) => eprintln!(
@@ -4083,7 +4371,7 @@ mod tests {
     #[test]
     fn every_command_finds_the_path_on_either_side_of_its_flags() {
         for (cmd, flags) in COMMAND_FLAGS {
-            if *cmd == "status" {
+            if matches!(*cmd, "status" | "undo") {
                 continue; // --id is a lookup selector, not a path option.
             }
             let Some((flag, takes_value)) = flags.iter().find(|(_, v)| *v) else {
@@ -4497,6 +4785,26 @@ mod tests {
         assert!(receipt.contains("consented_text_prefixes"));
         assert!(receipt.contains("\"observed\":1"));
         assert!(!receipt.contains("synthetic ordinary text payload"));
+    }
+
+    #[test]
+    fn undo_id_is_one_record_and_never_beside_a_folder() {
+        let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert!(check_positionals("undo", &args(&["undo", "--id", "1-2-3-ab"])).is_ok());
+        for bad in [
+            &["undo", "--id", "1-2-3-ab", "/tmp/a"][..],
+            &["undo", "/tmp/a", "--id", "1-2-3-ab"],
+            &["undo", "--id", "../up"],
+            &["undo", "--id", "-1"],
+        ] {
+            assert!(check_positionals("undo", &args(bad)).is_err(), "{bad:?}");
+        }
+        // After `--` it is a folder that happens to be called that.
+        assert!(check_positionals("undo", &args(&["undo", "--", "--id"])).is_ok());
+        assert_eq!(undo_id(&args(&["undo", "--", "--id", "x"])), None);
+        assert!(check_flags("undo", &args(&["--id", "a", "--id", "b"])).is_err());
+        assert!(check_flags("undo", &args(&["--id", ""])).is_err());
+        assert!(check_flags("undo", &args(&["--id"])).is_err());
     }
 
     #[test]

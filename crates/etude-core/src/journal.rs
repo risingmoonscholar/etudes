@@ -381,6 +381,29 @@ pub fn valid_journal_id(id: &str) -> bool {
     valid_component(id, 128)
 }
 
+/// When a record was made, read from its id. Legacy ids hold no time, and the
+/// file's modified time changes each time the record is saved.
+pub fn creation_time(id: &str) -> Option<u128> {
+    let parts: Vec<_> = id.split('-').collect();
+    if !valid_journal_id(id)
+        || parts
+            .iter()
+            .take(3)
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return None;
+    }
+    if parts.len() != 4
+        || parts[3].is_empty()
+        || !parts[3].bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    parts[1].parse::<u32>().ok()?;
+    parts[2].parse::<u64>().ok()?;
+    parts[0].parse().ok()
+}
+
 fn valid_component(value: &str, limit: usize) -> bool {
     !value.is_empty()
         && value.len() <= limit

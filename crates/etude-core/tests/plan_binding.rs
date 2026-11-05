@@ -750,5 +750,58 @@ fn group_folder_made_after_the_journal_is_a_recorded_conflict() {
     )
     .expect_err("the beaten apply must not succeed");
     assert_eq!(failure.moved, 0);
+    assert!(
+        failure.error.to_string().contains("a folder it needed"),
+        "{:?}",
+        failure.error
+    );
+    assert_recorded_conflict(failure);
+}
+
+/// A file lands on the destination between the check and the rename. Nothing
+/// moved, so the message must say a file, not a folder, and the journal must
+/// read refused rather than interrupted.
+#[cfg(unix)]
+#[test]
+fn file_landing_at_the_rename_is_a_recorded_conflict_about_a_file() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-file-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let fixture = Fixture::new();
+    let out = scan::scan(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let root = fixture.0.clone();
+    let mut hook = |index: usize, from: &std::path::Path| {
+        if index == 0 {
+            let name = from.file_name().unwrap();
+            let landing = root.join(&bound.groups[0].name).join(name);
+            std::fs::write(landing, b"someone else's file").unwrap();
+        }
+    };
+    let failure = apply::apply_bound_with_faults_for_tests(
+        &bound,
+        &Fixture::context(),
+        Some(&TagSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut hook),
+            ..Default::default()
+        },
+    )
+    .expect_err("the beaten apply must not succeed");
+    assert_eq!(failure.moved, 0);
+    let text = failure.error.to_string();
+    assert!(text.contains("a file appeared"), "{text}");
+    assert!(!text.contains("folder"), "{text}");
     assert_recorded_conflict(failure);
 }

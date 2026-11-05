@@ -941,7 +941,9 @@ CODE_PROBES = {
         "journal_unreadable": garbage_journal,
         "journal_key_unavailable": bad_key,
         "journal_write_failed": journal_store_is_a_file,
-        "unknown_operation": lambda p: p.run("status", "--id", "absent", "--json", codes=(1,)),
+        "unknown_operation": tuple(
+            (lambda p, command=command: p.run(command, "--id", "absent", "--json", codes=(1,)))
+            for command in ("status", "undo")),
         "unknown_item": sweep_unknown_item,
         "item_assigned_twice": sweep_item_assigned_twice,
         "unsafe_input": sweep_unsafe_input,

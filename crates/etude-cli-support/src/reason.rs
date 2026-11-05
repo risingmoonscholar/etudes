@@ -276,7 +276,13 @@ pub const CODES: &[CodeSpec] = &[
         name: "unknown_operation",
         retry: RetryClass::Never,
         subject_kind: None,
-        operations: &["sweep:status", "stash:status", "stash:pop", "stash:inspect"],
+        operations: &[
+            "sweep:status",
+            "sweep:undo",
+            "stash:status",
+            "stash:pop",
+            "stash:inspect",
+        ],
         explanation: "No journal contains the requested durable operation id.",
     },
     CodeSpec {
