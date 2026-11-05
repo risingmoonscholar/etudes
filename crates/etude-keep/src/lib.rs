@@ -170,7 +170,7 @@ fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
         .output()
         .map_err(|e| KeepError::Keychain(format!("could not be read: {}", plain(&e))))?;
     if !out.status.success() {
-        return Ok(None); // not found is not an error; it means first run
+        return read_failure(out.status.code());
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let bytes = unhex(&text).ok_or(KeepError::Keychain(
@@ -180,6 +180,19 @@ fn read_key() -> Result<Option<[u8; 32]>, KeepError> {
         .try_into()
         .map_err(|_| KeepError::Keychain("holds a journal key of the wrong length".into()))?;
     Ok(Some(arr))
+}
+
+// Only "not found" means first run. Any other failure, such as a locked keychain,
+// says nothing about the key: treating it as absent would make a fresh key, and
+// the `-U` in store_key would overwrite the real one and strand every journal.
+fn read_failure(code: Option<i32>) -> Result<Option<[u8; 32]>, KeepError> {
+    const ITEM_NOT_FOUND: i32 = 44;
+    if code == Some(ITEM_NOT_FOUND) {
+        return Ok(None);
+    }
+    Err(KeepError::Keychain(
+        "could not be read; if it is locked, unlock it or set ETUDE_JOURNAL_KEY".into(),
+    ))
 }
 
 fn store_key(k: &[u8; 32]) -> Result<(), KeepError> {
@@ -298,6 +311,14 @@ mod tests {
     use super::*;
 
     const K: [u8; 32] = [7u8; 32];
+
+    #[test]
+    fn only_item_not_found_counts_as_no_key() {
+        assert!(matches!(read_failure(Some(44)), Ok(None)));
+        for code in [Some(1), Some(36), Some(51), Some(128), None] {
+            assert!(matches!(read_failure(code), Err(KeepError::Keychain(_))));
+        }
+    }
 
     #[test]
     fn a_keychain_failure_has_no_system_error_number() {

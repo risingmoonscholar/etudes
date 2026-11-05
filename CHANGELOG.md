@@ -14,6 +14,11 @@ reviewers were pointed at the tools before anyone else could be.
 
 sweep, stash and unpack.
 
+### Safety fixes
+
+- A failed read of the login keychain no longer counts as "no key". It used to create a new key that replaced the real one, which made every undo record unreadable. Only the keychain's "item not found" answer means first run now.
+- A relative path such as `unpack a.zip` now gets the same free-space floor and size limit as an absolute path.
+
 ### Error messages
 
 Every failure now says what failed, whether anything moved, and a next step that works when you run it. Printed undo and pop steps name the folder or the id, so they cannot act on other work. Exit 0 means the whole request was done. `schema_version` stays 4.
