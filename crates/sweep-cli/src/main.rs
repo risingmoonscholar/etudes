@@ -4622,11 +4622,15 @@ mod tests {
         ]);
         std::env::set_current_dir(original).unwrap();
 
+        let untouched = root.join("IMG_4400.HEIC").exists();
+        // The fixture also makes a folder beside the root. Remove both before
+        // asserting, so a failure does not leave them behind.
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(fixtures::outside_dir(&root));
         assert!(
-            root.join("IMG_4400.HEIC").exists(),
+            untouched,
             "a camera-burst file moved: apply operated on the cwd with no PATH given"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     // forget must recognise sweep's own journals by the `{tool}-` prefix.

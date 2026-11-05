@@ -21,7 +21,18 @@ impl TestDir {
 }
 impl Drop for TestDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // A killed unpack can leave its system extractor writing for a moment
+        // after the kill. `remove_dir_all` then fails on a folder that gained
+        // a file mid-removal, and the whole fixture stayed behind. Try again
+        // until the extractor is gone, up to a bound.
+        let give_up = Instant::now() + Duration::from_secs(30);
+        loop {
+            let _ = std::fs::remove_dir_all(&self.0);
+            if !self.0.exists() || Instant::now() >= give_up {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
