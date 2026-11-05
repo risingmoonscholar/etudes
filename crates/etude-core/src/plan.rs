@@ -183,6 +183,8 @@ pub struct Plan {
     /// Items held because they, or the folder they would move into, carry
     /// the immutable flag. A count only.
     pub locked_skipped: usize,
+    /// How many of those carry the system flag, or wait on a folder that does.
+    pub locked_system: usize,
     /// Entries refused by policy. See `ScanOutcome::skipped_system`.
     pub skipped_system: usize,
     /// Directories not entered because they hold a project marker.
@@ -262,6 +264,7 @@ impl Plan {
             skipped_symlink: 0,
             aliases_skipped: 0,
             locked_skipped: 0,
+            locked_system: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,
@@ -296,6 +299,7 @@ impl Plan {
             skipped_symlink: scan.skipped_symlink,
             aliases_skipped: scan.aliases_skipped,
             locked_skipped: scan.locked_skipped,
+            locked_system: scan.locked_system,
             skipped_system: scan.skipped_system,
             skipped_project: scan.skipped_project,
             skipped_in_flight: scan.skipped_in_flight,
@@ -602,6 +606,7 @@ impl Plan {
                     ("symlinks", j::num(self.skipped_symlink)),
                     ("aliases_skipped", j::num(self.aliases_skipped)),
                     ("locked_skipped", j::num(self.locked_skipped)),
+                    ("locked_system", j::num(self.locked_system)),
                     // A deliberate refusal: sweep could have entered these
                     // and chose not to (credential/noise names, or a system
                     // location like /Library).
@@ -1150,6 +1155,7 @@ fn build_with_policy(
     // flag cannot receive anything. Its group is held here, by name, and its
     // members are counted as locked, so apply never has to refuse it.
     let mut locked_skipped = scan.locked_skipped;
+    let mut locked_system = scan.locked_system;
     groups.retain(|group| {
         let locked = matches!(
             crate::scan::is_locked_at(&scan.root.join(&group.name)),
@@ -1157,6 +1163,9 @@ fn build_with_policy(
         );
         if locked {
             locked_skipped += group.members.len();
+            if crate::scan::has_system_lock_flag(&scan.root.join(&group.name)) {
+                locked_system += group.members.len();
+            }
         }
         !locked
     });
@@ -1179,6 +1188,7 @@ fn build_with_policy(
         skipped_symlink: scan.skipped_symlink,
         aliases_skipped: scan.aliases_skipped,
         locked_skipped,
+        locked_system,
         skipped_system: scan.skipped_system,
         skipped_project: scan.skipped_project,
         skipped_in_flight: scan.skipped_in_flight,
@@ -1492,6 +1502,7 @@ mod tests {
             skipped_symlink: 0,
             aliases_skipped: 0,
             locked_skipped: 0,
+            locked_system: 0,
             skipped_system: 0,
             skipped_project: 0,
             skipped_in_flight: 0,

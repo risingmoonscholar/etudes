@@ -1109,6 +1109,9 @@ pub struct ScanOutcome {
     /// `schg`, `st_flags`). A locked folder is held whole and not entered. A
     /// count only; the flag is read from metadata the scan already holds.
     pub locked_skipped: usize,
+    /// How many of those carry the system flag (`schg`), which only an
+    /// administrator can clear. They need a different step.
+    pub locked_system: usize,
     /// Entries refused by POLICY: a credential/noise directory by name
     /// (`.ssh`, `node_modules`, ...) or an absolute system location
     /// (`/System`, `~/Library`, ...). sweep could have looked and chose not
@@ -1583,6 +1586,7 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
         skipped_symlink: 0,
         aliases_skipped: 0,
         locked_skipped: 0,
+        locked_system: 0,
         skipped_system: 0,
         skipped_project: 0,
         skipped_in_flight: 0,
@@ -1731,6 +1735,9 @@ fn walk(
         // from the metadata already read above: no further syscall.
         if has_lock_flag(&meta) {
             out.locked_skipped += 1;
+            if has_system_flag(&meta) {
+                out.locked_system += 1;
+            }
             continue;
         }
         if !cfg.whole_units && meta.is_file() {
@@ -1897,26 +1904,37 @@ const SF_IMMUTABLE: u32 = 0x0002_0000;
 #[cfg(target_os = "macos")]
 pub fn has_lock_flag(meta: &fs::Metadata) -> bool {
     use std::os::macos::fs::MetadataExt;
-    meta.st_flags() & (UF_IMMUTABLE | SF_IMMUTABLE) != 0
+    flags_lock(meta.st_flags())
+}
+
+fn flags_lock(flags: u32) -> bool {
+    flags & (UF_IMMUTABLE | SF_IMMUTABLE) != 0
+}
+
+fn flags_system_lock(flags: u32) -> bool {
+    flags & SF_IMMUTABLE != 0
 }
 
 /// Other platforms have no `st_flags`; nothing is ever locked by flag.
 #[cfg(not(target_os = "macos"))]
 pub fn has_lock_flag(_: &fs::Metadata) -> bool {
-    let _ = (UF_IMMUTABLE, SF_IMMUTABLE);
     false
 }
 
 /// Whether the entry at `path` carries the system flag, which only an
 /// administrator can clear: Finder's Locked box and `chflags nouchg` do not.
-#[cfg(target_os = "macos")]
 pub fn has_system_lock_flag(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| has_system_flag(&meta))
+}
+
+#[cfg(target_os = "macos")]
+fn has_system_flag(meta: &fs::Metadata) -> bool {
     use std::os::macos::fs::MetadataExt;
-    fs::symlink_metadata(path).is_ok_and(|meta| meta.st_flags() & SF_IMMUTABLE != 0)
+    flags_system_lock(meta.st_flags())
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn has_system_lock_flag(_: &Path) -> bool {
+fn has_system_flag(_: &fs::Metadata) -> bool {
     false
 }
 
@@ -2621,3 +2639,19 @@ mod tests {
 #[cfg(test)]
 #[path = "project_document_hold.rs"]
 mod project_document_hold;
+
+#[cfg(test)]
+mod lock_flag_tests {
+    use super::*;
+
+    /// Setting `schg` needs root, so the classification is pinned on the bits.
+    #[test]
+    fn the_user_and_system_flags_are_told_apart() {
+        assert!(flags_lock(UF_IMMUTABLE));
+        assert!(!flags_system_lock(UF_IMMUTABLE));
+        assert!(flags_lock(SF_IMMUTABLE));
+        assert!(flags_system_lock(SF_IMMUTABLE));
+        assert!(!flags_lock(0));
+        assert!(!flags_system_lock(0));
+    }
+}

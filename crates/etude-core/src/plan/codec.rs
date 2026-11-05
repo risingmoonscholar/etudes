@@ -339,6 +339,7 @@ pub(super) fn encode(
     if plan.locked_skipped > 0 {
         w.byte(5);
         w.n(plan.locked_skipped as u64);
+        w.n(plan.locked_system as u64);
     }
     if w.0.len() > MAX_BYTES {
         return Err(invalid());
@@ -452,6 +453,7 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         skipped_symlink: r.usize()?,
         aliases_skipped: 0,
         locked_skipped: 0,
+        locked_system: 0,
         skipped_system: r.usize()?,
         skipped_project: r.usize()?,
         skipped_in_flight: r.usize()?,
@@ -512,7 +514,8 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
     if r.at != data.len() && data[r.at] == 5 {
         r.byte()?;
         plan.locked_skipped = r.usize()?;
-        if plan.locked_skipped == 0 {
+        plan.locked_system = r.usize()?;
+        if plan.locked_skipped == 0 || plan.locked_system > plan.locked_skipped {
             return Err(invalid());
         }
     }
@@ -670,6 +673,7 @@ mod tests {
             skipped_symlink: 2,
             aliases_skipped: 0,
             locked_skipped: 0,
+            locked_system: 0,
             skipped_system: 3,
             skipped_project: 4,
             skipped_in_flight: 5,
@@ -751,10 +755,12 @@ mod tests {
         let old = encode(&plan, &snapshot, &context).unwrap();
         assert_eq!(decode(&old).unwrap().0.locked_skipped, 0);
         plan.locked_skipped = 3;
+        plan.locked_system = 1;
         let bytes = encode(&plan, &snapshot, &context).unwrap();
         assert!(bytes.starts_with(&old));
         let decoded = decode(&bytes).unwrap().0;
         assert_eq!(decoded.locked_skipped, 3);
+        assert_eq!(decoded.locked_system, 1);
         assert_eq!(encode(&decoded, &snapshot, &context).unwrap(), bytes);
         assert!(decoded.to_json().contains("\"locked_skipped\":3"));
     }

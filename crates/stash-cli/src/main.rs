@@ -740,7 +740,14 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
             held.join(". ")
         );
         if outcome.locked_skipped > 0 {
-            eprintln!("       {}", etude_cli_support::problems::unlock_step(path));
+            eprintln!(
+                "       {}",
+                etude_cli_support::problems::locked_steps(
+                    path,
+                    outcome.locked_skipped,
+                    outcome.locked_system
+                )
+            );
             etude_cli_support::envelope::detail(etude_core::json::obj(&[
                 ("clear", etude_core::json::bool(false)),
                 ("moved", etude_core::json::num(0)),
@@ -937,7 +944,7 @@ fn execute_stash(
             if clear {
                 println!("The selected folder is clear.\n");
             } else {
-                print_locked_skipped(bound.locked_skipped, &bound.root);
+                print_locked_skipped(bound.locked_skipped, bound.locked_system, &bound.root);
                 print_stash_holds(&r, true, bound.locked_skipped, &bound.root);
                 if bound.skipped_unreadable > 0 {
                     println!(
@@ -1334,12 +1341,12 @@ fn unreadable_note(count: usize) -> String {
 }
 
 /// Locked items the scan held: never selected, never moved.
-fn print_locked_skipped(locked_skipped: usize, folder: &Path) {
+fn print_locked_skipped(locked_skipped: usize, locked_system: usize, folder: &Path) {
     if locked_skipped > 0 {
         println!(
             "{}. {}",
             etude_cli_support::problems::locked_note(locked_skipped),
-            etude_cli_support::problems::unlock_step(folder)
+            etude_cli_support::problems::locked_steps(folder, locked_skipped, locked_system)
         );
     }
 }

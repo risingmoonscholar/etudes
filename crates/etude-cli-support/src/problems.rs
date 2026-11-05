@@ -288,8 +288,8 @@ fn locked_move_advice(count: usize, folder: &Path, system: bool) -> String {
     let items = crate::counted(count, "item is", "items are");
     if system {
         return format!(
-            "{items} locked by a system flag, and a locked item cannot be moved. An administrator can clear it with sudo chflags noschg on the item.\n       See which with: find {} -flags +schg",
-            crate::quoted_path(folder),
+            "{items} locked by a system flag, and a locked item cannot be moved. {}",
+            system_unlock_step(folder)
         );
     }
     format!(
@@ -312,6 +312,30 @@ pub fn unlock_step(folder: &Path) -> String {
     )
 }
 
+/// The system flag: Finder and `nouchg` cannot clear it, and `+uchg` cannot find it.
+fn system_unlock_step(folder: &Path) -> String {
+    format!(
+        "An administrator can clear it with sudo chflags noschg on the item.\n       See which with: find {} -flags +schg",
+        crate::quoted_path(folder)
+    )
+}
+
+/// The steps for what a scan held: `system` of the `count` items carry the
+/// system flag. Only the steps that apply are printed.
+pub fn locked_steps(folder: &Path, count: usize, system: usize) -> String {
+    if system == 0 {
+        unlock_step(folder)
+    } else if system >= count {
+        system_unlock_step(folder)
+    } else {
+        format!(
+            "{}\n       {}",
+            unlock_step(folder),
+            system_unlock_step(folder)
+        )
+    }
+}
+
 /// One wording for items a scan held because of a lock, in every tool. Sweep
 /// also holds a group whose existing folder is locked, so the item itself may
 /// not carry the flag.
@@ -327,7 +351,7 @@ pub fn locked_note(count: usize) -> String {
 /// line after this one says what became of the files.
 pub fn locked_folder_message(tool: &str, folder: &Path) -> String {
     format!(
-        "{tool}: {} is locked, so nothing can move into or out of it.\n       {UNLOCK_FOLDER} Then run this again.",
+        "{tool}: {} is locked, so nothing can move into or out of it, and this plan cannot run as made.\n       {UNLOCK_FOLDER} Then plan again with {tool}.",
         crate::shown(folder)
     )
 }
@@ -519,6 +543,14 @@ mod tests {
         assert!(system.contains("-flags +schg"), "{system}");
         assert!(!system.contains("nouchg"), "{system}");
         assert!(!system.contains("+uchg"), "{system}");
+
+        let folder = Path::new("/nowhere");
+        let user_only = locked_steps(folder, 2, 0);
+        assert!(user_only.contains("nouchg") && !user_only.contains("noschg"));
+        let system_only = locked_steps(folder, 2, 2);
+        assert!(system_only.contains("noschg") && !system_only.contains("nouchg"));
+        let both = locked_steps(folder, 2, 1);
+        assert!(both.contains("+uchg") && both.contains("+schg"));
     }
 
     use super::*;

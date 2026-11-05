@@ -142,7 +142,7 @@ pub fn declaration(
             "schema_version",
             j::num(match tool {
                 Tool::Sweep => SCHEMA_VERSION + 9,
-                Tool::Stash => 11,
+                Tool::Stash => 12,
                 Tool::Unpack => SCHEMA_VERSION + 3,
             }),
         ),
@@ -474,8 +474,8 @@ pub fn declaration(
             ("flag", j::str("st_flags_UF_IMMUTABLE_or_SF_IMMUTABLE")),
             ("read_scope", j::str("selected_tree_metadata;_from_the_lstat_already_taken_per_entry;_no_extra_read")),
             ("scan", j::str("hold_locked_files_and_folders_by_name;_a_locked_folder_is_not_entered;_a_group_whose_existing_destination_folder_is_locked_is_held")),
-            ("apply", j::str("one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move;_never_tagged")),
-            ("counters", j::str("plan.skipped.locked_skipped;_apply.held_locked")),
+            ("apply", j::str("one_lstat_per_item_before_its_move_holds_a_newly_locked_item;_a_locked_root_or_destination_folder_refuses_plan_stale_before_any_move_because_the_plan_cannot_run_as_made;_clear_the_lock_then_plan_again;_never_tagged")),
+            ("counters", j::str("plan.skipped.locked_skipped;_plan.skipped.locked_system;_apply.held_locked")),
             ("platform", j::str("macos_only;_never_locked_elsewhere")),
         ])));
         fields.push(("structured_progress", j::obj(&[

@@ -95,7 +95,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v13/sweep.json`, `v11/stash.json` and `v7/unpack.json` are the
+later declaration: `v13/sweep.json`, `v12/stash.json` and `v7/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -201,9 +201,16 @@ read), locked files and folders are held and counted under
 `skipped.locked_skipped`, apply takes one `lstat` per item before its move and
 holds a newly locked item (`held_locked`), and a locked root or destination
 folder refuses the plan before any move. Plan artifacts append optional
-section 5 for a nonzero locked count.
+section 5 for a nonzero locked count, with how many of those carry the system
+flag (`skipped.locked_system`).
 A scan of a locked root does not offer apply, and `--json` adds
 `details.root_locked`, only when it is true.
+
+**Declaration versions 13 (sweep) and 12 (stash)** reword `plan_stale`: the plan
+cannot run as made, because what it saw has changed or a folder it needs is
+locked. Clear any lock, then plan again. A locked root or destination folder
+keeps this code and exit 2. `v12/stash.json` pins the stash declaration and
+`v1/stash.json` mirrors it; earlier pins remain unchanged.
 
 These are finite falsification probes. They do not observe every read attempt,
 prove absence of ordinary-file reads, check subprocess networking or cover every
@@ -220,7 +227,7 @@ envelope. Existing contract and operation fields move under `details`; consumers
 must check `schema_version` before accessing that field. The original schema-version-1
 declarations are retained verbatim under `history/v1/`. The published
 `v1/{sweep,stash,unpack}.json` fixtures mirror the current canonical
-contract envelopes (`v13/sweep.json`, `v11/stash.json` and `v7/unpack.json`);
+contract envelopes (`v13/sweep.json`, `v12/stash.json` and `v7/unpack.json`);
 `v2/envelope.json` and `v3/envelope.json` retain the preceding result structures;
 `v4/envelope.json` pins the current one. Editing fields or types without adding a new version is
 rejected by the independent binary witness.

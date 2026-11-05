@@ -4,6 +4,7 @@
 //! facts in view every time: tags already on a file stay, nothing is moved,
 //! and a tag is called new only when no file in the scanned folder carries it.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use etude_core::apply::{ApplyReport, TagRefusal, UndoReport};
@@ -156,7 +157,7 @@ pub fn nothing_to_tag(p: &Plan) {
 }
 
 /// Report a tag apply that ran to the end, and pick its exit.
-pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
+pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str, root: &Path) -> ExitCode {
     use etude_cli_support::envelope;
     envelope::effect("items_tagged", r.tagged);
     envelope::detail(j::obj(&[
@@ -197,7 +198,7 @@ pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str) -> ExitCode {
             "{} locked {} got no tag. {}",
             r.held_locked,
             files(r.held_locked),
-            etude_cli_support::problems::UNLOCK
+            etude_cli_support::problems::unlock_step(root)
         );
     }
     if r.tag_skipped_unreadable > 0 {

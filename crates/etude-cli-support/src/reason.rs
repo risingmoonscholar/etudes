@@ -194,7 +194,7 @@ pub const CODES: &[CodeSpec] = &[
         retry: RetryClass::AfterChange,
         subject_kind: Some("plan"),
         operations: &["sweep:apply", "sweep:propose", "stash:stash"],
-        explanation: "The observed plan is stale; create a fresh plan before applying.",
+        explanation: "The plan cannot run as made: what it saw has changed, or a folder it needs is locked. Clear any lock, then plan again.",
     },
     CodeSpec {
         code: Code::ProfileMissing,

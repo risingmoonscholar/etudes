@@ -2017,7 +2017,7 @@ fn print_locked_skipped(p: &plan::Plan) {
         println!(
             "  {}. {}",
             etude_cli_support::problems::locked_note(p.locked_skipped),
-            etude_cli_support::problems::unlock_step(&p.root)
+            etude_cli_support::problems::locked_steps(&p.root, p.locked_skipped, p.locked_system)
         );
     }
 }
@@ -2687,7 +2687,13 @@ fn run_apply(
             if let Some(id) = r.journal_path.as_deref().and_then(undo_record_id) {
                 etude_cli_support::envelope::recovery_operation(id);
             }
-            finish_apply(&r, &p.binding_json(), p.adds_tags, &undo_step(&p.root))
+            finish_apply(
+                &r,
+                &p.binding_json(),
+                p.adds_tags,
+                &undo_step(&p.root),
+                &p.root,
+            )
         }
         Err(failure) => {
             let moved = failure.moved;
@@ -2825,9 +2831,10 @@ fn finish_apply(
     binding: &str,
     adds_tags: bool,
     undo: &str,
+    root: &Path,
 ) -> ExitCode {
     if adds_tags {
-        return tag_output::finish_apply(r, binding, undo);
+        return tag_output::finish_apply(r, binding, undo, root);
     }
     etude_cli_support::envelope::effect("items_moved", r.moved);
     etude_cli_support::envelope::detail(etude_core::json::obj(&[
@@ -2859,7 +2866,7 @@ fn finish_apply(
         "\nMoved {}.",
         etude_cli_support::counted(r.moved, "file", "files")
     );
-    print_apply_holds(r);
+    print_apply_holds(r, root);
     if r.moved > 0 {
         match &r.journal_path {
             Some(jp) => {
@@ -2886,9 +2893,18 @@ fn finish_apply(
     ExitCode::SUCCESS
 }
 
+fn locked_after_scan_note(count: usize, root: &Path) -> String {
+    format!(
+        "{} locked after the scan and {} in place. {}",
+        etude_cli_support::counted(count, "item was", "items were"),
+        if count == 1 { "stays" } else { "stay" },
+        etude_cli_support::problems::unlock_step(root)
+    )
+}
+
 /// Counts of what apply left alone, with the reason for each. No tag names and
 /// no paths.
-fn print_apply_holds(r: &etude_core::apply::ApplyReport) {
+fn print_apply_holds(r: &etude_core::apply::ApplyReport, root: &Path) {
     let items = |n: usize| if n == 1 { "item" } else { "items" };
     if r.held_tagged > 0 {
         println!(
@@ -2905,12 +2921,7 @@ fn print_apply_holds(r: &etude_core::apply::ApplyReport) {
         );
     }
     if r.held_locked > 0 {
-        println!(
-            "{} locked after the scan and {} in place. {}",
-            etude_cli_support::counted(r.held_locked, "item was", "items were"),
-            if r.held_locked == 1 { "stays" } else { "stay" },
-            etude_cli_support::problems::UNLOCK
-        );
+        println!("{}", locked_after_scan_note(r.held_locked, root));
     }
     if r.tagged_not_returned > 0 {
         println!(
@@ -5086,7 +5097,7 @@ mod tag_report_tests {
         assert_eq!(report.moved, 1);
         assert_eq!(std::fs::read(&file).unwrap(), b"occupant");
         assert_eq!(
-            finish_apply(&report, "{}", false, "sweep undo"),
+            finish_apply(&report, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::from(3)
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -5100,9 +5111,22 @@ mod tag_report_tests {
             ..Default::default()
         };
         assert_eq!(
-            finish_apply(&report, "{}", false, "sweep undo"),
+            finish_apply(&report, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::from(3)
         );
+    }
+
+    #[test]
+    fn the_locked_after_the_scan_line_gives_the_step_that_finds_the_item() {
+        let one = locked_after_scan_note(1, Path::new("/nowhere"));
+        assert!(one.starts_with("1 item was locked after the scan and stays in place."));
+        assert!(one.contains("chflags nouchg"), "{one}");
+        assert!(
+            one.contains("See which with: find '/nowhere' -flags +uchg"),
+            "{one}"
+        );
+        let two = locked_after_scan_note(2, Path::new("/nowhere"));
+        assert!(two.starts_with("2 items were locked after the scan and stay in place."));
     }
 
     /// An item returned because it was tagged mid-move is a count in a normal
@@ -5116,7 +5140,7 @@ mod tag_report_tests {
             ..Default::default()
         };
         assert_eq!(
-            finish_apply(&some, "{}", false, "sweep undo"),
+            finish_apply(&some, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::SUCCESS
         );
         let all = ApplyReport {
@@ -5125,12 +5149,12 @@ mod tag_report_tests {
             ..Default::default()
         };
         assert_eq!(
-            finish_apply(&all, "{}", false, "sweep undo"),
+            finish_apply(&all, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::from(1)
         );
         let nothing = ApplyReport::default();
         assert_eq!(
-            finish_apply(&nothing, "{}", false, "sweep undo"),
+            finish_apply(&nothing, "{}", false, "sweep undo", Path::new("/nowhere")),
             ExitCode::SUCCESS
         );
     }

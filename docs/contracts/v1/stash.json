@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 11,
+    "schema_version": 12,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -177,7 +177,7 @@
         "operations": [
           "stash"
         ],
-        "why": "The observed plan is stale; create a fresh plan before applying."
+        "why": "The plan cannot run as made: what it saw has changed, or a folder it needs is locked. Clear any lock, then plan again."
       },
       {
         "code": "download_in_flight",
