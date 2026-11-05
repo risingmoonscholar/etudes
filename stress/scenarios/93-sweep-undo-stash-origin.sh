@@ -21,7 +21,8 @@ def run(binary, *args, allowed=(0,)):
 run(sweep, 'apply', root, '--yes', '--since', '0')
 folder = root/'Screenshots'; assert folder.is_dir()
 run(stash, 'select', *sorted(folder.glob('*.png')), '--into', hold)
-result = run(sweep, 'undo', root, '--json')
+result = run(sweep, 'undo', root, '--json', allowed=(3,))
+assert json.loads(result.stdout)['status'] == 'incomplete', 'files held by stash were not put back'
 assert folder.is_dir(), 'live stash origin was removed'
 assert json.loads(result.stdout)['details']['directories_left_for_journals'] == 1
 run(stash, 'pop', '--latest')

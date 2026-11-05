@@ -64,7 +64,7 @@ no_moves() {  # no_moves LABEL DIR WANT_CODE [ARGS]: apply moved nothing and say
 }
 
 B="$W/B"; shots "$B"; printf 'file' > "$B/Screenshots"
-no_moves "a file in the group folder's place" "$B" 3
+no_moves "a file in the group folder's place" "$B" 2
 assert_intact "$B" 4 "that failure moved nothing"
 
 C="$W/C"; shots "$C"; mkdir "$C/Screenshots"; printf 'x' > "$C/Screenshots/Screenshot 2026-01-01 at 10.00.00.png"

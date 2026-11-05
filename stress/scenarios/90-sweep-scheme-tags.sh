@@ -201,7 +201,7 @@ DIGEST2=$(json_get "$W/export2.json" 'd["details"]["binding"]["plan_digest"]')
 "$SWEEP" apply --plan "$W/plan2.bin" --plan-digest "$DIGEST2" --yes >/dev/null 2>&1
 set_tags "$D/b.pdf" Filed "Added by hand"
 "$SWEEP" undo "$D" >"$W/undo2.out" 2>&1; CODE=$?
-assert_eq 0 "$CODE" "undo of a partly changed apply exits 0 (exit $CODE)"
+assert_eq 3 "$CODE" "undo of a partly changed apply is not exit 0 (exit $CODE)"
 grep -q '1 file had its tags changed since apply and was left alone' "$W/undo2.out" \
   && pass "undo names the file whose tags changed since apply" || fail "undo did not name the changed file: $(head -c 400 "$W/undo2.out")"
 assert_eq '["Filed", "Added by hand"]' "$(tags_of "$D/b.pdf")" "and did not overwrite the change"

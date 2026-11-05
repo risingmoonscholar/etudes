@@ -148,7 +148,7 @@ for include in (False, True):
         text = transcript.decode(errors='replace')
         assert tagged_after_plan, 'review never reached the approval point'
         assert code == 2, f'unexpected exit {code}'
-        assert 'changed since planning' in text, 'the stale plan was not named'
+        assert 'changed just now' in text, 'the stale plan was not named'
         assert tagged.exists(), 'the late-tagged file moved'
         assert all((folder / f'report-{i}.pdf').exists() for i in range(6)), 'a file moved from a stale plan'
         assert 'private-late-tag' not in text, 'the tag text reached the output'
