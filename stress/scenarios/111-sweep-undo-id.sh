@@ -97,6 +97,16 @@ OUT=$(cd "$W/a-folder" && mkdir -p ./--id && "$SWEEP" undo -- --id 2>&1 </dev/nu
 clean "a folder called --id" "$OUT"
 assert_eq 1 "$RC" "a folder called --id: exit, nothing on record"
 
+# An empty name is refused, not shown as a blank.
+for TOOL in sweep stash unpack; do
+  OUT=$("$BIN/$TOOL" '' 2>&1 </dev/null); RC=$?
+  clean "empty name: $TOOL" "$OUT"
+  assert_eq 2 "$RC" "empty name: $TOOL: exit"
+  has "empty name: $TOOL: says it is empty" "$OUT" "name is empty"
+  "$BIN/$TOOL" '' --json >"$W/out.json" 2>/dev/null </dev/null
+  assert_eq invalid_arguments "$(field reason.code "$W/out.json")" "empty name: $TOOL: reason"
+done
+
 # --- an unknown id: the same answer as status --id and stash pop --id ----------
 fresh unknown
 UNKNOWN=1-2-3-ab
@@ -185,7 +195,9 @@ assert_eq "one a1" "$(cat "$F/Beta/a1.foo" | cut -d' ' -f1,2)" "chain: the file 
 "$SWEEP" undo --id "$OLDER" --json >"$W/out.json" 2>/dev/null </dev/null
 assert_eq incomplete "$(field status "$W/out.json")" "chain: status"
 assert_eq operation_incomplete "$(field reason.code "$W/out.json")" "chain: reason"
-# Follow the printed way forward: status lists each apply with its own step.
+has "chain: says what the listing covers" "$OUT" "lists only the applies of that folder"
+hasnt "chain: no claim that it lists every apply" "$OUT" "lists each apply"
+# Follow the printed way forward: status lists the applies of this folder, each with its own step.
 LIST=$(eval "\"\$SWEEP\" status '$F'" 2>&1 </dev/null); RC=$?
 assert_eq 0 "$RC" "chain: printed status step: exit"
 has "chain: status names the older step" "$LIST" "sweep undo --id $OLDER"
@@ -221,6 +233,23 @@ OUT=$(run_step "$STEP" 2>&1 </dev/null); RC=$?
 assert_eq 0 "$RC" "same place: printed step: exit"
 assert_eq "two a1" "$(cut -d' ' -f1,2 <"$F/a1.foo")" "same place: the newer file is home"
 assert_eq "one a1" "$(cut -d' ' -f1,2 <"$W/moved-away.foo")" "same place: the file moved away is intact"
+
+# --- the original place is a folder now: it is called a folder -------------------
+fresh folder
+F="$W/folder"; foos "$F" one a1 a2 a3
+apply "$F" Group; ID=$LAST_ID
+mkdir "$F/a1.foo"
+undo_id "folder in the way" 3 "$ID"
+has "folder in the way: says folder" "$OUT" "taken by another folder"
+hasnt "folder in the way: not another file" "$OUT" "another file"
+hasnt "folder in the way: no step to move a file" "$OUT" "Move the other file"
+has "folder in the way: a step that works" "$OUT" "remove it with: rmdir '$F/a1.foo'"
+STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*remove it with: //p' | head -1)
+OUT=$(eval "$STEP" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "folder in the way: printed rmdir: exit"
+OUT=$("$SWEEP" undo --id "$ID" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "folder in the way: then undo: exit"
+if [ -f "$F/a1.foo" ]; then pass "folder in the way: file is home"; else fail "folder in the way: file not home"; fi
 
 # --- a newer file now sits where the older record put one: it is not taken ------
 fresh wrong
@@ -424,6 +453,8 @@ has "status --id: names the id" "$OUT" "$ID completed"
 has "status --id: the step uses it" "$OUT" "sweep undo --id $ID"
 "$SWEEP" status --id "$ID" --json >"$W/out.json" 2>/dev/null </dev/null
 assert_eq "sweep undo --id $ID" "$(field details.command "$W/out.json")" "status --id: the JSON step"
+assert_eq "$F" "$(field details.folder "$W/out.json")" "status --id: the JSON folder"
+has "status --id: the folder undo --id touches" "$OUT" "folder: $F"
 
 # Follow it.
 OUT=$("$SWEEP" undo --id "$ID" 2>&1 </dev/null); RC=$?

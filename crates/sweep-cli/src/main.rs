@@ -333,7 +333,12 @@ fn cmd_status(args: &[String]) -> ExitCode {
         let not_as_left = etude_core::apply::items_not_as_left(&journal);
         let damaged =
             journal.progress_tail_damaged || etude_core::apply::unrecorded_moves(&journal) > 0;
-        summaries.push((journal.summary(), not_as_left, damaged));
+        summaries.push((
+            journal.summary(),
+            not_as_left,
+            damaged,
+            journal.root.clone(),
+        ));
         if id_arg.is_some() {
             break;
         }
@@ -352,7 +357,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
     }
     etude_cli_support::envelope::reason(Reason::completed());
     etude_cli_support::envelope::status("done");
-    for (summary, not_as_left, damaged) in summaries {
+    for (summary, not_as_left, damaged, folder) in summaries {
         let state = match summary.state {
             etude_core::journal::JournalState::Refused => "refused",
             etude_core::journal::JournalState::Completed => "completed",
@@ -379,6 +384,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                 ]),
             ),
             ("damaged", etude_core::json::bool(damaged)),
+            ("folder", etude_core::json::path(&folder)),
             (
                 "command",
                 if command.is_empty() {
@@ -403,6 +409,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     format!("; {command}")
                 }
             );
+            println!("  folder: {}", etude_cli_support::shown(&folder));
             if not_as_left > 0 {
                 println!(
                     "  {} not as apply left {}: gone from where it put {}, changed, or the original place is taken.",
@@ -1062,6 +1069,10 @@ fn check_positionals(cmd: &str, args: &[String]) -> Result<(), String> {
             )),
             None => Ok(()),
         },
+        "" if found.first().is_some_and(|folder| folder.is_empty()) => Err(
+            "the folder name is empty. Give a folder, or leave it out to scan the current folder. Nothing was changed."
+                .to_string(),
+        ),
         "" => match found.get(1) {
             Some(extra) => Err(format!(
                 "a scan takes one folder, and {} is a second. Nothing was changed.",
@@ -2399,8 +2410,11 @@ fn refuse_apply(e: &etude_core::apply::ApplyError, root: &Path, doing: &str, ite
         E::Io(source) if disk_read_only(source) => {
             eprintln!("sweep: {doing} in {folder}: the disk is read-only.")
         }
-        E::Io(source) if source.kind() == std::io::ErrorKind::AlreadyExists => eprintln!(
+        E::Io(source) if etude_core::apply::is_folder_appeared(source) => eprintln!(
             "sweep: {doing} in {folder}: a folder it needed to make appeared after the plan was made. Scan and apply again."
+        ),
+        E::Io(source) if source.kind() == std::io::ErrorKind::AlreadyExists => eprintln!(
+            "sweep: {doing} in {folder}: a file appeared at the destination after the plan was made. Scan and apply again."
         ),
         E::Io(source) => {
             eprintln!("sweep: {doing} in {folder}: {}.", plain_io_error(source));
@@ -3241,6 +3255,7 @@ fn print_other_records(blocked: &str, sl: &dyn etude_core::journal::Sealer) {
     use etude_cli_support::counted;
     use etude_core::json as j;
     let Ok(candidates) = etude_core::journal::candidates_unordered("sweep") else {
+        eprintln!("The other undo records could not be listed, so none are shown here.");
         return;
     };
     let (mut live, mut unopened, mut opened) = (Vec::new(), Vec::new(), 0usize);
@@ -3713,8 +3728,24 @@ fn finish_undo(
     tag_output::print_undo_refusals(&r);
     if !r.skipped_occupied.is_empty() {
         let one = r.skipped_occupied.len() == 1;
+        let folders: Vec<&PathBuf> = r
+            .skipped_occupied_origins
+            .iter()
+            .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir()))
+            .collect();
+        let taker = if folders.len() == r.skipped_occupied.len() {
+            if one {
+                "another folder"
+            } else {
+                "other folders"
+            }
+        } else if folders.is_empty() {
+            if one { "another file" } else { "other files" }
+        } else {
+            "other files or folders"
+        };
         println!(
-            "  {} not put back because {} original {} taken by another file. {} still at:",
+            "  {} not put back because {} original {} taken by {taker}. {} still at:",
             etude_cli_support::counted(r.skipped_occupied.len(), "file was", "files were"),
             if one { "its" } else { "their" },
             if one { "place is" } else { "places are" },
@@ -3723,10 +3754,25 @@ fn finish_undo(
         for p in &r.skipped_occupied {
             println!("    {}", etude_core::redact::path(p));
         }
-        println!(
-            "  Move the other {} away, then run: {retry}",
-            if one { "file" } else { "files" },
-        );
+        if folders.len() < r.skipped_occupied.len() {
+            println!(
+                "  Move the other {} away, then run: {retry}",
+                if r.skipped_occupied.len() - folders.len() == 1 {
+                    "file"
+                } else {
+                    "files"
+                },
+            );
+        }
+        if !folders.is_empty() {
+            for p in folders.iter().take(3) {
+                println!(
+                    "  If that folder is empty, remove it with: rmdir {}",
+                    etude_cli_support::quoted_path(p),
+                );
+            }
+            println!("  If a folder holds files, move it away. Then run: {retry}");
+        }
     }
     if !r.skipped_missing.is_empty() {
         let mut folders: Vec<&Path> = r
@@ -3759,7 +3805,7 @@ fn finish_undo(
         );
         println!("  If you moved that folder, move it back and run: {retry}");
         println!(
-            "  If a later apply moved {}, undo that apply first, then run the same step. `sweep status {}` lists each apply with its own step.",
+            "  If a later apply moved {}, undo that apply first, then run the same step. `sweep status {}` lists only the applies of that folder, not of a folder inside it or around it.",
             if one { "it" } else { "them" },
             etude_cli_support::quoted_path(&root),
         );
