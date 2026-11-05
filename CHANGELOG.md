@@ -14,6 +14,10 @@ reviewers were pointed at the tools before anyone else could be.
 
 sweep, stash and unpack.
 
+### Added
+
+- `sweep undo --id ID` reverses one apply. It opens only that record, so a record that will not open cannot block it, and it reaches an older apply of the same folder. It uses the same checks as `sweep undo`, so it never overwrites a file.
+
 ### Safety fixes
 
 - A failed read of the login keychain no longer counts as "no key". It used to create a new key that replaced the real one, which made every undo record unreadable. Only the keychain's "item not found" answer means first run now.
@@ -29,6 +33,8 @@ Every failure now says what failed, whether anything moved, and a next step that
 - **`unpack`:** options may come before the archive. `--max-size 0` is refused. Damaged, empty and password-protected archives each get their own message, and the leftover folder is named in full if it cannot be removed.
 - **`sweep`:** a scan says when a file holds a group folder's name and does not offer an apply that would refuse. It still exits 0, and `--json` adds `details.blocked_folders`.
 - **`sweep undo`, `stash pop`:** when files are not where they were left, the message covers both a moved folder and a deleted one. `sweep undo` with no folder and `stash pop --latest` keep stopping at that record, so they also point to another folder's apply or another stash. A record that cannot be opened no longer claims to know where the files are.
+- **`sweep undo`, `sweep undo FOLDER`, `sweep status FOLDER`:** the refusal for a record that will not open now lists the records that do, newest first and up to five, each with its folder and its `sweep undo --id ID` step, and says how many more exist. If none opens, it says so and prints no step. `--json` adds `details.records_that_open`.
+- **`sweep status`:** each row's step is now `sweep undo --id ID`, so it reverses that row and not another apply of the folder. `sweep apply` prints the undo record id.
 - **`stash`:** refuses your home folder unless you pass `--allow-home`.
 - Folder names you typed are shown in full. Names of files the tool found itself stay hidden.
 - Singular and plural counts are right in all three tools.
@@ -44,6 +50,7 @@ New reason codes: `journal_write_failed`, `profile_invalid`, `archive_unreadable
 | `sweep status PATH`, missing folder | 1 -> 3 | `nothing_to_do` -> `error`, `missing_input` |
 | `stash status PATH`, missing folder | 2 -> 3 | `refused` -> `error` |
 | `stash pop PATH`, missing folder or a file | 1 -> 3 | `nothing_to_do` -> `error` |
+| `sweep status`, `details.command` | unchanged | `sweep undo 'FOLDER'` -> `sweep undo --id ID` |
 | `sweep undo FILE`, `sweep status FILE`, `stash status FILE` | 1 -> 3 | `nothing_to_do` -> `missing_input` |
 | `stash select --into`, missing folder | 2 -> 3 | `unsafe_input` -> `missing_input` |
 | `sweep review` with no terminal | 0 -> 2 | refused |
