@@ -98,8 +98,9 @@ print(open(os.path.join('$S','Icon\r'),'rb').read().decode())
 ")
 assert_eq "ICONBYTES" "$popped_content" "content survived the round trip untouched"
 
-# Extract a synthetic image, then make a Finder alias to it in a separate
-# sweep tree. No alias target needs to be opened by sweep to skip the alias.
+# Extract a synthetic image and write a synthetic FinderInfo alias flag in a
+# separate sweep tree. No desktop application is used to create the fixture.
+# No alias target needs to be opened by sweep to skip the alias.
 python3 -c 'import stat,sys,zipfile; info=zipfile.ZipInfo("picture.jpg"); info.create_system=3; info.external_attr=(stat.S_IFREG | 0o600) << 16; z=zipfile.ZipFile(sys.argv[1], "w"); z.writestr(info, b"synthetic image bytes"); z.close()' "$W/images.zip"
 assert_exit 0 "unpack publishes the synthetic alias target" -- "$UNPACK" "$W/images.zip" --into "$W/extracted"
 A="$W/Aliases"
@@ -107,29 +108,17 @@ mkdir -p "$A"
 python3 - "$W/extracted/picture.jpg" "$A" <<'PY'
 import pathlib, subprocess, sys
 target, tree = map(pathlib.Path, sys.argv[1:])
-script = '''on run argv
-tell application "Finder"
-make new alias file at (POSIX file (item 2 of argv) as alias) to (POSIX file (item 1 of argv) as alias) with properties {name:"image-alias.jpg"}
-end tell
-end run'''
-try:
-    result = subprocess.run(["osascript", "-e", script, str(target), str(tree)],
-                            stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode(errors="replace").strip())
-    print("    fixture  Finder created a real alias")
-except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-    print(f"    fixture  Finder unavailable ({error}); writing kIsAlias in FinderInfo")
-    alias = tree / "image-alias.jpg"
-    alias.write_bytes(b"synthetic opaque alias")
-    flags = bytearray(32)
-    flags[8:10] = (0x8000).to_bytes(2, "big")
-    subprocess.run(["xattr", "-wx", "com.apple.FinderInfo", flags.hex(), str(alias)],
-                   stdin=subprocess.DEVNULL, check=True)
+alias = tree / "image-alias.jpg"
+alias.write_bytes(b"synthetic opaque alias")
+flags = bytearray(32)
+flags[8:10] = (0x8000).to_bytes(2, "big")
+subprocess.run(["xattr", "-wx", "com.apple.FinderInfo", flags.hex(), str(alias)],
+               stdin=subprocess.DEVNULL, check=True)
 for i in range(3):
     (tree / f"ordinary-{i}.jpg").write_bytes(b"ordinary fixture")
 (tree / "image-link.jpg").symlink_to(target)
 PY
+unproven "a real Finder-created alias is skipped" "fixture writes FinderInfo directly; desktop automation is not run"
 snapshot_tree "$A" "$W/aliases-before.json"
 snapshot_tree "$W/extracted" "$W/target-before.json"
 "$SWEEP" "$A" --json >"$W/aliases.json"
