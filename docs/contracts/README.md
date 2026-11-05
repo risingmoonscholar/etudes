@@ -431,8 +431,9 @@ Existing tools' pins remain unchanged. The result envelope stays at version 4.
 
 `list` declares source and destination metadata preflight only and no writes. `pack` additionally
 declares destination metadata, volume free space, randomness, archive reads and
-the two archive writes. Attribute names and lengths are read by system call for
-the counts in the result; values stay out of the process. The system tar writer
+the two archive writes. The lengths of four named attributes (Finder tags, download warning, resource fork,
+Finder info) are read by system call for the counts in the result. Attribute names
+are never listed and values stay out of the process. The system tar writer
 reads retained values with keep. Source entries are retained and no journal is
 created. A declaration is not evidence of complete read coverage; the receipt
 explicitly leaves subprocess reads unproven.

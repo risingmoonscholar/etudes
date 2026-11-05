@@ -134,19 +134,21 @@ TAG_PLIST='<?xml version="1.0"?><plist version="1.0"><array><string>Red</string>
 xattr -w com.apple.quarantine '0081;00000000;Test;' "$T/a"
 xattr -w com.apple.metadata:_kMDItemUserTags "$TAG_PLIST" "$T/b"
 xattr -w user.note 'kept' "$T/c"
+xattr -w com.apple.ResourceFork 'fork' "$T/c"
 round_trip "metadata, keep" "$T" --for mac
-COUNTS=$("$PACK" "$T" --for mac --into "$W/counts.tar.gz" --list --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["items_with_download_warning"], d["items_with_finder_tags"], d["items_with_other_attributes"])')
+COUNTS=$("$PACK" "$T" --for mac --into "$W/counts.tar.gz" --list --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["items_with_download_warning"], d["items_with_finder_tags"], d["items_with_fork_or_finder_info"])')
 assert_eq "1 1 1" "$COUNTS" "metadata: each kind is counted"
-grep -q "Carried for a Mac: Finder tags on 1 item, the download warning on 1 item, other attributes on 1 item." "$RT_PACK" \
+grep -q "Mac metadata carried: Finder tags on 1 item, the download warning on 1 item, resource forks or Finder info on 1 item, any other attributes." "$RT_PACK" \
   && pass "metadata, keep: says what it carried" || fail "metadata, keep: $(cat "$RT_PACK")"
 xattr -p com.apple.quarantine "$RT_OUT/a" >/dev/null 2>&1 && pass "metadata, keep: the download warning came back" || fail "metadata, keep: the download warning was lost"
 xattr -p com.apple.metadata:_kMDItemUserTags "$RT_OUT/b" 2>/dev/null | grep -q Red && pass "metadata, keep: the Finder tag came back" || fail "metadata, keep: the Finder tag was lost"
 assert_eq kept "$(xattr -p user.note "$RT_OUT/c" 2>/dev/null)" "metadata, keep: the other attribute came back"
+assert_eq fork "$(xattr -p com.apple.ResourceFork "$RT_OUT/c" 2>/dev/null)" "metadata, keep: the resource fork came back"
 round_trip "metadata, drop" "$T" --for other
-grep -q "Removed from the archive: Finder tags on 1 item, the download warning on 1 item, other attributes on 1 item." "$RT_PACK" \
+grep -q "Mac metadata removed: Finder tags on 1 item, the download warning on 1 item, resource forks or Finder info on 1 item, any other attributes." "$RT_PACK" \
   && pass "metadata, drop: says what it removed" || fail "metadata, drop: $(cat "$RT_PACK")"
 grep -q "will not warn when it is extracted" "$RT_PACK" && pass "metadata, drop: warns about the download warning" || fail "metadata, drop: no warning"
-xattr "$RT_OUT/a" "$RT_OUT/b" "$RT_OUT/c" 2>/dev/null | grep -Eq 'quarantine|UserTags|user.note' \
+xattr "$RT_OUT/a" "$RT_OUT/b" "$RT_OUT/c" 2>/dev/null | grep -Eq 'quarantine|UserTags|user.note|ResourceFork' \
   && fail "metadata, drop: an attribute survived" || pass "metadata, drop: every attribute is gone"
 
 # Finder litter. A stored ._ file is left out in both modes; drop leaves out the

@@ -293,8 +293,9 @@ refused rather than split.
 
 MAC METADATA
 keep carries Finder tags, the download warning and other attributes, and needs
-tar.gz. drop removes them all, and pack counts what it removed. A file that loses
-the download warning will not warn after it is extracted. Owners are not kept.
+tar.gz. drop removes them all. Pack counts the items with tags, the download
+warning, and forks or Finder info, and says what it did. A file that loses the
+download warning will not warn after it is extracted. Owners are not kept.
 
 WHAT IS REFUSED
 Links, hard links between two names in FOLDER, setuid and setgid files, files
@@ -662,17 +663,14 @@ fn summary(policy: &Policy, plan: &Plan, first: &str) -> String {
         lines.push(format!("Left out {}.", plan.left_out_text()));
     }
     let attributes = plan.attributes_text();
-    if !attributes.is_empty() {
-        if policy.keep {
-            lines.push(format!("Carried for a Mac: {attributes}."));
-        } else {
-            lines.push(format!("Removed from the archive: {attributes}."));
-            if plan.quarantined > 0 {
-                lines.push(
-                    "A file that lost the download warning will not warn when it is extracted."
-                        .into(),
-                );
-            }
+    if policy.keep {
+        lines.push(format!("Mac metadata carried: {attributes}."));
+    } else {
+        lines.push(format!("Mac metadata removed: {attributes}."));
+        if plan.quarantined > 0 {
+            lines.push(
+                "A file that lost the download warning will not warn when it is extracted.".into(),
+            );
         }
     }
     lines.join("\n")
@@ -698,7 +696,7 @@ fn details(policy: &Policy, plan: &Plan, leftovers: &Leftovers) {
         ("excluded_litter", j::num(plan.litter)),
         ("items_with_finder_tags", j::num(plan.tagged)),
         ("items_with_download_warning", j::num(plan.quarantined)),
-        ("items_with_other_attributes", j::num(plan.attributed)),
+        ("items_with_fork_or_finder_info", j::num(plan.attributed)),
         ("leftovers_removed", j::num(leftovers.removed)),
         ("leftovers_kept", j::num(leftovers.kept.len())),
         ("upper_bound_bytes", j::num(plan.bound)),
@@ -1178,10 +1176,11 @@ impl Plan {
         }
         if self.attributed > 0 {
             parts.push(format!(
-                "other attributes on {}",
+                "resource forks or Finder info on {}",
                 counted(self.attributed, "item", "items")
             ));
         }
+        parts.push("any other attributes".to_string());
         parts.join(", ")
     }
 }
@@ -2017,7 +2016,6 @@ mod sys {
             options: i32,
         ) -> isize;
         fn fremovexattr(fd: i32, name: *const u8, options: i32) -> i32;
-        fn listxattr(path: *const i8, names: *mut u8, size: usize, options: i32) -> isize;
         fn getxattr(
             path: *const i8,
             name: *const i8,
@@ -2099,57 +2097,44 @@ mod sys {
         pub other: bool,
         pub bytes: u64,
     }
-    /// Names and lengths only. Attribute values stay out of this process.
+    /// Lengths of the attributes this tool names, and no others. It never lists
+    /// names, because that would look at Finder comments, and values stay out of
+    /// this process.
     pub fn attributes(path: &Path) -> io::Result<Attributes> {
-        let mut found = Attributes::default();
         let path = CString::new(path.as_os_str().as_bytes())?;
-        let mut names = vec![0u8; 16 * 1024];
-        loop {
-            // SAFETY: the buffer is live for the call and its size is passed.
-            let got =
-                unsafe { listxattr(path.as_ptr(), names.as_mut_ptr(), names.len(), NOFOLLOW) };
-            if got >= 0 {
-                names.truncate(got as usize);
-                break;
-            }
-            let error = io::Error::last_os_error();
-            match error.raw_os_error() {
-                // ERANGE: a longer list than the buffer.
-                Some(34) if names.len() < 16 * 1024 * 1024 => {
-                    let doubled = names.len() * 2;
-                    names.resize(doubled, 0);
-                }
-                // ENOTSUP: this disk has no attributes to lose.
-                Some(45 | 102) => return Ok(found),
-                _ => return Err(error),
-            }
-        }
-        for name in names.split(|b| *b == 0).filter(|name| !name.is_empty()) {
-            match name {
-                b"com.apple.metadata:_kMDItemUserTags" => found.tagged = true,
-                b"com.apple.quarantine" => found.quarantined = true,
-                // The system stamps nearly every file with this.
-                b"com.apple.provenance" => {}
-                _ => found.other = true,
-            }
-            let name = CString::new(name)?;
+        let length = |name: &[u8]| -> io::Result<Option<u64>> {
             // SAFETY: both strings are NUL terminated; a null buffer asks for length.
             let len = unsafe {
                 getxattr(
                     path.as_ptr(),
-                    name.as_ptr(),
+                    name.as_ptr().cast(),
                     std::ptr::null_mut(),
                     0,
                     0,
                     NOFOLLOW,
                 )
             };
-            if len < 0 {
-                return Err(io::Error::last_os_error());
+            if len >= 0 {
+                return Ok(Some(len as u64));
             }
-            found.bytes = found.bytes.saturating_add(len as u64);
-        }
-        Ok(found)
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                // ENOATTR, or ENOTSUP on a disk with no attributes to lose.
+                Some(93 | 45 | 102) => Ok(None),
+                _ => Err(error),
+            }
+        };
+        let tags = length(b"com.apple.metadata:_kMDItemUserTags\0")?;
+        let warning = length(b"com.apple.quarantine\0")?;
+        let fork = length(b"com.apple.ResourceFork\0")?;
+        let info = length(b"com.apple.FinderInfo\0")?;
+        let bytes = [tags, warning, fork, info].iter().flatten().sum();
+        Ok(Attributes {
+            tagged: tags.is_some(),
+            quarantined: warning.is_some(),
+            other: fork.is_some() || info.is_some(),
+            bytes,
+        })
     }
 }
 

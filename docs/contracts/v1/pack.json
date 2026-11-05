@@ -215,7 +215,7 @@
     "observation_scope": {
       "default_user_content": "included_source_file_bytes",
       "content_exceptions": [
-        "source_xattr_names_and_lengths",
+        "source_xattr_lengths_of_tags_warning_fork_and_finder_info",
         "source_xattr_bytes_keep_only",
         "archive_readback_bytes"
       ],
@@ -341,7 +341,7 @@
       "metadata_counts": [
         "finder_tags",
         "download_warning",
-        "other_attributes"
+        "fork_or_finder_info"
       ],
       "publication": "exclusive_rename_or_refuse"
     },

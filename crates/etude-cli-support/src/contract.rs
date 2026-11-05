@@ -1025,7 +1025,7 @@ fn pack_declaration(version: &str) -> String {
                 (
                     "content_exceptions",
                     strings(&[
-                        "source_xattr_names_and_lengths",
+                        "source_xattr_lengths_of_tags_warning_fork_and_finder_info",
                         "source_xattr_bytes_keep_only",
                         "archive_readback_bytes",
                     ]),
@@ -1138,7 +1138,7 @@ fn pack_declaration(version: &str) -> String {
                 ),
                 (
                     "metadata_counts",
-                    strings(&["finder_tags", "download_warning", "other_attributes"]),
+                    strings(&["finder_tags", "download_warning", "fork_or_finder_info"]),
                 ),
                 ("publication", j::str("exclusive_rename_or_refuse")),
             ]),

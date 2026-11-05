@@ -796,8 +796,10 @@ chosen as FOLDER is refused; pack the folder holding it.
 **Metadata.** `keep` carries Finder tags, the download warning (quarantine) and
 other attributes as AppleDouble entries in the tar, and `unpack` restores them.
 `drop` removes them and discards resource forks, ACLs and file flags. Pack counts
-the items with Finder tags, the download warning and other attributes and says
-what it carried or removed. A file that loses the download warning will not warn
+the items with Finder tags, the download warning, and resource forks or Finder
+info, and says what it carried or removed. It reads the lengths of those four
+attributes only, and never lists attribute names, so it does not look at Finder
+comments itself; with `keep` the system tar reads and stores every attribute. A file that loses the download warning will not warn
 after it is extracted. The top folder's own attributes and file owners are not
 kept. Empty folders are kept.
 

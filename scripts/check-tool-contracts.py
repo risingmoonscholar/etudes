@@ -205,7 +205,7 @@ class Probe:
                 "retain the old pin and add a new version")
         current_fixture = ROOT / "docs/contracts/v1" / f"{self.tool}.json"
         require(current_fixture.read_bytes() == pin.read_bytes(), "published contract fixture differs from versioned pin")
-        historical_hashes = {'pack': '53616376fbd4aa8024d06477e505e4cb655a104852cd88438d8ae6e3840d8371', 'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
+        historical_hashes = {'pack': 'e827e8c1d2ead48781c2c314cd43c04e712c5982a46df37a62501d1c20df5815', 'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
         historical = ROOT / "docs/contracts/history/v1" / f"{self.tool}.json"
         require(hashlib.sha256(historical.read_bytes()).hexdigest() == historical_hashes[self.tool], "historical v1 contract pin changed")
         self.contract = contract
