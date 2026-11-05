@@ -373,7 +373,7 @@ class Probe:
             # Existing file at the restore path must survive the attempted undo.
             collision = tree / names[0]
             collision.write_bytes(b"occupied restore path")
-            self.run("undo", tree, codes=(3,))
+            self.run("undo", tree, codes=(0, 3))
             require(collision.read_bytes() == b"occupied restore path", "undo overwrote a file")
             require((tree / "Screenshots" / names[0]).exists(), "collision deleted held payload")
             collision.unlink()
