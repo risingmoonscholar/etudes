@@ -53,6 +53,10 @@ pub enum ApplyError {
 pub struct ApplyFailure {
     pub error: ApplyError,
     pub durable_journal_id: Option<String>,
+    /// Items that had left their original place, or files that had a tag
+    /// written, when the apply stopped. Zero means the folder is as it was: any
+    /// empty folder this attempt made has been removed again.
+    pub moved: usize,
 }
 
 impl std::fmt::Display for ApplyError {
@@ -504,6 +508,7 @@ fn apply_plan_with_structured_progress(
         phase: ProgressPhase::Planning,
     };
     let mut durable_journal_id = None;
+    let mut created_directories = HashMap::new();
     let result = (|| {
         validate(&mut durable_journal_id)?;
         if let Some(hook) = faults.after_validate.as_mut() {
@@ -658,7 +663,6 @@ fn apply_plan_with_structured_progress(
         let mut held_cross_volume = 0usize;
         let mut tagged_not_returned = 0usize;
         let mut hold_record_failed = 0usize;
-        let mut created_directories = HashMap::new();
         for i in 0..j.entries.len() {
             if fail_at == Some(i) {
                 return Err(ApplyError::Injected(i));
@@ -815,10 +819,28 @@ fn apply_plan_with_structured_progress(
         ProgressPhase::Error
     };
     progress(event);
+    let moved = event.completed;
+    if result.is_err() && moved == 0 {
+        remove_folders_of_a_failed_attempt(&created_directories);
+    }
     result.map_err(|error| ApplyFailure {
         error,
         durable_journal_id,
+        moved,
     })
+}
+
+/// A failure that moved nothing leaves the folder as it found it, so that
+/// "nothing was moved, so there is nothing to undo" stays true. Only a folder
+/// this attempt made, still the same directory and still empty, is removed.
+fn remove_folders_of_a_failed_attempt(created: &HashMap<PathBuf, (u64, u64)>) {
+    let mut folders: Vec<_> = created.iter().collect();
+    folders.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+    for (path, identity) in folders {
+        if directory_identity(path).as_ref() == Some(identity) {
+            let _ = fs::remove_dir(path);
+        }
+    }
 }
 
 /// Apply a tag plan: add each tag to its files, in place.
@@ -948,6 +970,8 @@ fn apply_tags(
             return Err(ineligible_member(error, &mut j, Some(sl)));
         }
         crate::tags::write(&path, &change.written).map_err(ApplyError::Io)?;
+        // Counted at once: a failed read-back below still leaves this file tagged.
+        event.completed = report.tagged + 1;
         let landed = crate::tags::read(&path)
             .map_err(ApplyError::Io)?
             .is_some_and(|now| now == change.written);
