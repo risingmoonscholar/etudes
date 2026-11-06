@@ -227,15 +227,20 @@ builtin trap "$_stress_state_cleanup" EXIT
 # in the temp folder on every run, because the trap they wrote never mentioned
 # it. Rather than ask each scenario (and every future one) to remember, any
 # EXIT trap set from here on also removes the state folder, after the
-# scenario's own commands. A trap set in a subshell is left alone: the subshell
-# ending must not take the state folder away from the scenario still running.
-# Only the `trap CMD EXIT` and `trap - EXIT` forms are rewritten; every other
-# use passes straight through to the builtin.
+# scenario's own commands. A trap set in a `( ... )` subshell is left alone:
+# the subshell ending must not take the state folder away from the scenario
+# still running. This guard does not cover `$( ... )`: under /bin/bash 3.2,
+# $BASH_SUBSHELL is 0 in an EXIT trap fired there, so never set an EXIT trap
+# inside a command substitution.
+# Only the `trap CMD EXIT` and `trap - EXIT` forms are rewritten. Every other
+# use passes straight through to the builtin, including `trap -p EXIT`, so
+# `trap -- CMD EXIT` and `trap CMD EXIT INT` do not get the state cleanup.
 #
 # A scenario whose trap ends in `exit` must run "$_stress_state_cleanup" itself
 # before that `exit`; a later command in the same trap never runs.
 trap() {
-  if [ "$#" -eq 2 ] && { [ "$2" = EXIT ] || [ "$2" = 0 ]; }; then
+  if [ "$#" -eq 2 ] && { [ "$2" = EXIT ] || [ "$2" = 0 ]; } \
+    && { [ "$1" = - ] || [ "${1#-}" = "$1" ]; }; then
     local _stress_user_trap=$1
     [ "$_stress_user_trap" != - ] || _stress_user_trap=
     builtin trap "$_stress_user_trap
