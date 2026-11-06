@@ -59,7 +59,7 @@ What the tools promise:
 
 ## Getting Started
 
-Install the published 0.5.4 releases with Cargo:
+Install the latest release with Cargo:
 
 ```sh
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.4 sweep-cli
