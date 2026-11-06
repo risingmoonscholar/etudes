@@ -75,7 +75,18 @@ done
 assert_eq a.txt "$(ls "$W/folder")" "the folder is as it was"
 mkdir -p "$W/café"
 printf 'x' >"$W/café/b.txt"
+for tool in sweep stash unpack; do
+  case "$tool" in
+    sweep)  BINARY="$SWEEP" ;;
+    stash)  BINARY="$STASH" ;;
+    unpack) BINARY="$UNPACK" ;;
+  esac
+  "$BINARY" "$W/café" >"$W/ok-$tool.txt" 2>&1
+  assert_no_panic "$tool valid non-ASCII path" "$(cat "$W/ok-$tool.txt")"
+  if grep -q 'not valid text' "$W/ok-$tool.txt"; then
+    fail "$tool refused a valid non-ASCII path: $(head -c 300 "$W/ok-$tool.txt")"
+  else pass "$tool does not call a valid non-ASCII path invalid"; fi
+done
 "$SWEEP" "$W/café" --since 0 >"$W/ok.txt" 2>&1; code=$?
 if [ "$code" != 2 ]; then pass "a valid non-ASCII path is not refused (exit $code)"
 else fail "a valid non-ASCII path was refused: $(head -c 300 "$W/ok.txt")"; fi
-
