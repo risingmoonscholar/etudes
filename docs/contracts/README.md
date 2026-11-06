@@ -412,3 +412,15 @@ Stderr names every folder removed and every folder with the exact name left in
 place. The result's `effects.counters` add `leftover_folders_removed` and
 `leftover_folders_kept`, present only when not zero. See
 [staging recovery evidence](../release-evidence/unpack-staging-recovery.md).
+
+**Declaration version 15 (sweep)** adds routing discovery: `--map`,
+`--save-routes`, `--scheme existing`, the version-1 TOML profile path and shape,
+and `propose` are listed in `routing`. Live apply declares the conditional
+profile write. A plan may include `details.routing_hint` with `count`, at most
+three `extensions`, `folder` and an executable `command`; text hides this under
+`--quiet`. Saving requires validated existing direct visible destinations and
+an undo journal; conflicts refuse before moves. A complete apply replaces the
+whole mode-0600 profile through a same-folder temporary file, fsync and rename.
+Failed or partial applies save nothing. Existing profile SHA-256 replay binding
+is retained. `v15/sweep.json` pins this declaration and `v1/sweep.json` mirrors
+it; the result envelope stays at version 4.

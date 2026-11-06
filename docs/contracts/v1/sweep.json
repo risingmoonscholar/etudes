@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 14,
+    "schema_version": 15,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -441,6 +441,7 @@
           ],
           "writes": [
             "selected_tree_entries",
+            "sweep_existing_profile_if_save_routes",
             "journal_store",
             "keychain_if_no_supplied_key"
           ]
@@ -678,6 +679,16 @@
       "terminal": "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
       "ordering": "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
       "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
+    "routing": {
+      "map": "--map EXT=Folder",
+      "save_routes": "sweep apply PATH --map EXT=Folder --save-routes --yes; journal required; incompatible with tags",
+      "existing": "--scheme existing",
+      "profile_path": "ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml",
+      "profile_schema": "schema_version = 1; [[routes]] extension = quoted string, folder = quoted string",
+      "save_policy": "validated existing direct visible destinations only; conflicts refuse before moves; complete apply only; mode 0600 same-folder temporary file, fsync, rename",
+      "hint": "details.routing_hint: count, extensions (at most 3), folder, command; absent without actionable unclaimed extensions; quiet suppresses text",
+      "propose": "sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT"
     },
     "finder_aliases": {
       "attribute": "com.apple.FinderInfo",
