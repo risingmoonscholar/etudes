@@ -418,11 +418,20 @@ place. The result's `effects.counters` add `leftover_folders_removed` and
 and `propose` are listed in `routing`. Live apply declares the conditional
 profile write. A plan may include `details.routing_hint` with `count`, at most
 three `extensions`, `folder` and an executable `command`; text hides this under
-`--quiet`. Map advice observes the three-file grouping floor; smaller groups,
-built-in extensions and extensionless files get the working `propose --help`
-step instead. Saving requires validated existing direct visible destinations and
-an undo journal; conflicts refuse before moves. A complete apply replaces the
-whole mode-0600 profile through a same-folder temporary file, fsync and rename.
-Failed or partial applies save nothing. Existing profile SHA-256 replay binding
+`--quiet`, and `--json --quiet` keeps it. Map advice names a new folder for the
+person to replace, never a folder found in the tree, and observes the three-file
+grouping floor; smaller groups, built-in extensions and extensionless files get
+the working `propose --help` step instead. Saving requires validated existing
+direct visible destinations and an undo journal; only the routes being added are
+checked against the tree. Conflicts refuse before moves. A save with nothing new
+writes nothing; new routes are appended, so existing text and comments stay. A
+complete apply replaces the mode-0600 profile through a per-writer locked
+same-folder temporary file, fsync and rename; temporary files left by dead
+writers are removed. Failed or partial applies save nothing. `details.routes_saved`
+reports `state`, `reason`, `added`, `requested`, `profile`, `written` and
+`folder_synced`. A save that fails after every file moved is `incomplete` with
+`profile_write_failed`, whose subject is the profile; refusals before moves use
+`invalid_arguments`, `missing_input`, `profile_invalid`, `permission_denied`,
+`insufficient_space` or `profile_write_failed`. Undo keeps saved routes. Existing profile SHA-256 replay binding
 is retained. `v15/sweep.json` pins this declaration and `v1/sweep.json` mirrors
 it; the result envelope stays at version 4.
