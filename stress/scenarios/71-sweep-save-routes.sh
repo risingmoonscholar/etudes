@@ -26,7 +26,11 @@ check('3 files had no group.' in r.stdout and 'one.bpy' not in r.stdout, 'hint c
 command = next(line.split(': ', 1)[1] for line in r.stdout.splitlines() if 'To send' in line)
 args = shlex.split(command)
 check(args[0] == 'sweep' and run(*args[1:]).returncode == 0, 'the exact printed hint makes a usable plan')
+line = next(line for line in r.stdout.splitlines() if 'To send' in line)
+check('Blender' not in line and 'a new folder named Routed Files, or to your own folder' in line, 'the hint never names a folder sweep found')
 check('To send' not in run(root, '--since', '0', '--quiet').stdout, 'quiet suppresses routing advice')
+quiet = run(root, '--since', '0', '--quiet', '--json')
+check(json.loads(quiet.stdout)['details']['routing_hint']['command'] == command and 'To send' not in quiet.stderr, 'quiet JSON keeps the structured hint')
 hint = json.loads(run(root, '--since', '0', '--json').stdout)['details']['routing_hint']
 check(hint['count'] == 3 and hint['extensions'] == ['bpy'] and hint['command'] == command, 'JSON advice is structured and agrees with text')
 small = work / 'small'; small.mkdir(); (small / 'single.pdf').write_bytes(b'synthetic')

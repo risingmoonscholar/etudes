@@ -79,8 +79,10 @@ fn ungrouped_hint_is_private_structured_and_actionable() {
     assert!(!String::from_utf8_lossy(&out.stdout).contains("To send"));
     let out = f.run(&[root, "--since", "0", "--json"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"routing_hint\""));
+    // Quiet suppresses text only: the structured hint stays for agents.
     let out = f.run(&[root, "--since", "0", "--quiet", "--json"]);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains("routing_hint"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\"routing_hint\""));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("To send"));
     for name in ["single.bpy", "single.pdf", "extensionless"] {
         let small = Fixture::new();
         std::fs::write(small.root.join(name), b"synthetic").unwrap();
@@ -97,6 +99,30 @@ fn ungrouped_hint_is_private_structured_and_actionable() {
     }
     let out = odd.run(&[odd.root.to_str().unwrap(), "--since", "0"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("sweep propose --help"));
+}
+
+#[test]
+fn hint_never_names_a_folder_it_found() {
+    let f = Fixture::new();
+    f.files();
+    for folder in ["Archive", "Blender Files"] {
+        std::fs::create_dir(f.root.join(folder)).unwrap();
+    }
+    let root = f.root.to_str().unwrap();
+    let text = String::from_utf8(f.run(&[root, "--since", "0"]).stdout).unwrap();
+    let line = text.lines().find(|line| line.contains("To send")).unwrap();
+    assert!(
+        !line.contains("Archive") && !line.contains("Blender"),
+        "{line}"
+    );
+    assert!(
+        line.contains("a new folder named Routed Files, or to your own folder"),
+        "{line}"
+    );
+    assert!(
+        line.ends_with(&format!("--map 'bpy=Routed Files' -- '{root}'")),
+        "{line}"
+    );
 }
 
 #[test]

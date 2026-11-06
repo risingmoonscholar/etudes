@@ -471,7 +471,7 @@ pub fn declaration(
             ("profile_path", j::str("ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml")),
             ("profile_schema", j::str("schema_version = 1; [[routes]] extension = quoted string, folder = quoted string")),
             ("save_policy", j::str("validated existing direct visible destinations only; conflicts refuse before moves; complete apply only; mode 0600 same-folder temporary file, fsync, rename")),
-            ("hint", j::str("details.routing_hint: count, extensions (at most 3), folder, command; map advice needs three eligible files per extension; otherwise propose help; quiet suppresses text")),
+            ("hint", j::str("details.routing_hint: count, extensions (at most 3), folder, command; map advice needs three eligible files per extension and names a new folder for the person to replace, never one found in the tree; otherwise propose help; quiet suppresses text only")),
             ("propose", j::str("sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT")),
         ])));
         fields.push(("finder_aliases", j::obj(&[

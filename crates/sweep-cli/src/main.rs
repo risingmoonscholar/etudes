@@ -1734,21 +1734,10 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
         exts.pop();
         exts.push(ext.clone());
     }
-    let mut folders: Vec<String> = std::fs::read_dir(path)
-        .ok()?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|folder| !folder.chars().any(char::is_control))
-        .collect();
-    folders.sort();
-    let existing_folder = folders
-        .iter()
-        .find(|folder| {
-            plan::validate_existing_maps(&[(ext.clone(), (*folder).clone())], path).is_ok()
-        })
-        .map(String::as_str);
-    let folder = existing_folder.unwrap_or(&fallback);
+    // Never suggest a folder found here: the alphabetically first one is a
+    // guess, and naming it would be advice the tool made up. The new-folder
+    // name is sweep's own, runs as printed, and reads as "your folder here".
+    let folder = &fallback;
     let mut carried = String::new();
     for flag in ["--depth", "--since"] {
         if let Some(v) = value(args, flag) {
@@ -1765,13 +1754,8 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
         etude_cli_support::shell_word(&format!("{ext}={folder}"))?,
         etude_cli_support::quoted_path(path)
     );
-    let destination = if existing_folder.is_some() {
-        "a folder you have"
-    } else {
-        "a new folder"
-    };
     let text = format!(
-        "{} had no group. To send .{ext} files to {destination}: {command}",
+        "{} had no group. To send .{ext} files to a new folder named {folder}, or to your own folder by putting its name there: {command}",
         etude_cli_support::counted(p.unclaimed.len(), "file", "files")
     );
     Some((
@@ -1797,11 +1781,8 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     print_include_tagged_warning(args);
-    let hint = if quiet {
-        None
-    } else {
-        routing_hint(&plan, path, args)
-    };
+    // Quiet suppresses text only; agents still get the structured hint.
+    let hint = routing_hint(&plan, path, args);
     if !quiet
         && !has(args, "--json")
         && let Some((text, _)) = &hint
