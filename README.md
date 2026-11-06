@@ -1,6 +1,8 @@
 <h1 align="center">Études</h1>
 
-<h3 align="center">File tools for macOS that check before they touch anything.</h3>
+<h3 align="center">Careful file tools for macOS.</h3>
+
+<p align="center">Every move is checked first, and every failure says why.</p>
 
 <p align="center">
 <a href="https://risingmoonscholar.github.io/etudes/"><b>Documentation</b></a> |
@@ -13,16 +15,20 @@
 
 ## About
 
-**Études** — file tools for macOS that show you the plan before they touch
-anything, and can undo it after.
+Your Desktop has 400 screenshots. Your Downloads folder has 30 archives you
+never opened. Études cleans that up, and when something isn't safe, it stops
+and tells you why instead of guessing.
 
-Moving, archiving and unpacking files goes wrong quietly: a name collides, a
-disk fills, an archive half-extracts. Études tools check first, refuse
-honestly, and leave a record you can undo.
+- **`sweep ~/Desktop`** shows the groups it would make. Nothing moves until
+  you've seen the plan. Say yes, and it moves them. Changed your mind?
+  `sweep undo`.
+- **`stash`** gets files out of your way without deleting them. `stash pop`
+  puts them back.
+- **`unpack`** opens an archive into one clean folder, or places nothing at
+  all. No half-extracted mess.
 
-- `sweep` sorts a messy folder into groups.
-- `stash` moves files out of the way, and brings them back.
-- `unpack` opens an archive without the surprises.
+`sweep` sorts by names, dates and Finder data, and never reads what's inside your
+files to decide.
 
 What the tools promise:
 
