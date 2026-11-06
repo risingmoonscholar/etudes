@@ -1687,6 +1687,7 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for file in &p.unclaimed {
         if let Some(ext) = file.extension().and_then(|ext| ext.to_str())
+            && !ext.is_empty()
             && !ext.chars().any(char::is_control)
         {
             *counts.entry(ext.to_ascii_lowercase()).or_default() += 1;
@@ -1700,7 +1701,9 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
         suffix += 1;
     }
     let candidate = counts.iter().find(|(ext, count)| {
-        **count >= 3 && plan::validate_maps(&[((*ext).clone(), fallback.clone())], path).is_ok()
+        **count >= 3
+            && !ext.starts_with('-')
+            && plan::validate_maps(&[((*ext).clone(), fallback.clone())], path).is_ok()
     });
     let Some((ext, _)) = candidate else {
         let command = "sweep propose --help";

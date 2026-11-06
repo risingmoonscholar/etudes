@@ -91,6 +91,12 @@ fn ungrouped_hint_is_private_structured_and_actionable() {
         assert!(!text.contains(name));
         assert!(small.run(&["propose", "--help"]).status.success());
     }
+    let odd = Fixture::new();
+    for n in 0..3 {
+        std::fs::write(odd.root.join(format!("{n}.-bpy")), b"synthetic").unwrap();
+    }
+    let out = odd.run(&[odd.root.to_str().unwrap(), "--since", "0"]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("sweep propose --help"));
 }
 
 #[test]
