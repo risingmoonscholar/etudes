@@ -23,14 +23,25 @@ def check(ok, label):
     print(label)
 r = run(root, '--since', '0')
 check('3 files had no group.' in r.stdout and 'one.bpy' not in r.stdout, 'hint counts eligible unclaimed files without names')
-command = next(line.split(': ', 1)[1] for line in r.stdout.splitlines() if 'To send' in line)
-args = shlex.split(command)
+lines = r.stdout.splitlines()
+at = lines.index('3 files had no group.')
+hint_lines = lines[at:at + 3]
+check(hint_lines[1] == 'To route the .bpy files, name a folder after bpy= (sweep creates it if missing):' and hint_lines[2].startswith('  sweep '), 'the hint is a short sentence, then the command on its own line')
+check(all(len(line) < 90 for line in hint_lines[:2]) and len(hint_lines[2]) - len(shlex.split(hint_lines[2])[-1]) < 60, 'no line of the hint is wide beyond the folder the person typed')
+printed = hint_lines[2].strip()
+args = shlex.split(printed)
 check(args[0] == 'sweep' and run(*args[1:]).returncode == 0, 'the exact printed hint makes a usable plan')
-line = next(line for line in r.stdout.splitlines() if 'To send' in line)
-check('Blender' not in line and 'a new folder named Routed Files, or to your own folder' in line, 'the hint never names a folder sweep found')
-check('To send' not in run(root, '--since', '0', '--quiet').stdout, 'quiet suppresses routing advice')
+check(all('Blender' not in line for line in hint_lines) and "--map 'bpy=Routed Files'" in printed, 'the hint never names a folder sweep found')
+# Typed as a relative path from its parent, the hint prints it that way and runs from there.
+rel = subprocess.run([binary, 'files', '--since', '0'], capture_output=True, text=True, cwd=work)
+assert 'panicked' not in rel.stdout + rel.stderr
+rel_step = next(line.strip() for line in rel.stdout.splitlines() if line.startswith('  sweep '))
+rel_run = subprocess.run([binary, *shlex.split(rel_step)[1:]], capture_output=True, text=True, cwd=work)
+check(rel_step.endswith(' -- files') and rel_run.returncode == 0 and 'Routed Files' in rel_run.stdout, 'the hint shows the folder as typed and runs as printed from the same place')
+check('To route' not in run(root, '--since', '0', '--quiet').stdout, 'quiet suppresses routing advice')
 quiet = run(root, '--since', '0', '--quiet', '--json')
-check(json.loads(quiet.stdout)['details']['routing_hint']['command'] == command and 'To send' not in quiet.stderr, 'quiet JSON keeps the structured hint')
+command = json.loads(quiet.stdout)['details']['routing_hint']['command']
+check(shlex.split(command)[:-1] == args[:-1] and shlex.split(command)[-1] == str(root) and 'To route' not in quiet.stderr, 'quiet JSON keeps the structured hint, with the resolved folder')
 hint = json.loads(run(root, '--since', '0', '--json').stdout)['details']['routing_hint']
 check(hint['count'] == 3 and hint['extensions'] == ['bpy'] and hint['command'] == command, 'JSON advice is structured and agrees with text')
 small = work / 'small'; small.mkdir(); (small / 'single.pdf').write_bytes(b'synthetic')
@@ -132,6 +143,48 @@ check(r.returncode == 2 and 'already routes to Sketches' in r.stderr, 'after the
 r = run('apply', root, '--since', '0', '--map', 'bpy=Blender Files', '--save-routes', '--yes')
 check(r.returncode != 0 and 'routes were not saved' in r.stderr and profile.read_bytes() == before, 'failed apply explicitly saves nothing')
 check(not any(p.name.endswith('.pending') for p in profile.parent.iterdir()), 'failed apply cleans its private temporary file')
+PY
+# The shared reason table, contract and envelope code changed with this
+# feature, so drive $STASH and $UNPACK through them too: each contract still
+# matches its pinned file, shares retry and subject rules with sweep for every
+# common code, does not claim sweep's new profile code, and a refusal from
+# each still has the envelope shape its contract promises.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HOME="$W/home" python3 -u - "$SWEEP" "$STASH" "$UNPACK" "$REPO" >> "$W/checks" <<'PY' || CODE=$?
+import json, pathlib, subprocess, sys
+sweep, repo = sys.argv[1], pathlib.Path(sys.argv[4])
+tools = {'stash': sys.argv[2], 'unpack': sys.argv[3]}
+def run(binary, *args):
+    r = subprocess.run([binary, *args], capture_output=True, text=True)
+    assert 'panicked' not in r.stdout + r.stderr
+    return r
+def check(ok, label):
+    assert ok, label
+    print(label)
+def canonical(value):
+    value = dict(value)
+    value['operation_id'] = '<per-invocation>'
+    value['tool_version'] = '<manifest-version>'
+    if isinstance(value.get('details'), dict) and value['details'].get('kind') == 'capability_contract':
+        value['details'] = canonical(value['details'])
+    return value
+def rules(contract):
+    return {row['code']: (row['retry'], row['subject_kind']) for row in contract['details']['refusal_codes']}
+sweep_rules = rules(json.loads(run(sweep, 'contract', '--json').stdout))
+check(sweep_rules.get('profile_write_failed') == ('after_change', 'profile'), 'sweep lists the new profile code with its retry and subject')
+for name, binary in tools.items():
+    r = run(binary, 'contract', '--json')
+    contract = json.loads(r.stdout)
+    pin = repo / 'docs/contracts' / f"v{contract['details']['schema_version']}" / f'{name}.json'
+    check(r.returncode == 0 and canonical(contract) == json.loads(pin.read_text()), f'{name} contract --json still matches {pin.relative_to(repo)}')
+    own = rules(contract)
+    check('profile_write_failed' not in own and 'profile_invalid' not in own, f'{name} does not claim sweep profile codes')
+    shared = sorted(set(own) & set(sweep_rules))
+    check(shared and all(own[code] == sweep_rules[code] for code in shared), f'{name} and sweep agree on retry and subject for {len(shared)} shared codes')
+    r = run(binary, '--bogus', '--json')
+    out = r.stdout.strip().splitlines()
+    envelope = json.loads(out[0]) if len(out) == 1 else {}
+    check(r.returncode == 2 and envelope.get('status') == 'refused' and envelope.get('schema_version') == 4 and envelope.get('reason') == {'code': 'unknown_option', 'retry': own.get('unknown_option', ('?',))[0]} and envelope.get('details') == {} and envelope['scope']['tool'] == name, f'{name} refuses an unknown option with one envelope its contract describes')
 PY
 while IFS= read -r label; do
   case "$label" in UNPROVEN\ *) unproven "save failure after moves" "${label#UNPROVEN }";; *) pass "$label";; esac
