@@ -27,6 +27,10 @@ check(args[0] == 'sweep' and run(*args[1:]).returncode == 0, 'the exact printed 
 check('To send' not in run(root, '--since', '0', '--quiet').stdout, 'quiet suppresses routing advice')
 hint = json.loads(run(root, '--since', '0', '--json').stdout)['details']['routing_hint']
 check(hint['count'] == 3 and hint['extensions'] == ['bpy'] and hint['command'] == command, 'JSON advice is structured and agrees with text')
+small = work / 'small'; small.mkdir(); (small / 'single.pdf').write_bytes(b'synthetic')
+r = run(small, '--since', '0')
+check('1 file had no group.' in r.stdout and 'single.pdf' not in r.stdout and 'sweep propose --help' in r.stdout, 'small built-in groups get private per-file routing advice')
+check(run('propose', '--help').returncode == 0, 'the per-file routing advice works as printed')
 r = run('apply', root, '--since', '0', '--map', 'bpy=Blender Files', '--save-routes', '--yes')
 check(r.returncode == 0 and 'Saved route .bpy → Blender Files' in r.stdout and str(profile) in r.stdout, 'successful apply names the saved route and profile')
 check(profile.stat().st_mode & 0o777 == 0o600, 'saved profile is mode 0600')

@@ -79,6 +79,18 @@ fn ungrouped_hint_is_private_structured_and_actionable() {
     assert!(!String::from_utf8_lossy(&out.stdout).contains("To send"));
     let out = f.run(&[root, "--since", "0", "--json"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"routing_hint\""));
+    let out = f.run(&[root, "--since", "0", "--quiet", "--json"]);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("routing_hint"));
+    for name in ["single.bpy", "single.pdf", "extensionless"] {
+        let small = Fixture::new();
+        std::fs::write(small.root.join(name), b"synthetic").unwrap();
+        let out = small.run(&[small.root.to_str().unwrap(), "--since", "0"]);
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("1 file had no group."), "{text}");
+        assert!(text.contains("sweep propose --help"), "{text}");
+        assert!(!text.contains(name));
+        assert!(small.run(&["propose", "--help"]).status.success());
+    }
 }
 
 #[test]

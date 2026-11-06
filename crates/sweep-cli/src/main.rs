@@ -1684,19 +1684,53 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
     if p.adds_tags || p.unclaimed.is_empty() {
         return None;
     }
-    let mut exts: Vec<String> = p
-        .unclaimed
-        .iter()
-        .filter_map(|file| file.extension()?.to_str().map(str::to_ascii_lowercase))
-        .filter(|ext| {
-            plan::validate_maps(&[(ext.clone(), "Routed Files".into())], path).is_ok()
-                && !ext.chars().any(char::is_control)
-        })
-        .collect();
-    exts.sort();
-    exts.dedup();
-    exts.truncate(3);
-    let ext = exts.first()?;
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for file in &p.unclaimed {
+        if let Some(ext) = file.extension().and_then(|ext| ext.to_str())
+            && !ext.chars().any(char::is_control)
+        {
+            *counts.entry(ext.to_ascii_lowercase()).or_default() += 1;
+        }
+    }
+    let mut exts: Vec<String> = counts.keys().take(3).cloned().collect();
+    let mut fallback = "Routed Files".to_owned();
+    let mut suffix = 1;
+    while std::fs::symlink_metadata(path.join(&fallback)).is_ok() {
+        fallback = format!("Routed Files {suffix}");
+        suffix += 1;
+    }
+    let candidate = counts.iter().find(|(ext, count)| {
+        **count >= 3 && plan::validate_maps(&[((*ext).clone(), fallback.clone())], path).is_ok()
+    });
+    let Some((ext, _)) = candidate else {
+        let command = "sweep propose --help";
+        let kinds = if exts.is_empty() {
+            "these files".to_owned()
+        } else {
+            format!(".{} files", exts.join(", ."))
+        };
+        let folder = etude_cli_support::shown(path);
+        let text = format!(
+            "{} had no group. For per-file folder choices for {kinds} in {folder}: {command}",
+            etude_cli_support::counted(p.unclaimed.len(), "file", "files")
+        );
+        return Some((
+            text,
+            etude_core::json::obj(&[
+                ("count", etude_core::json::num(p.unclaimed.len())),
+                (
+                    "extensions",
+                    etude_core::json::arr(exts.iter().map(|ext| etude_core::json::str(ext))),
+                ),
+                ("folder", etude_core::json::str(&folder)),
+                ("command", etude_core::json::str(command)),
+            ]),
+        ));
+    };
+    if !exts.contains(ext) {
+        exts.pop();
+        exts.push(ext.clone());
+    }
     let mut folders: Vec<String> = std::fs::read_dir(path)
         .ok()?
         .filter_map(Result::ok)
@@ -1707,10 +1741,7 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
         })
         .collect();
     folders.sort();
-    let folder = folders
-        .first()
-        .map(String::as_str)
-        .unwrap_or("Routed Files");
+    let folder = folders.first().map(String::as_str).unwrap_or(&fallback);
     let mut carried = String::new();
     for flag in ["--depth", "--since"] {
         if let Some(v) = value(args, flag) {
@@ -1723,12 +1754,17 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
         }
     }
     let command = format!(
-        "sweep {}{carried} --map {}",
-        etude_cli_support::quoted_path(path),
-        etude_cli_support::shell_word(&format!("{ext}={folder}"))?
+        "sweep{carried} --map {} -- {}",
+        etude_cli_support::shell_word(&format!("{ext}={folder}"))?,
+        etude_cli_support::quoted_path(path)
     );
+    let destination = if folders.is_empty() {
+        "a new folder"
+    } else {
+        "a folder you have"
+    };
     let text = format!(
-        "{} had no group. To send .{ext} files to a folder: {command}",
+        "{} had no group. To send .{ext} files to {destination}: {command}",
         etude_cli_support::counted(p.unclaimed.len(), "file", "files")
     );
     Some((
@@ -1754,7 +1790,11 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     print_include_tagged_warning(args);
-    let hint = routing_hint(&plan, path, args);
+    let hint = if quiet {
+        None
+    } else {
+        routing_hint(&plan, path, args)
+    };
     if !quiet
         && !has(args, "--json")
         && let Some((text, _)) = &hint

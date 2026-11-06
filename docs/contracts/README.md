@@ -418,7 +418,9 @@ place. The result's `effects.counters` add `leftover_folders_removed` and
 and `propose` are listed in `routing`. Live apply declares the conditional
 profile write. A plan may include `details.routing_hint` with `count`, at most
 three `extensions`, `folder` and an executable `command`; text hides this under
-`--quiet`. Saving requires validated existing direct visible destinations and
+`--quiet`. Map advice observes the three-file grouping floor; smaller groups,
+built-in extensions and extensionless files get the working `propose --help`
+step instead. Saving requires validated existing direct visible destinations and
 an undo journal; conflicts refuse before moves. A complete apply replaces the
 whole mode-0600 profile through a same-folder temporary file, fsync and rename.
 Failed or partial applies save nothing. Existing profile SHA-256 replay binding

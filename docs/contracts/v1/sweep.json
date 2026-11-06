@@ -687,7 +687,7 @@
       "profile_path": "ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml",
       "profile_schema": "schema_version = 1; [[routes]] extension = quoted string, folder = quoted string",
       "save_policy": "validated existing direct visible destinations only; conflicts refuse before moves; complete apply only; mode 0600 same-folder temporary file, fsync, rename",
-      "hint": "details.routing_hint: count, extensions (at most 3), folder, command; absent without actionable unclaimed extensions; quiet suppresses text",
+      "hint": "details.routing_hint: count, extensions (at most 3), folder, command; map advice needs three eligible files per extension; otherwise propose help; quiet suppresses text",
       "propose": "sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT"
     },
     "finder_aliases": {
