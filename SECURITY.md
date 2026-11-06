@@ -50,7 +50,7 @@ invalid values without fallback. It is not a password derivation interface;
 the caller must generate a random key and retain it securely for undo.
 Supplied keys can be exposed through environment inspection, inherited child
 processes, or shell tracing. They are not stored by the tools and cannot be
-destroyed by `sweep forget`. See the README for generation and restoration.
+destroyed by `sweep forget`. See [docs/undo-and-journals.md](docs/undo-and-journals.md) for generation and restoration.
 Neither key source permits an unencrypted journal. Explicit `--no-journal`
 writes no journal and removes undo.
 

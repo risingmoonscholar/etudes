@@ -57,7 +57,7 @@ fi
 tests_actual=$(printf '%s\n' "$tests_output" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
-for f in README.md demo/index.html; do
+for f in README.md docs/testing.md demo/index.html; do
   claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
 
@@ -70,7 +70,7 @@ scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
 # Every file that states the number, not just the readme. demo/index.html is
 # the published site: it can be wrong in front of everyone while CI is green,
 # which is the exact failure this script exists to catch, one file over.
-for f in README.md demo/index.html; do
+for f in README.md docs/testing.md demo/index.html; do
   claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 done
 
