@@ -5,7 +5,7 @@ W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 CODE=0
 mkdir -p "$W/home"
 HOME="$W/home" python3 -u - "$SWEEP" "$W" > "$W/checks" <<'PY' || CODE=$?
-import json, os, pathlib, shlex, signal, subprocess, sys
+import json, os, pathlib, shlex, signal, subprocess, sys, time
 binary, work = sys.argv[1], pathlib.Path(sys.argv[2])
 root = work / 'files'; root.mkdir()
 (root / 'Blender Files').mkdir()
@@ -79,20 +79,32 @@ race = work / 'race'; (race / 'Race').mkdir(parents=True)
 for n in range(300): (race / f'{n:03}.rcx').write_bytes(b'synthetic')
 proc = subprocess.Popen([binary, 'apply', race, '--since', '0', '--map', 'rcx=Race', '--save-routes', '--yes', '--json', '--progress-json'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 paused = False
+tried = False
 err_lines = []
 for err_line in proc.stderr:
     err_lines.append(err_line)
-    if not paused and '"phase":"advancing"' in err_line:
+    if not paused and not tried and '"phase":"advancing"' in err_line:
+        tried = True
+        # Pause, confirm the process is stopped, then inject; never inject
+        # into a running process, so a late stop is unproven, not a failure.
         os.kill(proc.pid, signal.SIGSTOP)
-        with open(profile, 'a') as handle: handle.write('# edited while sweep was moving files\n')
+        stopped = False
+        for _ in range(200):
+            state = subprocess.run(['ps', '-o', 'state=', '-p', str(proc.pid)], capture_output=True, text=True).stdout
+            if 'T' in state:
+                stopped = True
+                break
+            time.sleep(0.01)
+        if stopped:
+            with open(profile, 'a') as handle: handle.write('# edited while sweep was moving files\n')
+            paused = True
         os.kill(proc.pid, signal.SIGCONT)
-        paused = True
 out = proc.stdout.read(); proc.wait()
 err = ''.join(err_lines)
+assert 'panicked' not in out + err
 if not paused:
-    print('UNPROVEN apply finished before the pause could land')
+    print('UNPROVEN apply finished, or was not confirmed stopped, before the pause could land')
 else:
-    assert 'panicked' not in out + err
     result = json.loads(out)
     check(proc.returncode == 3 and result['status'] == 'incomplete' and result['reason'] == {'code': 'profile_write_failed', 'retry': 'after_change', 'subject': {'kind': 'profile', 'path': profile_text}}, 'a save that fails after moves names the profile, not the journal')
     check('the files moved as reported above, but the route was not saved' in err and result['details']['routes_saved']['reason'] == 'profile_changed' and (race / 'Race/000.rcx').exists(), 'the message says the files moved and the route was not saved')
