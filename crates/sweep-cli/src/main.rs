@@ -51,7 +51,8 @@ FLAGS
     --map EXT=Folder  route an unknown extension into a folder, this run only
                       (repeatable; refusals still win; journal required)
     --save-routes    apply: remember --map routes after all moves succeed
-                      (existing direct folders only; journal required)
+                      (existing direct folders only; journal required).
+                      Undo moves files back but keeps saved routes
     --scheme folders  group by file type and other built-in folder rules (default)
     --scheme existing use the saved, versioned existing-folder profile
     --scheme tags     add Finder tags and move nothing (macOS); needs --map
@@ -2879,7 +2880,45 @@ mod saved_route_tests {
             ExitCode::from(3)
         );
         assert!(!path.exists());
-        assert!(!base.join("state/.sweep-existing-profile.pending").exists());
+        assert_eq!(std::fs::read_dir(base.join("state")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_failed_folder_flush_after_the_rename_still_counts_as_saved() {
+        let out = std::process::Command::new("mktemp")
+            .arg("-d")
+            .output()
+            .unwrap();
+        let base = PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(base.clone());
+        std::fs::create_dir(base.join("Box")).unwrap();
+        let path = base.join("state/profile.toml");
+        let mut pending = existing_profile::PendingRoutes::prepare_at(
+            &base,
+            &[plan::MapSpec {
+                ext: "bpy".into(),
+                folder: "Box".into(),
+                created: false,
+            }],
+            path.clone(),
+        )
+        .unwrap();
+        pending.fail_folder_sync = true;
+        assert_eq!(
+            finish_saved_routes(Some(pending), true, ExitCode::SUCCESS),
+            ExitCode::SUCCESS
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("folder = \"Box\"")
+        );
     }
 
     #[test]
@@ -2960,34 +2999,195 @@ fn run_apply_with_routes(
     code
 }
 
+fn routes_json(routes: &[(String, String)]) -> String {
+    etude_core::json::arr(routes.iter().map(|(ext, folder)| {
+        etude_core::json::obj(&[
+            ("extension", etude_core::json::str(ext)),
+            ("folder", etude_core::json::str(folder)),
+        ])
+    }))
+}
+
+/// `details.routes_saved`: what --save-routes did, for agents.
+fn routes_saved_detail(
+    state: &str,
+    reason: Option<&str>,
+    added: &[(String, String)],
+    requested: &[(String, String)],
+    profile: &Path,
+    written: bool,
+    folder_synced: bool,
+) {
+    etude_cli_support::envelope::detail_field(
+        "routes_saved",
+        etude_core::json::obj(&[
+            ("state", etude_core::json::str(state)),
+            (
+                "reason",
+                reason.map_or_else(|| "null".into(), etude_core::json::str),
+            ),
+            ("added", routes_json(added)),
+            ("requested", routes_json(requested)),
+            ("profile", etude_core::json::path(profile)),
+            ("written", etude_core::json::bool(written)),
+            ("folder_synced", etude_core::json::bool(folder_synced)),
+        ]),
+    );
+}
+
+fn profile_subject(path: &Path) -> Option<etude_cli_support::reason::Subject> {
+    Some(etude_cli_support::reason::Subject::path(
+        "profile",
+        &path.display().to_string(),
+    ))
+}
+
+/// --save-routes was refused before anything moved.
+fn save_routes_refusal(error: &existing_profile::PrepareError, maps: &[plan::MapSpec]) -> ExitCode {
+    use etude_cli_support::reason::{Code, Subject};
+    use existing_profile::PrepareKind as K;
+    eprintln!(
+        "sweep: {}. Nothing was moved, and no route was saved. {}.",
+        error.what, error.next
+    );
+    let requested: Vec<(String, String)> = maps
+        .iter()
+        .map(|map| (map.ext.clone(), map.folder.clone()))
+        .collect();
+    let profile = existing_profile::profile_location();
+    routes_saved_detail(
+        "not_saved",
+        Some("refused_before_moves"),
+        &[],
+        &requested,
+        &profile,
+        false,
+        false,
+    );
+    etude_cli_support::envelope::no_undo_needed();
+    etude_cli_support::envelope::status("refused");
+    let path = error.path.as_deref().map(|path| path.display().to_string());
+    let subject = |kind| match &path {
+        Some(path) => Subject::path(kind, path),
+        None => Subject::wait(kind, None),
+    };
+    match error.kind {
+        K::Arguments => refusal(Code::InvalidArguments, None),
+        K::MissingFolder => failure(Code::MissingInput, Some(subject("input"))),
+        K::ProfileInvalid => refusal(Code::ProfileInvalid, profile_subject(&profile)),
+        K::Denied => failure(Code::PermissionDenied, Some(subject("input"))),
+        K::NoSpace => failure(Code::InsufficientSpace, Some(subject("destination"))),
+        K::WriteFailed => failure(Code::ProfileWriteFailed, profile_subject(&profile)),
+    }
+}
+
 fn finish_saved_routes(
     pending: Option<existing_profile::PendingRoutes>,
     complete: bool,
     mut code: ExitCode,
 ) -> ExitCode {
-    if let Some(pending) = pending {
-        if complete {
-            if let Err(message) = pending.save() {
-                eprintln!(
-                    "sweep: files moved as reported above, but saving routes failed: {message}. Check the profile before trying again."
-                );
-                etude_cli_support::envelope::status("incomplete");
-                code = failure(
-                    etude_cli_support::reason::Code::OperationIncomplete,
-                    Some(etude_cli_support::reason::Subject::wait("journal", None)),
-                );
-            }
-        } else {
-            eprintln!(
-                "sweep: routes were not saved because apply did not move every planned file. Resolve the holds or failure above, then try again."
+    let Some(pending) = pending else {
+        return code;
+    };
+    let profile = pending.profile().to_path_buf();
+    let shown_profile = etude_cli_support::shown(&profile);
+    let added = pending.added.clone();
+    let requested = pending.requested.clone();
+    if !complete {
+        drop(pending);
+        eprintln!(
+            "sweep: routes were not saved because apply did not move every planned file. Resolve the holds or failure above, then try again."
+        );
+        routes_saved_detail(
+            "not_saved",
+            Some("apply_incomplete"),
+            &[],
+            &requested,
+            &profile,
+            false,
+            false,
+        );
+        if code == ExitCode::SUCCESS {
+            etude_cli_support::envelope::status("incomplete");
+            code = failure(
+                etude_cli_support::reason::Code::OperationIncomplete,
+                Some(etude_cli_support::reason::Subject::wait("journal", None)),
             );
-            if code == ExitCode::SUCCESS {
-                etude_cli_support::envelope::status("incomplete");
-                code = failure(
-                    etude_cli_support::reason::Code::OperationIncomplete,
-                    Some(etude_cli_support::reason::Subject::wait("journal", None)),
+        }
+        return code;
+    }
+    match pending.save() {
+        Ok(saved) => {
+            if saved.written {
+                for (ext, folder) in &added {
+                    etude_cli_support::envelope::print(format!(
+                        "Saved route .{ext} → {}. Undo moves the files back but keeps this route.",
+                        etude_cli_support::shown_text(folder)
+                    ));
+                }
+            } else {
+                for (ext, folder) in &requested {
+                    etude_cli_support::envelope::print(format!(
+                        "Route .{ext} → {} was already saved; the profile was not changed.",
+                        etude_cli_support::shown_text(folder)
+                    ));
+                }
+            }
+            etude_cli_support::envelope::print(format!("Routes profile: {shown_profile}"));
+            if let Some(problem) = &saved.sync_problem {
+                eprintln!(
+                    "sweep: the route is saved, but the disk did not confirm the profile's folder was written: {problem}. If this Mac loses power soon, check {shown_profile}."
                 );
             }
+            routes_saved_detail(
+                "saved",
+                None,
+                &added,
+                &requested,
+                &profile,
+                saved.written,
+                saved.sync_problem.is_none(),
+            );
+        }
+        Err(error) => {
+            let (why, reason) = match &error {
+                existing_profile::SaveError::Changed => (
+                    format!("{shown_profile} changed while the files were moving"),
+                    "profile_changed",
+                ),
+                existing_profile::SaveError::WriteFailed(why) => (
+                    format!("{shown_profile} could not be replaced: {why}"),
+                    "write_failed",
+                ),
+            };
+            let lines: Vec<String> = added
+                .iter()
+                .map(|(ext, folder)| existing_profile::route_lines(ext, folder))
+                .collect();
+            eprintln!(
+                "sweep: the files moved as reported above, but the {} not saved: {why}. To save {}, add these lines to the end of {shown_profile}:\n\n{}\n",
+                if added.len() == 1 {
+                    "route was"
+                } else {
+                    "routes were"
+                },
+                if added.len() == 1 { "it" } else { "them" },
+                lines.join("\n\n")
+            );
+            routes_saved_detail(
+                "not_saved",
+                Some(reason),
+                &[],
+                &requested,
+                &profile,
+                false,
+                false,
+            );
+            etude_cli_support::envelope::status("incomplete");
+            code = failure(
+                etude_cli_support::reason::Code::ProfileWriteFailed,
+                profile_subject(&profile),
+            );
         }
     }
     code
@@ -3309,10 +3509,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let pending = if has(args, "--save-routes") {
         match existing_profile::PendingRoutes::prepare(&path, &scheme.maps) {
             Ok(pending) => Some(pending),
-            Err(message) => {
-                eprintln!("sweep: {message} Nothing was moved. Routes were not saved.");
-                return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
-            }
+            Err(error) => return save_routes_refusal(&error, &scheme.maps),
         }
     } else {
         None
@@ -3403,6 +3600,17 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         eprintln!(
             "sweep: routes were not saved: every --map route needs a selected group of at least three eligible files. Nothing was moved. Drop --save-routes to apply the selected groups only."
         );
+        if let Some(pending) = &pending {
+            routes_saved_detail(
+                "not_saved",
+                Some("refused_before_moves"),
+                &[],
+                &pending.requested,
+                pending.profile(),
+                false,
+                false,
+            );
+        }
         return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
     }
     print_include_tagged_warning(args);

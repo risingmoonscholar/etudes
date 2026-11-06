@@ -51,6 +51,7 @@ pub enum Code {
     SizeLimitExceeded,
     ExtractionStopped,
     ProfileInvalid,
+    ProfileWriteFailed,
 }
 
 impl Code {
@@ -81,6 +82,7 @@ impl Code {
         Self::SizeLimitExceeded,
         Self::ExtractionStopped,
         Self::ProfileInvalid,
+        Self::ProfileWriteFailed,
     ];
 }
 
@@ -363,6 +365,14 @@ pub const CODES: &[CodeSpec] = &[
         operations: &["sweep:scan", "sweep:apply", "sweep:review", "sweep:propose"],
         explanation: "The saved profile exists but cannot be used as written; correct the file before retrying.",
     },
+    CodeSpec {
+        code: Code::ProfileWriteFailed,
+        name: "profile_write_failed",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("profile"),
+        operations: &["sweep:apply"],
+        explanation: "Routes could not be saved to the profile; the result says whether files moved. Fix the profile or its folder, or add the route by hand.",
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,6 +525,7 @@ impl Reason {
             Code::SizeLimitExceeded => "size_limit_exceeded",
             Code::ExtractionStopped => "extraction_stopped",
             Code::ProfileInvalid => "profile_invalid",
+            Code::ProfileWriteFailed => "profile_write_failed",
         }
     }
 }
