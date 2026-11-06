@@ -191,12 +191,15 @@ pub struct PendingRoutes {
     temp: PathBuf,
     path: PathBuf,
     original: Option<Vec<u8>>,
+    replaced: bool,
     pub added: Vec<(String, String)>,
 }
 
 impl Drop for PendingRoutes {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.temp);
+        if !self.replaced {
+            let _ = std::fs::remove_file(&self.temp);
+        }
     }
 }
 
@@ -224,6 +227,7 @@ impl PendingRoutes {
             temp,
             path: path.clone(),
             original: None,
+            replaced: false,
             added: Vec::new(),
         };
         let original = match std::fs::read(&path) {
@@ -279,7 +283,7 @@ impl PendingRoutes {
         Ok(pending)
     }
 
-    pub fn save(self) -> Result<(), String> {
+    pub fn save(mut self) -> Result<(), String> {
         let path = &self.path;
         let current = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
@@ -290,6 +294,8 @@ impl PendingRoutes {
             return Err("the profile changed during apply; routes were not saved".into());
         }
         std::fs::rename(&self.temp, path).map_err(|e| etude_cli_support::plain_io_error(&e))?;
+        // The next writer may now own the pending name. Never remove its file.
+        self.replaced = true;
         std::fs::File::open(path.parent().unwrap())
             .and_then(|file| file.sync_all())
             .map_err(|e| {
@@ -338,5 +344,28 @@ mod writer_tests {
         assert_eq!(parse(&encode(&routes).unwrap()).unwrap(), routes);
         assert!(encode(&[("bpy".into(), "bad\nfolder".into())]).is_err());
         assert!(encode(&[("bad\next".into(), "Box".into())]).is_err());
+        let out = std::process::Command::new("mktemp")
+            .arg("-d")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let base = PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(base.clone());
+        let path = base.join("profile.toml");
+        let mut first = PendingRoutes::prepare_at(&base, &[], path.clone()).unwrap();
+        std::fs::rename(&first.temp, &path).unwrap();
+        first.replaced = true;
+        let second = PendingRoutes::prepare_at(&base, &[], path).unwrap();
+        drop(first);
+        assert!(
+            second.temp.exists(),
+            "a completed writer must not remove the next writer's temporary file"
+        );
     }
 }
