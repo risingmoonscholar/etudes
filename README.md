@@ -21,7 +21,8 @@ and tells you why instead of guessing.
 
 - **`sweep ~/Desktop`** shows the groups it would make. Nothing moves until
   you've seen the plan. Say yes, and it moves them. Changed your mind?
-  `sweep undo`.
+  `sweep undo`. Send a file type to your own folder with `--map`, and keep
+  that route with `--save-routes`.
 - **`stash`** gets files out of your way without deleting them. `stash pop`
   puts them back.
 - **`unpack`** opens an archive into one clean folder, or places nothing at
@@ -55,7 +56,7 @@ What the tools promise:
 - **Nothing in the background.** No daemon, no menu-bar app, nothing starts at
   login. `stash` tells you when files are due back and waits to be asked.
 - **Small and checkable.** `etude-core` has zero dependencies. The suite has
-  737 tests, and the stress harness has 78 scenarios.
+  758 tests, and the stress harness has 79 scenarios.
 
 ## Getting Started
 
