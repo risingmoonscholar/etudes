@@ -169,7 +169,9 @@ fn saving_refuses_invalid_flags_missing_folders_and_conflicts_before_moves() {
         let f = Fixture::new();
         f.files();
         let out = f.apply(&extra);
-        assert_eq!(out.status.code(), Some(2));
+        // A missing folder is missing_input (exit 3); the others are argument errors.
+        let missing = extra.contains(&"bpy=Missing");
+        assert_eq!(out.status.code(), Some(if missing { 3 } else { 2 }));
         assert!(f.root.join("one.bpy").exists());
         assert!(!f.profile().exists());
     }
@@ -273,4 +275,157 @@ fn help_and_contract_expose_routing() {
     ] {
         assert!(text.contains(word), "missing {word}");
     }
+}
+
+#[test]
+fn a_route_saved_for_another_folder_does_not_block_saving_here() {
+    let f = Fixture::new();
+    f.files();
+    std::fs::create_dir(f.root.join("Box")).unwrap();
+    // Models exists only in another tree.
+    let original = "schema_version = 1\n[[routes]]\nextension = \"blendx\"\nfolder = \"Models\"\n";
+    std::fs::write(f.profile(), original).unwrap();
+    let out = f.apply(&["--map", "bpy=Box", "--save-routes"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = std::fs::read_to_string(f.profile()).unwrap();
+    assert!(
+        text.starts_with(original) && text.contains("folder = \"Box\""),
+        "{text}"
+    );
+}
+
+#[test]
+fn saving_keeps_the_persons_text_and_skips_a_write_with_nothing_new() {
+    use std::os::unix::fs::MetadataExt;
+    let f = Fixture::new();
+    f.files();
+    for folder in ["Box", "Other"] {
+        std::fs::create_dir(f.root.join(folder)).unwrap();
+    }
+    let original = "# routes I keep by hand\nschema_version = 1\n\n[[routes]]\nextension = \"bpy\"\nfolder = \"Box\"\n# Blender files\n";
+    std::fs::write(f.profile(), original).unwrap();
+    let before = std::fs::metadata(f.profile()).unwrap();
+    let out = f.apply(&["--map", "bpy=Box", "--save-routes"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("Route .bpy → Box was already saved; the profile was not changed."),
+        "{text}"
+    );
+    let after = std::fs::metadata(f.profile()).unwrap();
+    assert_eq!(std::fs::read_to_string(f.profile()).unwrap(), original);
+    assert_eq!(
+        (before.ino(), before.mtime_nsec()),
+        (after.ino(), after.mtime_nsec())
+    );
+    assert!(f.run(&["undo", f.root.to_str().unwrap()]).status.success());
+    for n in 0..3 {
+        std::fs::write(f.root.join(format!("{n}.xyz")), b"synthetic").unwrap();
+    }
+    let out = f.apply(&["--map", "xyz=Other", "--save-routes"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = std::fs::read_to_string(f.profile()).unwrap();
+    assert!(
+        text.starts_with(original),
+        "the person's comments must stay: {text}"
+    );
+    assert!(
+        text.ends_with("[[routes]]\nextension = \"xyz\"\nfolder = \"Other\"\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn json_reports_the_route_save_outcome() {
+    let f = Fixture::new();
+    f.files();
+    std::fs::create_dir(f.root.join("Box")).unwrap();
+    let out = f.apply(&["--map", "bpy=Box", "--save-routes", "--json"]);
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    let profile = f.profile().display().to_string();
+    assert!(
+        text.contains(&format!(
+            "\"routes_saved\":{{\"state\":\"saved\",\"reason\":null,\"added\":[{{\"extension\":\"bpy\",\"folder\":\"Box\"}}],\"requested\":[{{\"extension\":\"bpy\",\"folder\":\"Box\"}}],\"profile\":\"{profile}\",\"written\":true,\"folder_synced\":true}}"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"moved\":3"),
+        "the apply details stay in one object: {text}"
+    );
+    // Refused before anything moved: the same field says so.
+    let out = f.apply(&["--map", "bpy=Missing", "--save-routes", "--json"]);
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains(
+            "\"routes_saved\":{\"state\":\"not_saved\",\"reason\":\"refused_before_moves\""
+        ),
+        "{text}"
+    );
+    assert!(text.contains("\"code\":\"missing_input\""), "{text}");
+}
+
+#[test]
+fn prepare_problems_have_their_own_codes_and_a_leftover_does_not_block() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.files();
+    std::fs::create_dir(f.root.join("Box")).unwrap();
+    let json = |out: &Output| String::from_utf8_lossy(&out.stdout).into_owned();
+    // A killed run's leftover is removed, and the save goes ahead.
+    std::fs::write(f.state.join(".sweep-existing-profile.pending"), b"partial").unwrap();
+    let out = f.apply(&["--map", "bpy=Box", "--save-routes"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!f.state.join(".sweep-existing-profile.pending").exists());
+    assert!(f.run(&["undo", f.root.to_str().unwrap()]).status.success());
+    // An unreadable profile is profile_invalid, naming the profile.
+    std::fs::set_permissions(f.profile(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = f.apply(&["--map", "bpy=Box", "--save-routes", "--json"]);
+    std::fs::set_permissions(f.profile(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(json(&out).contains(&format!(
+        "\"reason\":{{\"code\":\"profile_invalid\",\"retry\":\"after_change\",\"subject\":{{\"kind\":\"profile\",\"path\":\"{}\"}}}}",
+        f.profile().display()
+    )), "{}", json(&out));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("chmod u+r -- "));
+    // A state folder sweep cannot write is permission_denied, with a working step.
+    std::fs::remove_file(f.profile()).unwrap();
+    std::fs::set_permissions(&f.state, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let out = f.apply(&["--map", "bpy=Box", "--save-routes", "--json"]);
+    std::fs::set_permissions(&f.state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        json(&out).contains("\"code\":\"permission_denied\""),
+        "{}",
+        json(&out)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("chmod u+w -- "));
+    assert!(f.root.join("one.bpy").exists());
+}
+
+#[test]
+fn help_says_undo_keeps_saved_routes() {
+    let f = Fixture::new();
+    let text = String::from_utf8(f.run(&["--help"]).stdout).unwrap();
+    assert!(
+        text.contains("Undo moves files back but keeps saved routes"),
+        "{text}"
+    );
 }
