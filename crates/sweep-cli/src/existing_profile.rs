@@ -184,3 +184,147 @@ mod tests {
         );
     }
 }
+
+/// A private, fully validated replacement prepared before any moves. The
+/// create-new file also serializes sweep writers; Drop removes it on failure.
+pub struct PendingRoutes {
+    temp: PathBuf,
+    original: Option<Vec<u8>>,
+    pub added: Vec<(String, String)>,
+}
+
+impl Drop for PendingRoutes {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temp);
+    }
+}
+
+impl PendingRoutes {
+    pub fn prepare(
+        root: &std::path::Path,
+        maps: &[etude_core::plan::MapSpec],
+    ) -> Result<Self, String> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = profile_path();
+        let parent = path.parent().ok_or("profile has no parent folder")?;
+        std::fs::create_dir_all(parent).map_err(|e| etude_cli_support::plain_io_error(&e))?;
+        let temp = parent.join(".sweep-existing-profile.pending");
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(&temp).map_err(|e| format!("cannot prepare routes at {}: {}. Check that no other sweep is saving routes, then remove any leftover pending file.", etude_cli_support::shown(&temp), etude_cli_support::plain_io_error(&e)))?;
+        let mut pending = Self {
+            temp,
+            original: None,
+            added: Vec::new(),
+        };
+        let original = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(format!(
+                    "cannot read profile: {}",
+                    etude_cli_support::plain_io_error(&e)
+                ));
+            }
+        };
+        let mut routes = match &original {
+            Some(bytes) => parse(std::str::from_utf8(bytes).map_err(|_| "profile must be UTF-8")?)?,
+            None => Vec::new(),
+        };
+        // Normalize existing extension spellings using the reader's validator.
+        routes = etude_core::plan::validate_existing_maps(&routes, root)?
+            .into_iter()
+            .map(|map| (map.ext, map.folder))
+            .collect();
+        let mut added = Vec::new();
+        for map in maps {
+            if map.created {
+                return Err(format!(
+                    "--save-routes needs an existing direct visible folder; {:?} is missing. Create it first.",
+                    map.folder
+                ));
+            }
+            if let Some((_, folder)) = routes.iter().find(|(ext, _)| ext == &map.ext) {
+                if folder != &map.folder {
+                    return Err(format!(
+                        ".{} already routes to {:?}; cannot save {:?}. Choose the existing route or edit the profile.",
+                        map.ext, folder, map.folder
+                    ));
+                }
+            } else {
+                let route = (map.ext.clone(), map.folder.clone());
+                routes.push(route.clone());
+                added.push(route);
+            }
+        }
+        etude_core::plan::validate_existing_maps(&routes, root)?;
+        let source = encode(&routes)?;
+        pending.original = original;
+        pending.added = added;
+        file.write_all(source.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|e| etude_cli_support::plain_io_error(&e))?;
+        Ok(pending)
+    }
+
+    pub fn save(self) -> Result<(), String> {
+        let path = profile_path();
+        let current = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(etude_cli_support::plain_io_error(&e)),
+        };
+        if current != self.original {
+            return Err("the profile changed during apply; routes were not saved".into());
+        }
+        std::fs::rename(&self.temp, &path).map_err(|e| etude_cli_support::plain_io_error(&e))?;
+        std::fs::File::open(path.parent().unwrap())
+            .and_then(|file| file.sync_all())
+            .map_err(|e| {
+                format!(
+                    "profile replaced, but its folder could not be synced: {}",
+                    etude_cli_support::plain_io_error(&e)
+                )
+            })?;
+        for (ext, folder) in &self.added {
+            etude_cli_support::envelope::print(format!(
+                "Saved route .{ext} → {}",
+                etude_cli_support::shown_text(folder)
+            ));
+        }
+        etude_cli_support::envelope::print(format!(
+            "Routes profile: {}",
+            etude_cli_support::shown(&path)
+        ));
+
+        Ok(())
+    }
+}
+
+fn encode(routes: &[(String, String)]) -> Result<String, String> {
+    let quote = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let mut source = String::from("schema_version = 1\n");
+    for (ext, folder) in routes {
+        source.push_str(&format!(
+            "\n[[routes]]\nextension = {}\nfolder = {}\n",
+            quote(ext),
+            quote(folder)
+        ));
+    }
+    if parse(&source)? != routes {
+        return Err("routes cannot round-trip through the profile reader".into());
+    }
+    Ok(source)
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+    #[test]
+    fn writer_round_trips_quotes_and_rejects_controls() {
+        let routes = vec![("bpy".into(), "Blender \"Files\"".into())];
+        assert_eq!(parse(&encode(&routes).unwrap()).unwrap(), routes);
+        assert!(encode(&[("bpy".into(), "bad\nfolder".into())]).is_err());
+        assert!(encode(&[("bad\next".into(), "Box".into())]).is_err());
+    }
+}

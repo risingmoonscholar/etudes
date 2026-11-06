@@ -168,8 +168,13 @@ $ sweep apply --plan ~/plan.bin --plan-digest <digest> --yes
 
 `sweep --scheme existing PATH` reads the plain profile
 `~/Library/Application Support/etudes/sweep-existing-profile.toml` (or the same
-filename under `ETUDE_STATE_DIR` when that variable is set). Sweep never
-creates this file. Add routes as versioned data you can review before use:
+filename under `ETUDE_STATE_DIR` when that variable is set).
+Use `sweep apply PATH --map bpy="Blender Files" --save-routes --yes` to remember
+validated routes after every planned move succeeds. The destination must already
+be a direct visible folder. Conflicts refuse before moving anything; failed or
+partial applies save no routes. Saving needs a journal and cannot use tags.
+Sweep writes the whole profile privately and atomically. You can also add routes
+as versioned data you can review before use:
 
 ```toml
 schema_version = 1
