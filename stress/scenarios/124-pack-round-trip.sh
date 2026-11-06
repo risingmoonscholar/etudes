@@ -161,6 +161,12 @@ STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*To allow more: //p')
 # shellcheck disable=SC2086
 assert_exit 0 "a large attribute over a real limit: the printed step works" -- "$PACK" "$T" --for mac --into "$W/big-attr.tar.gz" $STEP
 
+# A limit above the real archive size is enough. The old estimate of twice the
+# payload refused 3 MB of data that cannot be compressed under a 4 MB limit.
+T="$W/near-limit"; mkdir -p "$T"; dd if=/dev/urandom of="$T/data" bs=1048576 count=3 status=none
+assert_exit 0 "3 MB under a 4 MB limit is packed, not refused" -- "$PACK" "$T" --for other --max-size 4M --into "$W/near-limit.zip"
+rm -f "${W:?}/near-limit.zip"
+
 # Metadata. keep carries it; drop removes it, counts it, and warns.
 require xattr "attributes need xattr" || exit 0
 T="$W/meta"; mkdir -p "$T"; printf 'a\n' > "$T/a"; printf 'b\n' > "$T/b"; printf 'c\n' > "$T/c"

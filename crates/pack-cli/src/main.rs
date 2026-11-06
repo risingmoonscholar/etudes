@@ -1538,13 +1538,17 @@ impl Walker<'_> {
         self.plan.tagged += usize::from(attributes.tagged);
         self.plan.quarantined += usize::from(attributes.quarantined);
         self.plan.attributed += usize::from(attributes.other);
-        // A generous per-member allowance covers headers and metadata encoding.
+        // Deflate grows data it cannot shrink by well under 1 in 256, and the
+        // per-member allowance covers headers and metadata encoding. A bound of
+        // twice the payload refused folders whose archive could never reach the
+        // limit; the check while writing still stops one that does.
         let metadata = if policy.keep { attributes.bytes } else { 0 };
         let overflow = || over_limit(policy, u64::MAX);
         self.plan.bound = self
             .plan
             .bound
-            .checked_add(m.len().saturating_mul(2))
+            .checked_add(m.len())
+            .and_then(|n| n.checked_add(m.len() / 256))
             .and_then(|n| n.checked_add(metadata.saturating_mul(4)))
             .and_then(|n| n.checked_add(65536))
             .ok_or_else(overflow)?;

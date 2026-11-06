@@ -1,9 +1,18 @@
 use std::process::{Command, Stdio};
 
+/// Removes the test folder on drop, so a failed assertion leaves nothing.
+struct Root(std::path::PathBuf);
+impl Drop for Root {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn missing_input_is_three_and_unknown_option_is_two() {
     let root = std::env::temp_dir().join(format!("etudes-pack-exit-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
+    let _cleanup = Root(root.clone());
     for (args, code, reason) in [
         (
             vec![
@@ -33,5 +42,4 @@ fn missing_input_is_three_and_unknown_option_is_two() {
                 .contains(&format!(r#""code":"{reason}""#))
         );
     }
-    std::fs::remove_dir(root).unwrap();
 }
