@@ -20,7 +20,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-FILES="README.md demo/index.html"
+FILES="README.md docs/testing.md demo/index.html"
 
 # Measured exactly as check-claims.sh measures. Test count from the suite's
 # own report; scenario count from what git TRACKS, because a reader gets what
