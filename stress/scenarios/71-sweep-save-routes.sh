@@ -9,7 +9,9 @@ import json, os, pathlib, shlex, subprocess, sys
 binary, work = sys.argv[1], pathlib.Path(sys.argv[2])
 root = work / 'files'; root.mkdir()
 (root / 'Blender Files').mkdir()
-profile = pathlib.Path(os.environ['ETUDE_STATE_DIR']) / 'sweep-existing-profile.toml'
+# Sweep prints the state folder as given; TMPDIR may end in '/', so compare raw text.
+profile_text = os.path.join(os.environ['ETUDE_STATE_DIR'], 'sweep-existing-profile.toml')
+profile = pathlib.Path(profile_text)
 for name in ('one.bpy', 'two.bpy', 'three.bpy', 'passport.bpy'):
     (root / name).write_bytes(b'synthetic')
 def run(*args):
@@ -32,7 +34,7 @@ r = run(small, '--since', '0')
 check('1 file had no group.' in r.stdout and 'single.pdf' not in r.stdout and 'sweep propose --help' in r.stdout, 'small built-in groups get private per-file routing advice')
 check(run('propose', '--help').returncode == 0, 'the per-file routing advice works as printed')
 r = run('apply', root, '--since', '0', '--map', 'bpy=Blender Files', '--save-routes', '--yes')
-check(r.returncode == 0 and 'Saved route .bpy → Blender Files' in r.stdout and str(profile) in r.stdout, 'successful apply names the saved route and profile')
+check(r.returncode == 0 and 'Saved route .bpy → Blender Files' in r.stdout and profile_text in r.stdout, 'successful apply names the saved route and profile')
 check(profile.stat().st_mode & 0o777 == 0o600, 'saved profile is mode 0600')
 check((root / 'passport.bpy').exists() and (root / 'Blender Files/one.bpy').exists(), 'personal-record holds win over saved routes')
 r = run('undo', root)
