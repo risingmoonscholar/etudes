@@ -325,14 +325,19 @@ fn a_bare_gzip_is_one_member_and_not_complete_while_it_is_still_being_written() 
         // exists, so the bytes can be checked right then.
         if line.contains("\"phase\":\"advancing\"") && line.contains("\"completed\":1") {
             saw_complete_record = true;
-            let member = std::fs::read_dir(&dir.0)
+            // unpack can move the member into place between finding the
+            // staging folder and reading the member, so a member that left
+            // staging is read where it landed.
+            let staged = std::fs::read_dir(&dir.0)
                 .unwrap()
                 .filter_map(Result::ok)
                 .find(|entry| entry.file_name().to_string_lossy().contains(".partial"))
-                .map(|staging| staging.path().join("big.bin"))
-                .or_else(|| Some(dir.join("out/big.bin")))
-                .unwrap();
-            let size = std::fs::metadata(&member).map(|m| m.len()).unwrap_or(0);
+                .map(|staging| staging.path().join("big.bin"));
+            let size = staged
+                .and_then(|member| std::fs::metadata(member).ok())
+                .or_else(|| std::fs::metadata(dir.join("out/big.bin")).ok())
+                .map(|m| m.len())
+                .unwrap_or(0);
             assert_eq!(size, BYTES, "1/1 was reported over a partly written member");
         }
         lines.push(line);
