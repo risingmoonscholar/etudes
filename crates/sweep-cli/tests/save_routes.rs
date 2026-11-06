@@ -76,13 +76,13 @@ fn ungrouped_hint_is_private_structured_and_actionable() {
     assert!(text.contains("--map"));
     assert!(!text.contains("one.bpy"));
     let out = f.run(&[root, "--since", "0", "--quiet"]);
-    assert!(!String::from_utf8_lossy(&out.stdout).contains("To send"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("To route"));
     let out = f.run(&[root, "--since", "0", "--json"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"routing_hint\""));
     // Quiet suppresses text only: the structured hint stays for agents.
     let out = f.run(&[root, "--since", "0", "--quiet", "--json"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("\"routing_hint\""));
-    assert!(!String::from_utf8_lossy(&out.stderr).contains("To send"));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("To route"));
     for name in ["single.bpy", "single.pdf", "extensionless"] {
         let small = Fixture::new();
         std::fs::write(small.root.join(name), b"synthetic").unwrap();
@@ -110,19 +110,102 @@ fn hint_never_names_a_folder_it_found() {
     }
     let root = f.root.to_str().unwrap();
     let text = String::from_utf8(f.run(&[root, "--since", "0"]).stdout).unwrap();
-    let line = text.lines().find(|line| line.contains("To send")).unwrap();
-    assert!(
-        !line.contains("Archive") && !line.contains("Blender"),
-        "{line}"
+    let hint: Vec<&str> = text.lines().take(3).collect();
+    assert_eq!(hint[0], "3 files had no group.", "{text}");
+    assert_eq!(
+        hint[1], "To route the .bpy files, name a folder after bpy= (sweep creates it if missing):",
+        "{text}"
     );
     assert!(
-        line.contains("a new folder named Routed Files, or to your own folder"),
-        "{line}"
+        hint.iter()
+            .all(|line| !line.contains("Archive") && !line.contains("Blender")),
+        "{text}"
     );
     assert!(
-        line.ends_with(&format!("--map 'bpy=Routed Files' -- '{root}'")),
-        "{line}"
+        hint[2] == format!("  sweep --since 0 --map 'bpy=Routed Files' -- {root}")
+            || hint[2] == format!("  sweep --since 0 --map 'bpy=Routed Files' -- '{root}'"),
+        "{text}"
     );
+}
+
+#[test]
+fn hint_prints_the_folder_as_typed_and_it_runs_from_there() {
+    let f = Fixture::new();
+    let home = f.base.join("home");
+    let typed = home.join("My Files");
+    std::fs::create_dir(&typed).unwrap();
+    for name in ["one.bpy", "two.bpy", "three.bpy"] {
+        std::fs::write(typed.join(name), b"synthetic").unwrap();
+    }
+    let run_in = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("ETUDE_STATE_DIR", &f.state)
+            .env("ETUDE_JOURNAL_KEY", &f.key)
+            .output()
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let step = |text: &str| {
+        text.lines()
+            .find(|line| line.starts_with("  sweep "))
+            .unwrap()
+            .to_owned()
+    };
+    let cases = [
+        (&home, "~/My Files", "~/'My Files'"),
+        (&home, "My Files", "'My Files'"),
+        (&typed, "", "."),
+    ];
+    for (dir, arg, word) in cases {
+        let mut args = vec!["--since", "0"];
+        if !arg.is_empty() {
+            args.push(arg);
+        }
+        let text = run_in(dir, &args);
+        let line = step(&text);
+        assert_eq!(
+            line,
+            format!("  sweep --since 0 --map 'bpy=Routed Files' -- {word}"),
+            "{text}"
+        );
+        assert!(
+            text.lines().take(3).all(|l| l.chars().count() < 90),
+            "{text}"
+        );
+        // The printed step, read by a shell in the same folder, plans the files.
+        let command =
+            line.trim()
+                .replacen("sweep", &format!("'{}'", env!("CARGO_BIN_EXE_sweep")), 1);
+        let out = Command::new("sh")
+            .args(["-c", &command])
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("ETUDE_STATE_DIR", &f.state)
+            .env("ETUDE_JOURNAL_KEY", &f.key)
+            .output()
+            .unwrap();
+        let planned = String::from_utf8(out.stdout).unwrap();
+        assert!(
+            out.status.success() && planned.contains("Routed Files    3 files"),
+            "{planned}"
+        );
+    }
+    // JSON keeps the resolved path, so an agent needs no shell to expand `~`.
+    let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+        .args(["--since", "0", "--json", "~/My Files"])
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("ETUDE_STATE_DIR", &f.state)
+        .env("ETUDE_JOURNAL_KEY", &f.key)
+        .output()
+        .unwrap();
+    let json = String::from_utf8(out.stdout).unwrap();
+    let resolved = typed.to_str().unwrap();
+    assert!(json.contains(&format!("-- '{resolved}'\"")), "{json}");
 }
 
 #[test]

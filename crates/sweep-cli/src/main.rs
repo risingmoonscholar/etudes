@@ -1143,13 +1143,19 @@ fn no_such_group(only: &str, groups: &[plan::Group], place: &str) -> Option<Stri
 /// finder, parameterised by command, means a command cannot pick the path
 /// wrongly rather than merely being unlikely to.
 fn path_arg(cmd: &str, args: &[String]) -> Result<Option<PathBuf>, String> {
+    Ok(typed_path_arg(cmd, args)?.map(|p| PathBuf::from(expand_tilde(p))))
+}
+
+/// The path argument exactly as typed, before `~` is expanded, for a printed
+/// step that should read the way the person wrote it.
+fn typed_path_arg<'a>(cmd: &str, args: &'a [String]) -> Result<Option<&'a str>, String> {
     let mut path = None;
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
         if a == "--" {
             if path.is_none() {
-                path = args.get(i + 1).map(|p| PathBuf::from(expand_tilde(p)));
+                path = args.get(i + 1).map(String::as_str);
             }
             break;
         }
@@ -1163,11 +1169,34 @@ fn path_arg(cmd: &str, args: &[String]) -> Result<Option<PathBuf>, String> {
             return Err(format!("unknown option {a}. Run `sweep help`."));
         }
         if path.is_none() {
-            path = Some(PathBuf::from(expand_tilde(a)));
+            path = Some(a.as_str());
         }
         i += 1;
     }
     Ok(path)
+}
+
+/// The scanned folder as one shell word that runs from the current folder,
+/// written the way the person typed it: `~/Desktop`, `Downloads`, or `.` when
+/// they typed none. Falls back to the full quoted path when the typed form
+/// cannot be pasted safely.
+fn typed_folder_word(path: &Path, args: &[String]) -> String {
+    use etude_cli_support::shell_word;
+    let typed = match typed_path_arg("", args) {
+        Ok(Some(typed)) => typed,
+        Ok(None) => return ".".to_owned(),
+        Err(_) => return etude_cli_support::quoted_path(path),
+    };
+    // Only `~/` is expanded, and only when HOME is set: the same rule as
+    // `expand_tilde`, so the shell reads the word back as the same folder.
+    let word = match typed.strip_prefix("~/") {
+        Some("") if std::env::var_os("HOME").is_some() => Some("~/".to_owned()),
+        Some(rest) if std::env::var_os("HOME").is_some() => {
+            shell_word(rest).map(|rest| format!("~/{rest}"))
+        }
+        _ => shell_word(typed),
+    };
+    word.unwrap_or_else(|| etude_cli_support::quoted_path(path))
 }
 
 /// The id given to `undo --id`. A word after `--` is a folder, however it looks.
@@ -1709,14 +1738,15 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
     let Some((ext, _)) = candidate else {
         let command = "sweep propose --help";
         let kinds = if exts.is_empty() {
-            "these files".to_owned()
+            "files".to_owned()
         } else {
             format!(".{} files", exts.join(", ."))
         };
         let folder = etude_cli_support::shown(path);
         let text = format!(
-            "{} had no group. For per-file folder choices for {kinds} in {folder}: {command}",
-            etude_cli_support::counted(p.unclaimed.len(), "file", "files")
+            "{} had no group.\nTo choose a folder for each of the {kinds} in {}, read:\n  {command}",
+            etude_cli_support::counted(p.unclaimed.len(), "file", "files"),
+            typed_folder_word(path, args)
         );
         return Some((
             text,
@@ -1750,13 +1780,19 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
             carried.push_str(&format!(" {flag}"));
         }
     }
+    let map = etude_cli_support::shell_word(&format!("{ext}={folder}"))?;
+    // The JSON command keeps the resolved path, so it runs without a shell
+    // expanding `~`; the printed one reads the way the person typed it.
     let command = format!(
-        "sweep{carried} --map {} -- {}",
-        etude_cli_support::shell_word(&format!("{ext}={folder}"))?,
+        "sweep{carried} --map {map} -- {}",
         etude_cli_support::quoted_path(path)
     );
+    let typed_command = format!(
+        "sweep{carried} --map {map} -- {}",
+        typed_folder_word(path, args)
+    );
     let text = format!(
-        "{} had no group. To send .{ext} files to a new folder named {folder}, or to your own folder by putting its name there: {command}",
+        "{} had no group.\nTo route the .{ext} files, name a folder after {ext}= (sweep creates it if missing):\n  {typed_command}",
         etude_cli_support::counted(p.unclaimed.len(), "file", "files")
     );
     Some((
