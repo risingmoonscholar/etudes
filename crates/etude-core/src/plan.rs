@@ -670,7 +670,18 @@ pub fn validate_maps(
     raw: &[(String, String)],
     root: &std::path::Path,
 ) -> Result<Vec<MapSpec>, String> {
-    validate_maps_impl(raw, root, false)
+    validate_maps_impl(raw, Some(root), false)
+}
+
+/// Check a whole existing-folder profile without looking at any folder:
+/// extension and folder spelling, reserved names, and that no extension or
+/// folder appears twice. A saved route for another folder's tree is not
+/// checked against this one; returns the routes with normalized extensions.
+pub fn check_profile_routes(raw: &[(String, String)]) -> Result<Vec<(String, String)>, String> {
+    Ok(validate_maps_impl(raw, None, true)?
+        .into_iter()
+        .map(|map| (map.ext, map.folder))
+        .collect())
 }
 
 /// Validate a saved existing-folder profile. Unlike a one-shot agent map, a
@@ -683,7 +694,7 @@ pub fn validate_existing_maps(
     raw: &[(String, String)],
     root: &std::path::Path,
 ) -> Result<Vec<MapSpec>, String> {
-    let maps = validate_maps_impl(raw, root, true)?;
+    let maps = validate_maps_impl(raw, Some(root), true)?;
     if let Some(missing) = maps.iter().find(|map| map.created) {
         return Err(format!(
             "existing-folder profile destination {:?} does not exist; create it or edit the profile",
@@ -695,7 +706,7 @@ pub fn validate_existing_maps(
 
 fn validate_maps_impl(
     raw: &[(String, String)],
-    root: &std::path::Path,
+    root: Option<&std::path::Path>,
     allow_built_in_extensions: bool,
 ) -> Result<Vec<MapSpec>, String> {
     let mut seen = std::collections::BTreeSet::new();
@@ -776,6 +787,14 @@ fn validate_maps_impl(
         // spelling. APFS would route the files into the existing directory
         // while the plan displays the agent's spelling -- two names for one
         // destination, one of them false. Refuse and name the real one.
+        let Some(root) = root else {
+            out.push(MapSpec {
+                ext,
+                folder: folder.clone(),
+                created: false,
+            });
+            continue;
+        };
         if let Ok(rd) = std::fs::read_dir(root) {
             for e in rd.flatten() {
                 let existing = e.file_name().to_string_lossy().into_owned();
