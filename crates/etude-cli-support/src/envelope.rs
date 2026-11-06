@@ -143,6 +143,28 @@ pub fn detail(value: String) {
     });
 }
 
+/// Add one field to the result's details object, making one if there is none.
+pub fn detail_field(key: &str, value: String) {
+    RESULT.with(|state| {
+        let mut state = state.borrow_mut();
+        if !state.enabled {
+            return;
+        }
+        let field = format!("{}:{value}", j::str(key));
+        match state.payloads.last_mut() {
+            Some(last) if last.starts_with('{') && last.ends_with('}') => {
+                last.pop();
+                if last.len() > 1 {
+                    last.push(',');
+                }
+                last.push_str(&field);
+                last.push('}');
+            }
+            _ => state.payloads.push(format!("{{{field}}}")),
+        }
+    });
+}
+
 pub fn status(value: &'static str) {
     assert!(["done", "nothing_to_do", "refused", "incomplete", "error"].contains(&value));
     RESULT.with(|state| state.borrow_mut().status = Some(value));
