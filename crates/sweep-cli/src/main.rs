@@ -48,13 +48,16 @@ USAGE
     sweep lesson [N]             seven exercises against a folder you throw away
 
 FLAGS
+    --map EXT=Folder  route an unknown extension into a folder, this run only
+                      (repeatable; refusals still win; journal required)
+    --save-routes    apply: remember --map routes after all moves succeed
+                      (existing direct folders only; journal required).
+                      Undo moves files back but keeps saved routes
     --scheme folders  group by file type and other built-in folder rules (default)
     --scheme existing use the saved, versioned existing-folder profile
     --scheme tags     add Finder tags and move nothing (macOS); needs --map
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
-    --map EXT=Folder  route an unknown extension into a folder, this run only
-                      (repeatable; refusals still win; journal required)
     --map EXT=TAG     with --scheme tags: add the tag TAG to files with that
                       extension. Tags a file already has stay. Sweep never
                       makes up a tag; the plan marks each new one
@@ -786,6 +789,7 @@ const COMMAND_FLAGS: &[(&str, &[(&str, bool)])] = &[
         "apply",
         &[
             ("--yes", false),
+            ("--save-routes", false),
             ("--json", false),
             ("--plan", true),
             ("--plan-digest", true),
@@ -1139,13 +1143,19 @@ fn no_such_group(only: &str, groups: &[plan::Group], place: &str) -> Option<Stri
 /// finder, parameterised by command, means a command cannot pick the path
 /// wrongly rather than merely being unlikely to.
 fn path_arg(cmd: &str, args: &[String]) -> Result<Option<PathBuf>, String> {
+    Ok(typed_path_arg(cmd, args)?.map(|p| PathBuf::from(expand_tilde(p))))
+}
+
+/// The path argument exactly as typed, before `~` is expanded, for a printed
+/// step that should read the way the person wrote it.
+fn typed_path_arg<'a>(cmd: &str, args: &'a [String]) -> Result<Option<&'a str>, String> {
     let mut path = None;
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
         if a == "--" {
             if path.is_none() {
-                path = args.get(i + 1).map(|p| PathBuf::from(expand_tilde(p)));
+                path = args.get(i + 1).map(String::as_str);
             }
             break;
         }
@@ -1159,11 +1169,34 @@ fn path_arg(cmd: &str, args: &[String]) -> Result<Option<PathBuf>, String> {
             return Err(format!("unknown option {a}. Run `sweep help`."));
         }
         if path.is_none() {
-            path = Some(PathBuf::from(expand_tilde(a)));
+            path = Some(a.as_str());
         }
         i += 1;
     }
     Ok(path)
+}
+
+/// The scanned folder as one shell word that runs from the current folder,
+/// written the way the person typed it: `~/Desktop`, `Downloads`, or `.` when
+/// they typed none. Falls back to the full quoted path when the typed form
+/// cannot be pasted safely.
+fn typed_folder_word(path: &Path, args: &[String]) -> String {
+    use etude_cli_support::shell_word;
+    let typed = match typed_path_arg("", args) {
+        Ok(Some(typed)) => typed,
+        Ok(None) => return ".".to_owned(),
+        Err(_) => return etude_cli_support::quoted_path(path),
+    };
+    // Only `~/` is expanded, and only when HOME is set: the same rule as
+    // `expand_tilde`, so the shell reads the word back as the same folder.
+    let word = match typed.strip_prefix("~/") {
+        Some("") if std::env::var_os("HOME").is_some() => Some("~/".to_owned()),
+        Some(rest) if std::env::var_os("HOME").is_some() => {
+            shell_word(rest).map(|rest| format!("~/{rest}"))
+        }
+        _ => shell_word(typed),
+    };
+    word.unwrap_or_else(|| etude_cli_support::quoted_path(path))
 }
 
 /// The id given to `undo --id`. A word after `--` is a folder, however it looks.
@@ -1677,6 +1710,105 @@ fn scan_and_plan(
     Ok((p, Some(insp.0.stats), scheme))
 }
 
+fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String, String)> {
+    if p.adds_tags || p.unclaimed.is_empty() {
+        return None;
+    }
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for file in &p.unclaimed {
+        if let Some(ext) = file.extension().and_then(|ext| ext.to_str())
+            && !ext.is_empty()
+            && !ext.chars().any(char::is_control)
+        {
+            *counts.entry(ext.to_ascii_lowercase()).or_default() += 1;
+        }
+    }
+    let mut exts: Vec<String> = counts.keys().take(3).cloned().collect();
+    let mut fallback = "Routed Files".to_owned();
+    let mut suffix = 1;
+    while std::fs::symlink_metadata(path.join(&fallback)).is_ok() {
+        fallback = format!("Routed Files {suffix}");
+        suffix += 1;
+    }
+    let candidate = counts.iter().find(|(ext, count)| {
+        **count >= 3
+            && !ext.starts_with('-')
+            && plan::validate_maps(&[((*ext).clone(), fallback.clone())], path).is_ok()
+    });
+    let Some((ext, _)) = candidate else {
+        let command = "sweep propose --help";
+        let kinds = if exts.is_empty() {
+            "files".to_owned()
+        } else {
+            format!(".{} files", exts.join(", ."))
+        };
+        let folder = etude_cli_support::shown(path);
+        let text = format!(
+            "{} had no group.\nTo choose a folder for each of the {kinds} in {}, read:\n  {command}",
+            etude_cli_support::counted(p.unclaimed.len(), "file", "files"),
+            typed_folder_word(path, args)
+        );
+        return Some((
+            text,
+            etude_core::json::obj(&[
+                ("count", etude_core::json::num(p.unclaimed.len())),
+                (
+                    "extensions",
+                    etude_core::json::arr(exts.iter().map(|ext| etude_core::json::str(ext))),
+                ),
+                ("folder", etude_core::json::str(&folder)),
+                ("command", etude_core::json::str(command)),
+            ]),
+        ));
+    };
+    if !exts.contains(ext) {
+        exts.pop();
+        exts.push(ext.clone());
+    }
+    // Never suggest a folder found here: the alphabetically first one is a
+    // guess, and naming it would be advice the tool made up. The new-folder
+    // name is sweep's own, runs as printed, and reads as "your folder here".
+    let folder = &fallback;
+    let mut carried = String::new();
+    for flag in ["--depth", "--since"] {
+        if let Some(v) = value(args, flag) {
+            carried.push_str(&format!(" {flag} {}", etude_cli_support::shell_word(&v)?));
+        }
+    }
+    for flag in ["--allow-sync", "--include-tagged"] {
+        if has(args, flag) {
+            carried.push_str(&format!(" {flag}"));
+        }
+    }
+    let map = etude_cli_support::shell_word(&format!("{ext}={folder}"))?;
+    // The JSON command keeps the resolved path, so it runs without a shell
+    // expanding `~`; the printed one reads the way the person typed it.
+    let command = format!(
+        "sweep{carried} --map {map} -- {}",
+        etude_cli_support::quoted_path(path)
+    );
+    let typed_command = format!(
+        "sweep{carried} --map {map} -- {}",
+        typed_folder_word(path, args)
+    );
+    let text = format!(
+        "{} had no group.\nTo route the .{ext} files, name a folder after {ext}= (sweep creates it if missing):\n  {typed_command}",
+        etude_cli_support::counted(p.unclaimed.len(), "file", "files")
+    );
+    Some((
+        text,
+        etude_core::json::obj(&[
+            ("count", etude_core::json::num(p.unclaimed.len())),
+            (
+                "extensions",
+                etude_core::json::arr(exts.iter().map(|ext| etude_core::json::str(ext))),
+            ),
+            ("folder", etude_core::json::str(folder)),
+            ("command", etude_core::json::str(&command)),
+        ]),
+    ))
+}
+
 fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     let quiet = has(args, "--quiet");
     let explain = has(args, "--explain");
@@ -1686,6 +1818,14 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     print_include_tagged_warning(args);
+    // Quiet suppresses text only; agents still get the structured hint.
+    let hint = routing_hint(&plan, path, args);
+    if !quiet
+        && !has(args, "--json")
+        && let Some((text, _)) = &hint
+    {
+        println!("{text}");
+    }
 
     let mut export_binding = None;
     let mut export_items = None;
@@ -1724,6 +1864,10 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
     let plan_json = || {
         let mut json = plan.to_json();
+        if let Some((_, hint_json)) = &hint {
+            json.pop();
+            json.push_str(&format!(",\"routing_hint\":{hint_json}}}"));
+        }
         if let Some(binding) = &export_binding {
             json.pop();
             json.push_str(&format!(",\"binding\":{binding}}}"));
@@ -1805,6 +1949,8 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
             // counted here so the conclusion does not contradict them.
             print_hold_advice(&plan);
             println!("\nNothing has been moved.  Nothing left this machine.");
+        } else if !plan.unclaimed.is_empty() {
+            println!("\nNothing has been moved. Nothing left this machine.");
         } else {
             println!(
                 "\nNothing here needs organising.\n\n\
@@ -2721,6 +2867,153 @@ fn run_apply(
     sl: Option<KeychainSeal>,
     operation: &'static str,
 ) -> ExitCode {
+    run_apply_with_routes(p, context, sl, operation, None)
+}
+
+fn routes_complete(r: &etude_core::apply::ApplyReport, planned: usize) -> bool {
+    planned > 0
+        && r.moved == planned
+        && r.held_tagged
+            + r.held_locked
+            + r.held_cross_volume
+            + r.tagged_not_returned
+            + r.hold_record_failed
+            == 0
+}
+
+#[cfg(test)]
+mod saved_route_tests {
+    use super::*;
+    #[test]
+    fn partial_apply_discards_prepared_routes_without_panicking() {
+        let out = std::process::Command::new("mktemp")
+            .arg("-d")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let base = PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(base.clone());
+        std::fs::create_dir(base.join("Box")).unwrap();
+        let path = base.join("state/profile.toml");
+        let pending = existing_profile::PendingRoutes::prepare_at(
+            &base,
+            &[plan::MapSpec {
+                ext: "bpy".into(),
+                folder: "Box".into(),
+                created: false,
+            }],
+            path.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            finish_saved_routes(Some(pending), false, ExitCode::SUCCESS),
+            ExitCode::from(3)
+        );
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(base.join("state")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_failed_folder_flush_after_the_rename_still_counts_as_saved() {
+        let out = std::process::Command::new("mktemp")
+            .arg("-d")
+            .output()
+            .unwrap();
+        let base = PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(base.clone());
+        std::fs::create_dir(base.join("Box")).unwrap();
+        let path = base.join("state/profile.toml");
+        let mut pending = existing_profile::PendingRoutes::prepare_at(
+            &base,
+            &[plan::MapSpec {
+                ext: "bpy".into(),
+                folder: "Box".into(),
+                created: false,
+            }],
+            path.clone(),
+        )
+        .unwrap();
+        pending.fail_folder_sync = true;
+        assert_eq!(
+            finish_saved_routes(Some(pending), true, ExitCode::SUCCESS),
+            ExitCode::SUCCESS
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("folder = \"Box\"")
+        );
+    }
+
+    #[test]
+    fn partial_or_held_results_cannot_save_routes() {
+        use etude_core::apply::ApplyReport;
+        assert!(!routes_complete(&ApplyReport::default(), 0));
+        assert!(!routes_complete(
+            &ApplyReport {
+                moved: 2,
+                ..Default::default()
+            },
+            3
+        ));
+        for report in [
+            ApplyReport {
+                moved: 3,
+                held_tagged: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 3,
+                held_locked: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 3,
+                held_cross_volume: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 3,
+                tagged_not_returned: 1,
+                ..Default::default()
+            },
+            ApplyReport {
+                moved: 3,
+                hold_record_failed: 1,
+                ..Default::default()
+            },
+        ] {
+            assert!(!routes_complete(&report, 3));
+        }
+        assert!(routes_complete(
+            &ApplyReport {
+                moved: 3,
+                ..Default::default()
+            },
+            3
+        ));
+    }
+}
+
+fn run_apply_with_routes(
+    p: &plan::BoundPlan,
+    context: &plan::BindingContext,
+    sl: Option<KeychainSeal>,
+    operation: &'static str,
+    pending: Option<existing_profile::PendingRoutes>,
+) -> ExitCode {
     if let Err(code) = verify_existing_profile(&context.profile) {
         return code;
     }
@@ -2735,8 +3028,204 @@ fn run_apply(
         |event| progress.update(event),
     );
     progress.settle();
-    let code = report_apply(result, p, operation, sl.is_some());
+    let complete = result.as_ref().is_ok_and(|r| routes_complete(r, p.moves()));
+    let mut code = report_apply(result, p, operation, sl.is_some());
+    code = finish_saved_routes(pending, complete, code);
     progress.finish(code);
+    code
+}
+
+fn routes_json(routes: &[(String, String)]) -> String {
+    etude_core::json::arr(routes.iter().map(|(ext, folder)| {
+        etude_core::json::obj(&[
+            ("extension", etude_core::json::str(ext)),
+            ("folder", etude_core::json::str(folder)),
+        ])
+    }))
+}
+
+/// `details.routes_saved`: what --save-routes did, for agents.
+fn routes_saved_detail(
+    state: &str,
+    reason: Option<&str>,
+    added: &[(String, String)],
+    requested: &[(String, String)],
+    profile: &Path,
+    written: bool,
+    folder_synced: bool,
+) {
+    etude_cli_support::envelope::detail_field(
+        "routes_saved",
+        etude_core::json::obj(&[
+            ("state", etude_core::json::str(state)),
+            (
+                "reason",
+                reason.map_or_else(|| "null".into(), etude_core::json::str),
+            ),
+            ("added", routes_json(added)),
+            ("requested", routes_json(requested)),
+            ("profile", etude_core::json::path(profile)),
+            ("written", etude_core::json::bool(written)),
+            ("folder_synced", etude_core::json::bool(folder_synced)),
+        ]),
+    );
+}
+
+fn profile_subject(path: &Path) -> Option<etude_cli_support::reason::Subject> {
+    Some(etude_cli_support::reason::Subject::path(
+        "profile",
+        &path.display().to_string(),
+    ))
+}
+
+/// --save-routes was refused before anything moved.
+fn save_routes_refusal(error: &existing_profile::PrepareError, maps: &[plan::MapSpec]) -> ExitCode {
+    use etude_cli_support::reason::{Code, Subject};
+    use existing_profile::PrepareKind as K;
+    eprintln!(
+        "sweep: {}. Nothing was moved, and no route was saved. {}.",
+        error.what, error.next
+    );
+    let requested: Vec<(String, String)> = maps
+        .iter()
+        .map(|map| (map.ext.clone(), map.folder.clone()))
+        .collect();
+    let profile = existing_profile::profile_location();
+    routes_saved_detail(
+        "not_saved",
+        Some("refused_before_moves"),
+        &[],
+        &requested,
+        &profile,
+        false,
+        false,
+    );
+    etude_cli_support::envelope::no_undo_needed();
+    etude_cli_support::envelope::status("refused");
+    let path = error.path.as_deref().map(|path| path.display().to_string());
+    let subject = |kind| match &path {
+        Some(path) => Subject::path(kind, path),
+        None => Subject::wait(kind, None),
+    };
+    match error.kind {
+        K::Arguments => refusal(Code::InvalidArguments, None),
+        K::MissingFolder => failure(Code::MissingInput, Some(subject("input"))),
+        K::ProfileInvalid => refusal(Code::ProfileInvalid, profile_subject(&profile)),
+        K::Denied => failure(Code::PermissionDenied, Some(subject("input"))),
+        K::NoSpace => failure(Code::InsufficientSpace, Some(subject("destination"))),
+        K::WriteFailed => failure(Code::ProfileWriteFailed, profile_subject(&profile)),
+    }
+}
+
+fn finish_saved_routes(
+    pending: Option<existing_profile::PendingRoutes>,
+    complete: bool,
+    mut code: ExitCode,
+) -> ExitCode {
+    let Some(pending) = pending else {
+        return code;
+    };
+    let profile = pending.profile().to_path_buf();
+    let shown_profile = etude_cli_support::shown(&profile);
+    let added = pending.added.clone();
+    let requested = pending.requested.clone();
+    if !complete {
+        drop(pending);
+        eprintln!(
+            "sweep: routes were not saved because apply did not move every planned file. Resolve the holds or failure above, then try again."
+        );
+        routes_saved_detail(
+            "not_saved",
+            Some("apply_incomplete"),
+            &[],
+            &requested,
+            &profile,
+            false,
+            false,
+        );
+        if code == ExitCode::SUCCESS {
+            etude_cli_support::envelope::status("incomplete");
+            code = failure(
+                etude_cli_support::reason::Code::OperationIncomplete,
+                Some(etude_cli_support::reason::Subject::wait("journal", None)),
+            );
+        }
+        return code;
+    }
+    match pending.save() {
+        Ok(saved) => {
+            if saved.written {
+                for (ext, folder) in &added {
+                    etude_cli_support::envelope::print(format!(
+                        "Saved route .{ext} → {}. Undo moves the files back but keeps this route.",
+                        etude_cli_support::shown_text(folder)
+                    ));
+                }
+            } else {
+                for (ext, folder) in &requested {
+                    etude_cli_support::envelope::print(format!(
+                        "Route .{ext} → {} was already saved; the profile was not changed.",
+                        etude_cli_support::shown_text(folder)
+                    ));
+                }
+            }
+            etude_cli_support::envelope::print(format!("Routes profile: {shown_profile}"));
+            if let Some(problem) = &saved.sync_problem {
+                eprintln!(
+                    "sweep: the route is saved, but the disk did not confirm the profile's folder was written: {problem}. If this Mac loses power soon, check {shown_profile}."
+                );
+            }
+            routes_saved_detail(
+                "saved",
+                None,
+                &added,
+                &requested,
+                &profile,
+                saved.written,
+                saved.sync_problem.is_none(),
+            );
+        }
+        Err(error) => {
+            let (why, reason) = match &error {
+                existing_profile::SaveError::Changed => (
+                    format!("{shown_profile} changed while the files were moving"),
+                    "profile_changed",
+                ),
+                existing_profile::SaveError::WriteFailed(why) => (
+                    format!("{shown_profile} could not be replaced: {why}"),
+                    "write_failed",
+                ),
+            };
+            let lines: Vec<String> = added
+                .iter()
+                .map(|(ext, folder)| existing_profile::route_lines(ext, folder))
+                .collect();
+            eprintln!(
+                "sweep: the files moved as reported above, but the {} not saved: {why}. To save {}, add these lines to the end of {shown_profile}:\n\n{}\n",
+                if added.len() == 1 {
+                    "route was"
+                } else {
+                    "routes were"
+                },
+                if added.len() == 1 { "it" } else { "them" },
+                lines.join("\n\n")
+            );
+            routes_saved_detail(
+                "not_saved",
+                Some(reason),
+                &[],
+                &requested,
+                &profile,
+                false,
+                false,
+            );
+            etude_cli_support::envelope::status("incomplete");
+            code = failure(
+                etude_cli_support::reason::Code::ProfileWriteFailed,
+                profile_subject(&profile),
+            );
+        }
+    }
     code
 }
 
@@ -3022,6 +3511,18 @@ fn print_apply_holds(r: &etude_core::apply::ApplyReport, root: &Path) {
 /// since the plan was printed, and a stale plan is the write-freshness failure:
 /// the record says one thing and the tree says another.
 fn cmd_apply(args: &[String]) -> ExitCode {
+    if has(args, "--save-routes")
+        && (!has(args, "--map")
+            || has(args, "--no-journal")
+            || value(args, "--scheme").as_deref() == Some("tags")
+            || has(args, "--plan"))
+    {
+        eprintln!(
+            "sweep: --save-routes requires --map on a live apply with a journal; it cannot use --scheme tags, --no-journal or --plan. Nothing was moved. Drop the conflicting option."
+        );
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
+
     if let Some(file) = value(args, "--plan") {
         return apply_exported_plan(args, &file);
     }
@@ -3039,6 +3540,15 @@ fn cmd_apply(args: &[String]) -> ExitCode {
     let scheme = match resolve_scheme(args, &path) {
         Ok(scheme) => scheme,
         Err(error) => return scheme_refusal(error),
+    };
+
+    let pending = if has(args, "--save-routes") {
+        match existing_profile::PendingRoutes::prepare(&path, &scheme.maps) {
+            Ok(pending) => Some(pending),
+            Err(error) => return save_routes_refusal(&error, &scheme.maps),
+        }
+    } else {
+        None
     };
 
     if scheme.name == "tags" {
@@ -3116,6 +3626,29 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             None => true,
         };
     }
+    if pending.is_some()
+        && scheme.maps.iter().any(|map| {
+            !p.groups.iter().any(|group| {
+                group.accepted && group.name == map.folder && !group.members.is_empty()
+            })
+        })
+    {
+        eprintln!(
+            "sweep: routes were not saved: every --map route needs a selected group of at least three eligible files. Nothing was moved. Drop --save-routes to apply the selected groups only."
+        );
+        if let Some(pending) = &pending {
+            routes_saved_detail(
+                "not_saved",
+                Some("refused_before_moves"),
+                &[],
+                &pending.requested,
+                pending.profile(),
+                false,
+                false,
+            );
+        }
+        return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
+    }
     print_include_tagged_warning(args);
     print_unreadable_warning(&p);
     print_left_alone_notes(&p, false);
@@ -3177,7 +3710,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             );
         }
     };
-    run_apply(&bound, &context, sl, "apply")
+    run_apply_with_routes(&bound, &context, sl, "apply", pending)
 }
 
 /// `sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT`

@@ -857,6 +857,26 @@ def sweep_profile_invalid(probe):
     return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
 
 
+def sweep_profile_write_failed(probe):
+    """A file stands where the profile's folder belongs: nothing moves and the reason names the profile."""
+    tree = probe.directory / "tree"
+    (tree / "Box").mkdir(parents=True)
+    for name in ("one.bpy", "two.bpy", "three.bpy"):
+        (tree / name).write_bytes(b"synthetic payload")
+    before = snapshot(tree)
+    blocked = probe.directory / "state-file"
+    blocked.write_bytes(b"synthetic file where the profile folder belongs")
+    result = probe.run("apply", tree, "--since", "0", "--map", "bpy=Box", "--save-routes", "--yes",
+                       "--json", codes=(3,),
+                       environment={**probe.environment, "ETUDE_STATE_DIR": str(blocked / "state")})
+    require(snapshot(tree) == before, "a refused route save moved something")
+    envelope = json.loads(result.stdout)
+    require(envelope["status"] == "refused", "a refused route save that moved nothing is not refused")
+    require(envelope["details"]["routes_saved"]["state"] == "not_saved",
+            "a refused route save does not say the route was not saved")
+    return result
+
+
 def export_onto_a_file(probe):
     """A plan is never written over a file that is already there."""
     tree = screenshots(probe.directory / "tree")
@@ -1026,6 +1046,7 @@ CODE_PROBES = {
         "plan_stale": (stale_plan, sweep_propose_other_plan),
         "profile_missing": sweep_profile_missing,
         "profile_invalid": sweep_profile_invalid,
+        "profile_write_failed": sweep_profile_write_failed,
         "download_in_flight": download_in_flight,
         "journal_unreadable": garbage_journal,
         "journal_key_unavailable": bad_key,

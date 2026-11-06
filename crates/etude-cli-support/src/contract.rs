@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 10,
+                Tool::Sweep => SCHEMA_VERSION + 11,
                 Tool::Stash => 13,
                 Tool::Unpack => SCHEMA_VERSION + 4,
             }),
@@ -464,6 +464,17 @@ pub fn declaration(
     }
     fields.push(("structured_progress", structured_progress(tool)));
     if matches!(tool, Tool::Sweep) {
+        fields.push(("routing", j::obj(&[
+            ("map", j::str("--map EXT=Folder")),
+            ("save_routes", j::str("sweep apply PATH --map EXT=Folder --save-routes --yes; journal required; incompatible with tags")),
+            ("existing", j::str("--scheme existing")),
+            ("profile_path", j::str("ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml")),
+            ("profile_schema", j::str("schema_version = 1; [[routes]] extension = quoted string, folder = quoted string")),
+            ("save_policy", j::str("validated existing direct visible destinations only, checked against this tree for added routes only; conflicts refuse before moves; complete apply only; nothing new writes nothing; new routes are appended so existing text and comments stay; mode 0600 same-folder per-writer locked temporary file, fsync, rename; stale temporary files of dead writers are removed; undo keeps saved routes")),
+            ("save_result", j::str("details.routes_saved: state saved|not_saved, reason null|refused_before_moves|apply_incomplete|profile_changed|write_failed, added and requested [{extension, folder}], profile, written, folder_synced; a failed save after moves is incomplete with profile_write_failed naming the profile")),
+            ("hint", j::str("details.routing_hint: count, extensions (at most 3), folder, command; map advice needs three eligible files per extension and names a new folder for the person to replace, never one found in the tree; otherwise propose help; quiet suppresses text only")),
+            ("propose", j::str("sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT")),
+        ])));
         fields.push(("finder_aliases", j::obj(&[
             ("attribute", j::str("com.apple.FinderInfo")),
             ("read_scope", j::str("selected_tree_metadata;_32_byte_attribute_only;_metadata_observation_category")),
@@ -739,6 +750,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                 ],
                 &[
                     "selected_tree_entries",
+                    "sweep_existing_profile_if_save_routes",
                     "journal_store",
                     "keychain_if_no_supplied_key",
                 ],

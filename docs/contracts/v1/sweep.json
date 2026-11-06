@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 14,
+    "schema_version": 15,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -331,6 +331,15 @@
           "propose"
         ],
         "why": "The saved profile exists but cannot be used as written; correct the file before retrying."
+      },
+      {
+        "code": "profile_write_failed",
+        "retry": "after_change",
+        "subject_kind": "profile",
+        "operations": [
+          "apply"
+        ],
+        "why": "Routes could not be saved to the profile; the result says whether files moved. Fix the profile or its folder, or add the route by hand."
       }
     ],
     "contract_query": {
@@ -441,6 +450,7 @@
           ],
           "writes": [
             "selected_tree_entries",
+            "sweep_existing_profile_if_save_routes",
             "journal_store",
             "keychain_if_no_supplied_key"
           ]
@@ -678,6 +688,17 @@
       "terminal": "done_only_when_the_result_status_is_done_or_nothing_to_do;_otherwise_error;_absent_when_the_process_was_killed",
       "ordering": "every_record_is_written_after_the_counted_step_and_any_required_durable_record",
       "disclosure": "counts_and_invocation_identity_only;_no_paths_contents_keys_or_environment_values"
+    },
+    "routing": {
+      "map": "--map EXT=Folder",
+      "save_routes": "sweep apply PATH --map EXT=Folder --save-routes --yes; journal required; incompatible with tags",
+      "existing": "--scheme existing",
+      "profile_path": "ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml",
+      "profile_schema": "schema_version = 1; [[routes]] extension = quoted string, folder = quoted string",
+      "save_policy": "validated existing direct visible destinations only, checked against this tree for added routes only; conflicts refuse before moves; complete apply only; nothing new writes nothing; new routes are appended so existing text and comments stay; mode 0600 same-folder per-writer locked temporary file, fsync, rename; stale temporary files of dead writers are removed; undo keeps saved routes",
+      "save_result": "details.routes_saved: state saved|not_saved, reason null|refused_before_moves|apply_incomplete|profile_changed|write_failed, added and requested [{extension, folder}], profile, written, folder_synced; a failed save after moves is incomplete with profile_write_failed naming the profile",
+      "hint": "details.routing_hint: count, extensions (at most 3), folder, command; map advice needs three eligible files per extension and names a new folder for the person to replace, never one found in the tree; otherwise propose help; quiet suppresses text only",
+      "propose": "sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT"
     },
     "finder_aliases": {
       "attribute": "com.apple.FinderInfo",

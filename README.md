@@ -71,7 +71,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 737 tests
+cargo test --all                # 758 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -168,8 +168,15 @@ $ sweep apply --plan ~/plan.bin --plan-digest <digest> --yes
 
 `sweep --scheme existing PATH` reads the plain profile
 `~/Library/Application Support/etudes/sweep-existing-profile.toml` (or the same
-filename under `ETUDE_STATE_DIR` when that variable is set). Sweep never
-creates this file. Add routes as versioned data you can review before use:
+filename under `ETUDE_STATE_DIR` when that variable is set).
+Use `sweep apply PATH --map bpy="Blender Files" --save-routes --yes` to remember
+validated routes after every planned move succeeds. The destination must already
+be a direct visible folder. Conflicts refuse before moving anything; failed or
+partial applies save no routes. Saving needs a journal and cannot use tags.
+Sweep adds new routes after your own text, privately and atomically, and leaves
+the file alone when every route is already saved. Undo moves files back but
+keeps saved routes; edit the profile to drop one. You can also add routes
+as versioned data you can review before use:
 
 ```toml
 schema_version = 1
@@ -555,13 +562,13 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 78 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 79 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 78 scenarios
+bash stress/run.sh        # 79 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
