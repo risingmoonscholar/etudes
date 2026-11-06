@@ -1737,14 +1737,18 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
     let mut folders: Vec<String> = std::fs::read_dir(path)
         .ok()?
         .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|folder| {
-            plan::validate_existing_maps(&[(ext.clone(), folder.clone())], path).is_ok()
-                && !folder.chars().any(char::is_control)
-        })
+        .filter(|folder| !folder.chars().any(char::is_control))
         .collect();
     folders.sort();
-    let folder = folders.first().map(String::as_str).unwrap_or(&fallback);
+    let existing_folder = folders
+        .iter()
+        .find(|folder| {
+            plan::validate_existing_maps(&[(ext.clone(), (*folder).clone())], path).is_ok()
+        })
+        .map(String::as_str);
+    let folder = existing_folder.unwrap_or(&fallback);
     let mut carried = String::new();
     for flag in ["--depth", "--since"] {
         if let Some(v) = value(args, flag) {
@@ -1761,10 +1765,10 @@ fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String,
         etude_cli_support::shell_word(&format!("{ext}={folder}"))?,
         etude_cli_support::quoted_path(path)
     );
-    let destination = if folders.is_empty() {
-        "a new folder"
-    } else {
+    let destination = if existing_folder.is_some() {
         "a folder you have"
+    } else {
+        "a new folder"
     };
     let text = format!(
         "{} had no group. To send .{ext} files to {destination}: {command}",
