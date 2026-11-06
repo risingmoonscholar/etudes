@@ -468,7 +468,8 @@ fn prepare_problems_have_their_own_codes_and_a_leftover_does_not_block() {
     f.files();
     std::fs::create_dir(f.root.join("Box")).unwrap();
     let json = |out: &Output| String::from_utf8_lossy(&out.stdout).into_owned();
-    // A killed run's leftover is removed, and the save goes ahead.
+    // A killed run's leftover does not block the save. Only macOS can prove
+    // no writer holds it, so only macOS removes it; elsewhere it stays.
     std::fs::write(f.state.join(".sweep-existing-profile.pending"), b"partial").unwrap();
     let out = f.apply(&["--map", "bpy=Box", "--save-routes"]);
     assert!(
@@ -476,7 +477,10 @@ fn prepare_problems_have_their_own_codes_and_a_leftover_does_not_block() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(!f.state.join(".sweep-existing-profile.pending").exists());
+    assert_eq!(
+        f.state.join(".sweep-existing-profile.pending").exists(),
+        !cfg!(target_os = "macos")
+    );
     assert!(f.run(&["undo", f.root.to_str().unwrap()]).status.success());
     // An unreadable profile is profile_invalid, naming the profile.
     std::fs::set_permissions(f.profile(), std::fs::Permissions::from_mode(0o000)).unwrap();
