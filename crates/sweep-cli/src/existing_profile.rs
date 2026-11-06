@@ -262,6 +262,7 @@ const O_NONBLOCK: i32 = 0x4;
 #[cfg(target_os = "macos")]
 const O_EXLOCK: i32 = 0x20;
 
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn getuid() -> u32;
 }
@@ -324,6 +325,12 @@ fn prepare_io(what: String, dir: &std::path::Path, error: &std::io::Error) -> Pr
 /// only when it is provably sweep's: our name pattern, a regular file of this
 /// user, and lockable, which means no live writer holds it. Anything else is
 /// left alone; it cannot block this run, because every writer has its own name.
+/// Only macOS can take the lock in the open call, so elsewhere nothing is
+/// removed: without the lock a live writer's file would look like a leftover.
+#[cfg(not(target_os = "macos"))]
+fn remove_stale_pending(_dir: &std::path::Path) {}
+
+#[cfg(target_os = "macos")]
 fn remove_stale_pending(dir: &std::path::Path) {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -345,7 +352,6 @@ fn remove_stale_pending(dir: &std::path::Path) {
         }
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
-        #[cfg(target_os = "macos")]
         options.custom_flags(O_NOFOLLOW | O_NONBLOCK | O_EXLOCK);
         // Held by a live writer: the open would block, so it fails here.
         let Ok(file) = options.open(&path) else {
@@ -761,6 +767,8 @@ mod writer_tests {
         assert!(pending_files(&base.join("state")).is_empty());
     }
 
+    // The lock that tells a leftover from a live file is macOS-only.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_killed_run_leftover_is_removed_but_a_held_file_is_not() {
         let (base, _cleanup) = temp_dir();
