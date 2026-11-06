@@ -5,7 +5,7 @@ W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 CODE=0
 mkdir -p "$W/home"
 HOME="$W/home" python3 -u - "$SWEEP" "$W" > "$W/checks" <<'PY' || CODE=$?
-import json, os, pathlib, shlex, subprocess, sys
+import json, os, pathlib, shlex, signal, subprocess, sys
 binary, work = sys.argv[1], pathlib.Path(sys.argv[2])
 root = work / 'files'; root.mkdir()
 (root / 'Blender Files').mkdir()
@@ -38,7 +38,7 @@ r = run(small, '--since', '0')
 check('1 file had no group.' in r.stdout and 'single.pdf' not in r.stdout and 'sweep propose --help' in r.stdout, 'small built-in groups get private per-file routing advice')
 check(run('propose', '--help').returncode == 0, 'the per-file routing advice works as printed')
 r = run('apply', root, '--since', '0', '--map', 'bpy=Blender Files', '--save-routes', '--yes')
-check(r.returncode == 0 and 'Saved route .bpy → Blender Files' in r.stdout and profile_text in r.stdout, 'successful apply names the saved route and profile')
+check(r.returncode == 0 and 'Saved route .bpy → Blender Files. Undo moves the files back but keeps this route.' in r.stdout and profile_text in r.stdout, 'successful apply names the saved route, the profile, and that undo keeps it')
 check(profile.stat().st_mode & 0o777 == 0o600, 'saved profile is mode 0600')
 check((root / 'passport.bpy').exists() and (root / 'Blender Files/one.bpy').exists(), 'personal-record holds win over saved routes')
 r = run('undo', root)
@@ -54,17 +54,74 @@ check(r.returncode == 0, 'a second route is added to the whole existing profile'
 r = run('apply', '--plan', plan, '--plan-digest', digest, '--yes', '--json')
 check(r.returncode == 2 and json.loads(r.stdout)['reason']['code'] == 'plan_stale', 'saving a route invalidates an older profile-bound plan')
 run('undo', root)
+# A route saved for this tree does not block saving in a tree without its folder.
+elsewhere = work / 'elsewhere'; (elsewhere / 'Notes').mkdir(parents=True)
+for n in range(3): (elsewhere / f'{n}.mdx').write_bytes(b'synthetic')
+r = run('apply', elsewhere, '--since', '0', '--map', 'mdx=Notes', '--save-routes', '--yes', '--json')
+saved = json.loads(r.stdout)['details']['routes_saved'] if r.returncode == 0 else {}
+check(saved.get('state') == 'saved' and saved.get('added') == [{'extension': 'mdx', 'folder': 'Notes'}] and saved.get('profile') == profile_text and saved.get('written') is True, 'a saved route elsewhere does not block, and JSON reports the save')
+run('undo', elsewhere)
+# The person's own text survives a save, and a save with nothing new writes nothing.
+profile.write_text('# routes I keep\n' + profile.read_text())
+kept = profile.read_bytes(); inode = profile.stat().st_ino
+r = run('apply', elsewhere, '--since', '0', '--map', 'mdx=Notes', '--save-routes', '--yes')
+check(r.returncode == 0 and 'Route .mdx → Notes was already saved; the profile was not changed.' in r.stdout and profile.read_bytes() == kept and profile.stat().st_ino == inode, 'nothing new leaves the profile untouched')
+run('undo', elsewhere)
+(elsewhere / 'Sketches').mkdir()
+for n in range(3): (elsewhere / f'{n}.skx').write_bytes(b'synthetic')
+# A killed run's leftover pending file does not block the next save.
+(profile.parent / '.sweep-existing-profile.pending').write_bytes(b'left by a killed run')
+r = run('apply', elsewhere, '--since', '0', '--map', 'skx=Sketches', '--save-routes', '--yes')
+check(r.returncode == 0 and profile.read_bytes().startswith(kept) and not (profile.parent / '.sweep-existing-profile.pending').exists(), 'comments are kept and a stale pending file is cleared')
+run('undo', elsewhere)
+# Save fails after every file moved: pause apply, change the profile, resume.
+race = work / 'race'; (race / 'Race').mkdir(parents=True)
+for n in range(300): (race / f'{n:03}.rcx').write_bytes(b'synthetic')
+proc = subprocess.Popen([binary, 'apply', race, '--since', '0', '--map', 'rcx=Race', '--save-routes', '--yes', '--json', '--progress-json'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+paused = False
+err_lines = []
+for err_line in proc.stderr:
+    err_lines.append(err_line)
+    if not paused and '"phase":"advancing"' in err_line:
+        os.kill(proc.pid, signal.SIGSTOP)
+        with open(profile, 'a') as handle: handle.write('# edited while sweep was moving files\n')
+        os.kill(proc.pid, signal.SIGCONT)
+        paused = True
+out = proc.stdout.read(); proc.wait()
+err = ''.join(err_lines)
+if not paused:
+    print('UNPROVEN apply finished before the pause could land')
+else:
+    assert 'panicked' not in out + err
+    result = json.loads(out)
+    check(proc.returncode == 3 and result['status'] == 'incomplete' and result['reason'] == {'code': 'profile_write_failed', 'retry': 'after_change', 'subject': {'kind': 'profile', 'path': profile_text}}, 'a save that fails after moves names the profile, not the journal')
+    check('the files moved as reported above, but the route was not saved' in err and result['details']['routes_saved']['reason'] == 'profile_changed' and (race / 'Race/000.rcx').exists(), 'the message says the files moved and the route was not saved')
+    lines = err.split('add these lines to the end of ' + profile_text + ':\n\n', 1)[1].split('\n\n', 1)[0]
+    with open(profile, 'a') as handle: handle.write('\n' + lines + '\n')
+    run('undo', race)
+    r = run('apply', race, '--since', '0', '--map', 'rcx=Race', '--save-routes', '--yes')
+    check(r.returncode == 0 and 'Route .rcx → Race was already saved' in r.stdout, 'the printed lines save the route by hand')
+    run('undo', race)
 before = profile.read_bytes()
 (root / 'Other').mkdir()
 r = run('apply', root, '--since', '0', '--map', 'bpy=Other', '--save-routes', '--yes')
 check(r.returncode == 2 and 'Blender Files' in r.stderr and 'Other' in r.stderr and profile.read_bytes() == before and (root / 'one.bpy').exists(), 'conflicting routes name both folders and refuse before moves')
-for flags in (['--save-routes'], ['--save-routes', '--map', 'bpy=Blender Files', '--scheme', 'tags'], ['--save-routes', '--map', 'bpy=Blender Files', '--no-journal'], ['--save-routes', '--map', 'bpy=Missing']):
+for flags in (['--save-routes'], ['--save-routes', '--map', 'bpy=Blender Files', '--scheme', 'tags'], ['--save-routes', '--map', 'bpy=Blender Files', '--no-journal']):
     r = run('apply', root, '--yes', '--since', '0', *flags)
     check(r.returncode == 2 and profile.read_bytes() == before and (root / 'one.bpy').exists(), 'invalid save request refuses without changing files or profile: ' + ' '.join(flags))
+r = run('apply', elsewhere, '--yes', '--since', '0', '--save-routes', '--map', 'skx=Missing', '--json')
+result = json.loads(r.stdout)
+check(r.returncode == 3 and result['reason']['code'] == 'missing_input' and result['details']['routes_saved']['state'] == 'not_saved' and profile.read_bytes() == before and (elsewhere / '0.skx').exists(), 'a missing folder is missing_input and moves nothing')
+step = r.stderr.split('Create it first: ', 1)[1].rsplit('.', 1)[0]
+subprocess.run(shlex.split(step), check=True)
+r = run('apply', elsewhere, '--yes', '--since', '0', '--save-routes', '--map', 'skx=Missing')
+check(r.returncode == 2 and 'already routes to Sketches' in r.stderr, 'after the printed mkdir, the save reaches the route check')
 (root / 'Blender Files/one.bpy').write_bytes(b'occupied')
 r = run('apply', root, '--since', '0', '--map', 'bpy=Blender Files', '--save-routes', '--yes')
 check(r.returncode != 0 and 'routes were not saved' in r.stderr and profile.read_bytes() == before, 'failed apply explicitly saves nothing')
-check(not (profile.parent / '.sweep-existing-profile.pending').exists(), 'failed apply cleans its private temporary file')
+check(not any(p.name.endswith('.pending') for p in profile.parent.iterdir()), 'failed apply cleans its private temporary file')
 PY
-while IFS= read -r label; do pass "$label"; done < "$W/checks"
+while IFS= read -r label; do
+  case "$label" in UNPROVEN\ *) unproven "save failure after moves" "${label#UNPROVEN }";; *) pass "$label";; esac
+done < "$W/checks"
 [ "$CODE" -eq 0 ] || fail "saved routes contract failed (Python exit $CODE)"

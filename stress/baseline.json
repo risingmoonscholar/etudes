@@ -47,7 +47,7 @@
   "60-state-dir-unwritable": 4,
   "60-undo-progress-lost-on-volume-hazard": 0,
   "70-content-blindness-traps": 24,
-  "71-sweep-save-routes": 20,
+  "71-sweep-save-routes": 26,
   "72-refusal-reasons": 59,
   "73-propose-apply-kill-undo": 30,
   "80-finder-unpack": 10,
