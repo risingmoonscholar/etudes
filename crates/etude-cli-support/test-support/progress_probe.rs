@@ -32,7 +32,18 @@ impl ProbeDir {
 }
 impl Drop for ProbeDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // A killed tool can leave a system extractor writing for a moment
+        // after the kill. `remove_dir_all` then fails on a folder that gained
+        // a file mid-removal, and the whole fixture (hundreds of MB) stayed
+        // behind. Try again until the writer is gone, up to a bound.
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let _ = std::fs::remove_dir_all(&self.0);
+            if !self.0.exists() || std::time::Instant::now() >= give_up {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }
 

@@ -5,6 +5,14 @@ use etude_core::{
 };
 use std::path::PathBuf;
 
+/// Removes a state folder this test made, when the test ends, pass or fail.
+struct StateDir(PathBuf);
+impl Drop for StateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -691,6 +699,7 @@ fn source_taken_after_the_plan_check_is_a_recorded_conflict() {
     let _guard = state_lock();
     let state = std::env::temp_dir().join(format!("etudes-beaten-src-{}", std::process::id()));
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
     let (failure, entries) = beaten_after_validate(|bound, root| {
         let source = &bound.groups[0].members[0];
         std::fs::rename(source, root.join("taken.png")).unwrap();
@@ -705,6 +714,7 @@ fn destination_taken_after_the_plan_check_is_a_recorded_conflict() {
     let _guard = state_lock();
     let state = std::env::temp_dir().join(format!("etudes-beaten-dst-{}", std::process::id()));
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
     let (failure, _) = beaten_after_validate(|bound, root| {
         let destination = root.join(&bound.groups[0].name);
         std::fs::create_dir(&destination).unwrap();
@@ -722,6 +732,7 @@ fn group_folder_made_after_the_journal_is_a_recorded_conflict() {
     let _guard = state_lock();
     let state = std::env::temp_dir().join(format!("etudes-beaten-late-{}", std::process::id()));
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
     let fixture = Fixture::new();
     let out = scan::scan(
         &fixture.0,
@@ -767,6 +778,7 @@ fn file_landing_at_the_rename_is_a_recorded_conflict_about_a_file() {
     let _guard = state_lock();
     let state = std::env::temp_dir().join(format!("etudes-beaten-file-{}", std::process::id()));
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
     let fixture = Fixture::new();
     let out = scan::scan(
         &fixture.0,

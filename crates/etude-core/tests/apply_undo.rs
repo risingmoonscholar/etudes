@@ -113,6 +113,19 @@ fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, BoundPlan) {
 fn cleanup(root: &PathBuf) {
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_dir_all(fixtures::outside_dir(root));
+    // The state folder `setup` made for this test. Tests here run one at a
+    // time (`lock()`), so the variable still names this test's folder. Only a
+    // folder this file creates is removed: it sits directly in the temp folder
+    // and has this file's `sweep_state_` name.
+    if let Some(state) = std::env::var_os("ETUDE_STATE_DIR").map(PathBuf::from) {
+        let ours = state.parent() == Some(std::env::temp_dir().as_path())
+            && state
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("sweep_state_"));
+        if ours {
+            let _ = fs::remove_dir_all(&state);
+        }
+    }
 }
 
 #[test]
@@ -1416,6 +1429,7 @@ fn allow_sync_granted_at_scan_time_actually_reaches_apply() {
     assert!(out.root.join("Docs").join(&entry_name).exists());
 
     let _ = fs::remove_dir_all(&base);
+    let _ = fs::remove_dir_all(&state);
 }
 
 #[test]

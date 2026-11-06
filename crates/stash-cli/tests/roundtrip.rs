@@ -43,6 +43,19 @@ fn setup(tag: &str) -> PathBuf {
 fn cleanup(root: &Path) {
     let _ = fs::remove_dir_all(root);
     let _ = fs::remove_dir_all(fixtures::outside_dir(root));
+    // The state folder `setup` made for this test. Tests here run one at a
+    // time, so the variable still names this test's folder. Only a folder
+    // this file creates is removed: it sits directly in the temp folder and
+    // has this file's `stash_state_` name.
+    if let Some(state) = std::env::var_os("ETUDE_STATE_DIR").map(PathBuf::from) {
+        let ours = state.parent() == Some(std::env::temp_dir().as_path())
+            && state
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("stash_state_"));
+        if ours {
+            let _ = fs::remove_dir_all(&state);
+        }
+    }
 }
 
 /// Mirrors what the binary builds: one group, everything in it.

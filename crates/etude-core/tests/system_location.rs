@@ -136,7 +136,8 @@ fn without_home_a_library_folder_anywhere_is_refused_not_silently_allowed() {
     // defect was split apart.
     let _fake_home = FakeHome::unset();
 
-    let somewhere = fresh_root("no_home").join("random/nested/Library");
+    let root = fresh_root("no_home");
+    let somewhere = root.join("random/nested/Library");
     write_files(&somewhere, &["secret.plist"]);
 
     let err = scan::scan(&somewhere, &ScanConfig::default())
@@ -146,7 +147,7 @@ fn without_home_a_library_folder_anywhere_is_refused_not_silently_allowed() {
         "expected RefusedSystemLocation, got {err:?}"
     );
 
-    fs::remove_dir_all(somewhere.parent().unwrap().parent().unwrap()).ok();
+    fs::remove_dir_all(&root).ok();
 }
 
 #[test]

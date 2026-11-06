@@ -40,12 +40,14 @@ reject() {
     echo "$name survived: the progress tests are vacuous" >&2
     exit 1
   fi
-  if ! printf '%s\n' "$output" | grep -qE "$expected"; then
+  # A here-string, not a pipe: grep -q stops at the first match, and under
+  # pipefail the writer's broken pipe would turn a match into a failure.
+  if ! grep -qE "$expected" <<<"$output"; then
     echo "$name failed for an unrelated reason:" >&2
     printf '%s\n' "$output" | tail -30 >&2
     exit 1
   fi
-  echo "$name was rejected: $(printf '%s\n' "$output" | grep -E "$expected" | head -1 | cut -c1-120)"
+  echo "$name was rejected: $(grep -E -m1 "$expected" <<<"$output" | cut -c1-120)"
 }
 
 reject "counting the whole tree instead of the plan" crates/unpack-cli/src/main.rs \

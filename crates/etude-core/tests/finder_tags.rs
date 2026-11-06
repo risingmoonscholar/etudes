@@ -116,12 +116,15 @@ impl Sealer for FailingSeal {
 
 struct Scene {
     root: PathBuf,
+    /// The folder `scene` made: it holds `root` and the state folder.
+    base: PathBuf,
     files: Vec<PathBuf>,
 }
 
 impl Drop for Scene {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.base);
     }
 }
 
@@ -141,7 +144,7 @@ fn scene(label: &str, names: &[&str]) -> Scene {
             path
         })
         .collect();
-    Scene { root, files }
+    Scene { root, base, files }
 }
 
 fn scan_config(include_tagged: bool) -> ScanConfig {
