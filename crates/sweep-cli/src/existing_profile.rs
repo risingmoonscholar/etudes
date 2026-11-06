@@ -189,6 +189,7 @@ mod tests {
 /// create-new file also serializes sweep writers; Drop removes it on failure.
 pub struct PendingRoutes {
     temp: PathBuf,
+    path: PathBuf,
     original: Option<Vec<u8>>,
     pub added: Vec<(String, String)>,
 }
@@ -204,9 +205,16 @@ impl PendingRoutes {
         root: &std::path::Path,
         maps: &[etude_core::plan::MapSpec],
     ) -> Result<Self, String> {
+        Self::prepare_at(root, maps, profile_path())
+    }
+
+    pub(crate) fn prepare_at(
+        root: &std::path::Path,
+        maps: &[etude_core::plan::MapSpec],
+        path: PathBuf,
+    ) -> Result<Self, String> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let path = profile_path();
         let parent = path.parent().ok_or("profile has no parent folder")?;
         std::fs::create_dir_all(parent).map_err(|e| etude_cli_support::plain_io_error(&e))?;
         let temp = parent.join(".sweep-existing-profile.pending");
@@ -214,6 +222,7 @@ impl PendingRoutes {
             .open(&temp).map_err(|e| format!("cannot prepare routes at {}: {}. Check that no other sweep is saving routes, then remove any leftover pending file.", etude_cli_support::shown(&temp), etude_cli_support::plain_io_error(&e)))?;
         let mut pending = Self {
             temp,
+            path: path.clone(),
             original: None,
             added: Vec::new(),
         };
@@ -261,6 +270,9 @@ impl PendingRoutes {
         let source = encode(&routes)?;
         pending.original = original;
         pending.added = added;
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| etude_cli_support::plain_io_error(&e))?;
         file.write_all(source.as_bytes())
             .and_then(|_| file.sync_all())
             .map_err(|e| etude_cli_support::plain_io_error(&e))?;
@@ -268,8 +280,8 @@ impl PendingRoutes {
     }
 
     pub fn save(self) -> Result<(), String> {
-        let path = profile_path();
-        let current = match std::fs::read(&path) {
+        let path = &self.path;
+        let current = match std::fs::read(path) {
             Ok(bytes) => Some(bytes),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(etude_cli_support::plain_io_error(&e)),
@@ -277,7 +289,7 @@ impl PendingRoutes {
         if current != self.original {
             return Err("the profile changed during apply; routes were not saved".into());
         }
-        std::fs::rename(&self.temp, &path).map_err(|e| etude_cli_support::plain_io_error(&e))?;
+        std::fs::rename(&self.temp, path).map_err(|e| etude_cli_support::plain_io_error(&e))?;
         std::fs::File::open(path.parent().unwrap())
             .and_then(|file| file.sync_all())
             .map_err(|e| {
@@ -294,7 +306,7 @@ impl PendingRoutes {
         }
         etude_cli_support::envelope::print(format!(
             "Routes profile: {}",
-            etude_cli_support::shown(&path)
+            etude_cli_support::shown(path)
         ));
 
         Ok(())

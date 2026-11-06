@@ -1680,7 +1680,7 @@ fn scan_and_plan(
     Ok((p, Some(insp.0.stats), scheme))
 }
 
-fn routing_hint(p: &plan::Plan, path: &Path) -> Option<(String, String)> {
+fn routing_hint(p: &plan::Plan, path: &Path, args: &[String]) -> Option<(String, String)> {
     if p.adds_tags || p.unclaimed.is_empty() {
         return None;
     }
@@ -1711,8 +1711,19 @@ fn routing_hint(p: &plan::Plan, path: &Path) -> Option<(String, String)> {
         .first()
         .map(String::as_str)
         .unwrap_or("Routed Files");
+    let mut carried = String::new();
+    for flag in ["--depth", "--since"] {
+        if let Some(v) = value(args, flag) {
+            carried.push_str(&format!(" {flag} {}", etude_cli_support::shell_word(&v)?));
+        }
+    }
+    for flag in ["--allow-sync", "--include-tagged"] {
+        if has(args, flag) {
+            carried.push_str(&format!(" {flag}"));
+        }
+    }
     let command = format!(
-        "sweep {} --since 0 --map {}",
+        "sweep {}{carried} --map {}",
         etude_cli_support::quoted_path(path),
         etude_cli_support::shell_word(&format!("{ext}={folder}"))?
     );
@@ -1743,7 +1754,7 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     print_include_tagged_warning(args);
-    let hint = routing_hint(&plan, path);
+    let hint = routing_hint(&plan, path, args);
     if !quiet
         && !has(args, "--json")
         && let Some((text, _)) = &hint
@@ -2809,6 +2820,41 @@ fn routes_complete(r: &etude_core::apply::ApplyReport, planned: usize) -> bool {
 mod saved_route_tests {
     use super::*;
     #[test]
+    fn partial_apply_discards_prepared_routes_without_panicking() {
+        let out = std::process::Command::new("mktemp")
+            .arg("-d")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let base = PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(base.clone());
+        std::fs::create_dir(base.join("Box")).unwrap();
+        let path = base.join("state/profile.toml");
+        let pending = existing_profile::PendingRoutes::prepare_at(
+            &base,
+            &[plan::MapSpec {
+                ext: "bpy".into(),
+                folder: "Box".into(),
+                created: false,
+            }],
+            path.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            finish_saved_routes(Some(pending), false, ExitCode::SUCCESS),
+            ExitCode::from(3)
+        );
+        assert!(!path.exists());
+        assert!(!base.join("state/.sweep-existing-profile.pending").exists());
+    }
+
+    #[test]
     fn partial_or_held_results_cannot_save_routes() {
         use etude_core::apply::ApplyReport;
         assert!(!routes_complete(&ApplyReport::default(), 0));
@@ -2881,6 +2927,16 @@ fn run_apply_with_routes(
     progress.settle();
     let complete = result.as_ref().is_ok_and(|r| routes_complete(r, p.moves()));
     let mut code = report_apply(result, p, operation, sl.is_some());
+    code = finish_saved_routes(pending, complete, code);
+    progress.finish(code);
+    code
+}
+
+fn finish_saved_routes(
+    pending: Option<existing_profile::PendingRoutes>,
+    complete: bool,
+    mut code: ExitCode,
+) -> ExitCode {
     if let Some(pending) = pending {
         if complete {
             if let Err(message) = pending.save() {
@@ -2890,7 +2946,7 @@ fn run_apply_with_routes(
                 etude_cli_support::envelope::status("incomplete");
                 code = failure(
                     etude_cli_support::reason::Code::OperationIncomplete,
-                    Some(etude_cli_support::reason::Subject::wait("profile", None)),
+                    Some(etude_cli_support::reason::Subject::wait("journal", None)),
                 );
             }
         } else {
@@ -2901,12 +2957,11 @@ fn run_apply_with_routes(
                 etude_cli_support::envelope::status("incomplete");
                 code = failure(
                     etude_cli_support::reason::Code::OperationIncomplete,
-                    Some(etude_cli_support::reason::Subject::wait("profile", None)),
+                    Some(etude_cli_support::reason::Subject::wait("journal", None)),
                 );
             }
         }
     }
-    progress.finish(code);
     code
 }
 
