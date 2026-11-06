@@ -412,3 +412,35 @@ Stderr names every folder removed and every folder with the exact name left in
 place. The result's `effects.counters` add `leftover_folders_removed` and
 `leftover_folders_kept`, present only when not zero. See
 [staging recovery evidence](../release-evidence/unpack-staging-recovery.md).
+
+## Pack declaration (version 1)
+
+`pack contract --json` declares archive creation, separately from the other
+tools. `v1/pack.json` is its canonical envelope pin;
+`history/v1/pack.json` retains the initial bytes and their checked SHA-256.
+Existing tools' pins remain unchanged. The result envelope stays at version 4.
+
+| Domain | Meaning |
+| --- | --- |
+| source_file_bytes | Included file bytes read by the system archive writer |
+| source_xattr_bytes | Retained metadata bytes read by the writer with keep |
+| staging_archive_metadata | Size and identity of the private output |
+| archive_readback_bytes | Closed archive headers and payload read independently |
+| private_staging_archive | New private mode-0600 sibling of the destination |
+| new_destination_archive | New archive published with exclusive rename |
+
+`list` declares source and destination metadata preflight only and no writes. `pack` additionally
+declares destination metadata, volume free space, randomness, archive reads and
+the two archive writes. The lengths of four named attributes (Finder tags, download warning, resource fork,
+Finder info) are read by system call for the counts in the result. Attribute names
+are never listed and values stay out of the process. The system tar writer
+reads retained values with keep. Source entries are retained and no journal is
+created. A declaration is not evidence of complete read coverage; the receipt
+explicitly leaves subprocess reads unproven.
+
+`deletion.owned_artifacts` names the only two things pack removes: the private
+file of the current run, and a marked, unlocked private file a killed run left for
+the same destination. `policy` states the archive layout and what is refused.
+Pack reuses the codes `size_limit_exceeded`, `extraction_stopped` and
+`archive_unreadable` from unpack. Pack has not been published, so version 1 was
+revised in place during its candidate period.

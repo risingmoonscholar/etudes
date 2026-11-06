@@ -22,7 +22,7 @@ W=$(workdir); trap 'rm -rf "$W"' EXIT
 # Query each built binary and drive real verbs, then use independent snapshots
 # and digest checks to falsify its capability declaration. The same witness
 # runs in cargo test, so this scenario also covers CLI changes to the contract.
-for tool in sweep stash unpack; do
+for tool in sweep stash unpack pack; do
   if python3 "$(dirname "${BASH_SOURCE[0]}")/../../scripts/check-tool-contracts.py" \
       --tool "$tool" --bin "$BIN/$tool"; then
     pass "$tool contract agrees with exercised operation effects and recovery"

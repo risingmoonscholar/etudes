@@ -75,5 +75,12 @@
   "111-sweep-undo-id": 303,
   "112-locked-items": 48,
   "113-shared-progress": 22,
-  "114-unpack-staging-recovery": 42
+  "114-unpack-staging-recovery": 42,
+  "120-pack-refusal-matrix": 108,
+  "121-pack-kill-mid-write": 16,
+  "122-pack-then-unpack": 18,
+  "123-pack-full-and-read-only-disks": 31,
+  "124-pack-round-trip": 110,
+  "125-pack-refusals-and-messages": 605,
+  "126-pack-cleans-only-its-own": 86
 }

@@ -22,6 +22,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+import unicodedata
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -107,7 +108,7 @@ def negative_controls(tool, binary):
                 "elif sys.argv[1:2] != ['contract'] and mutation == 'behaviour':\n"
                 "    sentinel = pathlib.Path.cwd() / 'outside/sentinel'\n"
                 "    if sentinel.is_file(): sentinel.write_bytes(b'outside mutation')\n"
-                "    if '--list' in sys.argv:\n"
+                "    if '--list' in sys.argv and pathlib.Path(sys.argv[1]).is_file():\n"
                 "        pathlib.Path(sys.argv[1]).write_bytes(b'archive mutation')\n"
                 "sys.stdout.buffer.write(output)\n"
                 "sys.stderr.buffer.write(result.stderr)\n"
@@ -119,7 +120,9 @@ def negative_controls(tool, binary):
             probe = Probe(tool, wrapper, work)
             try:
                 probe.query()
-                if tool == "unpack":
+                if tool == "pack":
+                    probe.pack()
+                elif tool == "unpack":
                     probe.unpack()
                 else:
                     probe.custody()
@@ -202,7 +205,7 @@ class Probe:
                 "retain the old pin and add a new version")
         current_fixture = ROOT / "docs/contracts/v1" / f"{self.tool}.json"
         require(current_fixture.read_bytes() == pin.read_bytes(), "published contract fixture differs from versioned pin")
-        historical_hashes = {'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
+        historical_hashes = {'pack': 'e827e8c1d2ead48781c2c314cd43c04e712c5982a46df37a62501d1c20df5815', 'sweep': '9260c537fe634784dbf1230f69326ae3fd052cb4d804d973dadbe170e0d4f72d', 'stash': 'f394ed9f0b45a357c580e6394a6c6a0b5768ded1f3909edbff8efa43b8d8e0d8', 'unpack': '714024469ed4adad5b4a255ef2e1bbe629cce92f20bd8a081d167ed10213d583'}
         historical = ROOT / "docs/contracts/history/v1" / f"{self.tool}.json"
         require(hashlib.sha256(historical.read_bytes()).hexdigest() == historical_hashes[self.tool], "historical v1 contract pin changed")
         self.contract = contract
@@ -294,7 +297,8 @@ class Probe:
         empty = self.directory / "empty-tree"
         empty.mkdir()
         if self.tool != "unpack":
-            result = self.run(empty, "--json", codes=(1,))
+            extra = ("--for", "other") if self.tool == "pack" else ()
+            result = self.run(empty, *extra, "--json", codes=(1,))
             value = json.loads(result.stdout)
             require(value["status"] == "nothing_to_do", "empty operation is not reported")
             require(value["reason"] == {"code": "nothing_to_do", "retry": "not_needed"},
@@ -324,7 +328,8 @@ class Probe:
                 self.finder_aliases()
                 self.locked_items()
         missing = self.directory / "does-not-exist"
-        output = self.run(missing, "--json", codes=(2, 3))
+        extra = ("--for", "other") if self.tool == "pack" else ()
+        output = self.run(missing, *extra, "--json", codes=(2, 3))
         envelope = json.loads(output.stdout)
         self.envelope(envelope)
         require(envelope["status"] in ("refused", "error"), "error result claims success")
@@ -415,6 +420,69 @@ class Probe:
                 "a symbol scan does not verify subprocess network behaviour")
         require(self.contract["evidence"]["access_verified"] is False,
                 "a declaration cannot certify absence of access")
+
+    def pack(self):
+        self.environment["COPYFILE_DISABLE"] = "1"
+        tree = self.directory / "selected"
+        tree.mkdir()
+        outside = self.directory / "outside"
+        outside.mkdir()
+        (outside / "sentinel").write_bytes(b"outside scope")
+        outside_before = snapshot(outside)
+        (tree / "ordinary.txt").write_bytes(b"synthetic archive payload")
+        (tree / ".hidden").write_bytes(b"hidden payload")
+        (tree / "café.txt").write_bytes(b"unicode payload")
+        if sys.platform == "darwin":
+            for name, value in (("com.example.pack-fixture", "synthetic attribute"),
+                                ("com.apple.ResourceFork", "synthetic fork")):
+                subprocess.run(["/usr/bin/xattr", "-w", name, value, str(tree / "ordinary.txt")],
+                               stdin=subprocess.DEVNULL, capture_output=True, check=True)
+        (tree / "passport.pdf").write_bytes(b"synthetic excluded payload")
+        (tree / ".DS_Store").write_bytes(b"synthetic metadata")
+        (tree / "Example.app").mkdir()
+        (tree / "Example.app/part").write_bytes(b"complete package")
+        before = snapshot(tree)
+        identity = {str(p): (p.stat().st_dev, p.stat().st_ino, p.stat().st_ctime_ns)
+                    for p in tree.rglob("*")}
+        for recipient, suffix in (("other", "zip"), ("self", "tar.gz"), ("mac", "tar.gz")):
+            dest = self.directory / f"result-{recipient}.{suffix}"
+            listing = self.run(tree, "--for", recipient, "--into", dest, "--list", "--json")
+            require(not dest.exists(), "list created a destination")
+            require(not list(self.directory.glob(".*.pack-*.partial")), "list created staging")
+            result = self.run(tree, "--for", recipient, "--into", dest, "--json")
+            require(json.loads(result.stdout)["details"]["excluded"] >= 1, "sensitive exclusion missing")
+            require(b"passport" not in result.stdout + result.stderr, "excluded name disclosed")
+            if suffix == "zip":
+                with zipfile.ZipFile(dest) as archive:
+                    names = {n.rstrip("/") for n in archive.namelist()}
+                    require(archive.read("selected/ordinary.txt") == b"synthetic archive payload", "zip payload differs")
+                    require(archive.read("selected/Example.app/part") == b"complete package", "package split")
+                    require(archive.read("selected/.hidden") == b"hidden payload", "hidden payload omitted")
+                    unicode_name = next(n for n in archive.namelist() if unicodedata.normalize("NFC", n) == "selected/café.txt")
+                    require(archive.read(unicode_name) == b"unicode payload", "zip Unicode round trip differs")
+                    require("selected/.DS_Store" not in names, "drop retained litter")
+            else:
+                with tarfile.open(dest) as archive:
+                    names = {n.rstrip("/") for n in archive.getnames()}
+                    require(archive.extractfile("selected/ordinary.txt").read() == b"synthetic archive payload", "tar payload differs")
+                    require(archive.extractfile("selected/Example.app/part").read() == b"complete package", "package split")
+                    unicode_name = next(n for n in archive.getnames() if unicodedata.normalize("NFC", n) == "selected/café.txt")
+                    require(archive.extractfile(unicode_name).read() == b"unicode payload", "tar Unicode round trip differs")
+                    if sys.platform == "darwin":
+                        companion = archive.extractfile("selected/._ordinary.txt").read()
+                        require(b"synthetic fork" in companion and b"synthetic attribute" in companion,
+                                "keep lost resource fork or attribute bytes")
+                    require("selected/.DS_Store" in names, "keep lost litter")
+            require("selected/passport.pdf" not in names, "sensitive file archived")
+            archived = dest.read_bytes()
+            refused = self.run(tree, "--for", recipient, "--into", dest, "--json", codes=(2,))
+            require(json.loads(refused.stdout)["reason"]["code"] == "destination_exists", "collision reason differs")
+            require(dest.read_bytes() == archived, "destination replaced")
+            require(snapshot(tree) == before, "source paths, metadata or bytes changed")
+            require({str(p): (p.stat().st_dev, p.stat().st_ino, p.stat().st_ctime_ns)
+                     for p in tree.rglob("*")} == identity, "source identity changed")
+            require(snapshot(outside) == outside_before, "tool mutated outside its selected tree")
+            require(not list(self.directory.glob(".*.pack-*.partial")), "staging left behind")
 
     def custody(self):
         tree = self.directory / "selected"
@@ -1014,7 +1082,78 @@ def unpack_extraction_stopped(probe):
 # Real invocations for each refusal code, each on its own throwaway fixture. A
 # probe returns the tool's result; the caller compares its reason with the
 # contract. A code with several probes is proven only if none disagrees. Nothing here reads a tool's source or trusts a self-description.
+
+def pack_tree(probe):
+    tree = probe.directory / "tree"
+    tree.mkdir()
+    (tree / "ordinary").write_bytes(b"synthetic payload")
+    return tree
+
+
+def pack_code(probe, code):
+    tree = pack_tree(probe)
+    args = [str(tree), "--for", "other"]
+    if code == "download_in_flight":
+        (tree / "movie.part").write_bytes(b"incomplete")
+    elif code == "destination_exists":
+        (probe.directory / "tree.zip").write_bytes(b"occupied")
+    elif code == "size_limit_exceeded":
+        args += ["--max-size", "1"]
+    elif code == "unsupported_format":
+        args += ["--format", "rar"]
+    elif code == "unsafe_input":
+        (tree / "link").symlink_to("../outside")
+    elif code == "permission_denied":
+        needs_denied_permissions()
+        tree.chmod(0)
+    elif code == "extraction_stopped":
+        # A real SIGTERM is handled while the writer owns only staging.
+        (tree / "large").write_bytes(bytes(32 * 1024 * 1024))
+        process = subprocess.Popen([probe.binary, *args, "--json"],
+            cwd=probe.directory, env=probe.environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 20
+            while process.poll() is None and time.monotonic() < deadline:
+                if list(probe.directory.glob(".*.pack-*.partial")):
+                    process.send_signal(signal.SIGTERM)
+                    break
+                time.sleep(0.002)
+            stdout, stderr = process.communicate(timeout=30)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        if process.returncode == 0:
+            raise Unreached("writer finished before signal arrived")
+        require(process.returncode == 2, "stopped writer exit differs")
+        probe.envelope(json.loads(stdout))
+        require(not list(probe.directory.glob(".*.pack-*.partial")), "stopped writer left staging")
+        require(not (probe.directory / "tree.zip").exists(), "stopped writer published")
+        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+    elif code == "operation_incomplete":
+        raise Unreached("requires a post-publication readback failure; no deterministic filesystem interposition")
+    elif code == "archive_unreadable":
+        raise Unreached("requires a private archive that reads back wrong; the unit test an_archive_that_does_not_match_fails_its_check covers it")
+    try:
+        result = probe.run(*args, "--json", codes=(3,) if code == "permission_denied" else (2,))
+        if code == "download_in_flight":
+            require(b"movie.part" in result.stderr, "in-flight entry was not named")
+            require(b"ordinary" not in result.stdout + result.stderr, "unrelated source name disclosed")
+        return result
+    finally:
+        tree.chmod(0o700)
+
 CODE_PROBES = {
+    "pack": {
+        "invalid_arguments": lambda p: p.run("--json", codes=(2,)),
+        "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
+        "missing_input": lambda p: p.run(p.directory / "absent", "--for", "other", "--json", codes=(3,)),
+        **{code: (lambda p, code=code: pack_code(p, code)) for code in (
+            "unsupported_format", "size_limit_exceeded", "extraction_stopped", "destination_exists",
+            "download_in_flight", "unsafe_input", "permission_denied", "operation_incomplete",
+            "archive_unreadable")},
+    },
     "sweep": {
         "invalid_arguments": lambda p: p.run("apply", screenshots(p.directory / "tree"), "--json", codes=(2,)),
         "unknown_option": lambda p: p.run("--not-an-option", "--json", codes=(2,)),
@@ -1081,7 +1220,7 @@ CODE_PROBES = {
 NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
-    "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash) and 109 (unpack) fill a disk image to prove it",
+    "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash), 109 (unpack) and 123 (pack) fill a disk image to prove it",
 }
 
 
@@ -1148,13 +1287,16 @@ def refusal_codes(tool, binary, listed, directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", choices=("sweep", "stash", "unpack"))
+    parser.add_argument("--tool", choices=("sweep", "stash", "unpack", "pack"))
     parser.add_argument("--bin", type=Path)
     parser.add_argument("--negative-controls", action="store_true")
     arguments = parser.parse_args()
+    if arguments.tool == "pack" and sys.platform != "darwin":
+        print("pack: skipped, needs macOS tar and xattr")
+        return
     if arguments.tool is None:
         require(arguments.bin is None, "--bin requires --tool")
-        for tool in ("sweep", "stash", "unpack"):
+        for tool in ("sweep", "stash", "unpack", "pack"):
             result = subprocess.run(["python3", __file__, "--tool", tool, "--bin", str(ROOT / "target/debug" / tool)], stdin=subprocess.DEVNULL, check=False)
             require(result.returncode == 0, f"{tool} contract witness failed")
         return
@@ -1167,7 +1309,9 @@ def main():
         probe = Probe(arguments.tool, arguments.bin, Path(directory).resolve())
         probe.query()
         probe.network()
-        if arguments.tool == "unpack":
+        if arguments.tool == "pack":
+            probe.pack()
+        elif arguments.tool == "unpack":
             probe.unpack()
         else:
             probe.custody()

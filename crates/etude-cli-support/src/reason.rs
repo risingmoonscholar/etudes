@@ -124,7 +124,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "unsupported_format",
         retry: RetryClass::Never,
         subject_kind: None,
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "This format is outside the tool's supported set.",
     },
     CodeSpec {
@@ -144,6 +144,8 @@ pub const CODES: &[CodeSpec] = &[
             "stash:select",
             "stash:pop",
             "unpack:extract",
+            "pack:pack",
+            "pack:list",
         ],
         explanation: "The destination volume lacks the working space this request needs; choose a suitable destination or reduce the input.",
     },
@@ -169,6 +171,8 @@ pub const CODES: &[CodeSpec] = &[
         retry: RetryClass::AfterChange,
         subject_kind: Some("destination"),
         operations: &[
+            "pack:pack",
+            "pack:list",
             "sweep:apply",
             "sweep:propose",
             "sweep:undo",
@@ -209,7 +213,14 @@ pub const CODES: &[CodeSpec] = &[
         name: "download_in_flight",
         retry: RetryClass::Later,
         subject_kind: Some("download_in_flight"),
-        operations: &["sweep:scan", "stash:stash", "unpack:extract", "unpack:list"],
+        operations: &[
+            "pack:pack",
+            "pack:list",
+            "sweep:scan",
+            "stash:stash",
+            "unpack:extract",
+            "unpack:list",
+        ],
         explanation: "The input appears to still be downloading and may be checked later.",
     },
     CodeSpec {
@@ -291,6 +302,8 @@ pub const CODES: &[CodeSpec] = &[
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
         operations: &[
+            "pack:pack",
+            "pack:list",
             "sweep:scan",
             "sweep:apply",
             "stash:stash",
@@ -312,7 +325,13 @@ pub const CODES: &[CodeSpec] = &[
         name: "operation_incomplete",
         retry: RetryClass::AfterChange,
         subject_kind: Some("journal"),
-        operations: &["sweep:apply", "sweep:undo", "stash:stash", "stash:pop"],
+        operations: &[
+            "pack:pack",
+            "sweep:apply",
+            "sweep:undo",
+            "stash:stash",
+            "stash:pop",
+        ],
         explanation: "The operation stopped part-way; inspect its journal or filesystem and resolve the reported condition before continuing.",
     },
     CodeSpec {
@@ -336,7 +355,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "archive_unreadable",
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
-        operations: &["unpack:extract", "unpack:list"],
+        operations: &["pack:pack", "unpack:extract", "unpack:list"],
         explanation: "The archive is damaged, incomplete or not the format its name says; obtain a good copy before retrying.",
     },
     CodeSpec {
@@ -344,7 +363,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "size_limit_exceeded",
         retry: RetryClass::AfterChange,
         subject_kind: Some("input"),
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "Extraction passed its size limit; raise the limit with --max-size if the archive is trusted.",
     },
     CodeSpec {
@@ -352,7 +371,7 @@ pub const CODES: &[CodeSpec] = &[
         name: "extraction_stopped",
         retry: RetryClass::Later,
         subject_kind: Some("input"),
-        operations: &["unpack:extract"],
+        operations: &["pack:pack", "pack:list", "unpack:extract"],
         explanation: "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names.",
     },
     CodeSpec {
@@ -544,6 +563,7 @@ pub fn codes_json(tool: &str) -> String {
             "apply_exported_plan",
         ],
         "unpack" => &["extract", "list"],
+        "pack" => &["pack", "list"],
         _ => &[],
     };
     j::arr(

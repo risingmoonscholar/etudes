@@ -30,9 +30,9 @@ def tags(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
     return entries
 
 
-def page(sweep="0.5.2", stash="0.5.2", unpack="0.5.1"):
+def page(sweep="0.5.2", stash="0.5.2", unpack="0.5.1", pack="0.6.0"):
     return {"version": sweep,
-            "versions": {"sweep": sweep, "stash": stash, "unpack": unpack}}
+            "versions": {"sweep": sweep, "stash": stash, "unpack": unpack, "pack": pack}}
 
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/pages.yml"
@@ -67,6 +67,24 @@ class PagesReleaseGateTests(unittest.TestCase):
     def test_all_latest_published_versions_are_allowed(self):
         found = release.check_page(page(), tags())
         self.assertEqual(found, {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"})
+
+    def test_the_gate_reads_one_list_of_published_tools(self):
+        self.assertEqual(release.TOOLS, ("sweep", "stash", "unpack"))
+
+    def test_an_unpublished_tool_on_the_page_does_not_move_the_gate(self):
+        # No release of pack exists, and the page shows its candidate version.
+        self.assertNotIn("pack", release.check_page(page(), tags()))
+
+    def test_a_stray_tag_for_an_unlisted_tool_counts_for_nothing(self):
+        found = release.latest_published_versions(tags() + [release_row("pack-v9.9.9")])
+        self.assertEqual(found, {"sweep": "0.5.2", "stash": "0.5.2", "unpack": "0.5.1"})
+
+    def test_listing_a_tool_makes_the_gate_require_its_release(self):
+        with patch.object(release, "TOOLS", ("sweep", "stash", "unpack", "pack")):
+            # The legacy shared tags stand for every listed tool, so leave them out.
+            per_tool = [row for row in tags(unpack="0.5.2") if "-v" in row["tag_name"]]
+            with self.assertRaisesRegex(ValueError, "no stable published release.*pack"):
+                release.latest_published_versions(per_tool)
 
     def test_shared_monorepo_tag_supplies_unpack_version(self):
         self.assertEqual(

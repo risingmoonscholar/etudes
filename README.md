@@ -1,6 +1,6 @@
 # etudes
 
-Three small command-line tools that tidy a folder without reading your private files.
+Small command-line tools that tidy a folder without reading your private files. Three are released: `sweep`, `stash` and `unpack`. A fourth, `pack`, is not released yet.
 
 **macOS only.**
 ```console
@@ -41,6 +41,7 @@ afternoon, and can prove its own claims rather than asking you to trust them.
 | **`sweep`** | Organises the obvious and leaves the private alone | v0.5.4 |
 | **`stash`** | Clears a folder now, decides nothing, brings it all back | v0.5.4 |
 | **`unpack`** | Checks and extracts ZIP, tar variants and gzip | v0.5.4 |
+| **`pack`** | Creates a new archive under an explicit recipient policy | not released yet |
 
 ## Install
 
@@ -53,8 +54,11 @@ cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag s
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.4 unpack-cli
 ```
 
-The crates are named `*-cli`; the binaries they install are `sweep`, `stash` and
-`unpack`, in `~/.cargo/bin`.
+`pack` is not released yet, so it has no tag to install. To try it from a
+checkout: `cargo install --path crates/pack-cli --locked`.
+
+The crates are named `*-cli`; the binaries they install are `sweep`, `stash`
+and `unpack`, in `~/.cargo/bin`.
 
 `--tag` pins the install to a released version. Without it `cargo install` takes
 whatever `main` is at that moment, so two people running the same command on the
@@ -370,6 +374,9 @@ stash ~/Desktop --for 3d --json # what moved, and when it is due
 stash status --json             # what is held, and whether it is overdue
 unpack a.zip --list --json      # inspect an archive without extracting
 unpack a.zip --json             # what happened, or why it was refused
+pack ./selected --for other --list --json  # metadata preflight, no writes
+pack ./selected --for other --into ./delivery.zip --json
+pack contract --json
 ```
 
 **Unpack publishes an audited transaction.** Extraction happens in a private
@@ -604,6 +611,7 @@ crates/
   sweep-cli/     bin: sweep
   stash-cli/     bin: stash
   unpack-cli/    bin: unpack, dispatches to system tools, parses nothing
+  pack-cli/      bin: pack, manifest preflight and exclusive archive publication
   fixtures/      synthetic adversarial trees; no real file is read in testing
 ```
 
@@ -756,3 +764,78 @@ claim. Receipts continue to name uninstrumented access as unproven, and no zero
 counter proves absence of reads.
 
 Journalled stash operations return a persistent `stash_id`. Use `stash pop --id ID` for exact restoration, or `stash pop --latest` to explicitly select the latest live batch. Folder operations can coexist; ambiguous path-based restores refuse. Deadlines remain information until an explicit pop. See [independent stash batches](docs/stash-batches.md) for identity, legacy compatibility and disclosure semantics.
+
+
+## Pack a selected tree
+
+`pack FOLDER --for self|mac|other` makes a new archive beside FOLDER, or at
+`--into FILE`. The recipient is required. `self` and `mac` default to `tar.gz`
+with metadata kept; `other` defaults to ZIP with metadata dropped.
+`--format tar.gz|zip` and `--metadata keep|drop` make those choices explicit.
+ZIP with `keep` is refused because this writer cannot carry Mac metadata in that
+format. The name given to `--into` must end in the suffix of the format. `--list`
+says what would happen and writes nothing.
+
+Every member sits under one top folder named after FOLDER, so a stranger's
+`unzip` does not spill files and `unpack` puts every path back where it was.
+Scenario 124 packs and unpacks each recipient and format and compares every
+path, mode and byte, including a folder holding only a subfolder, empty folders
+and the deepest tree unpack accepts.
+
+**What is left out, counted and never named.** The sensitive-name classifier is
+shared with sweep. Folders such as `.ssh`, `.git` and `node_modules` are left out
+too. Stored `._` files are always left out; `.DS_Store`, `Thumbs.db` and
+`__MACOSX` are left out with `drop`. Other hidden entries are included. A package
+goes in whole, and a package holding a private-looking part is refused. A package
+chosen as FOLDER is refused; pack the folder holding it.
+
+**Metadata.** `keep` carries Finder tags, the download warning (quarantine) and
+other attributes as AppleDouble entries in the tar, and `unpack` restores them.
+`drop` removes them and discards resource forks, ACLs and file flags. Pack counts
+the items with Finder tags, the download warning, and resource forks or Finder
+info, and says what it carried or removed. It reads the lengths of those four
+attributes only, and never lists attribute names, so it does not look at Finder
+comments itself; with `keep` the system tar reads and stores every attribute. A file that loses the download warning will not warn
+after it is extracted. The top folder's own attributes and file owners are not
+kept. Empty folders are kept. A file whose other hard-link name stays out of the
+archive goes in as its own copy, and pack says so.
+
+**What is refused.** Links of any kind, hard links between two names in FOLDER,
+setuid and setgid files and folders, pipes, sockets and devices, files still downloading,
+files stored only in the cloud, unreadable items, names unsafe on another system,
+names that differ only by case or accent, more than 20,000 items and items more
+than 31 levels below FOLDER. These are refused before anything is written. Also system and
+credential folders as sweep judges them, your home folder and any folder holding
+it, and running as root. An in-flight refusal names the entry unless its name
+looks private. Other found names stay hidden; the message prints a `find` command
+that lists them.
+
+**Writing.** A conservative bound includes payload, per-member overhead and
+retained metadata lengths. `--max-size N[K|M|G]` defaults to 4 GiB, and a run over
+it prints the value that would allow it. Free space is checked before writing, and
+size every 100 ms while writing; the limit is soft and can be passed between
+checks. The archive is written to a private mode-0600 file beside the destination.
+That file is read back, its member list and payload byte count are compared with
+the plan, and the folder is re-checked, before a rename that cannot replace
+anything gives it the requested name. So the requested name holds a complete
+archive or nothing, after a failure, a full disk, SIGTERM, SIGINT, SIGHUP or
+SIGKILL. Volumes without that rename are refused. A failed check after the rename
+keeps the archive and reports `incomplete` with exit 3.
+
+**Cleanup.** A stop signal or failure removes the unfinished file only if its name
+still means the file pack made. A kill leaves it, so a later run for the same
+destination removes it only after proving all of this: the exact name with a
+32-hex nonce, a regular file with one name, mode 0600, owned by this user, an
+extended attribute holding the same nonce, and no process holding the lock pack
+took when creating it, which the writer shares, so an orphaned writer still counts.
+Anything else with that kind of name is left alone and reported, and so is a file
+another process still has open. This happens even when the run then refuses
+because the destination exists; `--list` only reports. A kill in the
+moment between creating the file and marking it leaves an empty file that pack
+will report and not remove. `--list` and refusals before writing remove nothing.
+
+Source checks are metadata checks, not a filesystem lock or an application
+consistency snapshot. The system archive process reads included file bytes; this
+differs from sweep's metadata classification. Receipts contain opaque item ids and
+redacted paths, with subprocess reads explicitly outside complete instrumentation
+coverage. No pack animation is included; the site records its help output.
