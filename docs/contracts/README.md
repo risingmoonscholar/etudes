@@ -435,3 +435,16 @@ reports `state`, `reason`, `added`, `requested`, `profile`, `written` and
 `insufficient_space` or `profile_write_failed`. Undo keeps saved routes. Existing profile SHA-256 replay binding
 is retained. `v15/sweep.json` pins this declaration and `v1/sweep.json` mirrors
 it; the result envelope stays at version 4.
+
+**Declaration version 16 (sweep)** lets `--scheme existing` create a saved
+route's folder. When a route's direct visible folder is missing, apply creates
+it only for a group that moves at least one file, through the same checked path
+as a `--map` folder: the plan lists it first (signal `.EXT (saved route, new
+folder sweep creates)`), the journal records it, and undo removes it when it is
+empty. A route with no files in the selected folder is ignored and creates
+nothing. A file or link holding the route's folder name still refuses with
+`profile_invalid` before anything moves, and routed files never fall to a
+built-in group. Apply, review and exported-plan apply declare the write
+`selected_tree_route_folders_if_missing`. The plan artifact schema and the
+result envelope (version 4) are unchanged. `v16/sweep.json` pins this
+declaration and `v1/sweep.json` mirrors it; `v15/sweep.json` remains retained.

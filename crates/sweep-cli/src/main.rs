@@ -54,7 +54,8 @@ FLAGS
                       (existing direct folders only; journal required).
                       Undo moves files back but keeps saved routes
     --scheme folders  group by file type and other built-in folder rules (default)
-    --scheme existing use the saved, versioned existing-folder profile
+    --scheme existing use the saved, versioned existing-folder profile; a
+                      missing route folder is created only when files move
     --scheme tags     add Finder tags and move nothing (macOS); needs --map
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)

@@ -119,11 +119,15 @@ extension = "pdf"
 folder = "Reading"
 ```
 
-Each route applies only when its destination is already a direct, visible
-folder in the selected directory. If a destination is missing, sweep refuses
-and names it rather than letting a built-in rule send those files elsewhere.
-A route needs at least three eligible files to form a group, and each extension
-needs its own destination. Duplicate or invalid routes refuse before anything
+A route's folder is a direct, visible folder in the selected directory. When
+it is missing, sweep creates it, the same way as a `--map` folder, but only when
+the run moves at least one file into it. The plan lists the folder before
+anything moves, and undo removes it again if it is empty after the files go
+back. A route whose extension has no files here is ignored and creates nothing.
+If a file or a link holds the folder's name, sweep refuses before anything
+moves and names it. A route needs at least three eligible files to form a
+group; fewer stay where they are, and no built-in rule takes them. Each
+extension needs its own destination. Duplicate or invalid routes refuse before anything
 moves. Safety refusals still take precedence over the profile; eligible profile
 routes take precedence over built-in grouping. A routed file is claimed once,
 even when its name also matches a built-in detector such as Screenshots. At
