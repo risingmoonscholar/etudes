@@ -520,11 +520,13 @@
         "operation": "startup_except_contract",
         "reads": [
           "journal_store_metadata",
-          "legacy_state_metadata"
+          "legacy_state_metadata",
+          "expired_journal_store",
+          "existing_journal_key"
         ],
         "writes": [
           "legacy_state_migration",
-          "expired_journals_except_stash"
+          "expired_journals_that_open_except_stash"
         ]
       }
     },
@@ -544,7 +546,7 @@
       "source_entries": "relocation_and_size_checked_copy_unlink",
       "user_payloads": "never",
       "owned_artifacts": [
-        "expired_journals_except_stash",
+        "expired_journals_that_open_except_stash",
         "sweep_journals_on_forget",
         "authorized_shared_key",
         "empty_group_directories",

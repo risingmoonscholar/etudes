@@ -195,7 +195,19 @@ fn run_main(args: Vec<String>) -> ExitCode {
     // index of the user's filenames forever keeps the exposure forever.
     // Stash records are kept: their files may still be in a holding folder,
     // and only `stash pop` can tell, with the key, that nothing is left.
-    let expired = etude_core::journal::prune_expired();
+    // A record must open with the current key before it is dropped: one that
+    // does not is what undo tells the person to keep. The key is fetched only
+    // when something is old, read-only, and never created here.
+    let expired = if etude_core::journal::has_expired() {
+        let key = etude_keep::key_if_present();
+        etude_core::scan::record_read_outcome("key_material", key.is_ok());
+        match key {
+            Ok(Some(key)) => etude_core::journal::prune_expired(&KeychainSeal { key }),
+            _ => 0,
+        }
+    } else {
+        0
+    };
     etude_cli_support::envelope::effect("expired_journals_removed", expired);
     if expired > 0 {
         eprintln!(

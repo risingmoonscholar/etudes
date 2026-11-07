@@ -255,7 +255,7 @@ pub fn declaration(
                     "owned_artifacts",
                     strings(match tool {
                         Tool::Sweep => &[
-                            "expired_journals_except_stash",
+                            "expired_journals_that_open_except_stash",
                             "sweep_journals_on_forget",
                             "authorized_shared_key",
                             "empty_group_directories",
@@ -950,8 +950,16 @@ fn startup_scope(tool: Tool) -> String {
     match tool {
         Tool::Sweep => scope(
             "startup_except_contract",
-            &["journal_store_metadata", "legacy_state_metadata"],
-            &["legacy_state_migration", "expired_journals_except_stash"],
+            &[
+                "journal_store_metadata",
+                "legacy_state_metadata",
+                "expired_journal_store",
+                "existing_journal_key",
+            ],
+            &[
+                "legacy_state_migration",
+                "expired_journals_that_open_except_stash",
+            ],
         ),
         Tool::Stash => scope(
             "startup_except_contract",

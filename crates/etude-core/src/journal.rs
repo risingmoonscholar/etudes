@@ -1136,12 +1136,14 @@ impl Journal {
 /// forever means keeping the exposure forever, and undo is only useful for as
 /// long as the user remembers what they ran.
 ///
-/// The exception is a record that is still the only way back. A stash record
+/// The exceptions are records that are still the only way back. A stash record
 /// describes files that sit in a hidden holding folder until they are popped;
 /// dropping it by age leaves them there with nothing that can bring them back.
 /// So a stash record is kept for as long as its stash is outstanding, and
 /// expires like any other record once nothing is held: [`TTL_DAYS`] after the
 /// pop that finished it (a pop rewrites the record, which resets its age).
+/// And a record that does not open with the current key is kept: only the
+/// right key can tell what it holds, and the person may still find that key.
 pub const TTL_DAYS: u64 = 30;
 
 /// Tools whose records hold files that are not yet back where they came
@@ -1161,33 +1163,76 @@ fn kept_until_finished(file_name: &str) -> bool {
         .is_some_and(|(tool, _)| KEPT_UNTIL_FINISHED.contains(&tool))
 }
 
-/// Delete journals older than [`TTL_DAYS`]. Returns how many were removed.
-///
-/// Called at the start of every run that touches the state directory. Failure
-/// is not fatal: a journal that cannot be removed is a housekeeping problem,
-/// not a reason to refuse the user's actual request.
-///
-/// Records of a tool in [`KEPT_UNTIL_FINISHED`] are skipped. This runs with no
-/// journal key, so it cannot tell a popped stash from an outstanding one, and
-/// it decides from the filename and modified time only; it reads no journal
-/// contents. Those records expire through [`prune_finished`] instead.
-pub fn prune_expired() -> usize {
+/// Records past [`TTL_DAYS`] that [`prune_expired`] would consider, by name and
+/// modified time only. Lets a caller skip fetching the key when nothing is old.
+fn expired_candidates() -> Vec<(String, JournalCandidate)> {
     let Some(cutoff) = ttl_cutoff() else {
-        return 0;
+        return Vec::new();
     };
     let Ok(rd) = crate::scan::observe_read("directory_enumeration", fs::read_dir(state_dir()))
     else {
-        return 0;
+        return Vec::new();
     };
-    let mut removed = 0;
+    let mut found = Vec::new();
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".journal") || kept_until_finished(&name) {
+        if kept_until_finished(&name) {
             continue;
         }
-        let Ok(md) = e.metadata() else { continue };
-        let Ok(t) = md.modified() else { continue };
-        if t < cutoff && fs::remove_file(e.path()).is_ok() {
+        let Some((tool, id)) = name
+            .strip_suffix(".journal")
+            .and_then(|stem| stem.split_once('-'))
+        else {
+            continue;
+        };
+        let Ok(md) = fs::symlink_metadata(e.path()) else {
+            continue;
+        };
+        if md.is_file() && md.modified().is_ok_and(|t| t < cutoff) {
+            found.push((
+                tool.to_string(),
+                JournalCandidate {
+                    path: e.path(),
+                    metadata: md,
+                    id: id.to_string(),
+                },
+            ));
+        }
+    }
+    found
+}
+
+/// Whether any record outside [`KEPT_UNTIL_FINISHED`] is past [`TTL_DAYS`].
+/// Reads names and metadata only.
+pub fn has_expired() -> bool {
+    !expired_candidates().is_empty()
+}
+
+/// Delete records older than [`TTL_DAYS`] that open with `sealer`. Returns how
+/// many were removed.
+///
+/// Called at the start of every sweep run. Failure is not fatal: a journal
+/// that cannot be removed is a housekeeping problem, not a reason to refuse the
+/// user's actual request.
+///
+/// Records of a tool in [`KEPT_UNTIL_FINISHED`] are skipped: whether a stash
+/// still holds files is a question for [`prune_finished`].
+///
+/// A record that does not open with this key (another key, altered, damaged)
+/// is kept, however old. When undo cannot open a record it tells the person to
+/// keep it, because the right key opens it again; deleting it by age would make
+/// that advice false and leave the files where the apply put them with no way
+/// back. Kept, it exposes nothing to anyone without that key. `sweep forget`
+/// still removes it.
+pub fn prune_expired(sealer: &dyn Sealer) -> usize {
+    let mut removed = 0;
+    for (tool, candidate) in expired_candidates() {
+        if candidate.load(&tool, sealer).is_err() {
+            continue;
+        }
+        let unchanged = fs::symlink_metadata(&candidate.path)
+            .is_ok_and(|now| same_journal(&candidate.metadata, &now));
+        if unchanged && fs::remove_file(&candidate.path).is_ok() {
             removed += 1;
         }
     }
@@ -2114,17 +2159,24 @@ mod tests {
         fs::create_dir_all(&dir).expect("mkdir");
         unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
 
-        let old = dir.join("old.journal");
-        let new = dir.join("new.journal");
-        fs::write(&old, b"x").expect("write");
-        fs::write(&new, b"x").expect("write");
+        for id in ["old", "new"] {
+            Journal {
+                id: id.into(),
+                tool: "sweep".into(),
+                ..Journal::default()
+            }
+            .save_sealed(&MarkSeal(1))
+            .expect("write");
+        }
+        let old = dir.join("sweep-old.journal");
+        let new = dir.join("sweep-new.journal");
 
         // Backdate one past the TTL. filetime is not in the dependency tree, so
         // this uses the libc utimes we already link.
         let past = (TTL_DAYS + 5) * 86_400;
         set_mtime_secs_ago(&old, past);
 
-        let removed = prune_expired();
+        let removed = prune_expired(&MarkSeal(1));
 
         assert_eq!(removed, 1, "prune removed {removed} journals, expected 1");
         assert!(!old.exists(), "an expired journal survived");
@@ -2195,14 +2247,14 @@ mod tests {
         let popped = aged_record(&dir, "stash", "popped", &[EntryState::Reversed]);
         let swept = aged_record(&dir, "sweep", "old", &[EntryState::Moved]);
 
-        assert_eq!(prune_expired(), 1);
+        assert_eq!(prune_expired(&MarkSeal(1)), 1);
         assert!(
             held.exists(),
             "an outstanding stash record was dropped by age"
         );
         assert!(
             popped.exists(),
-            "the keyless prune cannot tell a popped stash"
+            "the age prune leaves even a popped stash to stash"
         );
         assert!(!swept.exists(), "an old sweep record survived its 30 days");
         fs::remove_dir_all(&dir).unwrap();
@@ -2274,6 +2326,39 @@ mod tests {
             "an old record that moved nothing survived"
         );
         assert!(swept.exists(), "prune_finished reached outside its tool");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `sweep undo` on a record the key cannot open says "Keep that record".
+    /// The age prune used to delete it 30 days after its last write anyway.
+    #[test]
+    fn age_prune_keeps_old_records_that_do_not_open() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_unopened_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+
+        let opens = aged_record(&dir, "sweep", "opens", &[EntryState::Moved]);
+        let other_key = Journal {
+            id: "otherkey".into(),
+            tool: "sweep".into(),
+            ..Journal::default()
+        };
+        other_key.save_sealed(&MarkSeal(2)).unwrap();
+        set_mtime_secs_ago(&other_key.path(), (TTL_DAYS + 5) * 86_400);
+        let altered = dir.join("sweep-altered.journal");
+        fs::write(&altered, b"\x05\0\0\0garbage").unwrap();
+        set_mtime_secs_ago(&altered, (TTL_DAYS + 5) * 86_400);
+
+        assert!(has_expired());
+        assert_eq!(prune_expired(&MarkSeal(1)), 1);
+        assert!(!opens.exists(), "an old record that opens survived");
+        assert!(
+            other_key.path().exists(),
+            "a record under another key was dropped by age"
+        );
+        assert!(altered.exists(), "a damaged record was dropped by age");
         fs::remove_dir_all(&dir).unwrap();
     }
 
