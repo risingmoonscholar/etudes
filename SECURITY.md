@@ -188,6 +188,12 @@ CI. There is no `cargo vet`, no reproducible build, no published checksum, and
 no signature. If you install from git you are trusting this repository and
 whatever `cargo` resolves.
 
+**A power cut can leave the newest move without its record.** Each journal
+record is ordered behind its move with a barrier sync, not a full drive flush,
+and a finished run is flushed once. After a power cut, every surviving move
+except the newest has its record. The newest move may lack one, or a record
+may survive without its move. Undo reconciles both; no file is lost.
+
 **No protection against a filesystem race.** A file that changes between plan
 and apply is handled — the apply re-checks — but this is not a hardened
 against-an-adversary property, and the stress suite records where it could not
