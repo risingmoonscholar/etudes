@@ -191,29 +191,11 @@ fn run_main(args: Vec<String>) -> ExitCode {
     // the old one still has what it's looking for.
     etude_core::journal::migrate_legacy_state_dir();
 
-    // Journals past their TTL are dropped before anything else. Keeping an
-    // index of the user's filenames forever keeps the exposure forever.
-    // Stash records are kept: their files may still be in a holding folder,
-    // and only `stash pop` can tell, with the key, that nothing is left.
-    // A record must open with the current key before it is dropped: one that
-    // does not is what undo tells the person to keep. The key is fetched only
-    // when something is old, read-only, and never created here.
-    let expired = if etude_core::journal::has_expired() {
-        let key = etude_keep::key_if_present();
-        etude_core::scan::record_read_outcome("key_material", key.is_ok());
-        match key {
-            Ok(Some(key)) => etude_core::journal::prune_expired(&KeychainSeal { key }),
-            _ => 0,
-        }
-    } else {
-        0
-    };
-    etude_cli_support::envelope::effect("expired_journals_removed", expired);
-    if expired > 0 {
-        eprintln!(
-            "sweep: dropped {} older than 30 days",
-            etude_cli_support::counted(expired, "undo record", "undo records")
-        );
+    // Journals past their TTL are dropped before anything else, except in an
+    // undo run, which drops them after it has finished: see `prune_old_records`.
+    let undo = args.first().is_some_and(|arg| arg == "undo");
+    if !undo {
+        prune_old_records();
     }
 
     match args.first().map(String::as_str) {
@@ -230,7 +212,11 @@ fn run_main(args: Vec<String>) -> ExitCode {
         Some("lesson") => cmd_lesson(&args),
         Some("apply") => cmd_apply(&args),
         Some("propose") => cmd_propose(&args),
-        Some("undo") => cmd_undo(&args),
+        Some("undo") => {
+            let code = cmd_undo(&args);
+            prune_old_records();
+            code
+        }
         Some("status") => cmd_status(&args),
         Some("forget") => cmd_forget(&args),
         Some("review") => cmd_review(&args),
@@ -2500,6 +2486,38 @@ impl etude_core::journal::Sealer for KeychainSeal {
     }
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
         etude_keep::open(&self.key, sealed).map_err(|_| "wrong key or the journal was altered")
+    }
+}
+
+/// Drop undo records past their TTL, and say how many.
+///
+/// Keeping an index of the user's filenames forever keeps the exposure
+/// forever. Stash records are kept: their files may still be in a holding
+/// folder, and only `stash pop` can tell, with the key, that nothing is left.
+///
+/// A record must open with the current key before it is dropped. One that does
+/// not is the record `sweep undo` tells the person to keep, because the right
+/// key opens it again. When they find that key, the undo run that uses it must
+/// still find the record, so an undo run prunes after the undo, not before.
+/// The key is fetched only when something is old, read-only, never created.
+fn prune_old_records() {
+    let expired = if etude_core::journal::has_expired() {
+        let key = etude_keep::key_if_present();
+        etude_core::scan::record_read_outcome("key_material", key.is_ok());
+        match key {
+            Ok(Some(key)) => etude_core::journal::prune_expired(&KeychainSeal { key }),
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    etude_cli_support::envelope::effect("expired_journals_removed", expired);
+    if expired > 0 {
+        eprintln!(
+            "sweep: dropped {} older than {} days",
+            etude_cli_support::counted(expired, "undo record", "undo records"),
+            etude_core::journal::TTL_DAYS
+        );
     }
 }
 
