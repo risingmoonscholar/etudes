@@ -537,6 +537,7 @@ impl<W: DurableWrite> Drop for RunWriter<W> {
 
 /// Test-only switches and counters for the journal's durable writes.
 #[cfg(test)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod test_hooks {
     use std::cell::Cell;
     thread_local! {
@@ -1896,6 +1897,177 @@ mod tests {
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A real folder of three files and a throwaway state folder, for the
+    /// tests that run a whole apply against the journal's durable writes.
+    struct RunScene {
+        dir: std::path::PathBuf,
+        sources: Vec<std::path::PathBuf>,
+        _env: RestoreEnvVar,
+    }
+
+    impl RunScene {
+        fn new(name: &str, ext: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("etudes_run_{name}_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(dir.join("root")).unwrap();
+            let env = RestoreEnvVar::set("ETUDE_STATE_DIR", dir.join("state"));
+            let root = dir.join("root").canonicalize().unwrap();
+            let sources = (0..3)
+                .map(|i| {
+                    let path = root.join(format!("file{i}.{ext}"));
+                    fs::write(&path, format!("payload {i}")).unwrap();
+                    path
+                })
+                .collect();
+            Self {
+                dir,
+                sources,
+                _env: env,
+            }
+        }
+
+        fn move_plan(&self) -> crate::plan::Plan {
+            let root = self.dir.join("root").canonicalize().unwrap();
+            let scan = crate::scan::scan(
+                &root,
+                &crate::scan::ScanConfig {
+                    grace: None,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            crate::plan::Plan::with_groups(
+                &scan,
+                vec![crate::plan::Group {
+                    name: "Collected".into(),
+                    signal: crate::plan::Signal::Collected { count: 3 },
+                    members: self.sources.clone(),
+                    accepted: true,
+                }],
+            )
+        }
+
+        fn tag_plan(&self) -> crate::plan::Plan {
+            let mut plan = self.move_plan();
+            plan.adds_tags = true;
+            plan.groups[0].name = "Work".into();
+            plan.groups[0].signal = crate::plan::Signal::Tagged {
+                ext: "pdf".into(),
+                new: true,
+                entry: "Work".into(),
+            };
+            plan
+        }
+    }
+
+    impl Drop for RunScene {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct PlainSeal;
+    impl Sealer for PlainSeal {
+        fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(plain.to_vec())
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(sealed.to_vec())
+        }
+    }
+
+    /// A move apply that stops with an error after it wrote a record still
+    /// makes its records durable, exactly once.
+    #[test]
+    fn a_failed_apply_flushes_its_records_once() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("flush_move", "txt");
+        let before = test_hooks::FINISHES.get();
+        let error = crate::apply::apply_with_structured_progress(
+            &scene.move_plan(),
+            "flushtest",
+            Some(&PlainSeal),
+            Some(1),
+            |_| {},
+        )
+        .expect_err("the injected failure stops the apply");
+        assert!(matches!(error, crate::apply::ApplyError::Injected(1)));
+        assert_eq!(
+            test_hooks::FINISHES.get() - before,
+            1,
+            "one flush on the error path"
+        );
+        let id = candidates_by_recency("flushtest").unwrap().remove(0);
+        let mut journal = id.load("flushtest", &PlainSeal).unwrap();
+        assert_eq!(journal.entries[0].state, EntryState::Moved);
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+        assert_eq!(undo.restored, 1);
+    }
+
+    /// The same for a tag apply.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_tag_apply_flushes_its_records_once() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("flush_tag", "pdf");
+        let before = test_hooks::FINISHES.get();
+        let error = crate::apply::apply_with_structured_progress(
+            &scene.tag_plan(),
+            "flushtag",
+            Some(&PlainSeal),
+            Some(1),
+            |_| {},
+        )
+        .expect_err("the injected failure stops the apply");
+        assert!(matches!(error, crate::apply::ApplyError::Injected(1)));
+        assert_eq!(
+            test_hooks::FINISHES.get() - before,
+            1,
+            "one flush on the error path"
+        );
+        let id = candidates_by_recency("flushtag").unwrap().remove(0);
+        let mut journal = id.load("flushtag", &PlainSeal).unwrap();
+        assert_eq!(journal.entries[0].state, EntryState::Moved);
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+    }
+
+    /// A volume that refuses `F_BARRIERFSYNC` gets a full sync instead. The
+    /// records still reach the file and the run succeeds.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_refused_barrier_falls_back_and_the_records_still_land() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("barrier_refused", "txt");
+        test_hooks::BARRIER_REFUSED.set(true);
+        let before = test_hooks::BARRIER_FALLBACKS.get();
+        let result = crate::apply::apply_with_structured_progress(
+            &scene.move_plan(),
+            "barriertest",
+            Some(&PlainSeal),
+            None,
+            |_| {},
+        );
+        test_hooks::BARRIER_REFUSED.set(false);
+        let report = result.expect("the run succeeds on the fallback");
+        assert_eq!(report.moved, 3);
+        assert!(
+            test_hooks::BARRIER_FALLBACKS.get() - before >= 3,
+            "every record took the fallback"
+        );
+        let mut journal = Journal::load_sealed("barriertest", &report.journal_id, &PlainSeal)
+            .expect("journal reloads");
+        assert!(journal.entries.iter().all(|e| e.state == EntryState::Moved));
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+        assert_eq!(undo.restored, 3);
+        for (i, source) in scene.sources.iter().enumerate() {
+            assert_eq!(fs::read(source).unwrap(), format!("payload {i}").as_bytes());
+        }
+    }
 
     /// A record with no entries is written only when an apply is refused
     /// before it moves anything. Nothing was planned into it and nothing
