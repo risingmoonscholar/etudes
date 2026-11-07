@@ -61,7 +61,11 @@ fn folder(base: &Path, name: &str) -> String {
 }
 
 fn apply(base: &Path, key: &str, dir: &str) -> Output {
-    let out = run(base, key, &["apply", dir, "--yes", "--since", "0", "--json"]);
+    let out = run(
+        base,
+        key,
+        &["apply", dir, "--yes", "--since", "0", "--json"],
+    );
     assert!(
         out.status.success(),
         "{}",
@@ -101,7 +105,10 @@ fn a_scan_reads_no_key_and_drops_no_old_record() {
     let dir = folder(&base.0, "a");
     let applied = apply(&base.0, KEY, &dir);
     // The seam is live: a run that does use the key says so.
-    assert!(read_key_material(&applied), "apply did not report its key read");
+    assert!(
+        read_key_material(&applied),
+        "apply did not report its key read"
+    );
     let old = records(&base.0);
     assert_eq!(old.len(), 1);
     age(&old[0]);
@@ -111,7 +118,10 @@ fn a_scan_reads_no_key_and_drops_no_old_record() {
     let scan = run(&base.0, KEY, &[empty.to_str().unwrap(), "--json"]);
     assert_eq!(scan.status.code(), Some(1), "an empty folder needs nothing");
     assert!(!read_key_material(&scan), "a scan read the journal key");
-    assert!(old[0].exists(), "a scan, which holds no key, dropped a record");
+    assert!(
+        old[0].exists(),
+        "a scan, which holds no key, dropped a record"
+    );
     let status = run(&base.0, KEY, &["status", &dir, "--json"]);
     assert!(status.status.success());
     assert!(old[0].exists(), "status dropped a record");
@@ -125,7 +135,10 @@ fn an_apply_drops_an_old_record_it_can_open_and_keeps_its_own() {
     age(&old[0]);
 
     let out = apply(&base.0, KEY, &folder(&base.0, "b"));
-    assert!(!old[0].exists(), "an old record that opens survived an apply");
+    assert!(
+        !old[0].exists(),
+        "an old record that opens survived an apply"
+    );
     let now = records(&base.0);
     assert_eq!(now.len(), 1, "the apply's own record is missing");
     assert!(
@@ -154,9 +167,16 @@ fn an_undo_drops_old_records_after_it_has_undone() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(std::fs::read_dir(&b).unwrap().count(), 3, "undo did not restore");
+    assert_eq!(
+        std::fs::read_dir(&b).unwrap().count(),
+        3,
+        "undo did not restore"
+    );
     assert!(!first[0].exists(), "an old record survived the undo run");
-    assert!(target[0].exists(), "undo's own record, rewritten now, was dropped");
+    assert!(
+        target[0].exists(),
+        "undo's own record, rewritten now, was dropped"
+    );
 }
 
 #[test]
@@ -167,7 +187,10 @@ fn an_old_record_another_key_cannot_open_is_kept() {
     age(&old[0]);
 
     apply(&base.0, KEY, &folder(&base.0, "b"));
-    assert!(old[0].exists(), "an apply dropped a record it could not open");
+    assert!(
+        old[0].exists(),
+        "an apply dropped a record it could not open"
+    );
     let undo = run(&base.0, KEY, &["undo", "--id", &id(&old[0])]);
     assert_eq!(undo.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&undo.stderr).contains("Keep that record"));
