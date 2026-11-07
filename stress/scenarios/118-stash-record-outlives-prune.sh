@@ -56,6 +56,27 @@ assert_eq 1 "$?" "pop of a folder with nothing stashed exits 1"
 if [ ! -e "$ETUDE_STATE_DIR/$stash_record" ]; then pass "the popped stash record expires once 30 days old"; else fail "a popped stash record outlived its 30 days"; fi
 if grep -q 'dropped 1 undo record older than 30 days' "$W/pop2.err"; then pass "stash says it dropped one record"; else fail "stash's prune message: $(cat "$W/pop2.err")"; fi
 
+# A sweep record that does not open with the current key is kept past 30
+# days, so "Keep that record" is true, and the right key still undoes it.
+mkdir -p "$W/keyed"
+for n in 1 2 3; do printf 'keyed %s' "$n" >"$W/keyed/Screenshot 2024-01-02 at 00.00.0$n.png"; done
+touch -t 202401020000 "$W/keyed"/*.png
+(cd "$W/keyed" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256) >"$W/keyed.sum"
+"$SWEEP" apply "$W/keyed" --yes --since 0 >/dev/null 2>&1
+assert_eq 0 "$?" "sweep apply under the first key"
+keyed_record=$(ls "$ETUDE_STATE_DIR" | grep '^sweep-.*\.journal$')
+touch -t "$OLD" "$ETUDE_STATE_DIR/$keyed_record"
+OTHER_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+ETUDE_JOURNAL_KEY=$OTHER_KEY "$SWEEP" "$W/scan" >/dev/null 2>&1
+if [ -f "$ETUDE_STATE_DIR/$keyed_record" ]; then pass "an old record another key cannot open survives the prune"; else fail "sweep's prune deleted a record it could not open"; fi
+ETUDE_JOURNAL_KEY=$OTHER_KEY "$SWEEP" undo "$W/keyed" >/dev/null 2>"$W/wrongkey.err"
+assert_eq 3 "$?" "undo with the wrong key refuses"
+if grep -q 'Keep that record' "$W/wrongkey.err" && [ -f "$ETUDE_STATE_DIR/$keyed_record" ]; then pass "undo says keep the record, and it is still there"; else fail "wrong-key undo: $(cat "$W/wrongkey.err")"; fi
+"$SWEEP" undo "$W/keyed" >/dev/null 2>"$W/rightkey.err"
+assert_eq 0 "$?" "undo with the right key succeeds after 30 days"
+(cd "$W/keyed" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256) >"$W/keyed.after"
+if cmp -s "$W/keyed.sum" "$W/keyed.after"; then pass "the right key brings every file back with its bytes"; else fail "files after undo differ: $(diff "$W/keyed.sum" "$W/keyed.after" | head -5)"; fi
+
 python3 - "$W" <<'PY'
 import pathlib, sys, zipfile
 w = pathlib.Path(sys.argv[1])
