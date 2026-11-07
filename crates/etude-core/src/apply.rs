@@ -1471,7 +1471,8 @@ fn move_into_validated(from: &Path, to: &Path, expected: Option<(u64, u64)>) -> 
 ///   `int renameatx_np(int, const char *, int, const char *, unsigned int)`.
 /// - `.../MacOSX.sdk/usr/include/sys/fcntl.h`: `O_WRONLY 0x0001`,
 ///   `O_NOFOLLOW 0x00000100`, `O_CREAT 0x00000200`, `O_EXCL 0x00000800`,
-///   `O_DIRECTORY 0x00100000`, `O_CLOEXEC 0x01000000`, `AT_FDCWD -2`, and
+///   `O_DIRECTORY 0x00100000`, `O_CLOEXEC 0x01000000`,
+///   `O_EXEC 0x40000000`, `O_SEARCH (O_EXEC | O_DIRECTORY)`, `AT_FDCWD -2`, and
 ///   `int openat(int, const char *, int, ...)`.
 /// - `.../MacOSX.sdk/usr/include/sys/unistd.h`: `linkat` and `unlinkat`.
 /// - `.../MacOSX.sdk/usr/include/sys/errno.h`: `ENOENT 2`, `EXDEV 18`,
@@ -1485,6 +1486,7 @@ mod at {
     pub const O_EXCL: core::ffi::c_int = 0x0000_0800;
     pub const O_DIRECTORY: core::ffi::c_int = 0x0010_0000;
     pub const O_CLOEXEC: core::ffi::c_int = 0x0100_0000;
+    pub const O_SEARCH: core::ffi::c_int = 0x4000_0000 | O_DIRECTORY;
     pub const AT_FDCWD: core::ffi::c_int = -2;
     pub const ENOENT: i32 = 2;
     pub const EXDEV: i32 = 18;
@@ -1560,12 +1562,14 @@ fn split_destination(to: &Path) -> io::Result<(&Path, &std::ffi::OsStr)> {
 /// and inode (`fstat`) must equal the identity. A link anywhere in the path
 /// leads to another folder, so it fails the identity check too. Everything
 /// later is made relative to the returned descriptor, so a swap of the path
-/// after this point cannot redirect the move. std opens with `O_RDONLY` for
-/// `read(true)` and always adds `O_CLOEXEC`.
+/// after this point cannot redirect the move. The folder is opened for search
+/// only (`O_SEARCH`), so a folder you may write into but not list (mode 0300)
+/// still takes a move, as a rename by path did. std adds `O_RDONLY`, which is
+/// zero, for `read(true)`, and always adds `O_CLOEXEC`.
 #[cfg(target_os = "macos")]
 fn open_checked_folder(folder: &Path, expected: Option<(u64, u64)>) -> io::Result<fs::File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let flags = at::O_DIRECTORY
+    let flags = at::O_SEARCH
         | if expected.is_some() {
             at::O_NOFOLLOW
         } else {
@@ -3005,6 +3009,36 @@ mod tests {
         assert!(!super::is_copy_mismatch(
             &std::io::Error::from_raw_os_error(28)
         ));
+    }
+
+    /// A folder you may write into but not list (mode 0300) took a rename by
+    /// path. The move into the opened folder must still accept it, so the
+    /// folder is opened for search only, not for reading.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_move_into_a_write_only_folder_still_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ =
+                    fs::set_permissions(self.0.join("dropbox"), fs::Permissions::from_mode(0o700));
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("etudes_write_only_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _cleanup = Cleanup(dir.clone());
+        let dropbox = dir.join("dropbox");
+        fs::create_dir_all(&dropbox).expect("folder");
+        let source = dir.join("a.txt");
+        fs::write(&source, b"payload").expect("write");
+        fs::set_permissions(&dropbox, fs::Permissions::from_mode(0o300)).expect("chmod");
+        let method = move_one_for_tests(&source, &dropbox.join("a.txt"));
+        fs::set_permissions(&dropbox, fs::Permissions::from_mode(0o700)).expect("chmod back");
+        assert!(matches!(method, Ok(Method::Rename)), "{method:?}");
+        assert!(!source.exists());
+        assert_eq!(fs::read(dropbox.join("a.txt")).expect("moved"), b"payload");
     }
 
     /// A real process dies at the fallback seam, leaving the successor of a
