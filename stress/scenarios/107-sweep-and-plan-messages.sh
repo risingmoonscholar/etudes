@@ -11,7 +11,7 @@ cleanup() {
   chflags -R nouchg "$W" 2>/dev/null; chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"
 }
 trap cleanup EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 if [ "$(id -u)" = 0 ]; then
   unproven "sweep and plan messages" "root ignores file modes"
   exit 0

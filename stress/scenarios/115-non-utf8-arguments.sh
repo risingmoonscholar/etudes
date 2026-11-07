@@ -13,7 +13,7 @@ require python3 "reads --json results and checks raw bytes" || exit 0
 
 W=$(workdir)
 trap 'rm -rf "$W"' EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 export HOME="$W/home" ETUDE_STATE_DIR="$W/state"
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
 mkdir -p "$HOME" "$ETUDE_STATE_DIR" "$W/folder"

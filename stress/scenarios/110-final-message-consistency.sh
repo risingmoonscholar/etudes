@@ -13,7 +13,7 @@ cleanup() {
   chmod -R u+rwx "${W:?}" 2>/dev/null; rm -rf "${W:?}"
 }
 trap cleanup EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 require python3 "the checks read JSON with Python" || exit 0
 export HOME="$W/home" ETUDE_STATE_DIR="$W/state" SWEEP_GRACE_SECS=0
 mkdir -p "$HOME" "$ETUDE_STATE_DIR"
