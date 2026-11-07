@@ -36,6 +36,50 @@ pub fn is_copy_mismatch(error: &io::Error) -> bool {
         .is_some_and(|inner| inner.to_string() == COPY_MISMATCH)
 }
 
+/// A move failed after it had made a copy or a second name at the
+/// destination, and that copy could not be removed, or was kept because the
+/// source was gone and it was the only one left. It wraps the error that
+/// stopped the move.
+#[derive(Debug)]
+struct CopyLeftBehind(io::Error);
+
+impl std::fmt::Display for CopyLeftBehind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}; a copy remains at the destination", self.0)
+    }
+}
+
+impl std::error::Error for CopyLeftBehind {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+fn copy_left_behind(error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), CopyLeftBehind(error))
+}
+
+/// True when a failed move left a copy or a second name at its destination.
+pub fn is_copy_left_behind(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<CopyLeftBehind>())
+}
+
+/// The error that stopped the move, without the copy-left marker.
+fn without_copy_left(error: io::Error) -> io::Error {
+    if !is_copy_left_behind(&error) {
+        return error;
+    }
+    match error
+        .into_inner()
+        .map(|inner| inner.downcast::<CopyLeftBehind>())
+    {
+        Some(Ok(left)) => left.0,
+        _ => unreachable!("checked to be a CopyLeftBehind just above"),
+    }
+}
+
 #[derive(Debug)]
 pub enum ApplyError {
     Io(io::Error),
@@ -98,6 +142,11 @@ pub struct ApplyFailure {
     /// written, when the apply stopped. Zero means the folder is as it was: any
     /// empty folder this attempt made has been removed again.
     pub moved: usize,
+    /// The destination of an item that was not moved, where the failed move
+    /// left a copy or a second name it could not remove. The original is
+    /// still at its own path unless it was deleted during the move. Undo does
+    /// not know about this copy.
+    pub copy_left: Option<PathBuf>,
 }
 
 impl std::fmt::Display for ApplyError {
@@ -612,6 +661,7 @@ fn apply_plan_with_structured_progress(
         phase: ProgressPhase::Planning,
     };
     let mut durable_journal_id = None;
+    let mut copy_left = None;
     let mut created_directories = HashMap::new();
     let result = (|| {
         validate(&mut durable_journal_id)?;
@@ -769,8 +819,9 @@ fn apply_plan_with_structured_progress(
             hook(0, &plan.root);
         }
 
+        // Flushes once when this run ends, an error return included.
         let mut progress_writer = sealer
-            .map(|_| j.progress_writer())
+            .map(|_| j.run_writer())
             .transpose()
             .map_err(ApplyError::Journal)?;
 
@@ -859,6 +910,12 @@ fn apply_plan_with_structured_progress(
             };
             let method = match result {
                 Ok(method) => method,
+                // The move failed and could not take back the copy it made.
+                // Stop, and name that copy: the item was not moved.
+                Err(error) if is_copy_left_behind(&error) => {
+                    copy_left = Some(to.clone());
+                    return Err(ApplyError::Io(without_copy_left(error)));
+                }
                 Err(error) if is_folder_changed(&error) => {
                     return Err(ApplyError::DestinationDirectoryChanged(
                         to.parent().unwrap_or(&to).to_path_buf(),
@@ -991,6 +1048,7 @@ fn apply_plan_with_structured_progress(
         error,
         durable_journal_id,
         moved,
+        copy_left,
     })
 }
 
@@ -1133,7 +1191,8 @@ fn apply_tags(
     // Journal first. Nothing has been written yet.
     j.save_sealed(sl).map_err(ApplyError::Journal)?;
     *durable_journal_id = Some(id);
-    let mut progress_writer = j.progress_writer().map_err(ApplyError::Journal)?;
+    // Flushes once when this run ends, an error return included.
+    let mut progress_writer = j.run_writer().map_err(ApplyError::Journal)?;
     for i in 0..j.entries.len() {
         if fail_at == Some(i) {
             return Err(ApplyError::Injected(i));
@@ -1669,11 +1728,32 @@ fn rename_excl_at(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io:
 
 /// Remove the name `leaf` inside an opened folder: a copy this move made.
 #[cfg(target_os = "macos")]
-fn unlink_at(folder: &fs::File, leaf: &std::ffi::OsStr) {
+fn unlink_at(folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Result<()> {
     use std::os::fd::AsRawFd;
-    if let Ok(name) = c_path(leaf) {
-        // SAFETY: a valid NUL-terminated string and an open descriptor.
-        unsafe { at::unlinkat(folder.as_raw_fd(), name.as_ptr(), 0) };
+    let name = c_path(leaf)?;
+    // SAFETY: a valid NUL-terminated string and an open descriptor.
+    if unsafe { at::unlinkat(folder.as_raw_fd(), name.as_ptr(), 0) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// A move failed with `error` after it made the copy or second name `leaf`
+/// in `folder`, before the source was removed. Remove that name only while
+/// the source still exists, so the item is never left with no copy at all.
+/// If the name stays, say so in the error.
+#[cfg(target_os = "macos")]
+fn undo_copy(
+    error: io::Error,
+    source_exists: bool,
+    folder: &fs::File,
+    leaf: &std::ffi::OsStr,
+) -> io::Error {
+    if source_exists && unlink_at(folder, leaf).is_ok() {
+        error
+    } else {
+        copy_left_behind(error)
     }
 }
 
@@ -1744,13 +1824,14 @@ const COPYFILE_EXCL: u32 = 1 << 17;
 const COPY_DATA_AND_STAT_FLAGS: u32 = COPYFILE_STAT | COPYFILE_DATA | COPYFILE_EXCL;
 
 /// Copy `from` into a new file named `leaf` inside the opened `folder`, and
-/// return the open copy. A failed copy removes the file it created.
+/// return the open source and the open copy. A failed copy removes the file
+/// it created.
 #[cfg(target_os = "macos")]
 fn copy_data_and_stat(
     from: &Path,
     folder: &fs::File,
     leaf: &std::ffi::OsStr,
-) -> io::Result<fs::File> {
+) -> io::Result<(fs::File, fs::File)> {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::OpenOptionsExt;
     let source = fs::OpenOptions::new()
@@ -1785,11 +1866,11 @@ fn copy_data_and_stat(
         )
     };
     let outcome = if rc == 0 {
-        Ok(copy)
+        Ok((source, copy))
     } else {
         let error = io::Error::last_os_error();
         drop(copy);
-        unlink_at(folder, leaf);
+        let _ = unlink_at(folder, leaf);
         Err(error)
     };
     crate::scan::observe_read("cross_device_bytes", outcome)
@@ -1841,14 +1922,19 @@ fn link_unlink_at(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io:
     use std::os::fd::AsRawFd;
     let f = c_path(from.as_os_str())?;
     let t = c_path(leaf)?;
-    if crate::scan::observe_read("metadata", fs::symlink_metadata(from))?
-        .file_type()
-        .is_file()
-    {
+    let metadata = crate::scan::observe_read("metadata", fs::symlink_metadata(from))?;
+    if metadata.file_type().is_file() {
         // SAFETY: valid NUL-terminated strings and an open descriptor.
         let rc = unsafe { at::linkat(at::AT_FDCWD, f.as_ptr(), folder.as_raw_fd(), t.as_ptr(), 0) };
         if rc == 0 {
-            fs::remove_file(from)?;
+            if let Err(error) = fs::remove_file(from) {
+                // The new name is a second name for the source. Remove it
+                // only while the source still has its own.
+                use std::os::unix::fs::MetadataExt;
+                let source_exists = fs::symlink_metadata(from)
+                    .is_ok_and(|now| (now.dev(), now.ino()) == (metadata.dev(), metadata.ino()));
+                return Err(undo_copy(error, source_exists, folder, leaf));
+            }
             return Ok(Method::Rename);
         }
         let error = io::Error::last_os_error();
@@ -1883,15 +1969,24 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
             // EXDEV: cross-device. rename(2) cannot do this, so copy, verify
             // the copy landed intact, and only then unlink the source.
             crate::scan::observe_read("cross_device_bytes", fs::copy(from, to))?;
-            let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
-            let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
-            if src_md.len() != dst_md.len() {
-                let _ = fs::remove_file(to);
-                return Err(io::Error::other(COPY_MISMATCH));
+            // The copy exists and the source has not been removed: every
+            // failure removes the copy while the source is still there.
+            let checked = (|| {
+                let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
+                let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
+                if src_md.len() != dst_md.len() {
+                    return Err(io::Error::other(COPY_MISMATCH));
+                }
+                crate::scan::verify_read("cross_device_bytes");
+                fs::remove_file(from)
+            })();
+            match checked {
+                Ok(()) => Ok(Method::CopyUnlink),
+                Err(error) if fs::symlink_metadata(from).is_ok() && fs::remove_file(to).is_ok() => {
+                    Err(error)
+                }
+                Err(error) => Err(copy_left_behind(error)),
             }
-            crate::scan::verify_read("cross_device_bytes");
-            fs::remove_file(from)?;
-            Ok(Method::CopyUnlink)
         }
         Err(e) => Err(e),
     }
@@ -1914,27 +2009,45 @@ fn copy_unlink(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Re
     if !crate::scan::observe_read("metadata", fs::symlink_metadata(from))?.is_file() {
         return Err(io::Error::from_raw_os_error(at::EXDEV));
     }
-    let copy = copy_data_and_stat(from, folder, leaf)?;
-    let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
-    let dst_md = crate::scan::observe_read("metadata", copy.metadata())?;
-    drop(copy);
-    if src_md.len() != dst_md.len() {
-        unlink_at(folder, leaf);
-        return Err(io::Error::other(COPY_MISMATCH));
-    }
-    crate::scan::verify_read("cross_device_bytes");
-    #[cfg(test)]
-    AFTER_COPY.with(|hook| {
-        if let Some(hook) = hook.borrow_mut().take() {
-            hook(from);
+    let (source, copy) = copy_data_and_stat(from, folder, leaf)?;
+    // From here the copy exists and the source has not been removed. Every
+    // failure removes the copy, so a failed move leaves nothing behind.
+    let checked = (|| {
+        #[cfg(test)]
+        COPY_MADE.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(from);
+            }
+        });
+        let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
+        let dst_md = crate::scan::observe_read("metadata", copy.metadata())?;
+        if src_md.len() != dst_md.len() {
+            return Err(io::Error::other(COPY_MISMATCH));
         }
-    });
-    if crate::scan::has_finder_tag(from)? {
-        unlink_at(folder, leaf);
-        return Err(tagged_across_volumes());
+        crate::scan::verify_read("cross_device_bytes");
+        #[cfg(test)]
+        AFTER_COPY.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook(from);
+            }
+        });
+        if crate::scan::has_finder_tag(from)? {
+            return Err(tagged_across_volumes());
+        }
+        fs::remove_file(from)
+    })();
+    drop(copy);
+    match checked {
+        Ok(()) => Ok(Method::CopyUnlink),
+        Err(error) => {
+            // The source still exists while its file has a name anywhere,
+            // even if it was moved aside. A source deleted outright leaves
+            // the copy as the only one, so the copy stays.
+            use std::os::unix::fs::MetadataExt;
+            let source_exists = source.metadata().is_ok_and(|now| now.nlink() > 0);
+            Err(undo_copy(error, source_exists, folder, leaf))
+        }
     }
-    fs::remove_file(from)?;
-    Ok(Method::CopyUnlink)
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -1942,6 +2055,9 @@ type CopyHook = Box<dyn FnOnce(&Path)>;
 #[cfg(all(test, target_os = "macos"))]
 thread_local! {
     static AFTER_COPY: std::cell::RefCell<Option<CopyHook>> =
+        const { std::cell::RefCell::new(None) };
+    /// Runs once the copy exists, before the source is read again.
+    static COPY_MADE: std::cell::RefCell<Option<CopyHook>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1952,6 +2068,24 @@ thread_local! {
 #[cfg(not(target_os = "macos"))]
 fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     move_one_link_unlink_with(from, to, || {})
+}
+
+/// A link-then-unlink move made the name `to` and could not remove `from`.
+/// Remove `to` only while `from` is still the same file, so the item always
+/// keeps one name. If `to` stays, say so in the error.
+fn remove_second_name(error: io::Error, from: &Path, to: &Path) -> io::Error {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let same = match (fs::symlink_metadata(from), fs::symlink_metadata(to)) {
+            (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+            _ => false,
+        };
+        if same && fs::remove_file(to).is_ok() {
+            return error;
+        }
+    }
+    copy_left_behind(error)
 }
 
 fn move_one_link_unlink_with(
@@ -1966,7 +2100,9 @@ fn move_one_link_unlink_with(
         match fs::hard_link(from, to) {
             Ok(()) => {
                 after_hard_link();
-                fs::remove_file(from)?;
+                if let Err(error) = fs::remove_file(from) {
+                    return Err(remove_second_name(error, from, to));
+                }
                 return Ok(Method::Rename);
             }
             Err(e) if e.raw_os_error() == Some(18) => {}
@@ -3531,6 +3667,173 @@ mod tests {
         assert!(crate::scan::has_finder_tag(&source).unwrap());
         assert!(!destination.exists(), "the copy was removed");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A source folder and a destination folder for one failed move, with
+    /// write permission put back on both before they are removed.
+    #[cfg(target_os = "macos")]
+    struct FailedMove {
+        dir: PathBuf,
+        source: PathBuf,
+        destination: PathBuf,
+        parked: PathBuf,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl FailedMove {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("etudes_{name}_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(dir.join("from")).expect("source folder");
+            fs::create_dir_all(dir.join("to")).expect("destination folder");
+            let source = dir.join("from/item.dat");
+            fs::write(&source, b"payload").expect("write");
+            Self {
+                destination: dir.join("to/item.dat"),
+                parked: dir.join("parked.dat"),
+                source,
+                dir,
+            }
+        }
+        fn lock(&self, folder: &str) {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(self.dir.join(folder), fs::Permissions::from_mode(0o555))
+                .expect("chmod");
+        }
+        fn destination_names(&self) -> usize {
+            fs::read_dir(self.dir.join("to")).expect("list").count()
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for FailedMove {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            for folder in ["from", "to"] {
+                let _ =
+                    fs::set_permissions(self.dir.join(folder), fs::Permissions::from_mode(0o755));
+            }
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn exdev(_: &Path, _: &fs::File, _: &std::ffi::OsStr) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(18))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn enotsup(_: &Path, _: &fs::File, _: &std::ffi::OsStr) -> io::Result<()> {
+        Err(io::Error::from_raw_os_error(45))
+    }
+
+    /// The source is read again after the cross-volume copy lands. When that
+    /// read fails, the copy is removed: the source still exists (here it was
+    /// moved aside), so the copy was only a second copy.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_source_read_after_a_cross_volume_copy_removes_the_copy() {
+        let m = FailedMove::new("copy_source_read");
+        let (source, parked) = (m.source.clone(), m.parked.clone());
+        COPY_MADE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |_| {
+                fs::rename(&source, &parked).expect("move the source aside")
+            }));
+        });
+        let error = move_one_macos_with(&m.source, &m.destination, exdev)
+            .expect_err("the source read must fail");
+        assert_eq!(error.raw_os_error(), Some(2), "{error}");
+        assert!(!is_copy_left_behind(&error));
+        assert_eq!(m.destination_names(), 0, "the copy was removed");
+        assert_eq!(fs::read(&m.parked).expect("source kept"), b"payload");
+    }
+
+    /// The source's tag is read again before it is removed. When that read
+    /// fails, the copy is removed and the source is kept.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_tag_read_after_a_cross_volume_copy_removes_the_copy() {
+        let m = FailedMove::new("copy_tag_read");
+        let parked = m.parked.clone();
+        AFTER_COPY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |source: &Path| {
+                fs::rename(source, &parked).expect("move the source aside")
+            }));
+        });
+        let error = move_one_macos_with(&m.source, &m.destination, exdev)
+            .expect_err("the tag read must fail");
+        assert_eq!(error.raw_os_error(), Some(2), "{error}");
+        assert!(!is_copy_left_behind(&error));
+        assert_eq!(m.destination_names(), 0, "the copy was removed");
+        assert_eq!(fs::read(&m.parked).expect("source kept"), b"payload");
+    }
+
+    /// The source's folder refuses the removal. The copy is removed, so the
+    /// item is only where it started.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_source_removal_after_a_cross_volume_copy_removes_the_copy() {
+        let m = FailedMove::new("copy_source_removal");
+        m.lock("from");
+        let error = move_one_macos_with(&m.source, &m.destination, exdev)
+            .expect_err("the source removal must fail");
+        assert_eq!(error.raw_os_error(), Some(13), "{error}");
+        assert!(!is_copy_left_behind(&error));
+        assert_eq!(m.destination_names(), 0, "the copy was removed");
+        assert_eq!(fs::read(&m.source).expect("source kept"), b"payload");
+    }
+
+    /// The same for the link-then-unlink fallback: the second name is removed.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_source_removal_after_a_link_removes_the_link() {
+        let m = FailedMove::new("link_source_removal");
+        m.lock("from");
+        let error = move_one_macos_with(&m.source, &m.destination, enotsup)
+            .expect_err("the source removal must fail");
+        assert_eq!(error.raw_os_error(), Some(13), "{error}");
+        assert!(!is_copy_left_behind(&error));
+        assert_eq!(m.destination_names(), 0, "the second name was removed");
+        assert_eq!(fs::read(&m.source).expect("source kept"), b"payload");
+    }
+
+    /// When the copy cannot be removed either, the error says a copy was left,
+    /// and keeps the original reason for the failure.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_that_cannot_be_removed_is_reported() {
+        let m = FailedMove::new("copy_left");
+        m.lock("from");
+        let to = m.dir.join("to");
+        COPY_MADE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |_| {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&to, fs::Permissions::from_mode(0o555)).expect("chmod")
+            }));
+        });
+        let error = move_one_macos_with(&m.source, &m.destination, exdev)
+            .expect_err("the source removal must fail");
+        assert!(is_copy_left_behind(&error), "{error}");
+        assert_eq!(without_copy_left(error).raw_os_error(), Some(13));
+        assert_eq!(fs::read(&m.source).expect("source kept"), b"payload");
+        assert_eq!(fs::read(&m.destination).expect("copy left"), b"payload");
+    }
+
+    /// A source deleted by someone else after the copy landed leaves the copy
+    /// as the only one. It is kept, never removed, and reported.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_copy_is_kept_when_the_source_is_gone() {
+        let m = FailedMove::new("copy_only_one");
+        COPY_MADE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(|source: &Path| {
+                fs::remove_file(source).expect("delete")
+            }));
+        });
+        let error = move_one_macos_with(&m.source, &m.destination, exdev)
+            .expect_err("the source read must fail");
+        assert!(is_copy_left_behind(&error), "{error}");
+        assert_eq!(fs::read(&m.destination).expect("copy kept"), b"payload");
     }
 
     /// Issue #20's contract: data and mtime survive, and nothing else is

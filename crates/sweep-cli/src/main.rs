@@ -3284,6 +3284,8 @@ fn report_apply(
                 etude_cli_support::envelope::status("refused");
                 if p.adds_tags {
                     eprintln!("No tags were added, so there is nothing to undo.");
+                } else if let Some(copy) = failure.copy_left.as_deref() {
+                    eprintln!("{}", etude_cli_support::problems::copy_left_text(copy));
                 } else {
                     eprintln!("Nothing was moved, so there is nothing to undo.");
                 }

@@ -1054,7 +1054,12 @@ fn execute_stash(
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
                 etude_cli_support::envelope::status("refused");
-                eprintln!("Nothing was moved, so there is nothing to restore.");
+                match failure.copy_left.as_deref() {
+                    Some(copy) => {
+                        eprintln!("{}", etude_cli_support::problems::copy_left_text(copy))
+                    }
+                    None => eprintln!("Nothing was moved, so there is nothing to restore."),
+                }
                 return apply_exit_code(&e);
             }
             etude_cli_support::envelope::status("incomplete");
@@ -1294,7 +1299,12 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 // The private folder made for this attempt holds nothing.
                 let _ = std::fs::remove_dir(&root);
                 etude_cli_support::envelope::status("refused");
-                eprintln!("Nothing was moved, so there is nothing to restore.");
+                match failure.copy_left.as_deref() {
+                    Some(copy) => {
+                        eprintln!("{}", etude_cli_support::problems::copy_left_text(copy))
+                    }
+                    None => eprintln!("Nothing was moved, so there is nothing to restore."),
+                }
                 return apply_exit_code(&error);
             }
             etude_cli_support::envelope::status("incomplete");

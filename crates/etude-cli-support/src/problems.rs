@@ -66,6 +66,17 @@ fn new_plan_step(tool: &str, root: &Path) -> String {
     format!("{tool} {} --export-plan NEW_PLAN_FILE", quoted_path(root))
 }
 
+/// A move that failed and could not remove the copy it had made at
+/// `copy`. Printed instead of "Nothing was moved", which would be false.
+pub fn copy_left_text(copy: &Path) -> String {
+    format!(
+        "No file was moved, but the failed move left a copy at {}, and undo cannot see it.\n\
+         The original was not removed, so it should still be where it was. If it is, delete the copy: rm {}",
+        shown(copy),
+        quoted_path(copy)
+    )
+}
+
 /// A saved plan no longer matches its folder. Nothing was moved when this prints.
 pub fn plan_stale_text(tool: &str, root: &Path) -> String {
     format!(
@@ -546,6 +557,16 @@ pub fn record_open_problem(tool: &str, id: &str, error: &JournalError) -> String
 
 #[cfg(test)]
 mod tests {
+    /// A failed move that left a copy must not say nothing was moved, and
+    /// must name the copy with a step that works when pasted.
+    #[test]
+    fn a_left_copy_is_named_and_nothing_moved_is_not_claimed() {
+        let text = super::copy_left_text(Path::new("/no where/it's.txt"));
+        assert!(!text.contains("Nothing was moved"), "{text}");
+        assert!(text.contains("left a copy at"), "{text}");
+        assert!(text.contains("rm '/no where/it'\\''s.txt'"), "{text}");
+    }
+
     #[test]
     fn a_denied_move_names_a_locked_file_first_and_the_privacy_setting_second() {
         let eperm = std::io::Error::from_raw_os_error(1);

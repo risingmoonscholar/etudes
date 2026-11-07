@@ -449,9 +449,15 @@ impl DurableWrite for fs::File {
         unsafe extern "C" {
             fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
         }
-        if unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
+        #[cfg(test)]
+        let refused = test_hooks::BARRIER_REFUSED.get();
+        #[cfg(not(test))]
+        let refused = false;
+        if !refused && unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        test_hooks::BARRIER_FALLBACKS.set(test_hooks::BARRIER_FALLBACKS.get() + 1);
         // A filesystem without barriers (SMB, some FUSE mounts) refuses the
         // call. The full sync it falls back to is slower and still correct.
         fs::File::sync_all(self)
@@ -475,6 +481,8 @@ impl<W: DurableWrite> ProgressWriter<W> {
     /// Make every frame written so far durable. A run calls this once, before
     /// it reports success, so a finished run survives a power cut.
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        test_hooks::FINISHES.set(test_hooks::FINISHES.get() + 1);
         self.file.sync_all().map_err(JournalError::Io)
     }
 
@@ -488,6 +496,56 @@ impl<W: DurableWrite> ProgressWriter<W> {
             format!("done\t{index}\t{}\n", method.tag()).as_bytes(),
             sealer,
         )
+    }
+}
+
+/// The progress writer of one apply. Every frame it, or any other writer,
+/// added to the journal is made durable once when the run ends, whichever way
+/// it ends: by [`RunWriter::finish`] on success, which reports a failed flush,
+/// or on drop when an error return leaves the run early.
+pub(crate) struct RunWriter<W: DurableWrite = fs::File> {
+    writer: ProgressWriter<W>,
+    finished: bool,
+}
+
+impl<W: DurableWrite> RunWriter<W> {
+    pub(crate) fn record_done(
+        &mut self,
+        index: usize,
+        method: Method,
+        sealer: &dyn Sealer,
+    ) -> Result<(), JournalError> {
+        self.writer.record_done(index, method, sealer)
+    }
+
+    /// Flush the run once, before it reports success.
+    pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        self.finished = true;
+        self.writer.finish()
+    }
+}
+
+impl<W: DurableWrite> Drop for RunWriter<W> {
+    fn drop(&mut self) {
+        // An error return. The run already has an error to report; a failed
+        // flush here cannot replace it.
+        if !self.finished {
+            let _ = self.writer.finish();
+        }
+    }
+}
+
+/// Test-only switches and counters for the journal's durable writes.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::Cell;
+    thread_local! {
+        /// Make `F_BARRIERFSYNC` count as refused, as on a volume without it.
+        pub(crate) static BARRIER_REFUSED: Cell<bool> = const { Cell::new(false) };
+        /// How often a refused barrier fell back to a full sync.
+        pub(crate) static BARRIER_FALLBACKS: Cell<usize> = const { Cell::new(0) };
+        /// How often a writer made its frames durable with a full sync.
+        pub(crate) static FINISHES: Cell<usize> = const { Cell::new(0) };
     }
 }
 
@@ -715,6 +773,14 @@ impl Journal {
             .open(self.path())
             .map_err(JournalError::Io)?;
         Ok(ProgressWriter { file })
+    }
+
+    /// The progress writer for one apply run; see [`RunWriter`].
+    pub(crate) fn run_writer(&self) -> Result<RunWriter, JournalError> {
+        Ok(RunWriter {
+            writer: self.progress_writer()?,
+            finished: false,
+        })
     }
 
     /// Make the progress frames appended by one-off writers durable. Undo calls
