@@ -8,7 +8,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 779 tests
+cargo test --all                # 786 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -44,13 +44,13 @@ cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 81 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 82 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 81 scenarios
+bash stress/run.sh        # 82 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
