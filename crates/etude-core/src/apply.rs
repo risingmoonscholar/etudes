@@ -809,6 +809,10 @@ fn apply_plan_with_structured_progress(
                 }
                 continue;
             }
+            // The identity of the destination folder as checked here. The
+            // move below is made into the folder with this identity, not into
+            // whatever the path leads to by then.
+            let mut checked_folder = None;
             if let Some(parent) = to.parent() {
                 let observed_identity = plan.observed_directory_identity(parent);
                 // Keep the existing named refusal for an observed folder
@@ -831,6 +835,7 @@ fn apply_plan_with_structured_progress(
                         parent.to_path_buf(),
                     ));
                 }
+                checked_folder = expected;
             }
             if let Some(parent) = to.parent() {
                 ensure_destination_under_root(parent, &resolved_root)?;
@@ -850,10 +855,15 @@ fn apply_plan_with_structured_progress(
                     }
                 })
             } else {
-                move_one(&from, &to)
+                move_into_validated(&from, &to, checked_folder)
             };
             let method = match result {
                 Ok(method) => method,
+                Err(error) if is_folder_changed(&error) => {
+                    return Err(ApplyError::DestinationDirectoryChanged(
+                        to.parent().unwrap_or(&to).to_path_buf(),
+                    ));
+                }
                 // A tagged item that would have to cross volumes stays put.
                 // Nothing was copied, or the copy was removed.
                 Err(error) if is_tagged_across_volumes(&error) => {
@@ -889,8 +899,13 @@ fn apply_plan_with_structured_progress(
             // apply with this item undoable.
             if !plan.include_tagged && crate::scan::has_finder_tag(&to).map_err(ApplyError::Io)? {
                 // Return it through the same exclusive rename. It never
-                // replaces anything: an occupied origin refuses.
-                match move_one(&to, &from) {
+                // replaces anything: an occupied origin refuses. It goes only
+                // into the origin folder apply checked before the first move;
+                // a folder that is no longer that one refuses too.
+                let origin = from
+                    .parent()
+                    .and_then(|parent| validated_identity(&j, parent));
+                match move_into_validated(&to, &from, origin) {
                     Ok(_) => {
                         moved -= 1;
                         event.completed = moved;
@@ -1413,10 +1428,203 @@ fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
     }
 }
 
-/// link → unlink within one device; copy → verify → unlink across devices.
-/// One atomic, non-clobbering rename on macOS.
+/// The folder a move was about to land in is not the folder that was checked:
+/// it is gone, it is a link now, or it is another folder under the same name.
+/// Callers turn this into `ApplyError::DestinationDirectoryChanged`, naming
+/// the folder they checked.
+#[derive(Debug)]
+struct FolderChanged;
+
+impl std::fmt::Display for FolderChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the folder changed after it was checked; nothing was moved into it"
+        )
+    }
+}
+
+impl std::error::Error for FolderChanged {}
+
+fn folder_changed() -> io::Error {
+    io::Error::other(FolderChanged)
+}
+
+fn is_folder_changed(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<FolderChanged>())
+}
+
+/// Move `from` to `to` only if the folder `to` names still has the identity
+/// `expected`. When `expected` is `None` there is no recorded identity to hold
+/// the folder to, and the move is made by path as before.
+fn move_into_validated(from: &Path, to: &Path, expected: Option<(u64, u64)>) -> io::Result<Method> {
+    match expected {
+        Some(identity) => move_into_checked(from, to, identity),
+        None => move_one(from, to),
+    }
+}
+
+/// Bit values and declarations from the real SDK headers, not from memory:
+/// - `.../MacOSX.sdk/usr/include/sys/stdio.h`: `RENAME_EXCL 0x00000004` and
+///   `int renameatx_np(int, const char *, int, const char *, unsigned int)`.
+/// - `.../MacOSX.sdk/usr/include/sys/fcntl.h`: `O_WRONLY 0x0001`,
+///   `O_NOFOLLOW 0x00000100`, `O_CREAT 0x00000200`, `O_EXCL 0x00000800`,
+///   `O_DIRECTORY 0x00100000`, `O_CLOEXEC 0x01000000`,
+///   `O_EXEC 0x40000000`, `O_SEARCH (O_EXEC | O_DIRECTORY)`, `AT_FDCWD -2`, and
+///   `int openat(int, const char *, int, ...)`.
+/// - `.../MacOSX.sdk/usr/include/sys/unistd.h`: `linkat` and `unlinkat`.
+/// - `.../MacOSX.sdk/usr/include/sys/errno.h`: `ENOENT 2`, `EXDEV 18`,
+///   `ENOTDIR 20`, `ENOTSUP 45`, `ELOOP 62`.
+#[cfg(target_os = "macos")]
+mod at {
+    pub const RENAME_EXCL: core::ffi::c_uint = 0x0000_0004;
+    pub const O_WRONLY: core::ffi::c_int = 0x0001;
+    pub const O_NOFOLLOW: core::ffi::c_int = 0x0000_0100;
+    pub const O_CREAT: core::ffi::c_int = 0x0000_0200;
+    pub const O_EXCL: core::ffi::c_int = 0x0000_0800;
+    pub const O_DIRECTORY: core::ffi::c_int = 0x0010_0000;
+    pub const O_CLOEXEC: core::ffi::c_int = 0x0100_0000;
+    pub const O_SEARCH: core::ffi::c_int = 0x4000_0000 | O_DIRECTORY;
+    pub const AT_FDCWD: core::ffi::c_int = -2;
+    pub const ENOENT: i32 = 2;
+    pub const EXDEV: i32 = 18;
+    pub const ENOTDIR: i32 = 20;
+    pub const ENOTSUP: i32 = 45;
+    pub const ELOOP: i32 = 62;
+
+    unsafe extern "C" {
+        pub fn renameatx_np(
+            fromfd: core::ffi::c_int,
+            from: *const core::ffi::c_char,
+            tofd: core::ffi::c_int,
+            to: *const core::ffi::c_char,
+            flags: core::ffi::c_uint,
+        ) -> core::ffi::c_int;
+        pub fn renameat(
+            fromfd: core::ffi::c_int,
+            from: *const core::ffi::c_char,
+            tofd: core::ffi::c_int,
+            to: *const core::ffi::c_char,
+        ) -> core::ffi::c_int;
+        pub fn openat(
+            fd: core::ffi::c_int,
+            path: *const core::ffi::c_char,
+            flags: core::ffi::c_int,
+            ...
+        ) -> core::ffi::c_int;
+        pub fn linkat(
+            fromfd: core::ffi::c_int,
+            from: *const core::ffi::c_char,
+            tofd: core::ffi::c_int,
+            to: *const core::ffi::c_char,
+            flags: core::ffi::c_int,
+        ) -> core::ffi::c_int;
+        pub fn unlinkat(
+            fd: core::ffi::c_int,
+            path: *const core::ffi::c_char,
+            flags: core::ffi::c_int,
+        ) -> core::ffi::c_int;
+        pub fn fcopyfile(
+            from_fd: core::ffi::c_int,
+            to_fd: core::ffi::c_int,
+            state: *mut core::ffi::c_void,
+            flags: u32,
+        ) -> core::ffi::c_int;
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn c_path(path: &std::ffi::OsStr) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_bytes())
+        .map_err(|_| io::Error::other("path contains a NUL byte"))
+}
+
+/// The folder and final name of a destination path.
+#[cfg(target_os = "macos")]
+fn split_destination(to: &Path) -> io::Result<(&Path, &std::ffi::OsStr)> {
+    match (to.parent(), to.file_name()) {
+        (Some(parent), Some(leaf)) if parent.as_os_str().is_empty() => Ok((Path::new("."), leaf)),
+        (Some(parent), Some(leaf)) => Ok((parent, leaf)),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the destination has no folder and name",
+        )),
+    }
+}
+
+/// Open a folder for use as the base of `*at` calls.
 ///
-/// `renamex_np` with `RENAME_EXCL` is the whole point of issue #5's fix: the
+/// With an expected identity, the folder is opened without following a link
+/// in its last component (`O_NOFOLLOW`), and the opened folder's own device
+/// and inode (`fstat`) must equal the identity. A link anywhere in the path
+/// leads to another folder, so it fails the identity check too. Everything
+/// later is made relative to the returned descriptor, so a swap of the path
+/// after this point cannot redirect the move. The folder is opened for search
+/// only (`O_SEARCH`), so a folder you may write into but not list (mode 0300)
+/// still takes a move, as a rename by path did. std adds `O_RDONLY`, which is
+/// zero, for `read(true)`, and always adds `O_CLOEXEC`.
+#[cfg(target_os = "macos")]
+fn open_checked_folder(folder: &Path, expected: Option<(u64, u64)>) -> io::Result<fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let flags = at::O_SEARCH
+        | if expected.is_some() {
+            at::O_NOFOLLOW
+        } else {
+            0
+        };
+    let opened = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags | at::O_CLOEXEC)
+        .open(folder);
+    let Some(expected) = expected else {
+        return opened;
+    };
+    let opened = match opened {
+        Ok(opened) => opened,
+        Err(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(at::ELOOP | at::ENOTDIR | at::ENOENT)
+            ) =>
+        {
+            return Err(folder_changed());
+        }
+        Err(error) => return Err(error),
+    };
+    let metadata = opened.metadata()?;
+    if (metadata.dev(), metadata.ino()) != expected {
+        return Err(folder_changed());
+    }
+    Ok(opened)
+}
+
+/// Move into the folder `to` names, holding that folder to `expected`. The
+/// last step is made relative to the opened, verified folder, not its path.
+#[cfg(target_os = "macos")]
+fn move_into_checked(from: &Path, to: &Path, expected: (u64, u64)) -> io::Result<Method> {
+    let (parent, leaf) = split_destination(to)?;
+    let folder = open_checked_folder(parent, Some(expected))?;
+    move_into_folder(from, &folder, leaf, rename_excl_at)
+}
+
+/// Off macOS there is no `renameatx_np`. The identity is checked by path just
+/// before the move, which leaves the gap between that check and the move.
+#[cfg(not(target_os = "macos"))]
+fn move_into_checked(from: &Path, to: &Path, expected: (u64, u64)) -> io::Result<Method> {
+    if let Some(parent) = to.parent()
+        && !directory_matches(parent, expected)
+    {
+        return Err(folder_changed());
+    }
+    move_one(from, to)
+}
+
+/// One atomic, non-clobbering rename on macOS, into an opened folder.
+///
+/// `renameatx_np` with `RENAME_EXCL` is the whole point of issue #5's fix: the
 /// previous strategy was `link` then `unlink`, two syscalls, and a signal
 /// between them left one file reachable by both names. Undo then had to guess
 /// whose hard link the extra name was — a question with no safe answer. One
@@ -1424,31 +1632,42 @@ fn dedupe_key(path: &Path, folds_case: bool) -> Result<String, ApplyError> {
 /// refuses an existing destination at the filesystem level, backing up the
 /// plan-level collision check with one that cannot be raced.
 ///
+/// The destination is the name `leaf` inside the folder `folder` was opened
+/// on, so the move lands in that folder even if its path now leads elsewhere.
+///
 /// A future tidy-up replacing this with `fs::rename` would silently clobber on
 /// collision and reopen nothing else — `fs::rename` overwrites. The test
 /// `a_plain_rename_never_replaces_this` in apply_undo.rs fails on that tidy-up.
 #[cfg(target_os = "macos")]
-fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    unsafe extern "C" {
-        fn renamex_np(
-            from: *const core::ffi::c_char,
-            to: *const core::ffi::c_char,
-            flags: u32,
-        ) -> i32;
-    }
-    const RENAME_EXCL: u32 = 0x0000_0004;
-    let f = CString::new(from.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
-    let t = CString::new(to.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
-    // SAFETY: both pointers are valid NUL-terminated strings for the call.
-    let rc = unsafe { renamex_np(f.as_ptr(), t.as_ptr(), RENAME_EXCL) };
+fn rename_excl_at(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let f = c_path(from.as_os_str())?;
+    let t = c_path(leaf)?;
+    // SAFETY: both pointers are valid NUL-terminated strings for the call,
+    // and the folder descriptor is open for its duration.
+    let rc = unsafe {
+        at::renameatx_np(
+            at::AT_FDCWD,
+            f.as_ptr(),
+            folder.as_raw_fd(),
+            t.as_ptr(),
+            at::RENAME_EXCL,
+        )
+    };
     if rc == 0 {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
+    }
+}
+
+/// Remove the name `leaf` inside an opened folder: a copy this move made.
+#[cfg(target_os = "macos")]
+fn unlink_at(folder: &fs::File, leaf: &std::ffi::OsStr) {
+    use std::os::fd::AsRawFd;
+    if let Ok(name) = c_path(leaf) {
+        // SAFETY: a valid NUL-terminated string and an open descriptor.
+        unsafe { at::unlinkat(folder.as_raw_fd(), name.as_ptr(), 0) };
     }
 }
 
@@ -1488,7 +1707,10 @@ pub fn move_one_for_tests(from: &Path, to: &Path) -> io::Result<Method> {
 /// `COPYFILE_STAT (1<<1)`, `COPYFILE_DATA (1<<3)`, and `COPYFILE_EXCL
 /// (1<<17)`, which fails if the destination already exists. That last flag is
 /// essential on APFS when two different Unicode spellings resolve to one
-/// directory entry.
+/// directory entry. The copy is made with `fcopyfile` into a file this move
+/// creates itself with `openat(folder, name, O_CREAT | O_EXCL | ...)`, so the
+/// exclusive create, not the flag, is what refuses an existing destination
+/// now; the flag stays in the request so the two cannot disagree.
 // Module-level, not local to copy_data_and_stat, so a unit test can bind to
 // the actual production value instead of redeclaring its own copy that
 // could silently drift from what the real call site requests. A review
@@ -1515,67 +1737,127 @@ const COPYFILE_EXCL: u32 = 1 << 17;
 #[cfg(target_os = "macos")]
 const COPY_DATA_AND_STAT_FLAGS: u32 = COPYFILE_STAT | COPYFILE_DATA | COPYFILE_EXCL;
 
+/// Copy `from` into a new file named `leaf` inside the opened `folder`, and
+/// return the open copy. A failed copy removes the file it created.
 #[cfg(target_os = "macos")]
-fn copy_data_and_stat(from: &Path, to: &Path) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-    unsafe extern "C" {
-        fn copyfile(
-            from: *const core::ffi::c_char,
-            to: *const core::ffi::c_char,
-            state: *mut core::ffi::c_void,
-            flags: u32,
-        ) -> i32;
+fn copy_data_and_stat(
+    from: &Path,
+    folder: &fs::File,
+    leaf: &std::ffi::OsStr,
+) -> io::Result<fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::OpenOptionsExt;
+    let source = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(at::O_NOFOLLOW | at::O_CLOEXEC)
+        .open(from)?;
+    let name = c_path(leaf)?;
+    // SAFETY: a valid NUL-terminated string and an open descriptor. The mode
+    // is passed as the variadic argument, promoted to an unsigned int as C
+    // does; COPYFILE_STAT then sets the source's own mode.
+    let fd = unsafe {
+        at::openat(
+            folder.as_raw_fd(),
+            name.as_ptr(),
+            at::O_CREAT | at::O_EXCL | at::O_WRONLY | at::O_NOFOLLOW | at::O_CLOEXEC,
+            0o600 as core::ffi::c_uint,
+        )
+    };
+    if fd < 0 {
+        return crate::scan::observe_read("cross_device_bytes", Err(io::Error::last_os_error()));
     }
-    let f = CString::new(from.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
-    let t = CString::new(to.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
-    // SAFETY: both pointers are valid NUL-terminated strings for the call,
-    // and a null state pointer is documented as valid -- "less control...
-    // but [it] will work normally".
+    // SAFETY: openat returned a new descriptor that nothing else owns.
+    let copy = unsafe { fs::File::from_raw_fd(fd) };
+    // SAFETY: two open descriptors, and a null state pointer is documented
+    // as valid -- "less control... but [it] will work normally".
     let rc = unsafe {
-        copyfile(
-            f.as_ptr(),
-            t.as_ptr(),
+        at::fcopyfile(
+            source.as_raw_fd(),
+            copy.as_raw_fd(),
             std::ptr::null_mut(),
             COPY_DATA_AND_STAT_FLAGS,
         )
     };
-    crate::scan::observe_read(
-        "cross_device_bytes",
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        },
-    )
+    let outcome = if rc == 0 {
+        Ok(copy)
+    } else {
+        let error = io::Error::last_os_error();
+        drop(copy);
+        unlink_at(folder, leaf);
+        Err(error)
+    };
+    crate::scan::observe_read("cross_device_bytes", outcome)
 }
 
 #[cfg(target_os = "macos")]
 fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
-    move_one_macos_with(from, to, rename_excl)
+    move_one_macos_with(from, to, rename_excl_at)
 }
 
 /// The rename operation is injected only in unit tests, allowing the EXDEV
 /// branch to be exercised against a real normalization-aware destination
 /// without depending on a mount race to produce a particular errno ordering.
+/// The folder is opened by path with no identity to hold it to.
 #[cfg(target_os = "macos")]
 fn move_one_macos_with(
     from: &Path,
     to: &Path,
-    rename: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    rename: impl FnOnce(&Path, &fs::File, &std::ffi::OsStr) -> io::Result<()>,
 ) -> io::Result<Method> {
-    match rename(from, to) {
-        // One syscall, no crash window, refuses to clobber. See rename_excl.
+    let (parent, leaf) = split_destination(to)?;
+    let folder = open_checked_folder(parent, None)?;
+    move_into_folder(from, &folder, leaf, rename)
+}
+
+#[cfg(target_os = "macos")]
+fn move_into_folder(
+    from: &Path,
+    folder: &fs::File,
+    leaf: &std::ffi::OsStr,
+    rename: impl FnOnce(&Path, &fs::File, &std::ffi::OsStr) -> io::Result<()>,
+) -> io::Result<Method> {
+    match rename(from, folder, leaf) {
+        // One syscall, no crash window, refuses to clobber. See rename_excl_at.
         Ok(()) => Ok(Method::Rename),
         // EXDEV: cross-device, copy exclusively, verify, then unlink source.
-        Err(e) if e.raw_os_error() == Some(18) => copy_unlink(from, to),
-        // ENOTSUP: a filesystem without renamex_np. Fall back to link+unlink,
-        // which keeps the old crash window on that volume only; undo's
-        // successor-entry recovery covers it.
-        Err(e) if e.raw_os_error() == Some(45) => move_one_link_unlink(from, to),
+        Err(e) if e.raw_os_error() == Some(at::EXDEV) => copy_unlink(from, folder, leaf),
+        // ENOTSUP: a filesystem without renameatx_np. Fall back to
+        // link+unlink, which keeps the old crash window on that volume only;
+        // undo's successor-entry recovery covers it.
+        Err(e) if e.raw_os_error() == Some(at::ENOTSUP) => link_unlink_at(from, folder, leaf),
         Err(e) => Err(e),
+    }
+}
+
+/// `move_one_link_unlink`, made into an opened folder.
+#[cfg(target_os = "macos")]
+fn link_unlink_at(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Result<Method> {
+    use std::os::fd::AsRawFd;
+    let f = c_path(from.as_os_str())?;
+    let t = c_path(leaf)?;
+    if crate::scan::observe_read("metadata", fs::symlink_metadata(from))?
+        .file_type()
+        .is_file()
+    {
+        // SAFETY: valid NUL-terminated strings and an open descriptor.
+        let rc = unsafe { at::linkat(at::AT_FDCWD, f.as_ptr(), folder.as_raw_fd(), t.as_ptr(), 0) };
+        if rc == 0 {
+            fs::remove_file(from)?;
+            return Ok(Method::Rename);
+        }
+        let error = io::Error::last_os_error();
+        // EXDEV, or ENOTSUP from a filesystem with no hard links at all
+        // (exFAT, issue #21): fall through to a plain rename.
+        if !matches!(error.raw_os_error(), Some(at::EXDEV | at::ENOTSUP)) {
+            return Err(error);
+        }
+    }
+    // SAFETY: valid NUL-terminated strings and an open descriptor.
+    let rc = unsafe { at::renameat(at::AT_FDCWD, f.as_ptr(), folder.as_raw_fd(), t.as_ptr()) };
+    if rc == 0 {
+        Ok(Method::Rename)
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -1610,9 +1892,10 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
 }
 
 /// Copy after an EXDEV result, refusing an already occupied destination, then
-/// remove the source only after the copied size has been checked.
+/// remove the source only after the copied size has been checked. The copy is
+/// created inside the opened folder, never through its path.
 #[cfg(target_os = "macos")]
-fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
+fn copy_unlink(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Result<Method> {
     // The copy below requests data and POSIX stat only, so a Finder tag would
     // not reach the destination. A tagged item is refused before anything is
     // copied, and asked again before the source is unlinked in case a tag
@@ -1620,11 +1903,17 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     if crate::scan::has_finder_tag(from)? {
         return Err(tagged_across_volumes());
     }
-    copy_data_and_stat(from, to)?;
+    // Only a regular file is copied. Anything else keeps the rename's own
+    // cross-device error, and nothing is created.
+    if !crate::scan::observe_read("metadata", fs::symlink_metadata(from))?.is_file() {
+        return Err(io::Error::from_raw_os_error(at::EXDEV));
+    }
+    let copy = copy_data_and_stat(from, folder, leaf)?;
     let src_md = crate::scan::observe_read("metadata", fs::metadata(from))?;
-    let dst_md = crate::scan::observe_read("metadata", fs::metadata(to))?;
+    let dst_md = crate::scan::observe_read("metadata", copy.metadata())?;
+    drop(copy);
     if src_md.len() != dst_md.len() {
-        let _ = fs::remove_file(to);
+        unlink_at(folder, leaf);
         return Err(io::Error::other(COPY_MISMATCH));
     }
     crate::scan::verify_read("cross_device_bytes");
@@ -1635,7 +1924,7 @@ fn copy_unlink(from: &Path, to: &Path) -> io::Result<Method> {
         }
     });
     if crate::scan::has_finder_tag(from)? {
-        let _ = fs::remove_file(to);
+        unlink_at(folder, leaf);
         return Err(tagged_across_volumes());
     }
     fs::remove_file(from)?;
@@ -1650,10 +1939,11 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// The pre-#5 strategy, kept only as the fallback for filesystems without
-/// `renamex_np` and for non-macOS builds. Two syscalls, so a crash between
-/// them leaves one file under two names; undo's successor-entry recovery is
-/// what makes that survivable.
+/// The pre-#5 strategy, kept for non-macOS builds; on macOS the fallback for
+/// filesystems without `renameatx_np` is `link_unlink_at`. Two syscalls, so a
+/// crash between them leaves one file under two names; undo's
+/// successor-entry recovery is what makes that survivable.
+#[cfg(not(target_os = "macos"))]
 fn move_one_link_unlink(from: &Path, to: &Path) -> io::Result<Method> {
     move_one_link_unlink_with(from, to, || {})
 }
@@ -2034,7 +2324,7 @@ pub fn undo_with_progress(
     sealer: &dyn Sealer,
     mut progress: impl FnMut(Progress),
 ) -> UndoReport {
-    undo_selected_with_progress(j, sealer, None, |event| {
+    undo_selected_with_progress(j, sealer, None, None, |event| {
         if event.phase == ProgressPhase::Advancing {
             progress(Progress {
                 completed: event.completed,
@@ -2051,7 +2341,18 @@ pub fn undo_with_structured_progress(
     sealer: &dyn Sealer,
     progress: impl FnMut(StructuredProgress),
 ) -> UndoReport {
-    undo_selected_with_progress(j, sealer, None, progress)
+    undo_selected_with_progress(j, sealer, None, None, progress)
+}
+
+/// [`undo`] with a fault hook that runs after an entry's folder checks and
+/// immediately before its file is moved back. Production callers never use it.
+#[doc(hidden)]
+pub fn undo_with_faults_for_tests(
+    j: &mut Journal,
+    sealer: &dyn Sealer,
+    before_move: FaultHook<'_>,
+) -> UndoReport {
+    undo_selected_with_progress(j, sealer, None, Some(before_move), |_| {})
 }
 
 /// Reverse one journal entry, preserving every other entry's durable state.
@@ -2080,6 +2381,7 @@ pub fn undo_entry_with_structured_progress(
         j,
         sealer,
         Some(index),
+        None,
         progress,
     ))
 }
@@ -2088,6 +2390,7 @@ fn undo_selected_with_progress(
     j: &mut Journal,
     sealer: &dyn Sealer,
     selected: Option<usize>,
+    mut before_move: Option<FaultHook<'_>>,
     mut progress: impl FnMut(StructuredProgress),
 ) -> UndoReport {
     let mut r = UndoReport::default();
@@ -2230,10 +2533,13 @@ fn undo_selected_with_progress(
                             break;
                         }
                     }
-                    match move_one(&e.to, &e.from) {
+                    if let Some(hook) = before_move.as_mut() {
+                        hook(i, &e.from);
+                    }
+                    match move_back(j, &e) {
                         Ok(_) => r.restored += 1,
                         Err(err) => {
-                            r.error = Some(ApplyError::Io(err));
+                            r.error = Some(err);
                             break;
                         }
                     }
@@ -2338,7 +2644,10 @@ fn undo_selected_with_progress(
                 break;
             }
         }
-        match move_one(&e.to, &e.from) {
+        if let Some(hook) = before_move.as_mut() {
+            hook(i, &e.from);
+        }
+        match move_back(j, &e) {
             Ok(_) => {
                 j.entries[i].state = EntryState::Reversed;
                 r.restored += 1;
@@ -2353,7 +2662,7 @@ fn undo_selected_with_progress(
                 event.journalled += 1;
             }
             Err(err) => {
-                r.error = Some(ApplyError::Io(err));
+                r.error = Some(err);
                 break;
             }
         }
@@ -2501,6 +2810,34 @@ fn undo_tag_entry(
             .tags_refused
             .push((entry.from.clone(), TagRefusal::Changed));
     }
+}
+
+/// The identity apply recorded for a folder before it moved anything.
+fn validated_identity(journal: &Journal, path: &Path) -> Option<(u64, u64)> {
+    journal
+        .validated_directories
+        .iter()
+        .find(|directory| directory.path == path)
+        .map(|directory| (directory.device, directory.inode))
+}
+
+/// Move an entry's file back into the folder it came from, made into the
+/// folder whose identity apply recorded, not into whatever its path leads to.
+/// A folder that is no longer that one is the named folder-changed refusal.
+fn move_back(journal: &Journal, entry: &Entry) -> Result<Method, ApplyError> {
+    let origin = entry
+        .from
+        .parent()
+        .and_then(|parent| validated_identity(journal, parent));
+    move_into_validated(&entry.to, &entry.from, origin).map_err(|error| {
+        if is_folder_changed(&error) {
+            ApplyError::DestinationDirectoryChanged(
+                entry.from.parent().unwrap_or(&entry.from).to_path_buf(),
+            )
+        } else {
+            ApplyError::Io(error)
+        }
+    })
 }
 
 fn validated_directory_matches(journal: &Journal, path: &Path) -> bool {
@@ -2672,6 +3009,36 @@ mod tests {
         assert!(!super::is_copy_mismatch(
             &std::io::Error::from_raw_os_error(28)
         ));
+    }
+
+    /// A folder you may write into but not list (mode 0300) took a rename by
+    /// path. The move into the opened folder must still accept it, so the
+    /// folder is opened for search only, not for reading.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_move_into_a_write_only_folder_still_succeeds() {
+        use std::os::unix::fs::PermissionsExt;
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ =
+                    fs::set_permissions(self.0.join("dropbox"), fs::Permissions::from_mode(0o700));
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("etudes_write_only_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _cleanup = Cleanup(dir.clone());
+        let dropbox = dir.join("dropbox");
+        fs::create_dir_all(&dropbox).expect("folder");
+        let source = dir.join("a.txt");
+        fs::write(&source, b"payload").expect("write");
+        fs::set_permissions(&dropbox, fs::Permissions::from_mode(0o300)).expect("chmod");
+        let method = move_one_for_tests(&source, &dropbox.join("a.txt"));
+        fs::set_permissions(&dropbox, fs::Permissions::from_mode(0o700)).expect("chmod back");
+        assert!(matches!(method, Ok(Method::Rename)), "{method:?}");
+        assert!(!source.exists());
+        assert_eq!(fs::read(dropbox.join("a.txt")).expect("moved"), b"payload");
     }
 
     /// A real process dies at the fallback seam, leaving the successor of a
@@ -2975,7 +3342,7 @@ mod tests {
 
         // The device error is injected at the rename boundary. Everything
         // after it, including copyfile's exclusive create, is production code.
-        let error = move_one_macos_with(&source, &destination, |_, _| {
+        let error = move_one_macos_with(&source, &destination, |_, _, _| {
             Err(io::Error::from_raw_os_error(18))
         })
         .expect_err("EXDEV fallback must refuse the existing destination");
@@ -3028,6 +3395,63 @@ mod tests {
         assert_eq!(rc, 0, "could not set the test tag");
     }
 
+    /// The cross-volume copy is made into the folder that was opened, not
+    /// through its path. Here the folder's path is swapped for a link to a
+    /// folder outside after it was opened and before the copy: the copy must
+    /// land in the original folder, with its data and mtime, and nothing may
+    /// appear outside.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_cross_volume_copy_lands_in_the_opened_folder_when_its_path_is_swapped() {
+        use std::os::unix::fs::symlink;
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("etudes_exdev_swap_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _cleanup = Cleanup(dir.clone());
+        let checked = dir.join("checked");
+        let outside = dir.join("outside");
+        let displaced = dir.join("displaced");
+        fs::create_dir_all(&checked).expect("checked folder");
+        fs::create_dir_all(&outside).expect("outside folder");
+        let source = dir.join("source.dat");
+        fs::write(&source, b"payload").expect("write");
+        let past = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+        fs::File::options()
+            .write(true)
+            .open(&source)
+            .and_then(|f| f.set_modified(past))
+            .expect("set mtime");
+        let destination = checked.join("moved.dat");
+
+        let method = move_one_macos_with(&source, &destination, |_, _, _| {
+            fs::rename(&checked, &displaced).expect("move the checked folder aside");
+            symlink(&outside, &checked).expect("install outside link");
+            Err(io::Error::from_raw_os_error(18))
+        })
+        .expect("the copy proceeds");
+
+        assert_eq!(
+            fs::read_dir(&outside).expect("list outside").count(),
+            0,
+            "the copy went through the swapped path"
+        );
+        assert_eq!(method, Method::CopyUnlink);
+        let landed = displaced.join("moved.dat");
+        assert_eq!(fs::read(&landed).expect("copy landed"), b"payload");
+        assert_eq!(
+            fs::metadata(&landed)
+                .and_then(|m| m.modified())
+                .expect("mtime"),
+            past
+        );
+        assert!(!source.exists(), "the source was removed after the copy");
+    }
+
     /// A tagged item whose move would be cross-volume is refused by name,
     /// before anything is copied: the copy requests data and stat only, so
     /// the tag would be dropped. The source keeps its tag and the destination
@@ -3043,7 +3467,7 @@ mod tests {
         fs::write(&source, b"payload").expect("write");
         set_tag_for_test(&source);
 
-        let error = move_one_macos_with(&source, &destination, |_, _| {
+        let error = move_one_macos_with(&source, &destination, |_, _, _| {
             Err(io::Error::from_raw_os_error(18))
         })
         .expect_err("a tagged item must not cross volumes");
@@ -3061,7 +3485,7 @@ mod tests {
         let plain = dir.join("plain.dat");
         let plain_destination = dir.join("plain-moved.dat");
         fs::write(&plain, b"payload").expect("write");
-        let method = move_one_macos_with(&plain, &plain_destination, |_, _| {
+        let method = move_one_macos_with(&plain, &plain_destination, |_, _, _| {
             Err(io::Error::from_raw_os_error(18))
         })
         .expect("an untagged cross-volume move proceeds");
@@ -3085,7 +3509,7 @@ mod tests {
         AFTER_COPY.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(set_tag_for_test));
         });
-        let error = move_one_macos_with(&source, &destination, |_, _| {
+        let error = move_one_macos_with(&source, &destination, |_, _, _| {
             Err(io::Error::from_raw_os_error(18))
         })
         .expect_err("the late tag must stop the unlink");
@@ -3122,7 +3546,8 @@ mod tests {
         f.set_modified(past).expect("set mtime");
         drop(f);
 
-        copy_data_and_stat(&from, &to).expect("copy");
+        let folder = fs::File::open(&dir).expect("open folder");
+        drop(copy_data_and_stat(&from, &folder, to.file_name().unwrap()).expect("copy"));
 
         assert_eq!(
             fs::read(&to).expect("read dst"),

@@ -2422,3 +2422,148 @@ fn another_live_journal_keeps_its_origin_directory() {
     cleanup(&root);
     let _ = fs::remove_dir_all(state);
 }
+
+/// Removes a test's folder when the test ends, pass or fail.
+struct RemoveOnDrop(PathBuf);
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A test folder with a root and a folder outside it, both resolved, and a
+/// state folder for this test's journals.
+fn swap_scene(label: &str) -> (RemoveOnDrop, PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("etudes_swap_{label}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(base.join("root")).expect("create root");
+    fs::create_dir_all(base.join("outside")).expect("create outside folder");
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", base.join("state")) };
+    let base = base.canonicalize().expect("resolve test folder");
+    let root = base.join("root");
+    let outside = base.join("outside");
+    (RemoveOnDrop(base), root, outside)
+}
+
+/// The destination folder passes every check, then is swapped for a link to
+/// a folder outside the root in the instant before the move. The move must be
+/// made into the folder that was checked, so it refuses and nothing leaves
+/// the root.
+#[cfg(unix)]
+#[test]
+fn apply_refuses_a_destination_swapped_for_an_outside_link_just_before_the_move() {
+    use std::os::unix::fs::symlink;
+
+    let _g = lock();
+    let (_cleanup, root, outside) = swap_scene("apply_move");
+    let source = root.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let destination = root.join("Reading");
+    fs::create_dir(&destination).expect("create planned destination");
+
+    let out = scan::scan(&root, &ScanConfig::default()).expect("scan source and destination");
+    let p = Plan::with_groups(
+        &out,
+        vec![plan::Group {
+            name: "Reading".into(),
+            signal: plan::Signal::Mapped {
+                ext: "qoi".into(),
+                created: false,
+            },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    let mut swapped = false;
+    let mut swap = |_: usize, _: &std::path::Path| {
+        fs::remove_dir(&destination).expect("remove checked destination");
+        symlink(&outside, &destination).expect("install outside link");
+        swapped = true;
+    };
+    let result = apply::apply_with_faults_for_tests(
+        &p,
+        "test",
+        Some(&TestSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut swap),
+            ..Default::default()
+        },
+    );
+
+    assert!(swapped, "the swap point was not reached");
+    assert_eq!(
+        fs::read_dir(&outside).expect("list outside").count(),
+        0,
+        "the file left the root through the swapped link: {result:?}"
+    );
+    assert_eq!(fs::read(&source).expect("source stays"), b"fixture");
+    let failure = result.expect_err("a swapped destination must refuse");
+    assert!(
+        matches!(failure.error, ApplyError::DestinationDirectoryChanged(_)),
+        "{:?}",
+        failure.error
+    );
+    assert_eq!(failure.moved, 0);
+}
+
+/// Undo checks the folder a file came from, then moves the file back. A
+/// folder swapped for a link to a folder outside the root after that check
+/// must not receive the file.
+#[cfg(unix)]
+#[test]
+fn undo_refuses_a_source_folder_swapped_for_an_outside_link_just_before_the_move() {
+    use std::os::unix::fs::symlink;
+
+    let _g = lock();
+    let (_cleanup, root, outside) = swap_scene("undo_move");
+    let origin = root.join("Inbox");
+    fs::create_dir(&origin).expect("create origin folder");
+    let group = root.join("Reading");
+    fs::create_dir(&group).expect("create destination");
+    let from = origin.join("file.qoi");
+    let to = group.join("file.qoi");
+    fs::write(&to, b"fixture").expect("write moved file");
+    let (size, mtime, inode, edge) = etude_core::journal::fingerprint(&to).expect("fingerprint");
+    let mut j = Journal {
+        id: "undo-swap".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries: vec![Entry {
+            from: from.clone(),
+            to: to.clone(),
+            method: Method::Rename,
+            size,
+            mtime_secs: mtime,
+            inode,
+            edge_hash: edge,
+            state: etude_core::journal::EntryState::Moved,
+            tag: None,
+        }],
+        created_directories: Vec::new(),
+        validated_directories: vec![directory_guard(&origin)],
+        progress_tail_damaged: false,
+    };
+    j.save_sealed(&TestSeal).expect("save journal");
+
+    let mut swapped = false;
+    let mut swap = |_: usize, _: &std::path::Path| {
+        fs::remove_dir(&origin).expect("remove checked origin");
+        symlink(&outside, &origin).expect("install outside link");
+        swapped = true;
+    };
+    let undo = apply::undo_with_faults_for_tests(&mut j, &TestSeal, &mut swap);
+
+    assert!(swapped, "the swap point was not reached");
+    assert_eq!(
+        fs::read_dir(&outside).expect("list outside").count(),
+        0,
+        "the file left the root through the swapped link"
+    );
+    assert_eq!(fs::read(&to).expect("file stays put"), b"fixture");
+    assert_eq!(undo.restored, 0);
+    assert!(
+        matches!(undo.error, Some(ApplyError::DestinationDirectoryChanged(_))),
+        "{:?}",
+        undo.error
+    );
+}

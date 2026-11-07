@@ -65,10 +65,18 @@ Before each apply move, sweep checks that the destination folder is still a real
 directory with the device and inode recorded during planning (or immediately
 after sweep created it). Before each undo move-back, it checks the original
 source folder identity recorded in the journal. A replacement detected by
-these checks stops the operation before any further file moves. There is still
-a small race between checking a folder and moving the file into it; this check
-does not stop a swap in that instant. It does not defend against hostile code
-running as the same user.
+these checks stops the operation before any further file moves. On macOS the
+move itself is made into the folder that passed the check: the folder is opened
+without following a link, its device and inode are checked on the open folder,
+and the file is renamed, or copied across disks, into that open folder. A
+folder replaced, or swapped for a link, after the check is refused, not
+followed. An item apply finds tagged after its move goes back to its source
+folder the same way, or stays at its destination and is counted as not
+returned. What remains: a checked folder can still be moved as a whole after
+the check, and the file then lands in it wherever it now is. The file being
+moved is still named by its path. On other systems the check is made by path
+just before the move, so a swap in that instant is not stopped there. None of
+this defends against hostile code running as the same user.
 
 **`--json` discloses less than the human output.** For files that look like
 personal records it carries counts by category and never the paths.

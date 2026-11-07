@@ -685,3 +685,51 @@ fn a_single_item_tagged_during_rename_leaves_no_empty_group() {
         "empty group remains after return"
     );
 }
+
+/// A tag found after the rename sends the item back to its origin folder.
+/// If that folder was swapped for a link to a folder outside the root after
+/// apply checked it, the item must not go through the link: it stays at its
+/// destination, counted and journalled as not returned.
+#[test]
+fn a_returned_item_never_follows_an_origin_swapped_for_an_outside_link() {
+    use std::os::unix::fs::symlink;
+
+    let _g = lock();
+    let s = scene("return_swap", &["a.txt"]);
+    let outside = s.base.join("outside");
+    fs::create_dir(&outside).unwrap();
+    let displaced = s.base.join("displaced");
+    let plan = plan_of(&s, false);
+    let root = s.root.clone();
+    let mut swap_origin = |_: usize, to: &Path| {
+        tag(to);
+        // The origin is the root itself. Put the real root aside, make the
+        // root's name a link to the outside folder, and leave a link there
+        // so the moved item is still reachable by its recorded path.
+        fs::rename(&root, &displaced).unwrap();
+        symlink(&outside, &root).unwrap();
+        symlink(displaced.join("Collected"), outside.join("Collected")).unwrap();
+    };
+    let report = apply::apply_with_faults_for_tests(
+        &plan,
+        "test",
+        Some(&TestSeal),
+        ApplyFaults {
+            after_rename: Some(&mut swap_origin),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !outside.join("a.txt").exists(),
+        "the item followed the swapped link out of the root: {report:?}"
+    );
+    assert_eq!(
+        fs::read(displaced.join("Collected/a.txt")).unwrap(),
+        b"contents of a.txt"
+    );
+    let report = report.expect("apply returns a report");
+    assert_eq!(report.tagged_not_returned, 1);
+    assert_eq!(report.held_tagged, 0);
+    let _ = fs::remove_file(&root);
+    let _ = fs::remove_dir_all(&displaced);
+}
