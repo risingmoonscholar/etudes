@@ -629,7 +629,7 @@ fn cmd_lesson(args: &[String]) -> ExitCode {
                 eprintln!(
                     "sweep: lesson takes a step from 1 to {}, got {}",
                     LESSON.len(),
-                    etude_cli_support::shown_text(&v)
+                    etude_cli_support::shown_text(v)
                 );
                 return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
@@ -738,7 +738,7 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
         let n: u64 = digits.parse().map_err(|_| {
             format!(
                 "--since must be a number, optionally with h or d, got {}",
-                etude_cli_support::shown_text(&raw)
+                etude_cli_support::shown_text(raw)
             )
         })?;
         // Overflow is a wrong window, and a wrong window silently changes
@@ -755,7 +755,7 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
             };
             format!(
                 "--since {} is too large. The longest window is {most}{sym}",
-                etude_cli_support::shown_text(&raw)
+                etude_cli_support::shown_text(raw)
             )
         })?;
         return Ok(Some(std::time::Duration::from_secs(secs)));
@@ -1247,7 +1247,7 @@ fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
             let (ext, folder) = v.split_once('=').ok_or_else(|| {
                 format!(
                     "--map {}: expected EXT=Folder",
-                    etude_cli_support::shown_text(&v)
+                    etude_cli_support::shown_text(v)
                 )
             })?;
             out.push((ext.to_string(), folder.to_string()));
@@ -2296,7 +2296,7 @@ fn print_agent_named_note(p: &plan::Plan) {
         0 => {}
         1 => println!(
             "\n  the folder name {} was chosen by your agent, not derived from your files",
-            etude_cli_support::shown_text(&coined[0])
+            etude_cli_support::shown_text(coined[0])
         ),
         _ => println!(
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
