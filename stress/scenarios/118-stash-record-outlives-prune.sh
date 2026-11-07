@@ -93,10 +93,12 @@ touch -t 202401040000 "$W/other"/*.png
 ETUDE_JOURNAL_KEY=$OTHER_KEY "$SWEEP" apply "$W/other" --yes --since 0 >/dev/null 2>&1
 assert_eq 0 "$?" "an apply under another key runs"
 if [ -f "$ETUDE_STATE_DIR/$keyed_record" ]; then pass "an old record another key cannot open survives that apply's prune"; else fail "sweep's prune deleted a record it could not open"; fi
-ETUDE_JOURNAL_KEY=$OTHER_KEY "$SWEEP" undo "$W/keyed" >/dev/null 2>"$W/wrongkey.err"
+keyed_id=${keyed_record#sweep-}; keyed_id=${keyed_id%.journal}
+ETUDE_JOURNAL_KEY=$OTHER_KEY "$SWEEP" undo --id "$keyed_id" >/dev/null 2>"$W/wrongkey.err"
 assert_eq 3 "$?" "undo with the wrong key refuses"
 if grep -q 'Keep that record' "$W/wrongkey.err" && [ -f "$ETUDE_STATE_DIR/$keyed_record" ]; then pass "undo says keep the record, and it is still there"; else fail "wrong-key undo: $(cat "$W/wrongkey.err")"; fi
-"$SWEEP" undo "$W/keyed" >/dev/null 2>"$W/rightkey.err"
+# By id: the newer record from the other key would stop a folder undo first.
+"$SWEEP" undo --id "$keyed_id" >/dev/null 2>"$W/rightkey.err"
 assert_eq 0 "$?" "undo with the right key succeeds after 30 days"
 (cd "$W/keyed" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256) >"$W/keyed.after"
 if cmp -s "$W/keyed.sum" "$W/keyed.after"; then pass "the right key brings every file back with its bytes"; else fail "files after undo differ: $(diff "$W/keyed.sum" "$W/keyed.after" | head -5)"; fi
