@@ -954,6 +954,11 @@ fn apply_plan_with_structured_progress(
                 }
             }
         }
+        // Each record was only ordered behind its move. Make the finished
+        // run durable once, before reporting it.
+        if let Some(writer) = progress_writer.as_mut() {
+            writer.finish().map_err(ApplyError::Journal)?;
+        }
         Ok(ApplyReport {
             moved,
             held_tagged,
@@ -1183,6 +1188,7 @@ fn apply_tags(
         event.phase = ProgressPhase::Advancing;
         progress(*event);
     }
+    progress_writer.finish().map_err(ApplyError::Journal)?;
     report.journal_path = Some(j.path());
     Ok(report)
 }
@@ -2690,6 +2696,13 @@ fn undo_selected_with_progress(
         }
     }
 
+    // Undo records were only ordered behind their moves; make them durable
+    // once, so a finished undo survives a power cut.
+    if let Err(error) = j.sync_progress()
+        && r.error.is_none()
+    {
+        r.error = Some(ApplyError::Journal(error));
+    }
     r
 }
 
