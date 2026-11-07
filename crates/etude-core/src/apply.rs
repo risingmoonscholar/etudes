@@ -2034,7 +2034,7 @@ pub fn undo_with_progress(
     sealer: &dyn Sealer,
     mut progress: impl FnMut(Progress),
 ) -> UndoReport {
-    undo_selected_with_progress(j, sealer, None, |event| {
+    undo_selected_with_progress(j, sealer, None, None, |event| {
         if event.phase == ProgressPhase::Advancing {
             progress(Progress {
                 completed: event.completed,
@@ -2051,7 +2051,18 @@ pub fn undo_with_structured_progress(
     sealer: &dyn Sealer,
     progress: impl FnMut(StructuredProgress),
 ) -> UndoReport {
-    undo_selected_with_progress(j, sealer, None, progress)
+    undo_selected_with_progress(j, sealer, None, None, progress)
+}
+
+/// [`undo`] with a fault hook that runs after an entry's folder checks and
+/// immediately before its file is moved back. Production callers never use it.
+#[doc(hidden)]
+pub fn undo_with_faults_for_tests(
+    j: &mut Journal,
+    sealer: &dyn Sealer,
+    before_move: FaultHook<'_>,
+) -> UndoReport {
+    undo_selected_with_progress(j, sealer, None, Some(before_move), |_| {})
 }
 
 /// Reverse one journal entry, preserving every other entry's durable state.
@@ -2080,6 +2091,7 @@ pub fn undo_entry_with_structured_progress(
         j,
         sealer,
         Some(index),
+        None,
         progress,
     ))
 }
@@ -2088,6 +2100,7 @@ fn undo_selected_with_progress(
     j: &mut Journal,
     sealer: &dyn Sealer,
     selected: Option<usize>,
+    mut before_move: Option<FaultHook<'_>>,
     mut progress: impl FnMut(StructuredProgress),
 ) -> UndoReport {
     let mut r = UndoReport::default();
@@ -2230,6 +2243,9 @@ fn undo_selected_with_progress(
                             break;
                         }
                     }
+                    if let Some(hook) = before_move.as_mut() {
+                        hook(i, &e.from);
+                    }
                     match move_one(&e.to, &e.from) {
                         Ok(_) => r.restored += 1,
                         Err(err) => {
@@ -2337,6 +2353,9 @@ fn undo_selected_with_progress(
                 ));
                 break;
             }
+        }
+        if let Some(hook) = before_move.as_mut() {
+            hook(i, &e.from);
         }
         match move_one(&e.to, &e.from) {
             Ok(_) => {
