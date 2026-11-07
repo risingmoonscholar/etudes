@@ -105,7 +105,7 @@ where judgment is the job -- and comes back with `--map bpy=Blender`. Sweep
 executes the mapping as one more table row, this run only: every refusal
 still wins over a map, the moves are journaled, `undo` reverses them, and
 `--map` with `--no-journal` is refused outright. If the folder does not
-already exist, the output says so plainly: *the folder name "Blender" was
+already exist, the output says so plainly: *the folder name Blender was
 chosen by your agent, not derived from your files* -- the one sanctioned
 exception to the naming rule, and it announces itself.
 

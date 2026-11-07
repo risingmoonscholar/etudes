@@ -399,7 +399,7 @@ fresh_state values
 D="$W/values"; files "$D"
 say "stash --for -1d" 2 invalid_arguments "--for must be a length of time, got \`-1d\`. Try 30m, 2h, 3d or 1w." -- "$STASH" "$D" --for -1d
 hasnt "stash --for -1d: not an option" "$LAST" "another option"
-say "sweep --since -1" 2 invalid_arguments "--since must be a number, optionally with h or d, got \"-1\"" -- "$SWEEP" "$D" --since -1
+say "sweep --since -1" 2 invalid_arguments "--since must be a number, optionally with h or d, got -1" -- "$SWEEP" "$D" --since -1
 hasnt "sweep --since -1: not an option" "$LAST" "another option"
 say "sweep --since --yes" 2 - "--since needs a value, and \`--yes\` is another option." -- "$SWEEP" "$D" --since --yes
 say "select --for -1d" 2 invalid_arguments "--for must be a length of time, got \`-1d\`." -- "$STASH" select "$D/a.txt" --for -1d
@@ -447,7 +447,7 @@ ID=$(selected "$W/ro/f")
 say "select into read-only" 3 permission_denied "cannot write in $W/ro: permission denied. $NOTHING Choose another place with --into FOLDER." -- "$STASH" select "$S/one" --into "$W/ro"
 say "select unknown option" 2 unknown_option "unknown option --frob. Run \`stash help\`." -- "$STASH" select "$S/one" --frob
 say "select repeated option" 2 invalid_arguments "--into was given more than once" -- "$STASH" select "$S/one" --into "$S" --into "$S"
-say "select bad duration" 2 invalid_arguments "cannot read duration \"soon\". Try 30m, 2h, 3d or 1w." -- "$STASH" select "$S/one" --for soon
+say "select bad duration" 2 invalid_arguments "cannot read duration soon. Try 30m, 2h, 3d or 1w." -- "$STASH" select "$S/one" --for soon
 OUT=$("$STASH" select "$S/one" --for 2>&1 </dev/null); RC=$?
 clean "select no value" "$OUT"; assert_eq 2 "$RC" "select no value: exit"
 has "select no value: names the option" "$OUT" "--for needs a value."
