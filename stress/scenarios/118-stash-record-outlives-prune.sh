@@ -52,7 +52,7 @@ if ls -A "$W/held" | grep -q '^\.stash-'; then fail "a holding folder is left af
 # Popped, then 30 days pass: the record holds nothing and expires.
 touch -t "$OLD" "$ETUDE_STATE_DIR/$stash_record"
 "$SWEEP" "$W/scan" >/dev/null 2>&1
-if [ -f "$ETUDE_STATE_DIR/$stash_record" ]; then pass "sweep's keyless prune leaves the popped stash record to stash"; else fail "sweep's prune deleted a stash record"; fi
+if [ -f "$ETUDE_STATE_DIR/$stash_record" ]; then pass "sweep's prune leaves even a popped stash record to stash"; else fail "sweep's prune deleted a stash record"; fi
 "$STASH" pop "$W/scan" >/dev/null 2>"$W/pop2.err"
 assert_eq 1 "$?" "pop of a folder with nothing stashed exits 1"
 if [ ! -e "$ETUDE_STATE_DIR/$stash_record" ]; then pass "the popped stash record expires once 30 days old"; else fail "a popped stash record outlived its 30 days"; fi
