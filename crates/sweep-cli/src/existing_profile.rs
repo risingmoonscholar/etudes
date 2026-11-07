@@ -91,6 +91,9 @@ fn parse_string(value: &str) -> Result<String, String> {
 }
 
 fn parse(source: &str) -> Result<Vec<(String, String)>, String> {
+    // Some macOS editors write a byte order mark first. It is not part of the
+    // first line.
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut version = None;
     let mut routes = Vec::new();
     // A route being read, and the line its header is on.
@@ -801,6 +804,32 @@ mod writer_tests {
         drop(other);
         drop(held);
         assert_eq!(pending_files(&state), vec!["notes.pending".to_owned()]);
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_is_accepted_and_kept() {
+        let routes = vec![("bpy".to_owned(), "Box".to_owned())];
+        let text =
+            "\u{feff}schema_version = 1\n[[routes]]\nextension = \"bpy\"\nfolder = \"Box\"\n";
+        assert_eq!(parse(text).unwrap(), routes);
+        // A file holding only the mark is an empty profile, not a broken line.
+        assert_eq!(
+            parse("\u{feff}").unwrap_err(),
+            "the file needs one schema_version = 1 entry."
+        );
+        // Saving a new route keeps every byte the person wrote, mark included.
+        let (base, _cleanup) = temp_dir();
+        std::fs::create_dir(base.join("Box")).unwrap();
+        std::fs::create_dir(base.join("Other")).unwrap();
+        let path = base.join("profile.toml");
+        std::fs::write(&path, text).unwrap();
+        let pending =
+            PendingRoutes::prepare_at(&base, &[map("xyz", "Other")], path.clone()).unwrap();
+        assert!(pending.save().unwrap().written);
+        let after = std::fs::read(&path).unwrap();
+        assert!(after.starts_with(text.as_bytes()), "{after:?}");
+        let after = String::from_utf8(after).unwrap();
+        assert_eq!(parse(&after).unwrap().len(), 2);
     }
 
     #[test]
