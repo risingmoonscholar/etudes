@@ -2,6 +2,8 @@
 # A stash older than sweep's 30-day expiry keeps its undo record: a sweep run
 # drops an old sweep record but not the stash's, and pop brings every file back
 # with its bytes. Once popped and 30 days old, the stash's record expires too.
+# An old sweep record that another key cannot open is kept through a sweep run
+# and a wrong-key undo, and the right key then undoes it.
 # Everything is synthetic, in a temp dir, and removed on exit.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null

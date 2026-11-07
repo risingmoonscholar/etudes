@@ -80,5 +80,5 @@
   "115-non-utf8-arguments": 98,
   "116-moves-into-checked-folders": 18,
   "117-journal-barrier-kill-and-recover": 16,
-  "118-stash-record-outlives-prune": 15
+  "118-stash-record-outlives-prune": 21
 }

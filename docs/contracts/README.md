@@ -448,7 +448,8 @@ past the core TTL, but only one that opens with the existing key. A record that
 does not open is kept, so the advice `sweep undo` gives for it ("Keep that
 record") stays true. To check, sweep startup reads `existing_journal_key` and
 `expired_journal_store`, and only when such an old record exists; it never
-creates a key. Stash adds the owned
+creates a key. In a `sweep undo` run the startup prune runs after the undo
+instead of before, so the run that brings the right key still finds the record. Stash adds the owned
 artifact `popped_stash_journals_past_ttl`: `stash pop` opens stash records past
 the TTL with the current key and removes those that hold nothing, so a popped
 stash's record expires 30 days after the pop that finished it. A record that
