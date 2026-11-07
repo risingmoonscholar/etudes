@@ -360,9 +360,11 @@ fn remove_stale_pending(dir: &std::path::Path) {
         let Ok(file) = options.open(&path) else {
             continue;
         };
-        let same = file
-            .metadata()
-            .is_ok_and(|now| now.ino() == before.ino() && now.dev() == before.dev());
+        // A file with other names is not a leftover of ours: never unlink a
+        // hard link that carries the pending name.
+        let same = file.metadata().is_ok_and(|now| {
+            now.ino() == before.ino() && now.dev() == before.dev() && now.nlink() == 1
+        });
         if same {
             let _ = std::fs::remove_file(&path);
         }
@@ -830,6 +832,35 @@ mod writer_tests {
         assert!(after.starts_with(text.as_bytes()), "{after:?}");
         let after = String::from_utf8(after).unwrap();
         assert_eq!(parse(&after).unwrap().len(), 2);
+    }
+
+    // The lock that tells a leftover from a live file is macOS-only.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_hard_link_with_the_pending_name_is_never_removed() {
+        let (base, _cleanup) = temp_dir();
+        std::fs::create_dir(base.join("Box")).unwrap();
+        let state = base.join("state");
+        std::fs::create_dir(&state).unwrap();
+        let precious = base.join("precious.txt");
+        std::fs::write(&precious, b"keep me").unwrap();
+        let linked = state.join(".sweep-existing-profile.1-2.pending");
+        std::fs::hard_link(&precious, &linked).unwrap();
+        let pending =
+            PendingRoutes::prepare_at(&base, &[map("bpy", "Box")], state.join("profile.toml"))
+                .unwrap();
+        assert!(linked.exists(), "the hard link was unlinked");
+        assert_eq!(std::fs::read(&precious).unwrap(), b"keep me");
+        drop(pending);
+        assert!(linked.exists());
+        // A leftover with one name is still removed.
+        std::fs::remove_file(&linked).unwrap();
+        std::fs::write(&linked, b"x").unwrap();
+        let again =
+            PendingRoutes::prepare_at(&base, &[map("bpy", "Box")], state.join("profile.toml"))
+                .unwrap();
+        assert!(!linked.exists());
+        drop(again);
     }
 
     #[test]
