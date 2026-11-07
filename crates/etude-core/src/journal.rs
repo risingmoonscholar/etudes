@@ -1130,7 +1130,7 @@ impl Journal {
     }
 }
 
-/// Journals older than this are dropped on the next run.
+/// Journals older than this are dropped by the next run that opens records.
 ///
 /// A journal is an index of the user's filenames. Even sealed, keeping it
 /// forever means keeping the exposure forever, and undo is only useful for as
@@ -1164,7 +1164,7 @@ fn kept_until_finished(file_name: &str) -> bool {
 }
 
 /// Records past [`TTL_DAYS`] that [`prune_expired`] would consider, by name and
-/// modified time only. Lets a caller skip fetching the key when nothing is old.
+/// modified time only.
 fn expired_candidates() -> Vec<(String, JournalCandidate)> {
     let Some(cutoff) = ttl_cutoff() else {
         return Vec::new();
@@ -1202,18 +1202,14 @@ fn expired_candidates() -> Vec<(String, JournalCandidate)> {
     found
 }
 
-/// Whether any record outside [`KEPT_UNTIL_FINISHED`] is past [`TTL_DAYS`].
-/// Reads names and metadata only.
-pub fn has_expired() -> bool {
-    !expired_candidates().is_empty()
-}
-
 /// Delete records older than [`TTL_DAYS`] that open with `sealer`. Returns how
 /// many were removed.
 ///
-/// Called at the start of every sweep run. Failure is not fatal: a journal
-/// that cannot be removed is a housekeeping problem, not a reason to refuse the
-/// user's actual request.
+/// Called by the runs that already hold the key for their own work (in sweep:
+/// an apply or an undo with a journal), so a record past 30 days is dropped by
+/// the next run that opens records. Nothing reads the key just to prune.
+/// Failure is not fatal: a journal that cannot be removed is a housekeeping
+/// problem, not a reason to refuse the user's actual request.
 ///
 /// Records of a tool in [`KEPT_UNTIL_FINISHED`] are skipped: whether a stash
 /// still holds files is a question for [`prune_finished`].
@@ -2351,7 +2347,6 @@ mod tests {
         fs::write(&altered, b"\x05\0\0\0garbage").unwrap();
         set_mtime_secs_ago(&altered, (TTL_DAYS + 5) * 86_400);
 
-        assert!(has_expired());
         assert_eq!(prune_expired(&MarkSeal(1)), 1);
         assert!(!opens.exists(), "an old record that opens survived");
         assert!(

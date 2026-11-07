@@ -719,12 +719,14 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "sweep_existing_profile_bytes",
                     "finder_tag_names",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
                     "selected_tree_finder_tags",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -760,12 +762,14 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                     "sweep_existing_profile_bytes",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
                     "sweep_existing_profile_if_save_routes",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -779,11 +783,13 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                     "sweep_existing_profile_bytes",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -802,6 +808,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "empty_group_directories",
                     "keychain_if_no_supplied_key",
                     "selected_tree_finder_tags",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -950,16 +957,8 @@ fn startup_scope(tool: Tool) -> String {
     match tool {
         Tool::Sweep => scope(
             "startup_except_contract",
-            &[
-                "journal_store_metadata",
-                "legacy_state_metadata",
-                "expired_journal_store",
-                "existing_journal_key",
-            ],
-            &[
-                "legacy_state_migration",
-                "expired_journals_that_open_except_stash",
-            ],
+            &["journal_store_metadata", "legacy_state_metadata"],
+            &["legacy_state_migration"],
         ),
         Tool::Stash => scope(
             "startup_except_contract",

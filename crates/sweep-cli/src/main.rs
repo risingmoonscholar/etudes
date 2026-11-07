@@ -191,13 +191,6 @@ fn run_main(args: Vec<String>) -> ExitCode {
     // the old one still has what it's looking for.
     etude_core::journal::migrate_legacy_state_dir();
 
-    // Journals past their TTL are dropped before anything else, except in an
-    // undo run, which drops them after it has finished: see `prune_old_records`.
-    let undo = args.first().is_some_and(|arg| arg == "undo");
-    if !undo {
-        prune_old_records();
-    }
-
     match args.first().map(String::as_str) {
         None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
         Some("help" | "--help" | "-h") => {
@@ -212,11 +205,7 @@ fn run_main(args: Vec<String>) -> ExitCode {
         Some("lesson") => cmd_lesson(&args),
         Some("apply") => cmd_apply(&args),
         Some("propose") => cmd_propose(&args),
-        Some("undo") => {
-            let code = cmd_undo(&args);
-            prune_old_records();
-            code
-        }
+        Some("undo") => cmd_undo(&args),
         Some("status") => cmd_status(&args),
         Some("forget") => cmd_forget(&args),
         Some("review") => cmd_review(&args),
@@ -2492,25 +2481,18 @@ impl etude_core::journal::Sealer for KeychainSeal {
 /// Drop undo records past their TTL, and say how many.
 ///
 /// Keeping an index of the user's filenames forever keeps the exposure
-/// forever. Stash records are kept: their files may still be in a holding
-/// folder, and only `stash pop` can tell, with the key, that nothing is left.
+/// forever, so a record past 30 days is dropped by the next run that opens
+/// records: an apply or an undo with a journal. Only those runs call this,
+/// with the key they already hold for their own work; no run reads the key
+/// just to prune, so a scan, `status` or `verify` never touches the keychain
+/// for it and prunes nothing.
 ///
-/// A record must open with the current key before it is dropped. One that does
-/// not is the record `sweep undo` tells the person to keep, because the right
-/// key opens it again. When they find that key, the undo run that uses it must
-/// still find the record, so an undo run prunes after the undo, not before.
-/// The key is fetched only when something is old, read-only, never created.
-fn prune_old_records() {
-    let expired = if etude_core::journal::has_expired() {
-        let key = etude_keep::key_if_present();
-        etude_core::scan::record_read_outcome("key_material", key.is_ok());
-        match key {
-            Ok(Some(key)) => etude_core::journal::prune_expired(&KeychainSeal { key }),
-            _ => 0,
-        }
-    } else {
-        0
-    };
+/// Stash records are kept: their files may still be in a holding folder, and
+/// only `stash pop` can tell that nothing is left. A record must open with this
+/// key before it is dropped. One that does not is the record `sweep undo` tells
+/// the person to keep, because the right key opens it again.
+fn prune_old_records(seal: &dyn etude_core::journal::Sealer) {
+    let expired = etude_core::journal::prune_expired(seal);
     etude_cli_support::envelope::effect("expired_journals_removed", expired);
     if expired > 0 {
         eprintln!(
@@ -3048,6 +3030,12 @@ fn run_apply_with_routes(
 ) -> ExitCode {
     if let Err(code) = verify_existing_profile(&context.profile) {
         return code;
+    }
+    // Before the apply: its own record does not exist yet, so this cannot
+    // remove it, and older records go before any history is consulted, as they
+    // always have.
+    if let Some(seal) = sl.as_ref() {
+        prune_old_records(seal);
     }
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
     let mut progress =
@@ -4161,10 +4149,17 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return ExitCode::from(2);
     };
+    let code = undo_with(args, &sl);
+    // After the undo, not before: when the person brings back the key that
+    // opens an old record, the run that uses it must still find that record.
+    prune_old_records(&sl);
+    code
+}
 
+fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     // check_positionals has already refused a folder beside it and a bad id.
     if let Some(id) = undo_id(args) {
-        return undo_by_id(id, &sl);
+        return undo_by_id(id, sl);
     }
 
     // A named path reverses that folder's apply, whichever one it was.
@@ -4190,9 +4185,9 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     .report();
             }
         };
-        return match sweep_journal_for_root(&sl, &target) {
-            Err(record) => refuse_unreadable_record(&record, &sl, UndoAsked::Folder),
-            Ok(Some(mut j)) => finish_undo(&mut j, &sl, UndoAsked::Folder),
+        return match sweep_journal_for_root(sl, &target) {
+            Err(record) => refuse_unreadable_record(&record, sl, UndoAsked::Folder),
+            Ok(Some(mut j)) => finish_undo(&mut j, sl, UndoAsked::Folder),
             Ok(None) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
@@ -4214,10 +4209,10 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    match newest_undoable(&sl) {
-        Ok(Some(mut j)) => return finish_undo(&mut j, &sl, UndoAsked::Newest),
+    match newest_undoable(sl) {
+        Ok(Some(mut j)) => return finish_undo(&mut j, sl, UndoAsked::Newest),
         Ok(None) => {}
-        Err(record) => return refuse_unreadable_record(&record, &sl, UndoAsked::Newest),
+        Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     }
     // Everything readable has been reversed, or nothing is on record. Which of
     // the two decides the answer below.
@@ -4227,7 +4222,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         Err(error) => {
             return refuse_unreadable_record(
                 &RecordError { id: None, error },
-                &sl,
+                sl,
                 UndoAsked::Newest,
             );
         }
@@ -4238,7 +4233,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
-    let mut j = match newest.load("sweep", &sl) {
+    let mut j = match newest.load("sweep", sl) {
         Ok(j) => j,
         Err(error) => {
             return refuse_unreadable_record(
@@ -4246,12 +4241,12 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     id: Some(newest.id.clone()),
                     error,
                 },
-                &sl,
+                sl,
                 UndoAsked::Newest,
             );
         }
     };
-    if journal_is_fully_undone(&j, &sl) {
+    if journal_is_fully_undone(&j, sl) {
         // Say which operation this is about. The newest journal being already
         // restored is a fact about an earlier run, and a user who just applied
         // something reads it as a fact about that. If they used --no-journal
@@ -4264,7 +4259,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
-    finish_undo(&mut j, &sl, UndoAsked::Newest)
+    finish_undo(&mut j, sl, UndoAsked::Newest)
 }
 
 /// How the person chose the record. It decides which step can be printed: a
