@@ -44,13 +44,13 @@ cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 
 ## What is broken
 
-I wrote an adversarial harness and pointed it at my own tools: 79 scenarios
+I wrote an adversarial harness and pointed it at my own tools: 80 scenarios
 covering macOS filesystem hazards, crashes mid-apply, races between plan and
 apply, exact item-cap boundaries, and real disk images for full, read-only and
 case-sensitive volumes.
 
 ```sh
-bash stress/run.sh        # 79 scenarios
+bash stress/run.sh        # 80 scenarios
 ```
 
 Every failed assertion is actionable. Timing is recorded as a measurement, but
