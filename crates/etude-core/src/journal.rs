@@ -2196,8 +2196,14 @@ mod tests {
         let swept = aged_record(&dir, "sweep", "old", &[EntryState::Moved]);
 
         assert_eq!(prune_expired(), 1);
-        assert!(held.exists(), "an outstanding stash record was dropped by age");
-        assert!(popped.exists(), "the keyless prune cannot tell a popped stash");
+        assert!(
+            held.exists(),
+            "an outstanding stash record was dropped by age"
+        );
+        assert!(
+            popped.exists(),
+            "the keyless prune cannot tell a popped stash"
+        );
         assert!(!swept.exists(), "an old sweep record survived its 30 days");
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -2250,11 +2256,23 @@ mod tests {
         assert_eq!(prune_finished("stash", &MarkSeal(1)), 2);
         assert!(held.exists(), "an outstanding stash was dropped");
         assert!(partly.exists(), "a partly popped stash was dropped");
-        assert!(unrecorded.exists(), "a stash with an unrecorded move was dropped");
-        assert!(other_key.path().exists(), "an unreadable stash record was dropped");
-        assert!(fresh_popped.exists(), "a popped stash under 30 days old was dropped");
+        assert!(
+            unrecorded.exists(),
+            "a stash with an unrecorded move was dropped"
+        );
+        assert!(
+            other_key.path().exists(),
+            "an unreadable stash record was dropped"
+        );
+        assert!(
+            fresh_popped.exists(),
+            "a popped stash under 30 days old was dropped"
+        );
         assert!(!popped.exists(), "an old popped stash record survived");
-        assert!(!refused.exists(), "an old record that moved nothing survived");
+        assert!(
+            !refused.exists(),
+            "an old record that moved nothing survived"
+        );
         assert!(swept.exists(), "prune_finished reached outside its tool");
         fs::remove_dir_all(&dir).unwrap();
     }
