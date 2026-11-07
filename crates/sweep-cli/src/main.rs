@@ -193,6 +193,8 @@ fn run_main(args: Vec<String>) -> ExitCode {
 
     // Journals past their TTL are dropped before anything else. Keeping an
     // index of the user's filenames forever keeps the exposure forever.
+    // Stash records are kept: their files may still be in a holding folder,
+    // and only `stash pop` can tell, with the key, that nothing is left.
     let expired = etude_core::journal::prune_expired();
     etude_cli_support::envelope::effect("expired_journals_removed", expired);
     if expired > 0 {

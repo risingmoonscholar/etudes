@@ -17,7 +17,8 @@ symlink handling and environment variable names. It never outputs their values.
 Subprocesses inherit the environment. `mutation_scope.operations` gives each
 operation's read and write domains; `mutation_scope.startup` must be added to
 every operation except `contract`. In particular, a sweep scan may delete expired
-journals belonging to either tool, and stash status can acquire a key and migrate
+journals of any tool except stash, `stash pop` may delete expired records of
+stashes with nothing left to pop, and stash status can acquire a key and migrate
 state. `unpack --list` copies archive bytes into a private temporary directory
 and removes that copy; absence of a published destination does not mean no writes.
 
@@ -39,7 +40,8 @@ Scope domains resolve as follows:
 | `journal_store`, `journal_store_metadata` | Encrypted journal bytes, or just journal names and metadata, in the configured state directory |
 | `journal_recorded_paths_metadata`, `journal_recorded_entries` | Paths recorded in decrypted journals, which can span roots outside the current working directory |
 | `legacy_state_metadata`, `legacy_state_migration` | The old HOME/.local/state/etudes directory and its one-time move to the current default state directory, when no override is supplied |
-| `expired_journals_all_tools` | Journals older than the core TTL, irrespective of namespace, pruned at sweep startup |
+| `expired_journals_except_stash` | Journals older than the core TTL in every namespace except stash, pruned at sweep startup by name and modified time only |
+| `popped_stash_journals_past_ttl` | Stash journals older than the core TTL that open with the current key and hold nothing: no item still moved, no damaged progress tail, no unrecorded move on disk. Removed by `stash pop`; a stash journal that does not open is kept |
 | `journal_key`, `keychain_if_no_supplied_key` | Supplied key or shared login keychain key; acquisition may create a key when none exists |
 | `sweep_journals`, `shared_keychain_key_if_authorized` | Forget removes sweep's journals; destroying the shared key has separate guards |
 | `empty_group_directories`, `empty_holding_directories` | Empty directories removed after restoration |
@@ -95,7 +97,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v14/sweep.json`, `v13/stash.json` and `v8/unpack.json` are the
+later declaration: `v16/sweep.json`, `v14/stash.json` and `v8/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -342,7 +344,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 13 and its surrounding result envelope is version 4.
+declaration is version 14 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -373,7 +375,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 13 in `v13/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 14 in `v14/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
@@ -435,3 +437,19 @@ reports `state`, `reason`, `added`, `requested`, `profile`, `written` and
 `insufficient_space` or `profile_write_failed`. Undo keeps saved routes. Existing profile SHA-256 replay binding
 is retained. `v15/sweep.json` pins this declaration and `v1/sweep.json` mirrors
 it; the result envelope stays at version 4.
+
+**Declaration version 16 (sweep) and 14 (stash)** stop sweep's startup prune
+from deleting stash records. A stash record is the only way to bring back the
+files in its holding folder, so it is kept for as long as anything is held,
+however old it is. Sweep's startup write domain is now
+`expired_journals_except_stash`: it still drops every other record past the core
+TTL, by name and modified time, without reading it. Stash adds the owned
+artifact `popped_stash_journals_past_ttl`: `stash pop` opens stash records past
+the TTL with the current key and removes those that hold nothing, so a popped
+stash's record expires 30 days after the pop that finished it. A record that
+does not open is kept. Stash's reversibility conditions drop
+`journal_not_expired`, since a record that holds items does not expire. Sweep's
+reversibility conditions keep it. No read or write domain of `pop` changes: it
+already reads and writes `journal_store` and reads
+`journal_recorded_paths_metadata`. `v16/sweep.json` and `v14/stash.json` pin
+these declarations and `v1/` mirrors them; the result envelope stays at version 4.

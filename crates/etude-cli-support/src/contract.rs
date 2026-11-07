@@ -11,7 +11,7 @@ use etude_core::json as j;
 
 pub const SCHEMA_VERSION: u32 = 4;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Sweep,
     Stash,
@@ -141,8 +141,8 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 11,
-                Tool::Stash => 13,
+                Tool::Sweep => SCHEMA_VERSION + 12,
+                Tool::Stash => 14,
                 Tool::Unpack => SCHEMA_VERSION + 4,
             }),
         ),
@@ -255,13 +255,17 @@ pub fn declaration(
                     "owned_artifacts",
                     strings(match tool {
                         Tool::Sweep => &[
-                            "expired_journals_all_tools",
+                            "expired_journals_except_stash",
                             "sweep_journals_on_forget",
                             "authorized_shared_key",
                             "empty_group_directories",
                             "case_probe_files",
                         ],
-                        Tool::Stash => &["empty_holding_directories", "case_probe_files"],
+                        Tool::Stash => &[
+                            "empty_holding_directories",
+                            "case_probe_files",
+                            "popped_stash_journals_past_ttl",
+                        ],
                         Tool::Unpack => &[
                             "private_archive_copy",
                             "failed_staging_tree",
@@ -285,7 +289,16 @@ pub fn declaration(
                 ),
                 (
                     "conditions",
-                    strings(if custody {
+                    strings(if tool == Tool::Stash {
+                        // A stash record never expires while it holds items.
+                        &[
+                            "readable_journal",
+                            "same_key",
+                            "unchanged_items",
+                            "vacant_original_paths",
+                            "journal_progress_writable",
+                        ]
+                    } else if custody {
                         &[
                             "readable_journal",
                             "same_key",
@@ -938,7 +951,7 @@ fn startup_scope(tool: Tool) -> String {
         Tool::Sweep => scope(
             "startup_except_contract",
             &["journal_store_metadata", "legacy_state_metadata"],
-            &["legacy_state_migration", "expired_journals_all_tools"],
+            &["legacy_state_migration", "expired_journals_except_stash"],
         ),
         Tool::Stash => scope(
             "startup_except_contract",

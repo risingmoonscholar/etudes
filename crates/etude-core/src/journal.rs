@@ -1135,31 +1135,105 @@ impl Journal {
 /// A journal is an index of the user's filenames. Even sealed, keeping it
 /// forever means keeping the exposure forever, and undo is only useful for as
 /// long as the user remembers what they ran.
+///
+/// The exception is a record that is still the only way back. A stash record
+/// describes files that sit in a hidden holding folder until they are popped;
+/// dropping it by age leaves them there with nothing that can bring them back.
+/// So a stash record is kept for as long as its stash is outstanding, and
+/// expires like any other record once nothing is held: [`TTL_DAYS`] after the
+/// pop that finished it (a pop rewrites the record, which resets its age).
 pub const TTL_DAYS: u64 = 30;
+
+/// Tools whose records hold files that are not yet back where they came
+/// from. [`prune_expired`] never drops these by age; [`prune_finished`] drops
+/// them only after unsealing one and seeing that nothing is still held.
+pub const KEPT_UNTIL_FINISHED: &[&str] = &["stash"];
+
+fn ttl_cutoff() -> Option<SystemTime> {
+    SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400))
+}
+
+/// The tool a `{tool}-{id}.journal` filename belongs to, from its name alone.
+fn kept_until_finished(file_name: &str) -> bool {
+    file_name
+        .strip_suffix(".journal")
+        .and_then(|stem| stem.split_once('-'))
+        .is_some_and(|(tool, _)| KEPT_UNTIL_FINISHED.contains(&tool))
+}
 
 /// Delete journals older than [`TTL_DAYS`]. Returns how many were removed.
 ///
 /// Called at the start of every run that touches the state directory. Failure
 /// is not fatal: a journal that cannot be removed is a housekeeping problem,
 /// not a reason to refuse the user's actual request.
+///
+/// Records of a tool in [`KEPT_UNTIL_FINISHED`] are skipped. This runs with no
+/// journal key, so it cannot tell a popped stash from an outstanding one, and
+/// it decides from the filename and modified time only; it reads no journal
+/// contents. Those records expire through [`prune_finished`] instead.
 pub fn prune_expired() -> usize {
-    let cutoff =
-        match SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400)) {
-            Some(c) => c,
-            None => return 0,
-        };
+    let Some(cutoff) = ttl_cutoff() else {
+        return 0;
+    };
     let Ok(rd) = crate::scan::observe_read("directory_enumeration", fs::read_dir(state_dir()))
     else {
         return 0;
     };
     let mut removed = 0;
     for e in rd.flatten() {
-        if !e.file_name().to_string_lossy().ends_with(".journal") {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".journal") || kept_until_finished(&name) {
             continue;
         }
         let Ok(md) = e.metadata() else { continue };
         let Ok(t) = md.modified() else { continue };
         if t < cutoff && fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Whether a record has nothing left to bring back: no item is still at its
+/// destination, the progress tail is whole, and no planned item is on disk at
+/// its destination with an unrecorded move. The same test `stash pop` uses
+/// before it says a stash was already popped. Asks the file system for
+/// metadata only.
+pub fn is_finished(j: &Journal) -> bool {
+    !j.progress_tail_damaged
+        && !j.entries.iter().any(Entry::is_moved)
+        && crate::apply::unrecorded_moves(j) == 0
+}
+
+/// Delete `tool`'s records older than [`TTL_DAYS`] that are finished (see
+/// [`is_finished`]). Returns how many were removed.
+///
+/// For a tool in [`KEPT_UNTIL_FINISHED`], whose records [`prune_expired`]
+/// keeps. A record that cannot be read (another key, damaged, changed after
+/// discovery) is kept: an unreadable record cannot show that its files are
+/// back, and deleting it would make that permanent. A record is removed only if
+/// it is still the same file that was read.
+pub fn prune_finished(tool: &str, sealer: &dyn Sealer) -> usize {
+    let Some(cutoff) = ttl_cutoff() else {
+        return 0;
+    };
+    let Ok(candidates) = candidates_with_times(tool) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for (modified, candidate) in candidates {
+        if modified >= cutoff {
+            continue;
+        }
+        let Ok(journal) = candidate.load(tool, sealer) else {
+            continue;
+        };
+        if !is_finished(&journal) {
+            continue;
+        }
+        let unchanged = fs::symlink_metadata(&candidate.path)
+            .is_ok_and(|now| same_journal(&candidate.metadata, &now));
+        if unchanged && fs::remove_file(&candidate.path).is_ok() {
             removed += 1;
         }
     }
@@ -2058,6 +2132,131 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// A sealer that only opens what it sealed: a different `mark` stands in
+    /// for a different key.
+    struct MarkSeal(u8);
+    impl Sealer for MarkSeal {
+        fn seal(&self, p: &[u8]) -> Result<Vec<u8>, &'static str> {
+            let mut v = vec![self.0];
+            v.extend_from_slice(p);
+            Ok(v)
+        }
+        fn open(&self, p: &[u8]) -> Result<Vec<u8>, &'static str> {
+            match p.split_first() {
+                Some((m, rest)) if *m == self.0 => Ok(rest.to_vec()),
+                _ => Err("wrong key"),
+            }
+        }
+    }
+
+    /// One aged record per case, in a fresh state directory. Each entry's
+    /// destination is under `dir`, so `unrecorded_moves` asks a real disk.
+    fn aged_record(dir: &Path, tool: &str, id: &str, states: &[EntryState]) -> PathBuf {
+        let journal = Journal {
+            id: id.into(),
+            tool: tool.into(),
+            root: dir.join("root"),
+            entries: states
+                .iter()
+                .enumerate()
+                .map(|(i, state)| Entry {
+                    from: dir.join(format!("root/{id}-{i}")),
+                    to: dir.join(format!("root/.stash-0/{id}-{i}")),
+                    method: Method::Rename,
+                    size: 1,
+                    mtime_secs: 1,
+                    inode: 1,
+                    edge_hash: 1,
+                    state: *state,
+                    tag: None,
+                })
+                .collect(),
+            ..Journal::default()
+        };
+        journal.save_sealed(&MarkSeal(1)).expect("save");
+        let path = journal.path();
+        set_mtime_secs_ago(&path, (TTL_DAYS + 5) * 86_400);
+        path
+    }
+
+    /// The bug: sweep's age prune deleted a stash record whose files were still
+    /// in the holding folder, so `stash pop` could no longer bring them back.
+    #[test]
+    fn age_prune_keeps_stash_records_and_drops_old_sweep_records() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("stash_ttl_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+
+        let held = aged_record(&dir, "stash", "held", &[EntryState::Moved]);
+        let popped = aged_record(&dir, "stash", "popped", &[EntryState::Reversed]);
+        let swept = aged_record(&dir, "sweep", "old", &[EntryState::Moved]);
+
+        assert_eq!(prune_expired(), 1);
+        assert!(held.exists(), "an outstanding stash record was dropped by age");
+        assert!(popped.exists(), "the keyless prune cannot tell a popped stash");
+        assert!(!swept.exists(), "an old sweep record survived its 30 days");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finished_prune_drops_only_old_popped_stash_records_it_can_open() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("stash_done_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+
+        let held = aged_record(&dir, "stash", "held", &[EntryState::Moved]);
+        let partly = aged_record(
+            &dir,
+            "stash",
+            "partly",
+            &[EntryState::Reversed, EntryState::Stranded],
+        );
+        let popped = aged_record(
+            &dir,
+            "stash",
+            "popped",
+            &[EntryState::Reversed, EntryState::Held, EntryState::Returned],
+        );
+        let refused = aged_record(&dir, "stash", "refused", &[]);
+        // Every entry reads Planned, but the file sits at its destination and
+        // not at its origin: a move whose record was lost. Still held.
+        let unrecorded = aged_record(&dir, "stash", "unrecorded", &[EntryState::Planned]);
+        fs::create_dir_all(dir.join("root/.stash-0")).unwrap();
+        fs::write(dir.join("root/.stash-0/unrecorded-0"), b"x").unwrap();
+        let fresh_popped = dir.join("stash-fresh.journal");
+        Journal {
+            id: "fresh".into(),
+            tool: "stash".into(),
+            ..Journal::default()
+        }
+        .save_sealed(&MarkSeal(1))
+        .unwrap();
+        // Written with another key: this run cannot show its files are back.
+        let other_key = Journal {
+            id: "otherkey".into(),
+            tool: "stash".into(),
+            ..Journal::default()
+        };
+        other_key.save_sealed(&MarkSeal(2)).unwrap();
+        set_mtime_secs_ago(&other_key.path(), (TTL_DAYS + 5) * 86_400);
+        let swept = aged_record(&dir, "sweep", "popped", &[EntryState::Reversed]);
+
+        assert_eq!(prune_finished("stash", &MarkSeal(1)), 2);
+        assert!(held.exists(), "an outstanding stash was dropped");
+        assert!(partly.exists(), "a partly popped stash was dropped");
+        assert!(unrecorded.exists(), "a stash with an unrecorded move was dropped");
+        assert!(other_key.path().exists(), "an unreadable stash record was dropped");
+        assert!(fresh_popped.exists(), "a popped stash under 30 days old was dropped");
+        assert!(!popped.exists(), "an old popped stash record survived");
+        assert!(!refused.exists(), "an old record that moved nothing survived");
+        assert!(swept.exists(), "prune_finished reached outside its tool");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     fn set_mtime_secs_ago(p: &Path, secs: u64) {
