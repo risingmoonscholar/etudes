@@ -425,8 +425,10 @@ pub(crate) trait DurableWrite: Write {
 
     /// Order everything written so far before anything written after, without
     /// forcing it to stable storage. Recovery needs order, not durability, per
-    /// frame: a power cut may lose the newest records, but never a record
-    /// whose move survived, so at most the move in flight lacks its record.
+    /// frame: records persist as an in-order prefix, so after a power cut
+    /// every surviving move except the newest has its record. The newest move
+    /// may lack one, or a record may persist without its move; undo
+    /// reconciles both. A finished run is flushed once with `sync_all`.
     fn barrier(&mut self) -> io::Result<()> {
         self.sync_all()
     }
@@ -1499,6 +1501,24 @@ mod tests {
             }
             Ok(())
         }
+    }
+    /// The real barrier is accepted on a regular file on the local volume,
+    /// so the fast path runs, and what was written before it reads back.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_barrier_is_accepted_on_a_local_file() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!("etudes_barrier_{}", std::process::id()));
+        let _cleanup = Cleanup(path.clone());
+        let mut file = fs::File::create(&path).expect("create");
+        file.write_all(b"record").expect("write");
+        DurableWrite::barrier(&mut file).expect("barrier");
+        assert_eq!(fs::read(&path).expect("read"), b"record");
     }
     struct FrameSeal;
     impl FrameSeal {
