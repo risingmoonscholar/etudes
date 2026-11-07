@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>stash v0.5.5 candidate — locked items and checked moves · études</title>
+  <meta name="description" content="Stash 0.5.5 leaves locked items in place and says the folder is not clear, and moves each item into the folder it checked.">
+  <meta property="og:title" content="stash v0.5.5 candidate — locked items and checked moves">
+  <meta property="og:description" content="A locked item stays and the folder is not called clear; a folder swapped during a stash is refused, not followed.">
+  <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/stash-custody.gif">
+  <link rel="stylesheet" href="release.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="chrome">
+      <a href="../index.html">études / demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes">GitHub repository</a>
+    </header>
+
+    <article>
+      <p class="release-id">stash · v0.5.5 candidate</p>
+      <h1>stash v0.5.5 candidate — locked items and checked moves</h1>
+      <div class="release-copy">
+        <p>Stash no longer calls a folder clear while a locked item is still in it.</p>
+        <ul>
+          <li>Files and folders with the locked flag are left in place. A folder with a locked item in it is not called clear: stash moves the rest, says the folder is NOT clear, and exits 3 with status <code>incomplete</code>. A folder that holds only locked items moves nothing and reads <code>refused</code> with <code>permission_denied</code>. Every message says how to clear the flag.</li>
+          <li><code>stash select</code> of only a locked item now reads <code>refused</code> with <code>permission_denied</code>; it still exits 3.</li>
+          <li>On macOS each move goes into the holding folder that passed the check: the folder is opened without following a link and its device and inode are checked on the open folder. A folder swapped for a link during the move is refused instead of followed. <code>stash pop</code> moves items back the same way.</li>
+          <li><code>--progress-json</code> now covers <code>stash</code>, <code>stash select</code>, <code>stash pop</code> and <code>restore</code>. They used to refuse the flag with exit 2.</li>
+          <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
+        </ul>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The stash capability declaration is version 13.</p>
+      </div>
+    </article>
+
+    <section class="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">The demo</h2>
+      <figure>
+        <img src="../gifs/stash-custody.gif" alt="A light terminal demo stashes a synthetic folder, reports progress, then restores the visible items while leaving one hidden item in place." width="860" height="294">
+        <figcaption>A synthetic folder: stash, then pop it back. The hidden item stays in place. The terminal recording is shown in its original light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install stash 0.5.5</h2>
+      <p>0.5.5 is a release candidate. This pin works only after the tag is published:</p>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.5 stash-cli</code></pre>
+    </section>
+
+    <footer class="footer">
+      <a href="../index.html">All tool demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
+    </footer>
+  </main>
+</body>
+</html>

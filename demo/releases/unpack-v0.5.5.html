@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>unpack v0.5.5 candidate — leftover cleanup and progress · études</title>
+  <meta name="description" content="Unpack 0.5.5 removes a folder left by a killed extraction only when it can prove it, and reports progress.">
+  <meta property="og:title" content="unpack v0.5.5 candidate — leftover cleanup and progress">
+  <meta property="og:description" content="A proven leftover from a killed extraction is removed and named; anything unproved stays in place.">
+  <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/unpack-safety.gif">
+  <link rel="stylesheet" href="release.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="chrome">
+      <a href="../index.html">études / demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes">GitHub repository</a>
+    </header>
+
+    <article>
+      <p class="release-id">unpack · v0.5.5 candidate</p>
+      <h1>unpack v0.5.5 candidate — leftover cleanup and progress</h1>
+      <div class="release-copy">
+        <p>A later extraction cleans up after a killed one, but only what it can prove is its own leftover.</p>
+        <ul>
+          <li>A later extraction into the same destination removes a folder left by a killed extraction, and names it on stderr. It first checks the exact name, that the folder is a real directory you own, that its lock file names that very folder by device and inode, and that the lock is free. A running extraction holds the lock.</li>
+          <li>A symlink, a copy of a leftover, a folder from an older version and anything else unproved stay in place, and each is named with a step that works. A failed removal does not block the extraction. <code>--json</code> adds <code>leftover_folders_removed</code> and <code>leftover_folders_kept</code> under <code>effects</code> when not zero.</li>
+          <li><code>--progress-json</code> now covers extraction and <code>--list</code>. Progress comes from the judged listing and the private staging folder, not from extractor output. Redirected runs of 100 or more members print milestones on stderr.</li>
+          <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
+        </ul>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The unpack capability declaration is version 8.</p>
+      </div>
+    </article>
+
+    <section class="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">The demo</h2>
+      <figure>
+        <img src="../gifs/unpack-safety.gif" alt="A light terminal demo extracts a synthetic ZIP archive and refuses a second ZIP archive containing a symlink." width="860" height="294">
+        <figcaption>A normal synthetic archive extracts and its two output paths pass the tree audit; a ZIP archive containing a symlink is refused before extraction. The terminal recording is shown in its original light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install unpack 0.5.5</h2>
+      <p>0.5.5 is a release candidate. This pin works only after the tag is published:</p>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.5 unpack-cli</code></pre>
+    </section>
+
+    <footer class="footer">
+      <a href="../index.html">All tool demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
+    </footer>
+  </main>
+</body>
+</html>

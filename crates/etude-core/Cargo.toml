@@ -10,4 +10,4 @@ license.workspace = true
 [dependencies]
 
 [dev-dependencies]
-fixtures = { path = "../fixtures", version = "0.5.4" }
+fixtures = { path = "../fixtures", version = "0.5.5" }
