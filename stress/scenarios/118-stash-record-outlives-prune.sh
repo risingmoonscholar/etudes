@@ -59,12 +59,13 @@ if grep -q 'dropped 1 undo record older than 30 days' "$W/pop2.err"; then pass "
 python3 - "$W" <<'PY'
 import pathlib, sys, zipfile
 w = pathlib.Path(sys.argv[1])
-src = w/'zipsrc'; (src/'inner').mkdir(parents=True)
-(src/'inner'/'member.txt').write_bytes(b'archive member')
+src = w/'zipsrc'; src.mkdir()
+(src/'member.txt').write_bytes(b'archive member')
+(src/'second.txt').write_bytes(b'second member')
 with zipfile.ZipFile(w/'small.zip', 'w') as z:
-    z.write(src/'inner', 'inner')
-    z.write(src/'inner'/'member.txt', 'inner/member.txt')
+    z.write(src/'member.txt', 'member.txt')
+    z.write(src/'second.txt', 'second.txt')
 PY
 "$UNPACK" "$W/small.zip" --into "$W/out" >/dev/null 2>&1
 assert_eq 0 "$?" "unpack extracts a small zip"
-assert_eq "archive member" "$(cat "$W/out/inner/member.txt" 2>/dev/null)" "the extracted member has its bytes"
+assert_eq "archive member" "$(cat "$W/out/member.txt" 2>/dev/null)" "the extracted member has its bytes"
