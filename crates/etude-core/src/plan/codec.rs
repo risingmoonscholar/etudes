@@ -219,8 +219,14 @@ pub(super) fn encode(
                     w.text(ext)?;
                 }
             }
-            Signal::Mapped { ext, created } => {
-                w.byte(4);
+            Signal::Mapped {
+                ext,
+                created,
+                saved,
+            } => {
+                // A saved profile route has its own tag, so a plan written
+                // before saved routes existed still reads as it did.
+                w.byte(if *saved { 8 } else { 4 });
                 w.text(ext)?;
                 w.byte(u8::from(*created));
             }
@@ -389,6 +395,12 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
             4 => Signal::Mapped {
                 ext: r.text()?,
                 created: r.boolean()?,
+                saved: false,
+            },
+            8 => Signal::Mapped {
+                ext: r.text()?,
+                created: r.boolean()?,
+                saved: true,
             },
             5 => Signal::Collected { count: r.count()? },
             6 => Signal::Proposed { count: r.count()? },
@@ -627,6 +639,7 @@ mod tests {
             Signal::Mapped {
                 ext: "log".into(),
                 created: true,
+                saved: false,
             },
             Signal::Collected { count: 1 },
         ];
@@ -735,6 +748,41 @@ mod tests {
         );
         let (decoded, _, _) = decode(&bytes).unwrap();
         assert!(!decoded.adds_tags);
+    }
+
+    /// A saved-route group keeps its saved mark and its created folder
+    /// through an exported plan, under its own tag; a `--map` group keeps
+    /// the tag older plans used.
+    #[test]
+    fn a_saved_route_group_round_trips_with_its_own_tag() {
+        let (mut plan, snapshot, context) = fixture();
+        let index = plan
+            .groups
+            .iter()
+            .position(|group| matches!(group.signal, Signal::Mapped { .. }))
+            .unwrap();
+        let unsaved = encode(&plan, &snapshot, &context).unwrap();
+        plan.groups[index].signal = Signal::Mapped {
+            ext: "log".into(),
+            created: true,
+            saved: true,
+        };
+        let bytes = encode(&plan, &snapshot, &context).unwrap();
+        assert_eq!(bytes.len(), unsaved.len());
+        assert_ne!(bytes, unsaved);
+        let decoded = decode(&bytes).unwrap().0;
+        assert_eq!(decoded.groups[index].signal, plan.groups[index].signal);
+        assert_eq!(encode(&decoded, &snapshot, &context).unwrap(), bytes);
+        assert!(
+            decoded
+                .to_json()
+                .contains(".log (saved route, new folder sweep creates)")
+        );
+        let old = decode(&unsaved).unwrap().0;
+        assert!(matches!(
+            old.groups[index].signal,
+            Signal::Mapped { saved: false, .. }
+        ));
     }
 
     #[test]

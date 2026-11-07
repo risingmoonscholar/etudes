@@ -77,9 +77,13 @@ pub enum Signal {
     /// swept directory or was named by the agent -- the output labels the two
     /// differently, because a name the filesystem already carried and a name
     /// an agent coined are different claims and the user gets told which.
+    /// `saved` marks a route from the person's existing-folder profile: its
+    /// folder name is theirs, not an agent's, so a created one is labelled
+    /// as their saved route.
     Mapped {
         ext: String,
         created: bool,
+        saved: bool,
     },
     /// Not a detector. A caller-supplied set already decided elsewhere --
     /// stash's holding folder is one group by definition. Was called
@@ -110,13 +114,15 @@ impl Signal {
     pub fn describe(&self) -> String {
         match self {
             Signal::Screenshot => "named \"Screenshot ...\"".to_string(),
-            Signal::Mapped { ext, created } => {
-                if *created {
-                    format!(".{ext} (agent-named, one-shot)")
-                } else {
-                    format!(".{ext} (mapped into an existing folder)")
-                }
-            }
+            Signal::Mapped {
+                ext,
+                created,
+                saved,
+            } => match (*created, *saved) {
+                (true, true) => format!(".{ext} (saved route, new folder sweep creates)"),
+                (true, false) => format!(".{ext} (agent-named, one-shot)"),
+                (false, _) => format!(".{ext} (mapped into an existing folder)"),
+            },
             Signal::CameraBurst { days } => {
                 format!("camera names, taken within {days} days")
             }
@@ -684,24 +690,62 @@ pub fn check_profile_routes(raw: &[(String, String)]) -> Result<Vec<(String, Str
         .collect())
 }
 
+/// Why a saved existing-folder profile route cannot be used in this folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExistingRouteError {
+    /// The routes themselves are invalid: spelling, reserved names, a
+    /// duplicate, or a folder name that differs from one here only by case.
+    Invalid(String),
+    /// Something that is not a folder already holds a route's folder name
+    /// directly in the selected folder. `link` is true for a symbolic link,
+    /// which is never followed, even to a folder.
+    NotAFolder {
+        ext: String,
+        path: PathBuf,
+        link: bool,
+    },
+}
+
+impl std::fmt::Display for ExistingRouteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(why) => f.write_str(why),
+            Self::NotAFolder { ext, path, link } => write!(
+                f,
+                "the .{ext} route names {}, which is {}, not a folder",
+                path.display(),
+                if *link { "a link" } else { "a file" }
+            ),
+        }
+    }
+}
+
 /// Validate a saved existing-folder profile. Unlike a one-shot agent map, a
 /// profile may deliberately route an extension which a built-in detector
 /// would otherwise claim. Refusal detectors still run before these routes.
-/// A missing destination refuses the profile route by name: this scheme
-/// never creates destinations, and silently dropping a route could let a
-/// built-in grouping take the file somewhere else.
+/// A route's folder is the person's chosen destination: when it is missing,
+/// the route comes back with `created: true` and apply creates it, through
+/// the same checked path as a `--map` folder, only for a group that moves a
+/// file. A name held by a file or a link refuses the profile by name.
 pub fn validate_existing_maps(
     raw: &[(String, String)],
     root: &std::path::Path,
-) -> Result<Vec<MapSpec>, String> {
-    let maps = validate_maps_impl(raw, Some(root), true)?;
-    if let Some(missing) = maps.iter().find(|map| map.created) {
-        return Err(format!(
-            "existing-folder profile destination {:?} does not exist; create it or edit the profile",
-            missing.folder
-        ));
+) -> Result<Vec<MapSpec>, ExistingRouteError> {
+    // Spelling, reserved names and duplicates first, without the folder.
+    let routes = validate_maps_impl(raw, None, true).map_err(ExistingRouteError::Invalid)?;
+    for route in &routes {
+        let path = root.join(&route.folder);
+        if let Ok(found) = std::fs::symlink_metadata(&path)
+            && !found.is_dir()
+        {
+            return Err(ExistingRouteError::NotAFolder {
+                ext: route.ext.clone(),
+                path,
+                link: found.file_type().is_symlink(),
+            });
+        }
     }
-    Ok(maps)
+    validate_maps_impl(raw, Some(root), true).map_err(ExistingRouteError::Invalid)
 }
 
 fn validate_maps_impl(
@@ -1008,8 +1052,12 @@ fn group_entries(
     // A saved profile is an explicit user taxonomy. It may claim files that
     // a built-in grouping would otherwise take, but only after pass 1 has
     // removed every personal, project, in-flight, and too-recent refusal.
-    // The destination was verified as an existing direct child by the CLI;
-    // `created: false` also tells apply never to create it if it disappears.
+    // The CLI checked each destination: an existing direct folder keeps
+    // `created: false`, which tells apply never to create it if it
+    // disappears; a missing one is `created: true` and apply makes it for
+    // the first file that moves. A routed extension's files never fall to a
+    // built-in group: below the floor they stay where they are, and no
+    // folder is made for them.
     if profile_routes {
         for m in maps {
             let destination = scan.root.join(&m.folder);
@@ -1030,15 +1078,21 @@ fn group_entries(
                 .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
                 .copied()
                 .collect();
+            claimed.extend(members.iter().map(|e| e.path.clone()));
             if members.len() < MIN_STRUCTURAL_GROUP {
+                untouched.extend(
+                    members
+                        .iter()
+                        .map(|e| (e.path.clone(), Untouched::NoClearGroup)),
+                );
                 continue;
             }
-            claimed.extend(members.iter().map(|e| e.path.clone()));
             groups.push(Group {
                 name: m.folder.clone(),
                 signal: Signal::Mapped {
                     ext: m.ext.clone(),
-                    created: false,
+                    created: m.created,
+                    saved: true,
                 },
                 members: members.iter().map(|e| e.path.clone()).collect(),
                 accepted: false,
@@ -1188,6 +1242,7 @@ fn group_entries(
             signal: Signal::Mapped {
                 ext: m.ext.clone(),
                 created: m.created,
+                saved: false,
             },
             members: members.iter().map(|e| e.path.clone()).collect(),
             accepted: false,
@@ -1670,6 +1725,130 @@ mod tests {
         assert!(ok[0].created, "a new folder was not marked agent-created");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A saved route's missing folder is the person's chosen destination:
+    /// it comes back marked created, never refused. A file or a link that
+    /// holds the name is refused by name, and says which it is.
+    #[test]
+    fn a_missing_saved_route_folder_is_created_and_a_file_or_link_is_refused() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("sweep_existval_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Reading")).unwrap();
+        fs::write(root.join("Box"), b"x").unwrap();
+        std::os::unix::fs::symlink(root.join("Reading"), root.join("Linked")).unwrap();
+
+        let ok = validate_existing_maps(
+            &[
+                ("pdf".into(), "Reading".into()),
+                ("qoi".into(), "Fresh".into()),
+            ],
+            &root,
+        )
+        .unwrap();
+        assert!(!ok[0].created, "an existing folder was marked created");
+        assert!(
+            ok[1].created,
+            "a missing route folder was not marked created"
+        );
+        assert!(!root.join("Fresh").exists(), "validating created a folder");
+
+        let file = validate_existing_maps(&[("qoi".into(), "Box".into())], &root).unwrap_err();
+        assert_eq!(
+            file,
+            ExistingRouteError::NotAFolder {
+                ext: "qoi".into(),
+                path: root.join("Box"),
+                link: false,
+            }
+        );
+        assert!(file.to_string().ends_with("which is a file, not a folder"));
+        assert!(!file.to_string().contains('"'), "{file}");
+        let link = validate_existing_maps(&[("qoi".into(), "Linked".into())], &root).unwrap_err();
+        assert!(
+            matches!(link, ExistingRouteError::NotAFolder { link: true, .. }),
+            "{link:?}"
+        );
+        assert!(link.to_string().contains("which is a link, not a folder"));
+        // Route problems still come first, before any folder is looked at.
+        let twice = validate_existing_maps(
+            &[("qoi".into(), "Box".into()), ("qoi".into(), "Other".into())],
+            &root,
+        )
+        .unwrap_err();
+        assert!(matches!(twice, ExistingRouteError::Invalid(_)), "{twice:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The route wins even below the three-file floor: two routed PDFs stay
+    /// where they are rather than joining the built-in Documents group, and
+    /// a group that does form carries the created folder and the saved mark.
+    #[test]
+    fn a_routed_extension_below_the_floor_is_never_taken_by_a_built_in_group() {
+        let entries = vec![
+            cam_entry("a.pdf", 1000),
+            cam_entry("b.pdf", 1000),
+            cam_entry("c.docx", 1000),
+            cam_entry("d.docx", 1000),
+            cam_entry("e.docx", 1000),
+            cam_entry("one.qoi", 1000),
+            cam_entry("two.qoi", 1000),
+            cam_entry("three.qoi", 1000),
+        ];
+        let scan = scan_outcome(entries);
+        let maps = vec![
+            MapSpec {
+                ext: "pdf".into(),
+                folder: "Reading".into(),
+                created: true,
+            },
+            MapSpec {
+                ext: "qoi".into(),
+                folder: "Images Of Mine".into(),
+                created: true,
+            },
+        ];
+        let p = build_existing(&scan, &maps);
+        assert!(
+            !p.groups.iter().any(|g| g.name == "Reading"),
+            "a group formed below the floor"
+        );
+        for g in &p.groups {
+            assert!(
+                !g.members
+                    .iter()
+                    .any(|m| m.extension().is_some_and(|e| e == "pdf")),
+                "{} took a routed PDF",
+                g.name
+            );
+        }
+        assert_eq!(
+            p.untouched
+                .iter()
+                .filter(|(path, why)| *why == Untouched::NoClearGroup
+                    && path.extension().is_some_and(|e| e == "pdf"))
+                .count(),
+            2,
+            "the routed PDFs are not reported as left in place"
+        );
+        let routed = p
+            .groups
+            .iter()
+            .find(|g| g.name == "Images Of Mine")
+            .expect("the routed group forms");
+        assert_eq!(
+            routed.signal,
+            Signal::Mapped {
+                ext: "qoi".into(),
+                created: true,
+                saved: true,
+            }
+        );
+        assert_eq!(
+            routed.signal.describe(),
+            ".qoi (saved route, new folder sweep creates)"
+        );
     }
 
     /// A mapping claims only what every built-in pass declined.

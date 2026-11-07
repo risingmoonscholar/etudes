@@ -568,6 +568,7 @@ fn apply_refuses_a_destination_directory_replaced_after_planning() {
             signal: plan::Signal::Mapped {
                 ext: "qoi".into(),
                 created: false,
+                saved: false,
             },
             members: vec![source.clone()],
             accepted: true,
@@ -648,6 +649,7 @@ fn apply_refuses_a_planned_destination_replaced_by_an_outside_symlink() {
             signal: plan::Signal::Mapped {
                 ext: "qoi".into(),
                 created: false,
+                saved: false,
             },
             members: vec![source.clone()],
             accepted: true,
@@ -2469,6 +2471,7 @@ fn apply_refuses_a_destination_swapped_for_an_outside_link_just_before_the_move(
             signal: plan::Signal::Mapped {
                 ext: "qoi".into(),
                 created: false,
+                saved: false,
             },
             members: vec![source.clone()],
             accepted: true,

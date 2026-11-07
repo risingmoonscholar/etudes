@@ -1368,6 +1368,8 @@ fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, SchemeEr
                 ));
             }
             let profile = existing_profile::ExistingProfile::load()?;
+            // A missing route folder is not a problem: apply creates it for
+            // the first file that moves, and the plan says so first.
             let maps = plan::validate_existing_maps(&profile.routes, root).map_err(|why| {
                 SchemeError::ProfileInvalid(existing_profile::route_problem(&why))
             })?;
@@ -2263,18 +2265,25 @@ fn hold_hint(p: &plan::Plan) -> String {
     }
 }
 
-/// Say when a folder name came from an agent rather than from the files.
+/// Say when a folder name came from an agent rather than from the files, and
+/// which folders a saved route will create.
 ///
 /// The invariant this qualifies is the oldest in the repo: destination names
 /// are derived from the filesystem, never coined. --map with a folder that
-/// does not exist yet is the one sanctioned exception, and an exception the
-/// output does not announce would just be the invariant quietly gone.
+/// does not exist yet is the one sanctioned agent exception, and an exception
+/// the output does not announce would just be the invariant quietly gone. A
+/// saved route names the person's own folder; when it is missing, the plan
+/// says sweep creates it before anything moves.
 fn print_agent_named_note(p: &plan::Plan) {
     let coined: Vec<&str> = p
         .groups
         .iter()
         .filter_map(|g| match &g.signal {
-            plan::Signal::Mapped { created: true, .. } => Some(g.name.as_str()),
+            plan::Signal::Mapped {
+                created: true,
+                saved: false,
+                ..
+            } => Some(g.name.as_str()),
             _ => None,
         })
         .collect();
@@ -2288,6 +2297,33 @@ fn print_agent_named_note(p: &plan::Plan) {
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
             coined.len(),
             coined.join(", ")
+        ),
+    }
+    let saved: Vec<String> = p
+        .groups
+        .iter()
+        .filter(|g| {
+            matches!(
+                g.signal,
+                plan::Signal::Mapped {
+                    created: true,
+                    saved: true,
+                    ..
+                }
+            )
+        })
+        .map(|g| etude_cli_support::shown_text(&g.name))
+        .collect();
+    match saved.len() {
+        0 => {}
+        1 => println!(
+            "\n  sweep creates the folder {} for your saved route; undo removes it if it is empty",
+            saved[0]
+        ),
+        _ => println!(
+            "\n  sweep creates {} folders for your saved routes: {}; undo removes each one that is empty",
+            saved.len(),
+            saved.join(", ")
         ),
     }
 }
