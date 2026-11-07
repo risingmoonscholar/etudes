@@ -627,8 +627,9 @@ fn cmd_lesson(args: &[String]) -> ExitCode {
             Ok(n) if (1..=LESSON.len()).contains(&n) => n,
             _ => {
                 eprintln!(
-                    "sweep: lesson takes a step from 1 to {}, got {v:?}",
-                    LESSON.len()
+                    "sweep: lesson takes a step from 1 to {}, got {}",
+                    LESSON.len(),
+                    etude_cli_support::shown_text(&v)
                 );
                 return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
@@ -668,7 +669,8 @@ fn parse_scheme(args: &[String]) -> Result<(), String> {
                 .to_string(),
         ),
         Some(name) => Err(format!(
-            "unsupported scheme {name:?}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`"
+            "unsupported scheme {}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`",
+            etude_cli_support::shown_text(&name)
         )),
     }
 }
@@ -682,7 +684,10 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
         None => Ok(1),
         Some(v) => match v.parse::<u8>() {
             Ok(d) if (1..=8).contains(&d) => Ok(d),
-            _ => Err(format!("--depth must be a number from 1 to 8, got {v:?}")),
+            _ => Err(format!(
+                "--depth must be a number from 1 to 8, got {}",
+                etude_cli_support::shown_text(&v)
+            )),
         },
     }
 }
@@ -731,7 +736,10 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
         // who typos --since 6hh and is shown the ordinary 24h result has been
         // told their instruction was obeyed when it was discarded.
         let n: u64 = digits.parse().map_err(|_| {
-            format!("--since must be a number, optionally with h or d, got {raw:?}")
+            format!(
+                "--since must be a number, optionally with h or d, got {}",
+                etude_cli_support::shown_text(&raw)
+            )
         })?;
         // Overflow is a wrong window, and a wrong window silently changes
         // which files are held back. Unchecked, this panicked in debug and
@@ -745,7 +753,10 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
                 3600 => (u64::MAX / 3600, "h"),
                 _ => (u64::MAX / (24 * 60 * 60), "d"),
             };
-            format!("--since {raw:?} is too large. The longest window is {most}{sym}")
+            format!(
+                "--since {} is too large. The longest window is {most}{sym}",
+                etude_cli_support::shown_text(&raw)
+            )
         })?;
         return Ok(Some(std::time::Duration::from_secs(secs)));
     }
@@ -1233,9 +1244,12 @@ fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
             let v = args
                 .get(i + 1)
                 .ok_or_else(|| "--map needs EXT=Folder, like --map bpy=Blender".to_string())?;
-            let (ext, folder) = v
-                .split_once('=')
-                .ok_or_else(|| format!("--map {v:?}: expected EXT=Folder"))?;
+            let (ext, folder) = v.split_once('=').ok_or_else(|| {
+                format!(
+                    "--map {}: expected EXT=Folder",
+                    etude_cli_support::shown_text(&v)
+                )
+            })?;
             out.push((ext.to_string(), folder.to_string()));
             i += 2;
             continue;
@@ -2281,8 +2295,8 @@ fn print_agent_named_note(p: &plan::Plan) {
     match coined.len() {
         0 => {}
         1 => println!(
-            "\n  the folder name {:?} was chosen by your agent, not derived from your files",
-            coined[0]
+            "\n  the folder name {} was chosen by your agent, not derived from your files",
+            etude_cli_support::shown_text(&coined[0])
         ),
         _ => println!(
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
