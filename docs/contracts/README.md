@@ -16,8 +16,9 @@ marks access as unverified; a self-reported count cannot prove absence of access
 symlink handling and environment variable names. It never outputs their values.
 Subprocesses inherit the environment. `mutation_scope.operations` gives each
 operation's read and write domains; `mutation_scope.startup` must be added to
-every operation except `contract`. In particular, a sweep scan may delete expired
-journals of any tool except stash that open with the existing key, `stash pop` may delete expired records of
+every operation except `contract`. Sweep's startup deletes no journal: a sweep
+`apply`, `review`, exported-plan apply or `undo` may delete expired journals of
+any tool except stash that open with the key it already holds, `stash pop` may delete expired records of
 stashes with nothing left to pop, and stash status can acquire a key and migrate
 state. `unpack --list` copies archive bytes into a private temporary directory
 and removes that copy; absence of a published destination does not mean no writes.
@@ -40,8 +41,8 @@ Scope domains resolve as follows:
 | `journal_store`, `journal_store_metadata` | Encrypted journal bytes, or just journal names and metadata, in the configured state directory |
 | `journal_recorded_paths_metadata`, `journal_recorded_entries` | Paths recorded in decrypted journals, which can span roots outside the current working directory |
 | `legacy_state_metadata`, `legacy_state_migration` | The old HOME/.local/state/etudes directory and its one-time move to the current default state directory, when no override is supplied |
-| `expired_journals_that_open_except_stash` | Journals older than the core TTL in every namespace except stash, pruned at sweep startup only if they open with the existing key; one that does not open is kept |
-| `expired_journal_store`, `existing_journal_key` | At sweep startup, only when a journal outside stash is older than the core TTL: the supplied or existing keychain key, read without creating one, and those old journals' encrypted bytes, opened to check the key fits |
+| `expired_journals_that_open_except_stash` | Journals older than the core TTL in every namespace except stash, pruned by a sweep apply, review, exported-plan apply or undo, only if they open with the key that run already holds; one that does not open is kept |
+| `expired_journal_store` | The encrypted bytes of journals outside stash older than the core TTL, opened by an apply-type run with its own key to check the key fits before pruning |
 | `popped_stash_journals_past_ttl` | Stash journals older than the core TTL that open with the current key and hold nothing: no item still moved, no damaged progress tail, no unrecorded move on disk. Removed by `stash pop`; a stash journal that does not open is kept |
 | `journal_key`, `keychain_if_no_supplied_key` | Supplied key or shared login keychain key; acquisition may create a key when none exists |
 | `sweep_journals`, `shared_keychain_key_if_authorized` | Forget removes sweep's journals; destroying the shared key has separate guards |
@@ -439,17 +440,20 @@ reports `state`, `reason`, `added`, `requested`, `profile`, `written` and
 is retained. `v15/sweep.json` pins this declaration and `v1/sweep.json` mirrors
 it; the result envelope stays at version 4.
 
-**Declaration version 16 (sweep) and 14 (stash)** stop sweep's startup prune
-from deleting stash records. A stash record is the only way to bring back the
+**Declaration version 16 (sweep) and 14 (stash)** stop sweep's prune from
+deleting stash records. A stash record is the only way to bring back the
 files in its holding folder, so it is kept for as long as anything is held,
-however old it is. Sweep's startup write domain is now
-`expired_journals_that_open_except_stash`: it still drops every other record
-past the core TTL, but only one that opens with the existing key. A record that
-does not open is kept, so the advice `sweep undo` gives for it ("Keep that
-record") stays true. To check, sweep startup reads `existing_journal_key` and
-`expired_journal_store`, and only when such an old record exists; it never
-creates a key. In a `sweep undo` run the startup prune runs after the undo
-instead of before, so the run that brings the right key still finds the record. Stash adds the owned
+however old it is. Sweep's prune moves out of startup: startup now reads no key
+and deletes no journal, so a scan, `status` or `verify` never reaches the
+keychain to prune. Records past 30 days are dropped by the next run that opens
+records: `apply`, `review`, an exported-plan apply or `undo`, each with the key
+it already holds. Those scopes add the write domain
+`expired_journals_that_open_except_stash`, and the apply-type scopes add the read
+domain `expired_journal_store` (`undo` already reads `journal_store`). A record
+that does not open with that key is kept, so the advice `sweep undo` gives for it
+("Keep that record") stays true. An apply prunes before it moves anything, so its
+own new record cannot be removed. An undo prunes after the undo, so the run that
+brings the right key still finds the record. Stash adds the owned
 artifact `popped_stash_journals_past_ttl`: `stash pop` opens stash records past
 the TTL with the current key and removes those that hold nothing, so a popped
 stash's record expires 30 days after the pop that finished it. A record that
