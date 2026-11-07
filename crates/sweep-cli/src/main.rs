@@ -4270,6 +4270,45 @@ fn finish_undo(
     code
 }
 
+/// What to say after an undo when the routes profile still holds a route for
+/// files this undo put back. The journal does not record that an apply saved
+/// routes, so the answer comes from the profile: a route whose extension and
+/// folder match a restored file's. Undo never edits the profile.
+fn routes_kept_line(j: &etude_core::Journal) -> Option<String> {
+    let profile = existing_profile::ExistingProfile::load().ok()?;
+    let kept = kept_routes(j, &profile.routes);
+    if kept.is_empty() {
+        return None;
+    }
+    let list = kept
+        .iter()
+        .map(|(ext, folder)| format!(".{ext} -> {}", etude_cli_support::shown_text(folder)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "  Saved routes stay in the routes profile ({list}). To drop one, delete its [[routes]] block from {}",
+        etude_cli_support::shown(&existing_profile::profile_location())
+    ))
+}
+
+/// The profile routes that match a file this journal's undo put back.
+fn kept_routes(j: &etude_core::Journal, routes: &[(String, String)]) -> Vec<(String, String)> {
+    routes
+        .iter()
+        .filter(|(ext, folder)| {
+            j.entries.iter().any(|entry| {
+                entry.state == etude_core::journal::EntryState::Reversed
+                    && entry
+                        .to
+                        .extension()
+                        .is_some_and(|e| e.to_string_lossy().to_lowercase() == *ext)
+                    && entry.to.parent() == Some(j.root.join(folder).as_path())
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 fn run_undo(
     j: &mut etude_core::Journal,
     sl: &dyn etude_core::journal::Sealer,
@@ -4421,6 +4460,9 @@ fn run_undo(
                 etude_cli_support::counted(r.restored, "file", "files")
             );
         }
+    }
+    if !tag_journal && let Some(line) = routes_kept_line(j) {
+        println!("{line}");
     }
     if !r.skipped_changed.is_empty() {
         if tag_journal {
