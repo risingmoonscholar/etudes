@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Existing-folder routes move only eligible files into folders already present.
+# Existing-folder routes move only eligible files into their folders; a missing
+# route folder is created only when files move into it and removed by undo.
 # Invalid profiles and stale exported plans refuse without changing the tree.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
@@ -39,8 +40,33 @@ details = json.loads(result.stdout)['details']
 check(result.returncode == 1 and not details['groups'] and details['left_alone']['in_place'] == 3,
       'depth two reports the three routed files in place without proposing them again')
 check(run('undo', root).returncode == 0 and tree() == before, 'undo restores the original names and bytes')
+shelf = root / 'Missing destination'
+write_profile(route.replace('Reading', 'Missing destination'))
+result = run(root, '--scheme', 'existing', '--json')
+check(result.returncode == 0 and tree() == before and
+      '"name":"Missing destination","signal":".pdf (saved route, new folder sweep creates)"' in result.stdout,
+      'a plan lists a missing route folder as one sweep creates, and makes nothing')
+result = run('apply', root, '--scheme', 'existing', '--yes', '--json')
+check(result.returncode == 0 and shelf.is_dir() and
+      all((shelf / name).read_bytes() == original[name] and not (root / name).exists() for name in ('a.pdf', 'b.pdf', 'c.pdf')),
+      'apply creates the missing route folder and moves the routed files into it with their bytes')
+check((root / 'passport.pdf').read_bytes() == original['passport.pdf'], 'the safety hold still wins over a created route folder')
+check(run('undo', root).returncode == 0 and tree() == before and not shelf.exists(),
+      'undo restores every file and removes the empty folder sweep created')
+write_profile('[[routes]]\nextension = "xyz"\nfolder = "Never Made"\n')
+result = run('apply', root, '--scheme', 'existing', '--yes', '--json')
+check(result.returncode == 1 and tree() == before and 'Never Made' not in result.stdout + result.stderr,
+      'a route with no files here creates no folder and is not mentioned')
+held = root / 'Held'
+held.write_bytes(b'synthetic file holding the name')
+holding = tree()
+write_profile(route.replace('Reading', 'Held'))
+result = run('apply', root, '--scheme', 'existing', '--yes', '--json')
+check(result.returncode == 2 and tree() == holding and json.loads(result.stdout)['reason']['code'] == 'profile_invalid'
+      and 'which is a file, not a folder, so nothing moved' in result.stderr and '"Held"' not in result.stderr,
+      'a file holding the route name refuses by name without moving files')
+held.unlink()
 for body, label, named in (
-    (route.replace('Reading', 'Missing destination'), 'a missing destination is named and refuses without moving files', 'Missing destination'),
     (route + route, 'duplicate routes refuse without moving files', None),
     ('[[routes]]\nextension = [\n', 'malformed routes refuse without moving files', None),
 ):
