@@ -814,7 +814,8 @@ mod writer_tests {
         let text =
             "\u{feff}schema_version = 1\n[[routes]]\nextension = \"bpy\"\nfolder = \"Box\"\n";
         assert_eq!(parse(text).unwrap(), routes);
-        // A file holding only the mark is an empty profile, not a broken line.
+        // A file holding only the mark is refused like an empty file, not as a
+        // broken line.
         assert_eq!(
             parse("\u{feff}").unwrap_err(),
             "the file needs one schema_version = 1 entry."
