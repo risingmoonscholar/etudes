@@ -26,10 +26,14 @@
           <li>Files and folders with the locked flag are left in place. A folder with a locked item in it is not called clear: stash moves the rest, says the folder is NOT clear, and exits 3 with status <code>incomplete</code>. A folder that holds only locked items moves nothing and reads <code>refused</code> with <code>permission_denied</code>. Every message says how to clear the flag.</li>
           <li><code>stash select</code> of only a locked item now reads <code>refused</code> with <code>permission_denied</code>; it still exits 3.</li>
           <li>On macOS each move goes into the holding folder that passed the check: the folder is opened without following a link and its device and inode are checked on the open folder. A folder swapped for a link during the move is refused instead of followed. <code>stash pop</code> moves items back the same way.</li>
+          <li>On macOS each move also takes the item from the folder that was checked. A folder swapped during the move stops the stash with <code>plan_stale</code> and nothing more is moved out of it. The Finder tag check and the locked-flag check still read by path.</li>
+          <li>A move that failed after its copy to another disk landed no longer leaves that copy behind while saying nothing moved. If the copy cannot be removed, the message names it and gives the step; <code>--json</code> adds <code>details.copy_left</code>.</li>
+          <li>A stash kept longer than 30 days keeps its undo record for as long as it holds anything, so <code>stash pop</code> still finds it. Before, the next sweep run deleted it. A popped stash's record expires 30 days after the pop. A record that does not open with the current key is never removed by the tools, and <code>stash status --all</code> names it as unreadable.</li>
+          <li>A duration you typed for <code>stash --for</code> is shown as you typed it in messages, without debug quotes and backslashes.</li>
           <li><code>--progress-json</code> now covers <code>stash</code>, <code>stash select</code>, <code>stash pop</code> and <code>restore</code>. They used to refuse the flag with exit 2.</li>
           <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
         </ul>
-        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The stash capability declaration is version 13.</p>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The stash capability declaration is version 14.</p>
       </div>
     </article>
 
