@@ -722,6 +722,9 @@ fn validate_maps_impl(
             .strip_prefix('.')
             .unwrap_or(ext_raw)
             .to_ascii_lowercase();
+        if ext_raw.is_empty() {
+            return Err("--map: the extension before = is empty".to_owned());
+        }
         if ext.is_empty() || ext.contains('.') || ext.contains('/') || ext.len() > 32 {
             return Err(format!(
                 "--map: {ext_shown} is not a single extension (like bpy)"
@@ -745,8 +748,10 @@ fn validate_maps_impl(
             return Err(format!("--map: .{ext} is mapped twice"));
         }
         // The folder: exactly one component, visible, not a reserved name.
-        if folder.is_empty()
-            || folder == "."
+        if folder.is_empty() {
+            return Err("--map: the folder after = is empty".to_owned());
+        }
+        if folder == "."
             || folder == ".."
             || folder.contains('/')
             || folder.contains('\\')
@@ -1507,6 +1512,14 @@ mod tests {
     #[test]
     fn map_messages_show_names_as_typed_without_debug_quotes() {
         let root = std::env::temp_dir();
+        assert_eq!(
+            validate_maps(&[("".into(), "Box".into())], &root).unwrap_err(),
+            "--map: the extension before = is empty"
+        );
+        assert_eq!(
+            validate_maps(&[("bpy".into(), "".into())], &root).unwrap_err(),
+            "--map: the folder after = is empty"
+        );
         let bad_ext = validate_maps(&[("a/b \"c\"".into(), "Box".into())], &root).unwrap_err();
         assert_eq!(
             bad_ext,

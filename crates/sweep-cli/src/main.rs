@@ -2284,25 +2284,33 @@ fn hold_hint(p: &plan::Plan) -> String {
 /// does not exist yet is the one sanctioned exception, and an exception the
 /// output does not announce would just be the invariant quietly gone.
 fn print_agent_named_note(p: &plan::Plan) {
-    let coined: Vec<&str> = p
+    if let Some(note) = agent_named_note(p) {
+        println!("{note}");
+    }
+}
+
+fn agent_named_note(p: &plan::Plan) -> Option<String> {
+    let coined: Vec<String> = p
         .groups
         .iter()
         .filter_map(|g| match &g.signal {
-            plan::Signal::Mapped { created: true, .. } => Some(g.name.as_str()),
+            plan::Signal::Mapped { created: true, .. } => {
+                Some(etude_cli_support::shown_text(&g.name))
+            }
             _ => None,
         })
         .collect();
     match coined.len() {
-        0 => {}
-        1 => println!(
+        0 => None,
+        1 => Some(format!(
             "\n  the folder name {} was chosen by your agent, not derived from your files",
-            etude_cli_support::shown_text(coined[0])
-        ),
-        _ => println!(
+            coined[0]
+        )),
+        _ => Some(format!(
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
             coined.len(),
             coined.join(", ")
-        ),
+        )),
     }
 }
 
@@ -5005,6 +5013,27 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_named_note_escapes_control_characters_in_every_name() {
+        let group = |name: &str| plan::Group {
+            name: name.to_owned(),
+            signal: plan::Signal::Mapped {
+                ext: "bpy".into(),
+                created: true,
+            },
+            members: Vec::new(),
+            accepted: true,
+        };
+        let plan = plan::Plan::display_only(
+            PathBuf::from("/x"),
+            vec![group("A\x1b[2Jone"), group("B\ntwo")],
+        );
+        assert_eq!(
+            agent_named_note(&plan).unwrap(),
+            "\n  2 folder names were chosen by your agent, not derived from your files: A?[2Jone, B?two"
+        );
+    }
 
     // unknown flags must fail even after a valid path, or consent can move files.
     #[test]
