@@ -201,3 +201,28 @@ fn id(record: &Path) -> String {
     let name = record.file_stem().unwrap().to_str().unwrap();
     name.strip_prefix("sweep-").unwrap().to_owned()
 }
+
+/// No tool removes a stash record it cannot open, so forget, which stops for
+/// stash records, must say what they are and how a person removes one.
+#[test]
+fn forget_names_the_stash_records_it_keeps_and_how_to_remove_one() {
+    let base = temp("forget");
+    let record = base.0.join("state").join("stash-unopenable.journal");
+    std::fs::write(&record, b"sealed under a key nobody has").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+        .env("HOME", base.0.join("home"))
+        .env("ETUDE_STATE_DIR", base.0.join("state"))
+        .env("ETUDE_JOURNAL_KEY", KEY)
+        .arg("forget")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "a non-terminal forget refuses");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("1 stash record is in"), "{err}");
+    assert!(err.contains("they may still restore files"), "{err}");
+    assert!(err.contains("stash status --all"), "{err}");
+    assert!(err.contains("stash pop --id ID"), "{err}");
+    assert!(err.contains(&format!("rm '{}'", record.display())), "{err}");
+    assert!(record.exists(), "forget removed a stash record");
+}

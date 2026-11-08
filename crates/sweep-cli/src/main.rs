@@ -4788,6 +4788,36 @@ fn refuse_shared_key_destroy(removed_nothing: bool) -> ExitCode {
     refusal(etude_cli_support::reason::Code::InvalidArguments, None)
 }
 
+/// Why forget stops for stash records, and what the person can do about them.
+///
+/// Forget removes only sweep's records. A stash record may be the only way
+/// back for files in a holding folder, and no tool removes one it cannot open:
+/// sweep's prune skips stash records and `stash pop` drops only records that
+/// open and hold nothing. So a record nobody can open stays until the person
+/// removes it, and this says how, without reading the key to sort them.
+fn explain_kept_stash_records(records: &[PathBuf], shown_dir: &str) {
+    const LISTED: usize = 10;
+    eprintln!(
+        "sweep: {} in {shown_dir}. Forget keeps them, because they may still restore files.\n\
+         \x20      See which still open: stash status --all\n\
+         \x20      One that opens: restore it with `stash pop --id ID`, using the key it was\n\
+         \x20      made with (ETUDE_JOURNAL_KEY, or the keychain key this would destroy).\n\
+         \x20      One that `stash status --all` reports as unreadable is never removed by\n\
+         \x20      these tools. Once you are sure its files are back, remove that file by\n\
+         \x20      hand. Each record is the file stash-ID.journal:",
+        etude_cli_support::counted(records.len(), "stash record is", "stash records are")
+    );
+    for path in records.iter().take(LISTED) {
+        eprintln!("         rm {}", etude_cli_support::quoted_path(path));
+    }
+    if records.len() > LISTED {
+        eprintln!(
+            "         ({} more in {shown_dir}, named stash-ID.journal)",
+            records.len() - LISTED
+        );
+    }
+}
+
 fn cmd_forget(args: &[String]) -> ExitCode {
     use std::io::IsTerminal;
 
@@ -4795,7 +4825,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     let dir = etude_core::journal::state_dir();
     let shown_dir = etude_cli_support::shown(&dir);
     let mut n = 0;
-    let mut stash_present = false;
+    let mut stash_records = Vec::new();
     let mut not_removed = 0;
     let mut first_error = None;
     let mut sweep_journals = Vec::new();
@@ -4813,7 +4843,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
                 let name = e.file_name().to_string_lossy().into_owned();
                 match classify_journal_filename(&name) {
                     JournalOwner::Sweep => sweep_journals.push(e.path()),
-                    JournalOwner::Stash => stash_present = true,
+                    JournalOwner::Stash => stash_records.push(e.path()),
                     JournalOwner::Other => {}
                 }
             }
@@ -4845,7 +4875,15 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     }
     // Decide before removing anything: a command that ends in this refusal must
     // leave everything as it found it.
-    let gate = forget_key_gate(args, stash_present, std::io::stdin().is_terminal());
+    stash_records.sort();
+    let gate = forget_key_gate(
+        args,
+        !stash_records.is_empty(),
+        std::io::stdin().is_terminal(),
+    );
+    if gate != ForgetKeyGate::Proceed {
+        explain_kept_stash_records(&stash_records, &shown_dir);
+    }
     if gate == ForgetKeyGate::Refuse {
         return refuse_shared_key_destroy(true);
     }
