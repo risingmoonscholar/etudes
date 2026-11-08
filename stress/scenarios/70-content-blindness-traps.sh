@@ -17,7 +17,7 @@
 # All content is fabricated facsimile. No real record of anyone's exists here.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 
 # Query each built binary and drive real verbs, then use independent snapshots
 # and digest checks to falsify its capability declaration. The same witness

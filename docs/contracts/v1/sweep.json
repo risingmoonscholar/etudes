@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 15,
+    "schema_version": 16,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -405,13 +405,15 @@
             "journal_fingerprint_bytes",
             "cross_device_source_bytes",
             "sweep_existing_profile_bytes",
-            "finder_tag_names"
+            "finder_tag_names",
+            "expired_journal_store"
           ],
           "writes": [
             "selected_tree_entries",
             "selected_tree_finder_tags",
             "journal_store",
-            "keychain_if_no_supplied_key"
+            "keychain_if_no_supplied_key",
+            "expired_journals_that_open_except_stash"
           ]
         },
         {
@@ -446,13 +448,15 @@
             "journal_key",
             "cross_device_source_bytes",
             "journal_fingerprint_bytes",
-            "sweep_existing_profile_bytes"
+            "sweep_existing_profile_bytes",
+            "expired_journal_store"
           ],
           "writes": [
             "selected_tree_entries",
             "sweep_existing_profile_if_save_routes",
             "journal_store",
-            "keychain_if_no_supplied_key"
+            "keychain_if_no_supplied_key",
+            "expired_journals_that_open_except_stash"
           ]
         },
         {
@@ -465,12 +469,14 @@
             "journal_key",
             "cross_device_source_bytes",
             "journal_fingerprint_bytes",
-            "sweep_existing_profile_bytes"
+            "sweep_existing_profile_bytes",
+            "expired_journal_store"
           ],
           "writes": [
             "selected_tree_entries",
             "journal_store",
-            "keychain_if_no_supplied_key"
+            "keychain_if_no_supplied_key",
+            "expired_journals_that_open_except_stash"
           ]
         },
         {
@@ -488,7 +494,8 @@
             "journal_store",
             "empty_group_directories",
             "keychain_if_no_supplied_key",
-            "selected_tree_finder_tags"
+            "selected_tree_finder_tags",
+            "expired_journals_that_open_except_stash"
           ]
         },
         {
@@ -523,8 +530,7 @@
           "legacy_state_metadata"
         ],
         "writes": [
-          "legacy_state_migration",
-          "expired_journals_all_tools"
+          "legacy_state_migration"
         ]
       }
     },
@@ -544,7 +550,7 @@
       "source_entries": "relocation_and_size_checked_copy_unlink",
       "user_payloads": "never",
       "owned_artifacts": [
-        "expired_journals_all_tools",
+        "expired_journals_that_open_except_stash",
         "sweep_journals_on_forget",
         "authorized_shared_key",
         "empty_group_directories",

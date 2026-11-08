@@ -28,7 +28,7 @@ if [ ! -d "$W_PARENT" ] || [ -w "$W_PARENT" ]; then
   exit 0
 fi
 
-D=$(workdir)
+D=$(workdir) || exit 1
 for f in alpha beta gamma delta epsilon; do : > "$D/widget_$f.txt"; done
 BEFORE="${D}.before.json"
 AFTER="${D}.after.json"

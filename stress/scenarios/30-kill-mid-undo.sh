@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 CONTROL="${1:-}"
 case "$CONTROL" in ''|--control-late|--control-missing) ;; *) fail "unknown undo control"; exit 0;; esac
-W=$(workdir)
+W=$(workdir) || exit 1
 pid=""
 cleanup() {
   if [ -n "$pid" ]; then

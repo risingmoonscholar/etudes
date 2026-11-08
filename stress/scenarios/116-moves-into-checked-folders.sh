@@ -17,7 +17,7 @@ if [ "$(uname -s)" != Darwin ]; then
   exit 0
 fi
 
-W=$(workdir); trap 'chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 
 # sweep into a write-only folder, then undo.
 D="$W/root"; mkdir -p "$D/Docs"

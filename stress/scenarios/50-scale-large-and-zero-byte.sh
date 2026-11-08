@@ -11,7 +11,7 @@
 # a read observation: a cached or fast device can make a full read look cheap.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 D="$W/tree"; mkdir -p "$D"
 
 # --- zero-byte files, a real group of them ---------------------------

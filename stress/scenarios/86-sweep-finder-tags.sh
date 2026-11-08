@@ -8,7 +8,7 @@
 # Finder comments are not looked at. Everything is synthetic, in a temp dir.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 TAG='opaque-tag-bytes-Work'
 TAGATTR=com.apple.metadata:_kMDItemUserTags
 COMMENTATTR=com.apple.metadata:kMDItemFinderComment

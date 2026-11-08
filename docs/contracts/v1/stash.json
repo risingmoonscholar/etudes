@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 13,
+    "schema_version": 14,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -440,7 +440,8 @@
       "user_payloads": "never",
       "owned_artifacts": [
         "empty_holding_directories",
-        "case_probe_files"
+        "case_probe_files",
+        "popped_stash_journals_past_ttl"
       ]
     },
     "reversibility": {
@@ -450,7 +451,6 @@
         "same_key",
         "unchanged_items",
         "vacant_original_paths",
-        "journal_not_expired",
         "journal_progress_writable"
       ],
       "disabled_by": [

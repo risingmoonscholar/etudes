@@ -3,7 +3,7 @@
 # and a command the tools print for you to run next must do what was shown.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 OLD=202001010101
 TOOLS=$(dirname "$SWEEP")
 

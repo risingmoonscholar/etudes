@@ -2,7 +2,7 @@
 # Real SIGKILL, stopped live writers, conservative candidates and competing retries.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require pgrep "the surviving extractor must be stopped" || exit 0
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 python3 - "$UNPACK" "$W" >"$W/assertions" 2>"$W/errors" <<'PY'
 import fcntl
 import json

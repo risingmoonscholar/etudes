@@ -449,9 +449,15 @@ impl DurableWrite for fs::File {
         unsafe extern "C" {
             fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
         }
-        if unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
+        #[cfg(test)]
+        let refused = test_hooks::BARRIER_REFUSED.get();
+        #[cfg(not(test))]
+        let refused = false;
+        if !refused && unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        test_hooks::BARRIER_FALLBACKS.set(test_hooks::BARRIER_FALLBACKS.get() + 1);
         // A filesystem without barriers (SMB, some FUSE mounts) refuses the
         // call. The full sync it falls back to is slower and still correct.
         fs::File::sync_all(self)
@@ -475,6 +481,8 @@ impl<W: DurableWrite> ProgressWriter<W> {
     /// Make every frame written so far durable. A run calls this once, before
     /// it reports success, so a finished run survives a power cut.
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        test_hooks::FINISHES.set(test_hooks::FINISHES.get() + 1);
         self.file.sync_all().map_err(JournalError::Io)
     }
 
@@ -488,6 +496,57 @@ impl<W: DurableWrite> ProgressWriter<W> {
             format!("done\t{index}\t{}\n", method.tag()).as_bytes(),
             sealer,
         )
+    }
+}
+
+/// The progress writer of one apply. Every frame it, or any other writer,
+/// added to the journal is made durable once when the run ends, whichever way
+/// it ends: by [`RunWriter::finish`] on success, which reports a failed flush,
+/// or on drop when an error return leaves the run early.
+pub(crate) struct RunWriter<W: DurableWrite = fs::File> {
+    writer: ProgressWriter<W>,
+    finished: bool,
+}
+
+impl<W: DurableWrite> RunWriter<W> {
+    pub(crate) fn record_done(
+        &mut self,
+        index: usize,
+        method: Method,
+        sealer: &dyn Sealer,
+    ) -> Result<(), JournalError> {
+        self.writer.record_done(index, method, sealer)
+    }
+
+    /// Flush the run once, before it reports success.
+    pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        self.finished = true;
+        self.writer.finish()
+    }
+}
+
+impl<W: DurableWrite> Drop for RunWriter<W> {
+    fn drop(&mut self) {
+        // An error return. The run already has an error to report; a failed
+        // flush here cannot replace it.
+        if !self.finished {
+            let _ = self.writer.finish();
+        }
+    }
+}
+
+/// Test-only switches and counters for the journal's durable writes.
+#[cfg(test)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) mod test_hooks {
+    use std::cell::Cell;
+    thread_local! {
+        /// Make `F_BARRIERFSYNC` count as refused, as on a volume without it.
+        pub(crate) static BARRIER_REFUSED: Cell<bool> = const { Cell::new(false) };
+        /// How often a refused barrier fell back to a full sync.
+        pub(crate) static BARRIER_FALLBACKS: Cell<usize> = const { Cell::new(0) };
+        /// How often a writer made its frames durable with a full sync.
+        pub(crate) static FINISHES: Cell<usize> = const { Cell::new(0) };
     }
 }
 
@@ -715,6 +774,14 @@ impl Journal {
             .open(self.path())
             .map_err(JournalError::Io)?;
         Ok(ProgressWriter { file })
+    }
+
+    /// The progress writer for one apply run; see [`RunWriter`].
+    pub(crate) fn run_writer(&self) -> Result<RunWriter, JournalError> {
+        Ok(RunWriter {
+            writer: self.progress_writer()?,
+            finished: false,
+        })
     }
 
     /// Make the progress frames appended by one-off writers durable. Undo calls
@@ -1130,36 +1197,157 @@ impl Journal {
     }
 }
 
-/// Journals older than this are dropped on the next run.
+/// Journals older than this are dropped by the next run that opens records.
 ///
 /// A journal is an index of the user's filenames. Even sealed, keeping it
 /// forever means keeping the exposure forever, and undo is only useful for as
 /// long as the user remembers what they ran.
+///
+/// The exceptions are records that are still the only way back. A stash record
+/// describes files that sit in a hidden holding folder until they are popped;
+/// dropping it by age leaves them there with nothing that can bring them back.
+/// So a stash record is kept for as long as its stash is outstanding, and
+/// expires like any other record once nothing is held: [`TTL_DAYS`] after the
+/// pop that finished it (a pop rewrites the record, which resets its age).
+/// And a record that does not open with the current key is kept: only the
+/// right key can tell what it holds, and the person may still find that key.
 pub const TTL_DAYS: u64 = 30;
 
-/// Delete journals older than [`TTL_DAYS`]. Returns how many were removed.
-///
-/// Called at the start of every run that touches the state directory. Failure
-/// is not fatal: a journal that cannot be removed is a housekeeping problem,
-/// not a reason to refuse the user's actual request.
-pub fn prune_expired() -> usize {
-    let cutoff =
-        match SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400)) {
-            Some(c) => c,
-            None => return 0,
-        };
+/// Tools whose records hold files that are not yet back where they came
+/// from. [`prune_expired`] never drops these by age; [`prune_finished`] drops
+/// them only after unsealing one and seeing that nothing is still held.
+pub const KEPT_UNTIL_FINISHED: &[&str] = &["stash"];
+
+fn ttl_cutoff() -> Option<SystemTime> {
+    SystemTime::now().checked_sub(std::time::Duration::from_secs(TTL_DAYS * 86_400))
+}
+
+/// The tool a `{tool}-{id}.journal` filename belongs to, from its name alone.
+fn kept_until_finished(file_name: &str) -> bool {
+    file_name
+        .strip_suffix(".journal")
+        .and_then(|stem| stem.split_once('-'))
+        .is_some_and(|(tool, _)| KEPT_UNTIL_FINISHED.contains(&tool))
+}
+
+/// Records past [`TTL_DAYS`] that [`prune_expired`] would consider, by name and
+/// modified time only.
+fn expired_candidates() -> Vec<(String, JournalCandidate)> {
+    let Some(cutoff) = ttl_cutoff() else {
+        return Vec::new();
+    };
     let Ok(rd) = crate::scan::observe_read("directory_enumeration", fs::read_dir(state_dir()))
     else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if kept_until_finished(&name) {
+            continue;
+        }
+        let Some((tool, id)) = name
+            .strip_suffix(".journal")
+            .and_then(|stem| stem.split_once('-'))
+        else {
+            continue;
+        };
+        let Ok(md) = fs::symlink_metadata(e.path()) else {
+            continue;
+        };
+        if md.is_file() && md.modified().is_ok_and(|t| t < cutoff) {
+            found.push((
+                tool.to_string(),
+                JournalCandidate {
+                    path: e.path(),
+                    metadata: md,
+                    id: id.to_string(),
+                },
+            ));
+        }
+    }
+    found
+}
+
+/// Delete records older than [`TTL_DAYS`] that open with `sealer`. Returns how
+/// many were removed.
+///
+/// Called by the runs that already hold the key for their own work (in sweep:
+/// an apply or an undo with a journal), so a record past 30 days is dropped by
+/// the next run that opens records. Nothing reads the key just to prune.
+/// Failure is not fatal: a journal that cannot be removed is a housekeeping
+/// problem, not a reason to refuse the user's actual request.
+///
+/// Records of a tool in [`KEPT_UNTIL_FINISHED`] are skipped: whether a stash
+/// still holds files is a question for [`prune_finished`].
+///
+/// A record that does not open with this key (another key, altered, damaged)
+/// is kept, however old. When undo cannot open a record it tells the person to
+/// keep it, because the right key opens it again; deleting it by age would make
+/// that advice false and leave the files where the apply put them with no way
+/// back. Kept, it exposes nothing to anyone without that key. `sweep forget`
+/// still removes it.
+pub fn prune_expired(sealer: &dyn Sealer) -> usize {
+    let mut removed = 0;
+    for (tool, candidate) in expired_candidates() {
+        if candidate.load(&tool, sealer).is_err() {
+            continue;
+        }
+        let unchanged = fs::symlink_metadata(&candidate.path)
+            .is_ok_and(|now| same_journal(&candidate.metadata, &now));
+        if unchanged && fs::remove_file(&candidate.path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Whether a record has nothing left to bring back: no item is still at its
+/// destination, the progress tail is whole, and no planned item is on disk at
+/// its destination with an unrecorded move. The same test `stash pop` uses
+/// before it says a stash was already popped. Asks the file system for
+/// metadata only.
+///
+/// Blind spot, shared with `stash pop`: a record cut back to its base frame
+/// reads every entry as planned, and an unrecorded move is only seen when the
+/// destination is present and the origin is absent. If something has since
+/// been created at the origin, that entry reads as never moved, and the record
+/// reads as finished while its file may still sit in the holding folder.
+pub fn is_finished(j: &Journal) -> bool {
+    !j.progress_tail_damaged
+        && !j.entries.iter().any(Entry::is_moved)
+        && crate::apply::unrecorded_moves(j) == 0
+}
+
+/// Delete `tool`'s records older than [`TTL_DAYS`] that are finished (see
+/// [`is_finished`]). Returns how many were removed.
+///
+/// For a tool in [`KEPT_UNTIL_FINISHED`], whose records [`prune_expired`]
+/// keeps. A record that cannot be read (another key, damaged, changed after
+/// discovery) is kept: an unreadable record cannot show that its files are
+/// back, and deleting it would make that permanent. A record is removed only if
+/// it is still the same file that was read.
+pub fn prune_finished(tool: &str, sealer: &dyn Sealer) -> usize {
+    let Some(cutoff) = ttl_cutoff() else {
+        return 0;
+    };
+    let Ok(candidates) = candidates_with_times(tool) else {
         return 0;
     };
     let mut removed = 0;
-    for e in rd.flatten() {
-        if !e.file_name().to_string_lossy().ends_with(".journal") {
+    for (modified, candidate) in candidates {
+        if modified >= cutoff {
             continue;
         }
-        let Ok(md) = e.metadata() else { continue };
-        let Ok(t) = md.modified() else { continue };
-        if t < cutoff && fs::remove_file(e.path()).is_ok() {
+        let Ok(journal) = candidate.load(tool, sealer) else {
+            continue;
+        };
+        if !is_finished(&journal) {
+            continue;
+        }
+        let unchanged = fs::symlink_metadata(&candidate.path)
+            .is_ok_and(|now| same_journal(&candidate.metadata, &now));
+        if unchanged && fs::remove_file(&candidate.path).is_ok() {
             removed += 1;
         }
     }
@@ -1831,6 +2019,179 @@ mod tests {
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
 
+    /// A real folder of three files and a throwaway state folder, for the
+    /// tests that run a whole apply against the journal's durable writes.
+    struct RunScene {
+        dir: std::path::PathBuf,
+        sources: Vec<std::path::PathBuf>,
+        _env: RestoreEnvVar,
+    }
+
+    impl RunScene {
+        fn new(name: &str, ext: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("etudes_run_{name}_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(dir.join("root")).unwrap();
+            let env = RestoreEnvVar::set("ETUDE_STATE_DIR", dir.join("state"));
+            let root = dir.join("root").canonicalize().unwrap();
+            let sources = (0..3)
+                .map(|i| {
+                    let path = root.join(format!("file{i}.{ext}"));
+                    fs::write(&path, format!("payload {i}")).unwrap();
+                    path
+                })
+                .collect();
+            Self {
+                dir,
+                sources,
+                _env: env,
+            }
+        }
+
+        fn move_plan(&self) -> crate::plan::Plan {
+            let root = self.dir.join("root").canonicalize().unwrap();
+            let scan = crate::scan::scan(
+                &root,
+                &crate::scan::ScanConfig {
+                    grace: None,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            crate::plan::Plan::with_groups(
+                &scan,
+                vec![crate::plan::Group {
+                    name: "Collected".into(),
+                    signal: crate::plan::Signal::Collected { count: 3 },
+                    members: self.sources.clone(),
+                    accepted: true,
+                }],
+            )
+        }
+
+        // Only the macOS tag-apply test uses it; Finder tags exist only there.
+        #[cfg(target_os = "macos")]
+        fn tag_plan(&self) -> crate::plan::Plan {
+            let mut plan = self.move_plan();
+            plan.adds_tags = true;
+            plan.groups[0].name = "Work".into();
+            plan.groups[0].signal = crate::plan::Signal::Tagged {
+                ext: "pdf".into(),
+                new: true,
+                entry: "Work".into(),
+            };
+            plan
+        }
+    }
+
+    impl Drop for RunScene {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct PlainSeal;
+    impl Sealer for PlainSeal {
+        fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(plain.to_vec())
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(sealed.to_vec())
+        }
+    }
+
+    /// A move apply that stops with an error after it wrote a record still
+    /// makes its records durable, exactly once.
+    #[test]
+    fn a_failed_apply_flushes_its_records_once() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("flush_move", "txt");
+        let before = test_hooks::FINISHES.get();
+        let error = crate::apply::apply_with_structured_progress(
+            &scene.move_plan(),
+            "flushtest",
+            Some(&PlainSeal),
+            Some(1),
+            |_| {},
+        )
+        .expect_err("the injected failure stops the apply");
+        assert!(matches!(error, crate::apply::ApplyError::Injected(1)));
+        assert_eq!(
+            test_hooks::FINISHES.get() - before,
+            1,
+            "one flush on the error path"
+        );
+        let id = candidates_by_recency("flushtest").unwrap().remove(0);
+        let mut journal = id.load("flushtest", &PlainSeal).unwrap();
+        assert_eq!(journal.entries[0].state, EntryState::Moved);
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+        assert_eq!(undo.restored, 1);
+    }
+
+    /// The same for a tag apply.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_tag_apply_flushes_its_records_once() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("flush_tag", "pdf");
+        let before = test_hooks::FINISHES.get();
+        let error = crate::apply::apply_with_structured_progress(
+            &scene.tag_plan(),
+            "flushtag",
+            Some(&PlainSeal),
+            Some(1),
+            |_| {},
+        )
+        .expect_err("the injected failure stops the apply");
+        assert!(matches!(error, crate::apply::ApplyError::Injected(1)));
+        assert_eq!(
+            test_hooks::FINISHES.get() - before,
+            1,
+            "one flush on the error path"
+        );
+        let id = candidates_by_recency("flushtag").unwrap().remove(0);
+        let mut journal = id.load("flushtag", &PlainSeal).unwrap();
+        assert_eq!(journal.entries[0].state, EntryState::Moved);
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+    }
+
+    /// A volume that refuses `F_BARRIERFSYNC` gets a full sync instead. The
+    /// records still reach the file and the run succeeds.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_refused_barrier_falls_back_and_the_records_still_land() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("barrier_refused", "txt");
+        test_hooks::BARRIER_REFUSED.set(true);
+        let before = test_hooks::BARRIER_FALLBACKS.get();
+        let result = crate::apply::apply_with_structured_progress(
+            &scene.move_plan(),
+            "barriertest",
+            Some(&PlainSeal),
+            None,
+            |_| {},
+        );
+        test_hooks::BARRIER_REFUSED.set(false);
+        let report = result.expect("the run succeeds on the fallback");
+        assert_eq!(report.moved, 3);
+        assert!(
+            test_hooks::BARRIER_FALLBACKS.get() - before >= 3,
+            "every record took the fallback"
+        );
+        let mut journal = Journal::load_sealed("barriertest", &report.journal_id, &PlainSeal)
+            .expect("journal reloads");
+        assert!(journal.entries.iter().all(|e| e.state == EntryState::Moved));
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+        assert_eq!(undo.restored, 3);
+        for (i, source) in scene.sources.iter().enumerate() {
+            assert_eq!(fs::read(source).unwrap(), format!("payload {i}").as_bytes());
+        }
+    }
+
     /// A record with no entries is written only when an apply is refused
     /// before it moves anything. Nothing was planned into it and nothing
     /// moved, so calling it `Completed` would tell a caller the work was done.
@@ -2040,17 +2401,24 @@ mod tests {
         fs::create_dir_all(&dir).expect("mkdir");
         unsafe { std::env::set_var("ETUDE_STATE_DIR", &dir) };
 
-        let old = dir.join("old.journal");
-        let new = dir.join("new.journal");
-        fs::write(&old, b"x").expect("write");
-        fs::write(&new, b"x").expect("write");
+        for id in ["old", "new"] {
+            Journal {
+                id: id.into(),
+                tool: "sweep".into(),
+                ..Journal::default()
+            }
+            .save_sealed(&MarkSeal(1))
+            .expect("write");
+        }
+        let old = dir.join("sweep-old.journal");
+        let new = dir.join("sweep-new.journal");
 
         // Backdate one past the TTL. filetime is not in the dependency tree, so
         // this uses the libc utimes we already link.
         let past = (TTL_DAYS + 5) * 86_400;
         set_mtime_secs_ago(&old, past);
 
-        let removed = prune_expired();
+        let removed = prune_expired(&MarkSeal(1));
 
         assert_eq!(removed, 1, "prune removed {removed} journals, expected 1");
         assert!(!old.exists(), "an expired journal survived");
@@ -2058,6 +2426,181 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+    }
+
+    /// A sealer that only opens what it sealed: a different `mark` stands in
+    /// for a different key.
+    struct MarkSeal(u8);
+    impl Sealer for MarkSeal {
+        fn seal(&self, p: &[u8]) -> Result<Vec<u8>, &'static str> {
+            let mut v = vec![self.0];
+            v.extend_from_slice(p);
+            Ok(v)
+        }
+        fn open(&self, p: &[u8]) -> Result<Vec<u8>, &'static str> {
+            match p.split_first() {
+                Some((m, rest)) if *m == self.0 => Ok(rest.to_vec()),
+                _ => Err("wrong key"),
+            }
+        }
+    }
+
+    /// One aged record per case, in a fresh state directory. Each entry's
+    /// destination is under `dir`, so `unrecorded_moves` asks a real disk.
+    fn aged_record(dir: &Path, tool: &str, id: &str, states: &[EntryState]) -> PathBuf {
+        let journal = Journal {
+            id: id.into(),
+            tool: tool.into(),
+            root: dir.join("root"),
+            entries: states
+                .iter()
+                .enumerate()
+                .map(|(i, state)| Entry {
+                    from: dir.join(format!("root/{id}-{i}")),
+                    to: dir.join(format!("root/.stash-0/{id}-{i}")),
+                    method: Method::Rename,
+                    size: 1,
+                    mtime_secs: 1,
+                    inode: 1,
+                    edge_hash: 1,
+                    state: *state,
+                    tag: None,
+                })
+                .collect(),
+            ..Journal::default()
+        };
+        journal.save_sealed(&MarkSeal(1)).expect("save");
+        let path = journal.path();
+        set_mtime_secs_ago(&path, (TTL_DAYS + 5) * 86_400);
+        path
+    }
+
+    /// The bug: sweep's age prune deleted a stash record whose files were still
+    /// in the holding folder, so `stash pop` could no longer bring them back.
+    #[test]
+    fn age_prune_keeps_stash_records_and_drops_old_sweep_records() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("stash_ttl_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+
+        let held = aged_record(&dir, "stash", "held", &[EntryState::Moved]);
+        let popped = aged_record(&dir, "stash", "popped", &[EntryState::Reversed]);
+        let swept = aged_record(&dir, "sweep", "old", &[EntryState::Moved]);
+
+        assert_eq!(prune_expired(&MarkSeal(1)), 1);
+        assert!(
+            held.exists(),
+            "an outstanding stash record was dropped by age"
+        );
+        assert!(
+            popped.exists(),
+            "the age prune leaves even a popped stash to stash"
+        );
+        assert!(!swept.exists(), "an old sweep record survived its 30 days");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finished_prune_drops_only_old_popped_stash_records_it_can_open() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("stash_done_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+
+        let held = aged_record(&dir, "stash", "held", &[EntryState::Moved]);
+        let partly = aged_record(
+            &dir,
+            "stash",
+            "partly",
+            &[EntryState::Reversed, EntryState::Stranded],
+        );
+        let popped = aged_record(
+            &dir,
+            "stash",
+            "popped",
+            &[EntryState::Reversed, EntryState::Held, EntryState::Returned],
+        );
+        let refused = aged_record(&dir, "stash", "refused", &[]);
+        // Every entry reads Planned, but the file sits at its destination and
+        // not at its origin: a move whose record was lost. Still held.
+        let unrecorded = aged_record(&dir, "stash", "unrecorded", &[EntryState::Planned]);
+        fs::create_dir_all(dir.join("root/.stash-0")).unwrap();
+        fs::write(dir.join("root/.stash-0/unrecorded-0"), b"x").unwrap();
+        let fresh_popped = dir.join("stash-fresh.journal");
+        Journal {
+            id: "fresh".into(),
+            tool: "stash".into(),
+            ..Journal::default()
+        }
+        .save_sealed(&MarkSeal(1))
+        .unwrap();
+        // Written with another key: this run cannot show its files are back.
+        let other_key = Journal {
+            id: "otherkey".into(),
+            tool: "stash".into(),
+            ..Journal::default()
+        };
+        other_key.save_sealed(&MarkSeal(2)).unwrap();
+        set_mtime_secs_ago(&other_key.path(), (TTL_DAYS + 5) * 86_400);
+        let swept = aged_record(&dir, "sweep", "popped", &[EntryState::Reversed]);
+
+        assert_eq!(prune_finished("stash", &MarkSeal(1)), 2);
+        assert!(held.exists(), "an outstanding stash was dropped");
+        assert!(partly.exists(), "a partly popped stash was dropped");
+        assert!(
+            unrecorded.exists(),
+            "a stash with an unrecorded move was dropped"
+        );
+        assert!(
+            other_key.path().exists(),
+            "an unreadable stash record was dropped"
+        );
+        assert!(
+            fresh_popped.exists(),
+            "a popped stash under 30 days old was dropped"
+        );
+        assert!(!popped.exists(), "an old popped stash record survived");
+        assert!(
+            !refused.exists(),
+            "an old record that moved nothing survived"
+        );
+        assert!(swept.exists(), "prune_finished reached outside its tool");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `sweep undo` on a record the key cannot open says "Keep that record".
+    /// The age prune used to delete it 30 days after its last write anyway.
+    #[test]
+    fn age_prune_keeps_old_records_that_do_not_open() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("sweep_unopened_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+
+        let opens = aged_record(&dir, "sweep", "opens", &[EntryState::Moved]);
+        let other_key = Journal {
+            id: "otherkey".into(),
+            tool: "sweep".into(),
+            ..Journal::default()
+        };
+        other_key.save_sealed(&MarkSeal(2)).unwrap();
+        set_mtime_secs_ago(&other_key.path(), (TTL_DAYS + 5) * 86_400);
+        let altered = dir.join("sweep-altered.journal");
+        fs::write(&altered, b"\x05\0\0\0garbage").unwrap();
+        set_mtime_secs_ago(&altered, (TTL_DAYS + 5) * 86_400);
+
+        assert_eq!(prune_expired(&MarkSeal(1)), 1);
+        assert!(!opens.exists(), "an old record that opens survived");
+        assert!(
+            other_key.path().exists(),
+            "a record under another key was dropped by age"
+        );
+        assert!(altered.exists(), "a damaged record was dropped by age");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     fn set_mtime_secs_ago(p: &Path, secs: u64) {

@@ -11,7 +11,7 @@
 # provider it will actually meet most often on this OS.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W" "${W}.before-plans.json" "${W}.after-plans.json"' EXIT
 
 # Build the exact real macOS path shape for each provider, all under our own
