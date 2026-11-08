@@ -53,10 +53,11 @@ check(result.returncode == 0 and shelf.is_dir() and
 check((root / 'passport.pdf').read_bytes() == original['passport.pdf'], 'the safety hold still wins over a created route folder')
 check(run('undo', root).returncode == 0 and tree() == before and not shelf.exists(),
       'undo restores every file and removes the empty folder sweep created')
-write_profile('[[routes]]\nextension = "xyz"\nfolder = "Never Made"\n')
+write_profile(route + '[[routes]]\nextension = "xyz"\nfolder = "Never Made"\n')
 result = run('apply', root, '--scheme', 'existing', '--yes', '--json')
-check(result.returncode == 1 and tree() == before and 'Never Made' not in result.stdout + result.stderr,
+check(result.returncode == 0 and not (root / 'Never Made').exists() and 'Never Made' not in result.stdout + result.stderr,
       'a route with no files here creates no folder and is not mentioned')
+check(run('undo', root).returncode == 0 and tree() == before, 'undo after a run with an unused route restores the tree')
 held = root / 'Held'
 held.write_bytes(b'synthetic file holding the name')
 holding = tree()
