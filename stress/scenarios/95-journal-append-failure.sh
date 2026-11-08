@@ -4,7 +4,7 @@
 # recorded moves. Stash shares the move loop; unpack preserves the history.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export ETUDE_STATE_DIR="$W/state"

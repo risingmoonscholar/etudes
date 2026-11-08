@@ -5,7 +5,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require tar "the fixture needs tar" || exit 0
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 SRC="$W/payload"; ARCHIVE="$W/input.tar"; COUNT=5000; RUNS=5
 python3 - "$SRC" "$COUNT" <<'PYTHON'
 from pathlib import Path

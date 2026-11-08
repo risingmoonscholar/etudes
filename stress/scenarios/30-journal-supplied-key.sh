@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Supplied keys retain encrypted undo even when login keychain access fails.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W" "$ETUDE_STATE_DIR"' EXIT
 KEY_A=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 KEY_B=$(python3 -c 'import secrets; print(secrets.token_hex(32))')

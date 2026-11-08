@@ -47,7 +47,7 @@ run_and_signal() {
 
 trial() {
   local sig="$1" target="$2" n="$3"
-  local d; d=$(workdir)/D
+  local d; d=$(workdir) || exit 1; d=$d/D
   make_tree "$d" "$n"
   local before_set; before_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
   local before_n; before_n=$(echo "$before_set" | grep -c .)

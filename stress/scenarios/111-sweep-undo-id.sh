@@ -6,8 +6,8 @@
 # a file and never puts one in the wrong place: it restores, or stops and says so.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'chmod -R u+rwx "${W:?}" 2>/dev/null; rm -rf "${W:?}"' EXIT
-W=$(cd "$W" && pwd -P)
+W=$(workdir) || exit 1; trap 'chmod -R u+rwx "${W:?}" 2>/dev/null; rm -rf "${W:?}"' EXIT
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 require python3 "these checks read JSON and alter a record with Python" || exit 0
 export HOME="$W/home"; mkdir -p "$HOME"
 KEY_RIGHT="$ETUDE_JOURNAL_KEY"

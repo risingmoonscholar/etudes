@@ -11,7 +11,7 @@ SCRIPT="$(dirname "${BASH_SOURCE[0]}")/../../crates/unpack-cli/tests/quarantine_
 if python3 "$SCRIPT" raw; then pass "every raw extractor and alias propagation was measured"; else fail "raw quarantine measurement failed"; fi
 if python3 "$SCRIPT" unpack "$UNPACK"; then pass "APFS marked/unmarked extraction and failed preservation witnesses pass"; else fail "APFS quarantine witness failed"; fi
 require hdiutil "exFAT quarantine needs a disk image" || exit 0
-W=$(workdir)
+W=$(workdir) || exit 1
 MNT="$W/exfat"
 mkdir -p "$MNT"
 cleanup() { detach_registered_mounts; rm -rf "$W"; }

@@ -191,17 +191,6 @@ fn run_main(args: Vec<String>) -> ExitCode {
     // the old one still has what it's looking for.
     etude_core::journal::migrate_legacy_state_dir();
 
-    // Journals past their TTL are dropped before anything else. Keeping an
-    // index of the user's filenames forever keeps the exposure forever.
-    let expired = etude_core::journal::prune_expired();
-    etude_cli_support::envelope::effect("expired_journals_removed", expired);
-    if expired > 0 {
-        eprintln!(
-            "sweep: dropped {} older than 30 days",
-            etude_cli_support::counted(expired, "undo record", "undo records")
-        );
-    }
-
     match args.first().map(String::as_str) {
         None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
         Some("help" | "--help" | "-h") => {
@@ -2489,6 +2478,31 @@ impl etude_core::journal::Sealer for KeychainSeal {
     }
 }
 
+/// Drop undo records past their TTL, and say how many.
+///
+/// Keeping an index of the user's filenames forever keeps the exposure
+/// forever, so a record past 30 days is dropped by the next run that opens
+/// records: an apply or an undo with a journal. Only those runs call this,
+/// with the key they already hold for their own work; no run reads the key
+/// just to prune, so a scan, `status` or `verify` never touches the keychain
+/// for it and prunes nothing.
+///
+/// Stash records are kept: their files may still be in a holding folder, and
+/// only `stash pop` can tell that nothing is left. A record must open with this
+/// key before it is dropped. One that does not is the record `sweep undo` tells
+/// the person to keep, because the right key opens it again.
+fn prune_old_records(seal: &dyn etude_core::journal::Sealer) {
+    let expired = etude_core::journal::prune_expired(seal);
+    etude_cli_support::envelope::effect("expired_journals_removed", expired);
+    if expired > 0 {
+        eprintln!(
+            "sweep: dropped {} older than {} days",
+            etude_cli_support::counted(expired, "undo record", "undo records"),
+            etude_core::journal::TTL_DAYS
+        );
+    }
+}
+
 /// Fetch the key, creating it on first use.
 ///
 /// On failure sweep refuses rather than falling back to a plaintext journal.
@@ -3016,6 +3030,12 @@ fn run_apply_with_routes(
 ) -> ExitCode {
     if let Err(code) = verify_existing_profile(&context.profile) {
         return code;
+    }
+    // Before the apply: its own record does not exist yet, so this cannot
+    // remove it, and older records go before any history is consulted, as they
+    // always have.
+    if let Some(seal) = sl.as_ref() {
+        prune_old_records(seal);
     }
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
     let mut progress =
@@ -4142,10 +4162,17 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return ExitCode::from(2);
     };
+    let code = undo_with(args, &sl);
+    // After the undo, not before: when the person brings back the key that
+    // opens an old record, the run that uses it must still find that record.
+    prune_old_records(&sl);
+    code
+}
 
+fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     // check_positionals has already refused a folder beside it and a bad id.
     if let Some(id) = undo_id(args) {
-        return undo_by_id(id, &sl);
+        return undo_by_id(id, sl);
     }
 
     // A named path reverses that folder's apply, whichever one it was.
@@ -4171,9 +4198,9 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     .report();
             }
         };
-        return match sweep_journal_for_root(&sl, &target) {
-            Err(record) => refuse_unreadable_record(&record, &sl, UndoAsked::Folder),
-            Ok(Some(mut j)) => finish_undo(&mut j, &sl, UndoAsked::Folder),
+        return match sweep_journal_for_root(sl, &target) {
+            Err(record) => refuse_unreadable_record(&record, sl, UndoAsked::Folder),
+            Ok(Some(mut j)) => finish_undo(&mut j, sl, UndoAsked::Folder),
             Ok(None) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
@@ -4195,10 +4222,10 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    match newest_undoable(&sl) {
-        Ok(Some(mut j)) => return finish_undo(&mut j, &sl, UndoAsked::Newest),
+    match newest_undoable(sl) {
+        Ok(Some(mut j)) => return finish_undo(&mut j, sl, UndoAsked::Newest),
         Ok(None) => {}
-        Err(record) => return refuse_unreadable_record(&record, &sl, UndoAsked::Newest),
+        Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     }
     // Everything readable has been reversed, or nothing is on record. Which of
     // the two decides the answer below.
@@ -4208,7 +4235,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         Err(error) => {
             return refuse_unreadable_record(
                 &RecordError { id: None, error },
-                &sl,
+                sl,
                 UndoAsked::Newest,
             );
         }
@@ -4219,7 +4246,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
-    let mut j = match newest.load("sweep", &sl) {
+    let mut j = match newest.load("sweep", sl) {
         Ok(j) => j,
         Err(error) => {
             return refuse_unreadable_record(
@@ -4227,12 +4254,12 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     id: Some(newest.id.clone()),
                     error,
                 },
-                &sl,
+                sl,
                 UndoAsked::Newest,
             );
         }
     };
-    if journal_is_fully_undone(&j, &sl) {
+    if journal_is_fully_undone(&j, sl) {
         // Say which operation this is about. The newest journal being already
         // restored is a fact about an earlier run, and a user who just applied
         // something reads it as a fact about that. If they used --no-journal
@@ -4245,7 +4272,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
-    finish_undo(&mut j, &sl, UndoAsked::Newest)
+    finish_undo(&mut j, sl, UndoAsked::Newest)
 }
 
 /// How the person chose the record. It decides which step can be printed: a
@@ -4774,6 +4801,52 @@ fn refuse_shared_key_destroy(removed_nothing: bool) -> ExitCode {
     refusal(etude_cli_support::reason::Code::InvalidArguments, None)
 }
 
+/// Why forget stops for stash records, and what the person can do about them.
+///
+/// Forget removes only sweep's records. A stash record may be the only way
+/// back for files in a holding folder, and no tool removes one it cannot open:
+/// sweep's prune skips stash records and `stash pop` drops only records that
+/// open and hold nothing. So a record nobody can open stays until the person
+/// removes it, and this says how, without reading the key to sort them.
+fn explain_kept_stash_records(records: &[PathBuf], shown_dir: &str) {
+    const LISTED: usize = 10;
+    let key = if std::env::var_os("ETUDE_JOURNAL_KEY").is_some() {
+        "the key in ETUDE_JOURNAL_KEY, which forget cannot destroy, or the keychain key"
+    } else {
+        "ETUDE_JOURNAL_KEY, or the keychain key that forget destroys if you agree"
+    };
+    eprintln!(
+        "sweep: {} in {shown_dir}. Forget keeps them, because they may still restore files.\n\
+         \x20      See which still open: stash status --all\n\
+         \x20      One that opens: restore it with `stash pop --id ID`, using the key it was\n\
+         \x20      made with ({key}).\n\
+         \x20      One that `stash status --all` says cannot be opened is never removed by\n\
+         \x20      these tools. Once you are sure its files are back, remove that file by\n\
+         \x20      hand. Each record is the file stash-ID.journal:",
+        etude_cli_support::counted(records.len(), "stash record is", "stash records are")
+    );
+    for path in records.iter().take(LISTED) {
+        eprintln!("         rm {}", etude_cli_support::quoted_path(path));
+    }
+    if records.len() > LISTED {
+        eprintln!(
+            "         ({} more in {shown_dir}, named stash-ID.journal)",
+            records.len() - LISTED
+        );
+    }
+}
+
+/// Said before `--yes` destroys the keychain key while stash records exist:
+/// the records it made stop opening, and their files stay where stash put them.
+fn warn_stash_records_lose_their_key(count: usize) {
+    eprintln!(
+        "sweep: --yes destroys the keychain key now. {} made with it will no longer\n\
+         \x20      open, and their files stay in the hidden .stash- folders. To keep them,\n\
+         \x20      do not use --yes: pop each first with `stash pop --id ID`, then forget.",
+        etude_cli_support::counted(count, "stash record", "stash records")
+    );
+}
+
 fn cmd_forget(args: &[String]) -> ExitCode {
     use std::io::IsTerminal;
 
@@ -4781,7 +4854,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     let dir = etude_core::journal::state_dir();
     let shown_dir = etude_cli_support::shown(&dir);
     let mut n = 0;
-    let mut stash_present = false;
+    let mut stash_records = Vec::new();
     let mut not_removed = 0;
     let mut first_error = None;
     let mut sweep_journals = Vec::new();
@@ -4799,7 +4872,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
                 let name = e.file_name().to_string_lossy().into_owned();
                 match classify_journal_filename(&name) {
                     JournalOwner::Sweep => sweep_journals.push(e.path()),
-                    JournalOwner::Stash => stash_present = true,
+                    JournalOwner::Stash => stash_records.push(e.path()),
                     JournalOwner::Other => {}
                 }
             }
@@ -4831,7 +4904,15 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     }
     // Decide before removing anything: a command that ends in this refusal must
     // leave everything as it found it.
-    let gate = forget_key_gate(args, stash_present, std::io::stdin().is_terminal());
+    stash_records.sort();
+    let gate = forget_key_gate(
+        args,
+        !stash_records.is_empty(),
+        std::io::stdin().is_terminal(),
+    );
+    if !stash_records.is_empty() {
+        explain_kept_stash_records(&stash_records, &shown_dir);
+    }
     if gate == ForgetKeyGate::Refuse {
         return refuse_shared_key_destroy(true);
     }
@@ -4862,7 +4943,12 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     }
 
     match gate {
-        ForgetKeyGate::Proceed => destroy_shared_key(),
+        ForgetKeyGate::Proceed => {
+            if !stash_records.is_empty() && std::env::var_os("ETUDE_JOURNAL_KEY").is_none() {
+                warn_stash_records_lose_their_key(stash_records.len());
+            }
+            destroy_shared_key()
+        }
         ForgetKeyGate::Ask if forget_shared_key_consent() => destroy_shared_key(),
         ForgetKeyGate::Ask | ForgetKeyGate::Refuse => refuse_shared_key_destroy(false),
     }

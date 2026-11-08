@@ -4,7 +4,7 @@
 # the root's visible files, never guessed from elapsed time.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"; TOTAL=1000
 make_tree() {
   rm -rf "$D"; mkdir -p "$D"

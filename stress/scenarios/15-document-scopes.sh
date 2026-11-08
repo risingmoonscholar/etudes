@@ -4,7 +4,7 @@
 # asset layouts for both sweep and stash/pop.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 # Bounded document scopes: documents in scenes/ may reference ../textures/.
 # Restore permissions before cleanup, even when an assertion fails.
 trap 'chmod -R u+rwx "$W"; rm -rf "$W" "$ETUDE_STATE_DIR"' EXIT
