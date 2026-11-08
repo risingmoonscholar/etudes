@@ -447,7 +447,7 @@ however old it is. Sweep's prune moves out of startup: startup now reads no key
 and deletes no journal, so a scan, `status` or `verify` never reaches the
 keychain to prune. Records past 30 days are dropped by the next run that opens
 records: `apply`, `review`, an exported-plan apply or `undo`, each with the key
-it already holds. Those scopes add the write domain
+it already holds. An apply with `--no-journal` holds no key and prunes nothing. Those scopes add the write domain
 `expired_journals_that_open_except_stash`, and the apply-type scopes add the read
 domain `expired_journal_store` (`undo` already reads `journal_store`). A record
 that does not open with that key is kept, so the advice `sweep undo` gives for it

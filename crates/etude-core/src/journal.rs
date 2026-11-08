@@ -1240,6 +1240,12 @@ pub fn prune_expired(sealer: &dyn Sealer) -> usize {
 /// its destination with an unrecorded move. The same test `stash pop` uses
 /// before it says a stash was already popped. Asks the file system for
 /// metadata only.
+///
+/// Blind spot, shared with `stash pop`: a record cut back to its base frame
+/// reads every entry as planned, and an unrecorded move is only seen when the
+/// destination is present and the origin is absent. If something has since
+/// been created at the origin, that entry reads as never moved, and the record
+/// reads as finished while its file may still sit in the holding folder.
 pub fn is_finished(j: &Journal) -> bool {
     !j.progress_tail_damaged
         && !j.entries.iter().any(Entry::is_moved)
