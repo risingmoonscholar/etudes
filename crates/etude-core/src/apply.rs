@@ -888,6 +888,10 @@ fn apply_plan_with_structured_progress(
             {
                 return Err(ApplyError::SourceDirectoryChanged(parent.to_path_buf()));
             }
+            // The item as it is before the tag and lock checks read it by
+            // path. The move is held to this identity, so a file put in its
+            // place after those checks is refused, never moved unchecked.
+            let checked_item = file_identity(&from);
             // Move-time tag check, before this item's folder is created: a
             // tag added after the scan holds the item unless the plan was
             // made with tagged items included. Only the attribute's presence
@@ -943,15 +947,16 @@ fn apply_plan_with_structured_progress(
             if let Some(parent) = to.parent() {
                 ensure_destination_under_root(parent, &resolved_root)?;
             }
-            // The source as checked here: its folder by the identity recorded
-            // before the first move, and the item as it is now. The move
-            // below takes the item out of that folder only while both hold.
+            // The source as checked: its folder by the identity recorded
+            // before the first move, and the item as it was before the tag
+            // and lock checks. The move below takes the item out of that
+            // folder only while both hold.
             let source = SourceCheck {
                 path: &from,
                 folder: from
                     .parent()
                     .and_then(|parent| validated_identity(&j, parent)),
-                item: file_identity(&from),
+                item: checked_item,
             };
             if let Some(hook) = faults.before_rename.as_mut() {
                 hook(i, &from);
@@ -2408,6 +2413,8 @@ fn copy_unlink(
         if crate::scan::has_finder_tag(from)? {
             return Err(tagged_across_volumes());
         }
+        // A gap remains inside the checked folder: the name can be replaced
+        // between this fstatat and the unlinkat below, which then removes it.
         if identity_at(from_folder, from_leaf)? != original {
             return Err(source_changed(SourceChanged::Item));
         }
@@ -3038,7 +3045,9 @@ fn undo_selected_with_progress(
                     && mtime == e.mtime_secs
                     && hash == e.edge_hash
                 {
-                    let source = match moved_source(j, &e.to) {
+                    // No done record: the move may have been a cross-disk
+                    // copy, so the recorded inode is not evidence here.
+                    let source = match moved_source(j, &e.to, None) {
                         Ok(source) => source,
                         Err(err) => {
                             r.error = Some(err);
@@ -3156,7 +3165,8 @@ fn undo_selected_with_progress(
             advance!();
             continue;
         }
-        let source = match moved_source(j, &e.to) {
+        let recorded = (e.method == Method::Rename).then_some(e.inode);
+        let source = match moved_source(j, &e.to, recorded) {
             Ok(source) => source,
             Err(err) => {
                 r.error = Some(err);
@@ -3374,10 +3384,18 @@ fn source_error(error: &io::Error, from: &Path) -> ApplyError {
 }
 
 /// What undo holds a moved item to on its way back, taken after the item was
-/// checked by path and before it moves: the folder it was moved into, by the
-/// identity apply recorded when it made that folder, or else as it is now;
-/// and the item as it is now. A folder that is not a real folder now refuses.
-fn moved_source<'a>(journal: &Journal, moved: &'a Path) -> Result<SourceCheck<'a>, ApplyError> {
+/// checked by path and before it moves. The folder it was moved into is held
+/// to the identity apply recorded when it made that folder; a folder that
+/// already existed is held to its identity now, as no earlier one is
+/// recorded. A folder that is not a real folder now refuses. The item is held
+/// to `recorded_inode`, the inode the journal recorded, when the move kept it
+/// (a rename); a cross-disk copy has a new inode that the journal does not
+/// hold, so that item is held to its identity now.
+fn moved_source<'a>(
+    journal: &Journal,
+    moved: &'a Path,
+    recorded_inode: Option<u64>,
+) -> Result<SourceCheck<'a>, ApplyError> {
     let parent = moved.parent().unwrap_or(moved);
     let folder = journal
         .created_directories
@@ -3386,10 +3404,18 @@ fn moved_source<'a>(journal: &Journal, moved: &'a Path) -> Result<SourceCheck<'a
         .map(|directory| (directory.device, directory.inode))
         .or_else(|| directory_identity(parent))
         .ok_or_else(|| ApplyError::SourceDirectoryChanged(parent.to_path_buf()))?;
+    let now = file_identity(moved);
+    let item = match recorded_inode.filter(|inode| *inode != 0) {
+        Some(inode) => match now {
+            Some((device, current)) if current == inode => Some((device, inode)),
+            _ => return Err(ApplyError::SourceItemChanged(moved.to_path_buf())),
+        },
+        None => now,
+    };
     Ok(SourceCheck {
         path: moved,
         folder: Some(folder),
-        item: file_identity(moved),
+        item,
     })
 }
 
@@ -4106,6 +4132,42 @@ mod tests {
             !displaced.join("item.dat").exists(),
             "the checked item left its folder"
         );
+    }
+
+    /// Undo holds a renamed item to the inode the journal recorded, not to
+    /// whatever is at the moved path when undo looks: a file put in its place
+    /// after the fingerprint check is refused, and the recorded one is held.
+    #[cfg(unix)]
+    #[test]
+    fn undo_holds_a_renamed_item_to_its_recorded_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("etudes_moved_source_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("dir");
+        let moved = dir.join("item.dat");
+        fs::write(&moved, b"payload").expect("write");
+        let now = fs::symlink_metadata(&moved).expect("lstat");
+        let journal = Journal {
+            id: "moved-source".into(),
+            tool: "test".into(),
+            root: dir.clone(),
+            entries: Vec::new(),
+            created_directories: Vec::new(),
+            validated_directories: Vec::new(),
+            progress_tail_damaged: false,
+        };
+        let held = moved_source(&journal, &moved, Some(now.ino())).expect("the recorded item");
+        assert_eq!(held.item, Some((now.dev(), now.ino())));
+        let refused = moved_source(&journal, &moved, Some(now.ino() + 1))
+            .expect_err("another inode must refuse");
+        assert!(
+            matches!(refused, ApplyError::SourceItemChanged(ref item) if *item == moved),
+            "{refused:?}"
+        );
+        // A cross-disk copy has no recorded inode; the item as it is now.
+        let copied = moved_source(&journal, &moved, None).expect("no recorded inode");
+        assert_eq!(copied.item, Some((now.dev(), now.ino())));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A tagged item whose move would be cross-volume is refused by name,
