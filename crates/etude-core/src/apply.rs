@@ -167,6 +167,11 @@ pub struct ApplyFailure {
     /// still at its own path unless it was deleted during the move. Undo does
     /// not know about this copy.
     pub copy_left: Option<PathBuf>,
+    /// Folders this apply created that are still there, still the folder it
+    /// made, when it stopped after moving something. The journal records each
+    /// one, so undo removes it once it is empty. Empty when nothing moved: a
+    /// failure that moved nothing removes the folders it made.
+    pub created_folders: Vec<PathBuf>,
 }
 
 impl std::fmt::Display for ApplyError {
@@ -1064,11 +1069,22 @@ fn apply_plan_with_structured_progress(
             &created_directories,
         );
     }
+    let mut created_folders: Vec<PathBuf> = if result.is_err() && moved > 0 {
+        created_directories
+            .iter()
+            .filter(|(path, identity)| directory_matches(path, **identity))
+            .map(|(path, _)| path.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    created_folders.sort();
     result.map_err(|error| ApplyFailure {
         error,
         durable_journal_id,
         moved,
         copy_left,
+        created_folders,
     })
 }
 

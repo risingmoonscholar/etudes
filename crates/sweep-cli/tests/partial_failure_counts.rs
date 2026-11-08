@@ -144,3 +144,46 @@ fn partial_io_human_counts_and_undo() {
 fn partial_io_json_counts_and_undo() {
     verify(true);
 }
+/// An apply that stops after moving files into a saved-route folder it
+/// created names that folder and says undo removes it; undo then does.
+#[test]
+fn a_stopped_apply_names_the_folder_it_created_and_undo_removes_it() {
+    let f = Fixture::new();
+    fs::remove_dir(f.base.join("root/First")).unwrap();
+    let out = f.run(
+        &["apply", "--yes", "--scheme", "existing", "--since", "0"],
+        false,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "expected incomplete apply: {stderr}"
+    );
+    assert!(
+        stderr.contains("3 files were moved before this stopped."),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("This apply created the folder First; undo removes it once it is empty."),
+        "{stderr}"
+    );
+    assert!(f.base.join("root/First").is_dir());
+    let undo = f.run(&["undo"], false);
+    assert_eq!(
+        undo.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&undo.stderr)
+    );
+    for name in ["a.pdf", "b.pdf", "e.pdf", "c.png", "d.png", "f.png"] {
+        assert_eq!(
+            fs::read(f.base.join("root").join(name)).unwrap(),
+            format!("payload {name}").as_bytes()
+        );
+    }
+    assert!(
+        !f.base.join("root/First").exists(),
+        "undo left the folder the stopped apply created"
+    );
+}

@@ -53,9 +53,12 @@ FLAGS
     --save-routes    apply: remember --map routes after all moves succeed
                       (existing direct folders only; journal required).
                       Undo moves files back but keeps saved routes
-    --scheme folders  group by file type and other built-in folder rules (default)
-    --scheme existing use the saved, versioned existing-folder profile; a
-                      missing route folder is created only when files move
+    --scheme folders  group by file type and other built-in folder rules (default).
+                      A new folder needs 3 or more files; a folder of that
+                      name already here takes any number
+    --scheme existing use the saved, versioned existing-folder profile. A
+                      route moves any number of files; a missing route
+                      folder is created only when files move
     --scheme tags     add Finder tags and move nothing (macOS); needs --map
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
@@ -2106,6 +2109,14 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     } else if unclear > 1 {
         println!("  {unclear} files matched no group and were left where they are");
     }
+    if unclear > 0 {
+        for (folder, n) in p.below_floor() {
+            println!(
+                "  {} would go to {folder}: sweep makes a new folder only for 3 or more files, and moves any number into a {folder} folder that is already here",
+                etude_cli_support::counted(n, "file", "files")
+            );
+        }
+    }
     if in_place == 1 {
         println!("  1 file is already in its destination and was left in place");
     } else if in_place > 1 {
@@ -3413,6 +3424,11 @@ fn report_apply(
                     if moved == 1 { "it" } else { "they" }
                 );
             }
+            if let Some(text) =
+                created_folders_text(&failure.created_folders, &p.root, journal_enabled)
+            {
+                eprintln!("{text}");
+            }
             if let Some(text) = etude_cli_support::problems::report_copy_left(
                 failure.copy_left.as_deref(),
                 true,
@@ -3423,6 +3439,33 @@ fn report_apply(
             apply_exit_code(&e, moved)
         }
     }
+}
+
+/// Name the folders a stopped apply created and left behind, and say what
+/// becomes of them, so a person who sees a new folder knows where it came from.
+fn created_folders_text(folders: &[PathBuf], root: &Path, journal: bool) -> Option<String> {
+    let names: Vec<String> = folders
+        .iter()
+        .map(|folder| {
+            shown_folder_name(
+                &folder
+                    .strip_prefix(root)
+                    .unwrap_or(folder)
+                    .display()
+                    .to_string(),
+            )
+        })
+        .collect();
+    let (what, it) = match names.len() {
+        0 => return None,
+        1 => (format!("the folder {}", names[0]), "it"),
+        _ => (format!("the folders {}", names.join(", ")), "each one"),
+    };
+    Some(if journal {
+        format!("This apply created {what}; undo removes {it} once it is empty.")
+    } else {
+        format!("This apply created {what}; with --no-journal, undo cannot remove {it}.")
+    })
 }
 
 /// The id in an undo record's file name.
@@ -3737,7 +3780,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         })
     {
         eprintln!(
-            "sweep: routes were not saved: every --map route needs a selected group of at least three eligible files. Nothing was moved. Drop --save-routes to apply the selected groups only."
+            "sweep: routes were not saved: every --map route needs a selected group with at least one eligible file. Nothing was moved. Drop --save-routes to apply the selected groups only."
         );
         if let Some(pending) = &pending {
             routes_saved_detail(
