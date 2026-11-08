@@ -337,7 +337,11 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
         {
             Code::DestinationOutsideRoot
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => Code::PlanStale,
+        StalePlan(_)
+        | DestinationDirectoryChanged(_)
+        | SourceDirectoryChanged(_)
+        | SourceItemChanged(_)
+        | DestinationLocked(_) => Code::PlanStale,
         DestinationExists(_) | DestinationCollision(_) => Code::DestinationExists,
         DestinationIsSynced(_) | CannotCompareNames(_) => Code::UnsafeInput,
         DestinationBlocked(_) => Code::DestinationExists,
@@ -1492,6 +1496,8 @@ fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
         DestinationIsSynced(_) => "destination is synced",
         DestinationBlocked(_) => "a file holds the name of the holding folder",
         DestinationDirectoryChanged(_) => "destination folder identity changed or was unavailable",
+        SourceDirectoryChanged(_) => "source folder identity changed or was unavailable",
+        SourceItemChanged(_) => "source item identity changed or was unavailable",
         DestinationLocked(_) => "a folder is locked",
         CannotCompareNames(_) => "destination names cannot be compared",
         Io(_) => "I/O failure",
@@ -1510,6 +1516,8 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         | DestinationIsSynced(_)
         | DestinationBlocked(_)
         | DestinationDirectoryChanged(_)
+        | SourceDirectoryChanged(_)
+        | SourceItemChanged(_)
         | DestinationLocked(_)
         | CannotCompareNames(_) => refuse_preserving_status(apply_reason(e)),
         Io(_) | Journal(_) | Injected(_) => fail(apply_reason(e)),
@@ -1784,7 +1792,9 @@ fn print_restore_failure(
             "stash: {}",
             etude_cli_support::journal_write_problem(journal)
         ),
-        E::DestinationDirectoryChanged(path) => eprintln!(
+        E::DestinationDirectoryChanged(path)
+        | E::SourceDirectoryChanged(path)
+        | E::SourceItemChanged(path) => eprintln!(
             "{doing}: {} was moved or replaced while stash was working.",
             etude_cli_support::shown(path)
         ),
