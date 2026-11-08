@@ -2111,10 +2111,7 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     }
     if unclear > 0 {
         for (folder, n) in p.below_floor() {
-            println!(
-                "  {} would go to {folder}: sweep makes a new folder only for 3 or more files, and moves any number into a {folder} folder that is already here",
-                etude_cli_support::counted(n, "file", "files")
-            );
+            println!("  {}", below_floor_line(&p.root, folder, n));
         }
     }
     if in_place == 1 {
@@ -2348,6 +2345,30 @@ fn agent_named_note(p: &plan::Plan) -> Option<String> {
         )),
     }
     (!note.is_empty()).then_some(note)
+}
+
+/// Why files of a built-in kind stayed: too few for a new folder, or the name
+/// is held here by a link or a file that sweep never moves anything into.
+fn below_floor_line(root: &Path, folder: &str, n: usize) -> String {
+    let files = etude_cli_support::counted(n, "file", "files");
+    let held = match std::fs::symlink_metadata(root.join(folder)) {
+        Ok(meta) if meta.file_type().is_symlink() => Some("a link"),
+        Ok(meta) if !meta.is_dir() => Some("a file"),
+        _ => None,
+    };
+    if let Some(what) = held {
+        return format!(
+            "{files} would go to {folder}, but {folder} here is {what}, not a folder, so sweep moves nothing into it. Use a plain folder named {folder}"
+        );
+    }
+    let article = if folder.starts_with(['A', 'E', 'I', 'O', 'U']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!(
+        "{files} would go to {folder}: sweep makes a new folder only for 3 or more files, and moves any number into {article} {folder} folder that is already here"
+    )
 }
 
 /// A folder name for a plan line. Control characters show as `?`, and a name

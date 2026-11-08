@@ -772,3 +772,41 @@ fn a_built_in_group_keeps_its_floor_only_when_its_folder_is_missing() {
     assert_eq!(fixture.source_count("pdf"), 2, "{applied:?}");
     assert!(!fixture.root.join("Documents").exists());
 }
+
+/// The line that says why few files stayed is true for every family name
+/// and for a name held by a link: an Images folder, and a Documents link
+/// that sweep moves nothing into.
+#[test]
+fn the_below_floor_line_reads_right_for_a_vowel_name_and_a_link() {
+    let fixture = Fixture::new();
+    fixture.add_files("png", 2);
+    let root = fixture.root.to_str().unwrap();
+    let text = String::from_utf8_lossy(&fixture.run(&[root, "--since", "0"]).stdout).into_owned();
+    assert!(
+        text.contains(
+            "2 files would go to Images: sweep makes a new folder only for 3 or more files, \
+             and moves any number into an Images folder that is already here"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("a Images"), "{text}");
+
+    let fixture = Fixture::new();
+    let elsewhere = fixture.base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, fixture.root.join("Documents")).unwrap();
+    fixture.add_files("pdf", 2);
+    let root = fixture.root.to_str().unwrap();
+    let text = String::from_utf8_lossy(&fixture.run(&[root, "--since", "0"]).stdout).into_owned();
+    assert!(
+        text.contains(
+            "2 files would go to Documents, but Documents here is a link, not a folder, \
+             so sweep moves nothing into it. Use a plain folder named Documents"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("folder that is already here"), "{text}");
+    let applied = fixture.run(&["apply", root, "--since", "0", "--yes"]);
+    assert_eq!(fixture.source_count("pdf"), 2, "{applied:?}");
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
