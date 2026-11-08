@@ -1792,10 +1792,16 @@ fn print_restore_failure(
             "stash: {}",
             etude_cli_support::journal_write_problem(journal)
         ),
-        E::DestinationDirectoryChanged(path)
-        | E::SourceDirectoryChanged(path)
-        | E::SourceItemChanged(path) => eprintln!(
+        E::DestinationDirectoryChanged(path) => eprintln!(
             "{doing}: {} was moved or replaced while stash was working.",
+            etude_cli_support::shown(path)
+        ),
+        E::SourceDirectoryChanged(path) => eprintln!(
+            "{doing}: {} was moved or replaced while stash was working, so nothing more was moved out of it.",
+            etude_cli_support::shown(path)
+        ),
+        E::SourceItemChanged(path) => eprintln!(
+            "{doing}: {} was moved or replaced while stash was working, so it was not moved.",
             etude_cli_support::shown(path)
         ),
         other => eprintln!("{doing}: {}.", apply_error_reason(other)),

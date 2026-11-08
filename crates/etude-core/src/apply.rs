@@ -878,6 +878,16 @@ fn apply_plan_with_structured_progress(
                 return Err(ApplyError::Injected(i));
             }
             let (from, to) = (j.entries[i].from.clone(), j.entries[i].to.clone());
+            // The folder the item is in must still be the folder recorded
+            // before the first move, before anything is read through its path.
+            // A folder swapped since is named here, not reported as whatever
+            // the next read through the new path happens to fail with. The
+            // move itself checks the folder again through its descriptor.
+            if let Some(parent) = from.parent()
+                && !validated_directory_matches(&j, parent)
+            {
+                return Err(ApplyError::SourceDirectoryChanged(parent.to_path_buf()));
+            }
             // Move-time tag check, before this item's folder is created: a
             // tag added after the scan holds the item unless the plan was
             // made with tagged items included. Only the attribute's presence

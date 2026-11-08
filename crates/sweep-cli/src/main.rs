@@ -2856,14 +2856,20 @@ fn refuse_apply(
                 &format!("sweep {}", etude_cli_support::quoted_path(root))
             )
         ),
-        E::DestinationDirectoryChanged(path)
-        | E::SourceDirectoryChanged(path)
-        | E::SourceItemChanged(path) => {
+        E::DestinationDirectoryChanged(path) => {
             eprintln!(
                 "sweep: {doing}: {} was moved or replaced while sweep was working.",
                 shown(path)
             )
         }
+        E::SourceDirectoryChanged(path) => eprintln!(
+            "sweep: {doing}: {} was moved or replaced while sweep was working, so nothing more was moved out of it.",
+            shown(path)
+        ),
+        E::SourceItemChanged(path) => eprintln!(
+            "sweep: {doing}: {} was moved or replaced while sweep was working, so it was not moved.",
+            shown(path)
+        ),
         E::StalePlan(_) | E::Injected(_) => eprintln!("sweep: {doing} in {folder}: {e}"),
     }
 }
