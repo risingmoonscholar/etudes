@@ -1636,7 +1636,9 @@ struct SourceCheck<'a> {
     item: Option<(u64, u64)>,
 }
 
+#[cfg(target_os = "macos")]
 impl<'a> SourceCheck<'a> {
+    /// Hold nothing: the folder is opened by path, as `move_one` always has.
     fn unchecked(path: &'a Path) -> Self {
         Self {
             path,
@@ -4018,6 +4020,82 @@ mod tests {
             past
         );
         assert!(!source.exists(), "the source was removed after the copy");
+    }
+
+    /// The cross-volume copy reads and removes the source through the folder
+    /// that was opened and checked, not through its path. Here the source
+    /// folder's path is swapped for a link to a folder outside, holding a file
+    /// of the same name, after it was opened and before the copy: the copy must
+    /// be of the checked item, the outside file must stay as it was, and the
+    /// checked item must be the one removed. The link-then-unlink fallback,
+    /// for a volume without `renameatx_np`, is held to the same.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_cross_volume_copy_reads_the_opened_source_folder_when_its_path_is_swapped() {
+        source_folder_swapped_during_a_fallback(18, Method::CopyUnlink);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_link_fallback_takes_the_item_from_the_opened_source_folder_when_its_path_is_swapped() {
+        source_folder_swapped_during_a_fallback(45, Method::Rename);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn source_folder_swapped_during_a_fallback(errno: i32, expected: Method) {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "etudes_fallback_source_swap_{errno}_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let _cleanup = Cleanup(dir.clone());
+        let from_folder = dir.join("from");
+        let outside = dir.join("outside");
+        let displaced = dir.join("displaced");
+        let to_folder = dir.join("to");
+        for folder in [&from_folder, &outside, &to_folder] {
+            fs::create_dir_all(folder).expect("folder");
+        }
+        let source = from_folder.join("item.dat");
+        fs::write(&source, b"payload").expect("write");
+        fs::write(outside.join("item.dat"), b"outside bytes").expect("write outside");
+        let folder_md = fs::symlink_metadata(&from_folder).expect("lstat folder");
+        let item_md = fs::symlink_metadata(&source).expect("lstat item");
+        let check = SourceCheck {
+            path: &source,
+            folder: Some((folder_md.dev(), folder_md.ino())),
+            item: Some((item_md.dev(), item_md.ino())),
+        };
+
+        let method =
+            move_into_validated_with(check, &to_folder.join("item.dat"), None, |_, _, _, _| {
+                fs::rename(&from_folder, &displaced).expect("move the source folder aside");
+                symlink(&outside, &from_folder).expect("install outside link");
+                Err(io::Error::from_raw_os_error(errno))
+            })
+            .expect("the fallback proceeds");
+
+        assert_eq!(method, expected);
+        assert_eq!(
+            fs::read(to_folder.join("item.dat")).expect("item landed"),
+            b"payload",
+            "the item was taken through the swapped path"
+        );
+        assert_eq!(
+            fs::read(outside.join("item.dat")).expect("outside file stays"),
+            b"outside bytes"
+        );
+        assert!(
+            !displaced.join("item.dat").exists(),
+            "the checked item left its folder"
+        );
     }
 
     /// A tagged item whose move would be cross-volume is refused by name,
