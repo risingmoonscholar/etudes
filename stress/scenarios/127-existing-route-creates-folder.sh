@@ -3,7 +3,10 @@
 # sweep creates a route's missing folder only when the run moves a file into
 # it, lists it in the plan first, and undo removes it again once it is empty.
 # A route with no files here creates nothing and is not mentioned; a file
-# holding the route's name still refuses before anything moves.
+# holding the route's name still refuses before anything moves. A saved route
+# has no three-file floor: one or two files move. A built-in group keeps the
+# floor only when sweep would make its folder: one or two PDFs move into a
+# Documents folder that is already here, and two with no such folder stay.
 #
 # The change sits in shared planning code, so stash and unpack run here too:
 # a stash and pop round trip, and an unpack to exact bytes. Everything is
@@ -77,6 +80,52 @@ has "the refusal gives one next step" "$OUT" "Change the .qoi route's folder in 
 assert_eq profile_invalid "$(reason_of "$W/refused.json")" "the refusal's reason is profile_invalid"
 assert_eq 0 "$(bytes_ok "$D" qoi 4)" "the refusal moved nothing"
 assert_eq "synthetic file holding the name" "$(cat "$D/My Pictures")" "the file holding the name is untouched"
+
+# --- one and two files on a saved route move; no floor ----------------------
+no_group_count() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["details"]["left_alone"]["no_clear_group"])' "$1" 2>/dev/null; }
+for N in 1 2; do
+  F="$W/few-$N"; make_files "$F" qoi "$N"
+  OUT=$("$SWEEP" "$F" --scheme existing --since 0 2>&1); CODE=$?
+  assert_no_panic "plan of $N routed files" "$OUT"
+  assert_eq 0 "$CODE" "a plan of $N routed files is an ordinary plan (exit $CODE)"
+  has "the plan of $N routed files names the folder it will create" "$OUT" "sweep creates the folder My Pictures for your saved route"
+  hasnt "$N routed files are not called ungrouped" "$OUT" "matched no group"
+  hasnt "$N routed files get no routing advice" "$OUT" "had no group"
+  "$SWEEP" "$F" --scheme existing --since 0 --json >"$W/few-$N.json" 2>/dev/null
+  assert_eq 0 "$(no_group_count "$W/few-$N.json")" "the JSON plan lists none of the $N routed files as having no group"
+  OUT=$("$SWEEP" apply "$F" --scheme existing --since 0 --yes 2>&1); CODE=$?
+  assert_no_panic "apply of $N routed files" "$OUT"
+  assert_eq 0 "$CODE" "apply moves $N routed files (exit $CODE)"
+  [ -d "$F/My Pictures" ] && pass "apply created the route folder for $N files" || fail "apply did not create the route folder for $N files"
+  assert_eq 0 "$(bytes_ok "$F/My Pictures" qoi "$N")" "$N routed files landed with their bytes"
+  OUT=$("$SWEEP" undo "$F" 2>&1); CODE=$?
+  assert_no_panic "undo of $N routed files" "$OUT"
+  assert_eq 0 "$CODE" "undo restores $N routed files (exit $CODE)"
+  assert_eq 0 "$(bytes_ok "$F" qoi "$N")" "$N routed files are home with their bytes"
+  [ ! -e "$F/My Pictures" ] && pass "undo removed the folder made for $N files" || fail "undo left the folder made for $N files"
+done
+
+# --- a built-in group: the floor guards only a folder sweep would make -----
+for N in 1 2; do
+  B="$W/builtin-$N"; mkdir -p "$B/Documents"; make_files "$B" pdf "$N"
+  OUT=$("$SWEEP" apply "$B" --since 0 --yes 2>&1); CODE=$?
+  assert_no_panic "apply of $N files into an existing Documents" "$OUT"
+  assert_eq 0 "$CODE" "$N files move into a Documents folder that is already here (exit $CODE)"
+  assert_eq 0 "$(bytes_ok "$B/Documents" pdf "$N")" "$N files landed in Documents with their bytes"
+  OUT=$("$SWEEP" undo "$B" 2>&1); CODE=$?
+  assert_no_panic "undo of $N files from Documents" "$OUT"
+  assert_eq 0 "$CODE" "undo brings $N files back from Documents (exit $CODE)"
+  assert_eq 0 "$(bytes_ok "$B" pdf "$N")" "$N files are home with their bytes"
+  [ -d "$B/Documents" ] && pass "undo keeps the Documents folder sweep did not make" || fail "undo removed a folder sweep did not make"
+done
+B="$W/builtin-missing"; make_files "$B" pdf 2
+OUT=$("$SWEEP" "$B" --since 0 2>&1)
+assert_no_panic "plan of 2 files with no Documents folder" "$OUT"
+has "the plan says why 2 files stay" "$OUT" "2 files would go to Documents: sweep makes a new folder only for 3 or more files"
+OUT=$("$SWEEP" apply "$B" --since 0 --yes 2>&1)
+assert_no_panic "apply of 2 files with no Documents folder" "$OUT"
+assert_eq 0 "$(bytes_ok "$B" pdf 2)" "2 files with no folder of their own stay with their bytes"
+[ ! -e "$B/Documents" ] && pass "no Documents folder was made for 2 files" || fail "a Documents folder was made for 2 files"
 
 # --- stash and pop round trip --------------------------------------------------
 S="$W/stashed"; make_files "$S" txt 5
