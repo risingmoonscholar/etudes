@@ -67,14 +67,38 @@ fn new_plan_step(tool: &str, root: &Path) -> String {
 }
 
 /// A move that failed and could not remove the copy it had made at
-/// `copy`. Printed instead of "Nothing was moved", which would be false.
-pub fn copy_left_text(copy: &Path) -> String {
+/// `copy`. With nothing moved, this replaces "Nothing was moved", which would
+/// be false; after other moves it follows the undo step, which cannot see
+/// this copy. The copy may be the only one if the original vanished.
+pub fn copy_left_text(copy: &Path, moved_any: bool) -> String {
+    let first = if moved_any {
+        "The move that failed also left a copy at"
+    } else {
+        "No file was moved, but the failed move left a copy at"
+    };
     format!(
-        "No file was moved, but the failed move left a copy at {}, and undo cannot see it.\n\
-         The original was not removed, so it should still be where it was. If it is, delete the copy: rm {}",
+        "{first} {}, and undo cannot see it.\n\
+         If the original is still where it was, delete the copy: rm {}\n\
+         If the original is gone, this copy is the only one, so keep it.",
         shown(copy),
         quoted_path(copy)
     )
+}
+
+/// Report a copy a failed move left, if there is one: `details.copy_left` in
+/// the `--json` result (the path, or `"<redacted>"` where the result shows no
+/// paths), and the text to print. `None` when no copy was left.
+pub fn report_copy_left(copy: Option<&Path>, moved_any: bool, redacted: bool) -> Option<String> {
+    let copy = copy?;
+    crate::envelope::detail_field(
+        "copy_left",
+        if redacted {
+            etude_core::json::str("<redacted>")
+        } else {
+            etude_core::json::path(copy)
+        },
+    );
+    Some(copy_left_text(copy, moved_any))
 }
 
 /// A saved plan no longer matches its folder. Nothing was moved when this prints.
@@ -561,10 +585,37 @@ mod tests {
     /// must name the copy with a step that works when pasted.
     #[test]
     fn a_left_copy_is_named_and_nothing_moved_is_not_claimed() {
-        let text = super::copy_left_text(Path::new("/no where/it's.txt"));
-        assert!(!text.contains("Nothing was moved"), "{text}");
-        assert!(text.contains("left a copy at"), "{text}");
-        assert!(text.contains("rm '/no where/it'\\''s.txt'"), "{text}");
+        for moved_any in [false, true] {
+            let text = super::copy_left_text(Path::new("/no where/it's.txt"), moved_any);
+            assert!(!text.contains("Nothing was moved"), "{text}");
+            assert!(text.contains("left a copy at"), "{text}");
+            assert!(text.contains("undo cannot see it"), "{text}");
+            assert!(text.contains("rm '/no where/it'\\''s.txt'"), "{text}");
+            assert!(text.contains("this copy is the only one"), "{text}");
+            assert_eq!(text.starts_with("No file was moved"), !moved_any, "{text}");
+        }
+    }
+
+    /// The copy is in the `--json` result whether or not other files moved,
+    /// as its path, or redacted where that result shows no paths.
+    #[test]
+    fn a_left_copy_is_in_the_json_result() {
+        let copy = Path::new("/no where/it.txt");
+        for (moved_any, redacted, field) in [
+            (false, false, r#""copy_left":"/no where/it.txt""#),
+            (true, false, r#""copy_left":"/no where/it.txt""#),
+            (true, true, r#""copy_left":"<redacted>""#),
+        ] {
+            crate::envelope::begin("sweep", "0.5.4", &["apply".into(), "--json".into()]);
+            let text = super::report_copy_left(Some(copy), moved_any, redacted).expect("text");
+            assert!(text.contains("left a copy at"), "{text}");
+            let details = crate::envelope::payloads_for_tests();
+            assert_eq!(details.len(), 1, "{details:?}");
+            assert!(details[0].contains(field), "{details:?}");
+        }
+        crate::envelope::begin("sweep", "0.5.4", &["apply".into(), "--json".into()]);
+        assert!(super::report_copy_left(None, true, false).is_none());
+        assert!(crate::envelope::payloads_for_tests().is_empty());
     }
 
     #[test]

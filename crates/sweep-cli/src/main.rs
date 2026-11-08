@@ -3284,8 +3284,12 @@ fn report_apply(
                 etude_cli_support::envelope::status("refused");
                 if p.adds_tags {
                     eprintln!("No tags were added, so there is nothing to undo.");
-                } else if let Some(copy) = failure.copy_left.as_deref() {
-                    eprintln!("{}", etude_cli_support::problems::copy_left_text(copy));
+                } else if let Some(text) = etude_cli_support::problems::report_copy_left(
+                    failure.copy_left.as_deref(),
+                    false,
+                    false,
+                ) {
+                    eprintln!("{text}");
                 } else {
                     eprintln!("Nothing was moved, so there is nothing to undo.");
                 }
@@ -3318,6 +3322,13 @@ fn report_apply(
                     "{what} --no-journal removed undo, so {} cannot be put back by sweep.",
                     if moved == 1 { "it" } else { "they" }
                 );
+            }
+            if let Some(text) = etude_cli_support::problems::report_copy_left(
+                failure.copy_left.as_deref(),
+                true,
+                false,
+            ) {
+                eprintln!("{text}");
             }
             apply_exit_code(&e, moved)
         }
