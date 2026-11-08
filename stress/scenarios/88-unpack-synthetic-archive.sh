@@ -3,7 +3,7 @@
 # still extract an archive made here to its exact bytes.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 SRC="$W/source"; OUT="$W/out"; ARCHIVE="$W/fixture.tar.gz"
 mkdir -p "$SRC/sub"
 printf 'synthetic archive member\n' > "$SRC/member.txt"

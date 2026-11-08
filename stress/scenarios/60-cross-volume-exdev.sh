@@ -39,7 +39,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-W=$(workdir)
+W=$(workdir) || exit 1
 OUTER="$W/outer"
 IMG="$W/inner.dmg"
 # Named so its path sorts before plain filenames ('a' < the group's token

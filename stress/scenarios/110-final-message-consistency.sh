@@ -5,7 +5,7 @@
 # refuse. A relative archive gets the same free-space floor as an absolute one.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done

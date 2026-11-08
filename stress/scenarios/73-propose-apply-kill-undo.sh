@@ -32,7 +32,7 @@ case "$CONTROL" in ''|--control-late|--control-missing) ;; *) fail "unknown prop
 
 require python3 "builds fixture names and reads --json results" || exit 0
 
-W=$(workdir)
+W=$(workdir) || exit 1
 PID=""
 cleanup() {
   if [ -n "$PID" ]; then

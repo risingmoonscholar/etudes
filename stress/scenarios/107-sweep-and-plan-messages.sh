@@ -4,7 +4,7 @@
 # that fits the real cause. Each case checks the words, the exit and the reason.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done

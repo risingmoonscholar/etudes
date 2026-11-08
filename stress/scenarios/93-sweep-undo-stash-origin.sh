@@ -2,7 +2,7 @@
 # Selection, undo and pop preserve all original paths and bytes.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require python3 "fixture comparisons need Python" || exit 0
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W"' EXIT
 if python3 - "$SWEEP" "$STASH" "$UNPACK" "$W" <<'PY'
 import json, os, pathlib, secrets, subprocess, sys, tarfile

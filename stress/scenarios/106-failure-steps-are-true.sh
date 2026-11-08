@@ -4,7 +4,7 @@
 # group is named, one bad key gets one answer, and the home folder needs its flag.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"' EXIT
 W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 if [ "$(id -u)" = 0 ]; then

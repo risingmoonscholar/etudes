@@ -2,7 +2,7 @@
 # Recomputed plan digests do not grant permission to move held files.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 D="$W/root"; mkdir -p "$D"
 for name in report01.pdf report02.pdf report03.pdf passport.pdf; do

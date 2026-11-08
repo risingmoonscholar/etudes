@@ -11,6 +11,9 @@
 # its own temporary directory and removes it on exit.
 
 set -uo pipefail
+# A scenario run by hand has no SCENARIO; name it after the script so messages
+# and scratch folders still work under set -u.
+SCENARIO="${SCENARIO:-$(basename "$0" .sh)}"
 
 # A scenario that dies before its first assertion used to be invisible: no ok,
 # no FAIL, and the runner counted it as nothing at all. Worse, without `set -e`

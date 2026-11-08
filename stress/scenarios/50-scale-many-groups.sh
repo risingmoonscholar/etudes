@@ -18,7 +18,7 @@
 #   - the listing stays one line per group and does not blow up
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 D="$W/many"; mkdir -p "$D"
 
 # Flat 10k already measures throughput. This case measures membership and

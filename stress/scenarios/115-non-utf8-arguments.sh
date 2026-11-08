@@ -11,7 +11,7 @@ exec </dev/null
 
 require python3 "reads --json results and checks raw bytes" || exit 0
 
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W"' EXIT
 W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 export HOME="$W/home" ETUDE_STATE_DIR="$W/state"

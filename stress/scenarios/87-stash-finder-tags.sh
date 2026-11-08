@@ -5,7 +5,7 @@
 # and checks that the folder is clear because it is. Everything is synthetic.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 TAGATTR=com.apple.metadata:_kMDItemUserTags
 F="$W/folder"; mkdir -p "$F/tagged-folder"
 printf 'synthetic plain file\n' > "$F/plain.txt"
