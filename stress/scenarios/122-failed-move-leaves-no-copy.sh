@@ -2,7 +2,7 @@
 # A move that fails after it made its copy (across volumes) or its second name
 # (link then unlink), and before the source was removed, now removes that copy
 # or name. When it cannot, the failure names the copy, and sweep and stash no
-# longer say "Nothing was moved". Every apply, tag apply and undo that wrote
+# longer say "Nothing was moved". Every apply and tag apply that wrote
 # journal records now flushes them once on its error returns too.
 #
 # Honest scope: those failures cannot be produced from the command line
