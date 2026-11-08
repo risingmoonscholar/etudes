@@ -72,11 +72,21 @@ and the file is renamed, or copied across disks, into that open folder. A
 folder replaced, or swapped for a link, after the check is refused, not
 followed. An item apply finds tagged after its move goes back to its source
 folder the same way, or stays at its destination and is counted as not
-returned. What remains: a checked folder can still be moved as a whole after
-the check, and the file then lands in it wherever it now is. The file being
-moved is still named by its path. On other systems the check is made by path
-just before the move, so a swap in that instant is not stopped there. None of
-this defends against hostile code running as the same user.
+returned. The source side is held the same way: on macOS the folder the item
+is in is opened without following a link and checked against the device and
+inode recorded before the first move (for undo, the folder apply moved the
+item into), the item's own device and inode are checked inside that open
+folder, and the rename, the link-then-unlink fallback, and the cross-disk copy
+and removal of the original are all made relative to the two open folders. A
+source folder swapped for a link to somewhere else after the check is refused,
+and nothing is moved for that file. Two checks still go by path: the Finder tag
+check, because macOS has no call that reads an extended attribute relative to
+a folder descriptor, and the locked-flag check. A lock set after its check
+still makes the system refuse the rename. What remains: a checked folder can
+still be moved as a whole after the check, and the file then leaves or lands
+in it wherever it now is. On other systems both checks are made by path just
+before the move, so a swap in that instant is not stopped there. None of this
+defends against hostile code running as the same user.
 
 **`--json` discloses less than the human output.** For files that look like
 personal records it carries counts by category and never the paths.
