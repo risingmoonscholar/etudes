@@ -1903,6 +1903,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
+    // After the pop, on every path out: a pop of a finished record past 30
+    // days still answers "already popped" before that record is dropped.
+    let _prune = PruneOnExit(&sl);
     // An id no journal holds is the same answer `status --id` gives. A folder
     // with nothing stashed is a different question and keeps its own reason.
     let asked_id = match &selector {
@@ -3052,6 +3055,32 @@ impl etude_core::journal::Sealer for KeychainSeal {
 
 /// Refuses rather than writing an unencrypted record of what was stashed. Only
 /// folder stash takes --no-journal, so only folder stash may mention it.
+/// Drop stash records past the 30-day limit whose stash is fully popped.
+///
+/// Sweep's age-only prune keeps every stash record, because it has no key and
+/// cannot tell a popped stash from one whose files are still held. Here the key
+/// is open, so a record that shows nothing is still held can expire. A pop
+/// rewrites the record, so it is dropped 30 days after the pop that finished
+/// it. A record this key cannot open is kept.
+/// Runs [`prune_popped`] when `cmd_pop` returns, whichever way it returns.
+struct PruneOnExit<'a>(&'a KeychainSeal);
+impl Drop for PruneOnExit<'_> {
+    fn drop(&mut self) {
+        prune_popped(self.0);
+    }
+}
+
+fn prune_popped(sl: &dyn etude_core::journal::Sealer) {
+    let dropped = etude_core::journal::prune_finished("stash", sl);
+    if dropped > 0 {
+        eprintln!(
+            "stash: dropped {} older than {} days; nothing was left to pop from them",
+            etude_cli_support::counted(dropped, "undo record", "undo records"),
+            etude_core::journal::TTL_DAYS
+        );
+    }
+}
+
 fn sealer(takes_no_journal: bool) -> Option<KeychainSeal> {
     let result = etude_keep::key();
     etude_core::scan::record_read_outcome("key_material", result.is_ok());
