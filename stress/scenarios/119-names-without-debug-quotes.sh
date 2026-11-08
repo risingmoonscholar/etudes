@@ -9,7 +9,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null
 require python3 "checks the tree before and after" || exit 0
 
-W=$(workdir)
+W=$(workdir) || exit 1
 # Only a fresh temp folder is ever removed or used as a working folder.
 case "$W" in
   "${TMPDIR:-/tmp}"/*|/private/var/folders/*|/tmp/*|/private/tmp/*) ;;
