@@ -166,16 +166,170 @@ fn missing_builtin_route_does_not_fall_back_to_documents() {
         "--json",
     ]);
 
-    assert_ne!(output.status.code(), Some(0));
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("Reading")
-            || String::from_utf8_lossy(&output.stderr).contains("Reading"),
-        "the refusal should name the missing destination: stdout={}, stderr={}",
-        String::from_utf8_lossy(&output.stdout),
+    // The saved route is the person's destination: sweep makes the missing
+    // folder and the PDFs go there, never into the built-in Documents.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(fixture.source_count("pdf"), 3);
+    assert_eq!(fixture.source_count("pdf"), 0);
+    assert_eq!(
+        std::fs::read_dir(fixture.root.join("Reading"))
+            .unwrap()
+            .count(),
+        3
+    );
     assert!(!fixture.root.join("Documents").exists());
+}
+
+#[test]
+fn a_missing_route_folder_is_listed_created_and_removed_again_by_undo() {
+    let fixture = Fixture::new();
+    fixture.profile(&route("qoi", "Pictures Of Mine"));
+    let mut originals = Vec::new();
+    for index in 0..3 {
+        let name = format!("synthetic-{index}.qoi");
+        let bytes = format!("synthetic qoi payload {index}").into_bytes();
+        std::fs::write(fixture.root.join(&name), &bytes).unwrap();
+        originals.push((name, bytes));
+    }
+    let destination = fixture.root.join("Pictures Of Mine");
+    let root = fixture.root.to_str().unwrap();
+
+    let planned = fixture.run(&[root, "--scheme", "existing", "--since", "0"]);
+    assert_eq!(planned.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&planned.stdout);
+    assert!(
+        text.contains("sweep creates the folder Pictures Of Mine for your saved route"),
+        "{text}"
+    );
+    assert!(
+        text.contains(".qoi (saved route, new folder sweep creates)"),
+        "{text}"
+    );
+    assert!(!text.contains("chosen by your agent"), "{text}");
+    let planned = fixture.run(&[root, "--scheme", "existing", "--since", "0", "--json"]);
+    assert_eq!(planned.status.code(), Some(0));
+    let json = String::from_utf8_lossy(&planned.stdout);
+    assert!(
+        json.contains(
+            "\"name\":\"Pictures Of Mine\",\"signal\":\".qoi (saved route, new folder sweep creates)\""
+        ),
+        "{json}"
+    );
+    assert!(!destination.exists(), "planning created the folder");
+
+    let applied = fixture.run(&[
+        "apply", root, "--scheme", "existing", "--since", "0", "--yes", "--json",
+    ]);
+    assert_eq!(
+        applied.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    assert_eq!(fixture.source_count("qoi"), 0);
+    for (name, bytes) in &originals {
+        assert_eq!(&std::fs::read(destination.join(name)).unwrap(), bytes);
+    }
+
+    let undone = fixture.run(&["undo", root]);
+    assert_eq!(
+        undone.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&undone.stderr)
+    );
+    for (name, bytes) in &originals {
+        assert_eq!(&std::fs::read(fixture.root.join(name)).unwrap(), bytes);
+    }
+    assert!(
+        !destination.exists(),
+        "undo left the empty folder sweep created"
+    );
+}
+
+#[test]
+fn a_route_with_no_files_here_is_ignored_and_creates_nothing() {
+    let fixture = Fixture::new();
+    fixture.profile(&route("xyz", "Absent Folder"));
+    fixture.add_files("qoi", 2);
+    let root = fixture.root.to_str().unwrap();
+    for arguments in [
+        vec![root, "--scheme", "existing", "--since", "0"],
+        vec![root, "--scheme", "existing", "--since", "0", "--json"],
+        vec![
+            "apply", root, "--scheme", "existing", "--since", "0", "--yes", "--json",
+        ],
+    ] {
+        let output = fixture.run(&arguments);
+        // Nothing to organise is the ordinary exit 1, not a refusal.
+        assert_eq!(output.status.code(), Some(1), "{arguments:?}");
+        let all = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!all.contains("Absent Folder"), "{arguments:?}: {all}");
+        assert!(!all.contains("profile_invalid"), "{arguments:?}: {all}");
+        assert!(!fixture.root.join("Absent Folder").exists());
+    }
+    assert_eq!(fixture.source_count("qoi"), 2);
+}
+
+#[test]
+fn a_route_folder_held_by_a_file_or_a_link_is_refused_by_name() {
+    for link in [false, true] {
+        let fixture = Fixture::new();
+        let holder = fixture.root.join("Box");
+        if link {
+            std::fs::create_dir(fixture.base.join("elsewhere")).unwrap();
+            std::os::unix::fs::symlink(fixture.base.join("elsewhere"), &holder).unwrap();
+        } else {
+            std::fs::write(&holder, b"synthetic file").unwrap();
+        }
+        fixture.profile(&route("qoi", "Box"));
+        fixture.add_files("qoi", 3);
+        let output = fixture.run(&[
+            "apply",
+            fixture.root.to_str().unwrap(),
+            "--scheme",
+            "existing",
+            "--since",
+            "0",
+            "--yes",
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let kind = if link { "a link" } else { "a file" };
+        let expected = format!(
+            "routes .qoi to {}, which is {kind}, not a folder, so nothing moved. \
+             Change the .qoi route's folder in that profile.",
+            holder.display()
+        );
+        assert!(stderr.contains(&expected), "{stderr}");
+        assert!(!stderr.contains("\"Box\""), "{stderr}");
+        assert!(!stderr.contains("Edit that file"), "{stderr}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("\"code\":\"profile_invalid\""),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(fixture.source_count("qoi"), 3);
+        if link {
+            assert_eq!(
+                std::fs::read_dir(fixture.base.join("elsewhere"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        } else {
+            assert_eq!(std::fs::read(&holder).unwrap(), b"synthetic file");
+        }
+    }
 }
 
 #[test]
@@ -339,8 +493,10 @@ fn missing_destinations_and_ambiguous_profile_routes_leave_sources_untouched() {
         "0",
         "--json",
     ]);
-    assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Missing"));
+    // A plan for a missing route folder lists it and moves nothing; only
+    // apply creates it.
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("\"name\":\"Missing\""));
     assert!(!missing.root.join("Missing").exists());
     assert_eq!(missing.source_count("qoi"), 3);
 
@@ -439,4 +595,218 @@ fn exported_plan_refuses_a_changed_profile_and_does_not_recreate_a_removed_desti
         "replay recreated a removed destination"
     );
     assert_eq!(removed.source_count("qoi"), 3);
+}
+
+#[test]
+fn an_exported_plan_creates_its_route_folder_and_refuses_one_made_since() {
+    let replayed = Fixture::new();
+    replayed.profile(&route("qoi", "Reading"));
+    replayed.add_files("qoi", 3);
+    let digest = replayed.export();
+    assert!(!replayed.root.join("Reading").exists());
+    let output = replayed.replay(&digest);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(replayed.source_count("qoi"), 0);
+    assert_eq!(
+        std::fs::read_dir(replayed.root.join("Reading"))
+            .unwrap()
+            .count(),
+        3
+    );
+
+    // A folder that appeared after the plan was made is not the one the plan
+    // promised to create, so nothing moves into it.
+    let appeared = Fixture::new();
+    appeared.profile(&route("qoi", "Reading"));
+    appeared.add_files("qoi", 3);
+    let digest = appeared.export();
+    std::fs::create_dir(appeared.root.join("Reading")).unwrap();
+    let output = appeared.replay(&digest);
+    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(appeared.source_count("qoi"), 3);
+    assert_eq!(
+        std::fs::read_dir(appeared.root.join("Reading"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+/// One or two files on a saved route: listed, moved into the folder sweep
+/// creates, restored by undo, and the empty folder removed again. A saved
+/// route is the person's choice, so the three-file floor does not apply, and
+/// the routed files are never reported as having no group.
+#[test]
+fn one_or_two_files_on_a_saved_route_move_and_undo_removes_the_created_folder() {
+    for count in [1usize, 2] {
+        let fixture = Fixture::new();
+        fixture.profile(&route("pdf", "Docs "));
+        let mut originals = Vec::new();
+        for index in 0..count {
+            let name = format!("synthetic-{index}.pdf");
+            let bytes = format!("synthetic pdf payload {index}").into_bytes();
+            std::fs::write(fixture.root.join(&name), &bytes).unwrap();
+            originals.push((name, bytes));
+        }
+        let destination = fixture.root.join("Docs ");
+        let root = fixture.root.to_str().unwrap();
+
+        let planned = fixture.run(&[root, "--scheme", "existing", "--since", "0"]);
+        assert_eq!(planned.status.code(), Some(0));
+        let text = String::from_utf8_lossy(&planned.stdout);
+        assert!(
+            text.contains("sweep creates the folder 'Docs ' for your saved route"),
+            "{text}"
+        );
+        assert!(
+            text.contains(".pdf (saved route, new folder sweep creates)"),
+            "{text}"
+        );
+        assert!(!text.contains("matched no group"), "{text}");
+        let stderr = String::from_utf8_lossy(&planned.stderr);
+        assert!(!stderr.contains("had no group"), "{stderr}");
+        assert!(!stderr.contains("sweep propose --help"), "{stderr}");
+
+        let planned = fixture.run(&[root, "--scheme", "existing", "--since", "0", "--json"]);
+        assert_eq!(planned.status.code(), Some(0));
+        let json = String::from_utf8_lossy(&planned.stdout);
+        assert!(json.contains(&format!("\"count\":{count}")), "{json}");
+        assert!(json.contains("\"no_clear_group\":0"), "{json}");
+        assert!(json.contains("\"no_clear_group_paths\":[]"), "{json}");
+        assert!(json.contains("\"unknown_extensions\":{}"), "{json}");
+        assert!(!json.contains("routing_hint"), "{json}");
+        assert!(!destination.exists(), "planning created the folder");
+
+        let applied = fixture.run(&[
+            "apply", root, "--scheme", "existing", "--since", "0", "--yes", "--json",
+        ]);
+        assert_eq!(
+            applied.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&applied.stderr)
+        );
+        assert_eq!(fixture.source_count("pdf"), 0);
+        assert!(!fixture.root.join("Documents").exists());
+        for (name, bytes) in &originals {
+            assert_eq!(&std::fs::read(destination.join(name)).unwrap(), bytes);
+        }
+
+        let undone = fixture.run(&["undo", root]);
+        assert_eq!(
+            undone.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&undone.stderr)
+        );
+        for (name, bytes) in &originals {
+            assert_eq!(&std::fs::read(fixture.root.join(name)).unwrap(), bytes);
+        }
+        assert!(!destination.exists(), "undo left the empty created folder");
+    }
+}
+
+/// The floor guards only folders sweep would make. One or two PDFs move into a
+/// Documents folder that is already here, and undo keeps that folder; two
+/// PDFs with no Documents folder stay, and the plan says why in true words.
+#[test]
+fn a_built_in_group_keeps_its_floor_only_when_its_folder_is_missing() {
+    for count in [1usize, 2] {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.root.join("Documents")).unwrap();
+        fixture.add_files("pdf", count);
+        let root = fixture.root.to_str().unwrap();
+        let planned = fixture.run(&[root, "--since", "0"]);
+        assert_eq!(planned.status.code(), Some(0));
+        let text = String::from_utf8_lossy(&planned.stdout);
+        let files = if count == 1 { "1 file " } else { "2 files" };
+        assert!(text.contains(&format!("Documents       {files}")), "{text}");
+        let applied = fixture.run(&["apply", root, "--since", "0", "--yes"]);
+        assert_eq!(
+            applied.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&applied.stderr)
+        );
+        assert_eq!(fixture.source_count("pdf"), 0);
+        assert_eq!(
+            std::fs::read_dir(fixture.root.join("Documents"))
+                .unwrap()
+                .count(),
+            count
+        );
+        let undone = fixture.run(&["undo", root]);
+        assert_eq!(undone.status.code(), Some(0));
+        assert_eq!(fixture.source_count("pdf"), count);
+        assert!(
+            fixture.root.join("Documents").is_dir(),
+            "undo removed a folder sweep did not create"
+        );
+    }
+
+    let fixture = Fixture::new();
+    fixture.add_files("pdf", 2);
+    let root = fixture.root.to_str().unwrap();
+    let planned = fixture.run(&[root, "--since", "0"]);
+    // No group: the plan has nothing to do, which is exit 1, not a failure.
+    assert_eq!(planned.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&planned.stdout);
+    assert!(!text.contains("Documents       2 files"), "{text}");
+    assert!(
+        text.contains("2 files matched no group and were left where they are"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "2 files would go to Documents: sweep makes a new folder only for 3 or more files, \
+             and moves any number into a Documents folder that is already here"
+        ),
+        "{text}"
+    );
+    let applied = fixture.run(&["apply", root, "--since", "0", "--yes"]);
+    assert_eq!(fixture.source_count("pdf"), 2, "{applied:?}");
+    assert!(!fixture.root.join("Documents").exists());
+}
+
+/// The line that says why few files stayed is true for every family name
+/// and for a name held by a link: an Images folder, and a Documents link
+/// that sweep moves nothing into.
+#[test]
+fn the_below_floor_line_reads_right_for_a_vowel_name_and_a_link() {
+    let fixture = Fixture::new();
+    fixture.add_files("png", 2);
+    let root = fixture.root.to_str().unwrap();
+    let text = String::from_utf8_lossy(&fixture.run(&[root, "--since", "0"]).stdout).into_owned();
+    assert!(
+        text.contains(
+            "2 files would go to Images: sweep makes a new folder only for 3 or more files, \
+             and moves any number into an Images folder that is already here"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("a Images"), "{text}");
+
+    let fixture = Fixture::new();
+    let elsewhere = fixture.base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, fixture.root.join("Documents")).unwrap();
+    fixture.add_files("pdf", 2);
+    let root = fixture.root.to_str().unwrap();
+    let text = String::from_utf8_lossy(&fixture.run(&[root, "--since", "0"]).stdout).into_owned();
+    assert!(
+        text.contains(
+            "2 files would go to Documents, but Documents here is a link, not a folder, \
+             so sweep moves nothing into it. Use a plain folder named Documents"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("folder that is already here"), "{text}");
+    let applied = fixture.run(&["apply", root, "--since", "0", "--yes"]);
+    assert_eq!(fixture.source_count("pdf"), 2, "{applied:?}");
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }

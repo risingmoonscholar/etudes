@@ -11,7 +11,7 @@ use etude_core::json as j;
 
 pub const SCHEMA_VERSION: u32 = 4;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Sweep,
     Stash,
@@ -141,8 +141,8 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 11,
-                Tool::Stash => 13,
+                Tool::Sweep => SCHEMA_VERSION + 13,
+                Tool::Stash => 14,
                 Tool::Unpack => SCHEMA_VERSION + 4,
             }),
         ),
@@ -255,13 +255,17 @@ pub fn declaration(
                     "owned_artifacts",
                     strings(match tool {
                         Tool::Sweep => &[
-                            "expired_journals_all_tools",
+                            "expired_journals_that_open_except_stash",
                             "sweep_journals_on_forget",
                             "authorized_shared_key",
                             "empty_group_directories",
                             "case_probe_files",
                         ],
-                        Tool::Stash => &["empty_holding_directories", "case_probe_files"],
+                        Tool::Stash => &[
+                            "empty_holding_directories",
+                            "case_probe_files",
+                            "popped_stash_journals_past_ttl",
+                        ],
                         Tool::Unpack => &[
                             "private_archive_copy",
                             "failed_staging_tree",
@@ -285,7 +289,16 @@ pub fn declaration(
                 ),
                 (
                     "conditions",
-                    strings(if custody {
+                    strings(if tool == Tool::Stash {
+                        // A stash record never expires while it holds items.
+                        &[
+                            "readable_journal",
+                            "same_key",
+                            "unchanged_items",
+                            "vacant_original_paths",
+                            "journal_progress_writable",
+                        ]
+                    } else if custody {
                         &[
                             "readable_journal",
                             "same_key",
@@ -466,8 +479,10 @@ pub fn declaration(
     if matches!(tool, Tool::Sweep) {
         fields.push(("routing", j::obj(&[
             ("map", j::str("--map EXT=Folder")),
+            ("new_folder_floor", j::str("a group needs three eligible files only when sweep would create its folder; when the folder already exists as a direct child of the root, observed by the scan, any number moves into it (built-in groups and --map alike) and files already directly inside it are reported in place; saved routes have no floor; files below the floor are left_alone.no_clear_group")),
             ("save_routes", j::str("sweep apply PATH --map EXT=Folder --save-routes --yes; journal required; incompatible with tags")),
-            ("existing", j::str("--scheme existing")),
+            ("existing", j::str("--scheme existing; a saved route moves any number of matching files, with no three-file floor; a saved route whose direct visible folder is missing has it created by apply only when at least one file moves into it, listed in the plan first and recorded in the journal; undo removes it when empty; a route with no files here is ignored and creates nothing; a file or link holding the name refuses before moves; routed files never fall to built-in groups")),
+            ("saved_route_plans", j::str("an exported plan marks a saved-route group with plan signal tag 8; plans written by earlier versions read unchanged; a plan that holds a saved-route group needs declaration 17 or later, and an earlier version refuses it as an invalid or unsupported plan binding; artifact_schema_version stays 1")),
             ("profile_path", j::str("ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml")),
             ("profile_schema", j::str("schema_version = 1; [[routes]] extension = quoted string, folder = quoted string")),
             ("save_policy", j::str("validated existing direct visible destinations only, checked against this tree for added routes only; conflicts refuse before moves; complete apply only; nothing new writes nothing; new routes are appended so existing text and comments stay; mode 0600 same-folder per-writer locked temporary file, fsync, rename; stale temporary files of dead writers are removed; undo keeps saved routes")),
@@ -706,12 +721,15 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "sweep_existing_profile_bytes",
                     "finder_tag_names",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
+                    "selected_tree_route_folders_if_missing",
                     "selected_tree_finder_tags",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -747,12 +765,15 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                     "sweep_existing_profile_bytes",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
+                    "selected_tree_route_folders_if_missing",
                     "sweep_existing_profile_if_save_routes",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -766,11 +787,14 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                     "sweep_existing_profile_bytes",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
+                    "selected_tree_route_folders_if_missing",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -789,6 +813,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "empty_group_directories",
                     "keychain_if_no_supplied_key",
                     "selected_tree_finder_tags",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -938,7 +963,7 @@ fn startup_scope(tool: Tool) -> String {
         Tool::Sweep => scope(
             "startup_except_contract",
             &["journal_store_metadata", "legacy_state_metadata"],
-            &["legacy_state_migration", "expired_journals_all_tools"],
+            &["legacy_state_migration"],
         ),
         Tool::Stash => scope(
             "startup_except_contract",

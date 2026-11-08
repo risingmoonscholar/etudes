@@ -337,7 +337,11 @@ fn apply_reason(error: &etude_core::apply::ApplyError) -> etude_cli_support::rea
         {
             Code::DestinationOutsideRoot
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => Code::PlanStale,
+        StalePlan(_)
+        | DestinationDirectoryChanged(_)
+        | SourceDirectoryChanged(_)
+        | SourceItemChanged(_)
+        | DestinationLocked(_) => Code::PlanStale,
         DestinationExists(_) | DestinationCollision(_) => Code::DestinationExists,
         DestinationIsSynced(_) | CannotCompareNames(_) => Code::UnsafeInput,
         DestinationBlocked(_) => Code::DestinationExists,
@@ -704,7 +708,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         Some(d) => match parse_duration(&d) {
             Some(secs) => Some(now_secs() + secs),
             None => {
-                eprintln!("stash: cannot read duration {d:?}. Try 30m, 2h, 3d or 1w.");
+                eprintln!(
+                    "stash: cannot read duration {}. Try 30m, 2h, 3d or 1w.",
+                    etude_cli_support::shown_text(&d)
+                );
                 return refuse(etude_cli_support::reason::Code::InvalidArguments);
             }
         },
@@ -1054,7 +1061,14 @@ fn execute_stash(
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
                 etude_cli_support::envelope::status("refused");
-                eprintln!("Nothing was moved, so there is nothing to restore.");
+                match etude_cli_support::problems::report_copy_left(
+                    failure.copy_left.as_deref(),
+                    false,
+                    false,
+                ) {
+                    Some(text) => eprintln!("{text}"),
+                    None => eprintln!("Nothing was moved, so there is nothing to restore."),
+                }
                 return apply_exit_code(&e);
             }
             etude_cli_support::envelope::status("incomplete");
@@ -1069,6 +1083,13 @@ fn execute_stash(
                     "{what} --no-journal removed undo. Move {them} back by hand from {}.",
                     etude_cli_support::shown(&bound.root.join(&bound.groups[0].name))
                 ),
+            }
+            if let Some(text) = etude_cli_support::problems::report_copy_left(
+                failure.copy_left.as_deref(),
+                true,
+                false,
+            ) {
+                eprintln!("{text}");
             }
             apply_exit_code(&e)
         }
@@ -1177,7 +1198,10 @@ fn cmd_select(args: &[String]) -> ExitCode {
             match parse_duration(value).and_then(|seconds| now_secs().checked_add(seconds)) {
                 Some(deadline) => Some(deadline),
                 None => {
-                    eprintln!("stash: cannot read duration {value:?}. Try 30m, 2h, 3d or 1w.");
+                    eprintln!(
+                        "stash: cannot read duration {}. Try 30m, 2h, 3d or 1w.",
+                        etude_cli_support::shown_text(value)
+                    );
                     return refuse(etude_cli_support::reason::Code::InvalidArguments);
                 }
             }
@@ -1294,7 +1318,14 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 // The private folder made for this attempt holds nothing.
                 let _ = std::fs::remove_dir(&root);
                 etude_cli_support::envelope::status("refused");
-                eprintln!("Nothing was moved, so there is nothing to restore.");
+                match etude_cli_support::problems::report_copy_left(
+                    failure.copy_left.as_deref(),
+                    false,
+                    true,
+                ) {
+                    Some(text) => eprintln!("{text}"),
+                    None => eprintln!("Nothing was moved, so there is nothing to restore."),
+                }
                 return apply_exit_code(&error);
             }
             etude_cli_support::envelope::status("incomplete");
@@ -1310,6 +1341,13 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     if moved == 1 { "It is" } else { "They are" },
                     etude_cli_support::shown(&root)
                 ),
+            }
+            if let Some(text) = etude_cli_support::problems::report_copy_left(
+                failure.copy_left.as_deref(),
+                true,
+                true,
+            ) {
+                eprintln!("{text}");
             }
             apply_exit_code(&error)
         }
@@ -1458,6 +1496,8 @@ fn apply_error_reason(error: &etude_core::apply::ApplyError) -> &'static str {
         DestinationIsSynced(_) => "destination is synced",
         DestinationBlocked(_) => "a file holds the name of the holding folder",
         DestinationDirectoryChanged(_) => "destination folder identity changed or was unavailable",
+        SourceDirectoryChanged(_) => "source folder identity changed or was unavailable",
+        SourceItemChanged(_) => "source item identity changed or was unavailable",
         DestinationLocked(_) => "a folder is locked",
         CannotCompareNames(_) => "destination names cannot be compared",
         Io(_) => "I/O failure",
@@ -1476,6 +1516,8 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError) -> ExitCode {
         | DestinationIsSynced(_)
         | DestinationBlocked(_)
         | DestinationDirectoryChanged(_)
+        | SourceDirectoryChanged(_)
+        | SourceItemChanged(_)
         | DestinationLocked(_)
         | CannotCompareNames(_) => refuse_preserving_status(apply_reason(e)),
         Io(_) | Journal(_) | Injected(_) => fail(apply_reason(e)),
@@ -1754,6 +1796,14 @@ fn print_restore_failure(
             "{doing}: {} was moved or replaced while stash was working.",
             etude_cli_support::shown(path)
         ),
+        E::SourceDirectoryChanged(path) => eprintln!(
+            "{doing}: {} was moved or replaced while stash was working, so nothing more was moved out of it.",
+            etude_cli_support::shown(path)
+        ),
+        E::SourceItemChanged(path) => eprintln!(
+            "{doing}: {} was moved or replaced while stash was working, so it was not moved.",
+            etude_cli_support::shown(path)
+        ),
         other => eprintln!("{doing}: {}.", apply_error_reason(other)),
     }
 }
@@ -1903,6 +1953,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
+    // After the pop, on every path out: a pop of a finished record past 30
+    // days still answers "already popped" before that record is dropped.
+    let _prune = PruneOnExit(&sl);
     // An id no journal holds is the same answer `status --id` gives. A folder
     // with nothing stashed is a different question and keeps its own reason.
     let asked_id = match &selector {
@@ -3052,6 +3105,32 @@ impl etude_core::journal::Sealer for KeychainSeal {
 
 /// Refuses rather than writing an unencrypted record of what was stashed. Only
 /// folder stash takes --no-journal, so only folder stash may mention it.
+/// Drop stash records past the 30-day limit whose stash is fully popped.
+///
+/// Sweep's age-only prune keeps every stash record, because it has no key and
+/// cannot tell a popped stash from one whose files are still held. Here the key
+/// is open, so a record that shows nothing is still held can expire. A pop
+/// rewrites the record, so it is dropped 30 days after the pop that finished
+/// it. A record this key cannot open is kept.
+/// Runs [`prune_popped`] when `cmd_pop` returns, whichever way it returns.
+struct PruneOnExit<'a>(&'a KeychainSeal);
+impl Drop for PruneOnExit<'_> {
+    fn drop(&mut self) {
+        prune_popped(self.0);
+    }
+}
+
+fn prune_popped(sl: &dyn etude_core::journal::Sealer) {
+    let dropped = etude_core::journal::prune_finished("stash", sl);
+    if dropped > 0 {
+        eprintln!(
+            "stash: dropped {} older than {} days; nothing was left to pop from them",
+            etude_cli_support::counted(dropped, "undo record", "undo records"),
+            etude_core::journal::TTL_DAYS
+        );
+    }
+}
+
 fn sealer(takes_no_journal: bool) -> Option<KeychainSeal> {
     let result = etude_keep::key();
     etude_core::scan::record_read_outcome("key_material", result.is_ok());

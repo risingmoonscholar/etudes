@@ -53,6 +53,12 @@ moves first, then the stopped apply, restoring every original path and byte.
 This works even when the stopped apply's journal is the newest. Journals that
 actually lost several move records are still refused without touching files.
 
+Record order and a power cut. Each move's record is ordered behind its move with
+a barrier sync, not a full drive flush, and a finished run is flushed once.
+After a power cut, every surviving move except the newest has its record. The
+newest move may lack one, or a record may survive without its move. `sweep undo`
+and `stash pop` reconcile both.
+
 You can undo an older apply before a newer one with `sweep undo --id ID`. It never
 overwrites a file. If the newer apply moved those files, it restores none of them,
 exits 3 and says to undo the newer one first; `sweep status FOLDER` lists each

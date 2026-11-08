@@ -5,7 +5,7 @@
 # must therefore remain safe and exact.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 SOURCE="$W/source"; ARCHIVE="$W/archive.zip"; OUT="$W/out"; TOTAL=80
 mkdir -p "$SOURCE"
 for i in $(seq 1 "$TOTAL"); do

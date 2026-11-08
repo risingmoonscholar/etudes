@@ -34,7 +34,7 @@
 # That is the whole mechanism. Format-specific cleverness belongs in a fork.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 
 build_godot() {
   local d="$1"

@@ -16,7 +16,7 @@
 #    files stay safe; neither reads what the tools said while it happened.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export ETUDE_STATE_DIR="$W/state" SWEEP_GRACE_SECS=0
 CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check-progress-records.py"

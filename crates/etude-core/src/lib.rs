@@ -27,6 +27,15 @@ pub use journal::Journal;
 pub use plan::{Group, Plan, Signal};
 pub use scan::{Entry, ScanConfig, ScanError, ScanOutcome};
 
+/// A name a person typed, in full, for a message. Control characters and line
+/// breaks become `?`, so a hostile name cannot send escape codes to the
+/// terminal or split a message across lines. Quotes are left as they are.
+pub fn shown_text(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 /// Why sweep declined to act on a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Untouched {
@@ -34,8 +43,9 @@ pub enum Untouched {
     LooksPersonal(Category),
     /// No detector claimed it with enough confidence.
     NoClearGroup,
-    /// The file is already directly inside the destination selected by an
-    /// existing-folder profile route; it does not need to move.
+    /// The file is already directly inside the folder its group moves files
+    /// into (a saved route's folder, or a group folder that is already here);
+    /// it does not need to move.
     AlreadyInDestination,
     /// Changed within the grace window. Too recent to judge: a file someone
     /// touched an hour ago is one they are using, and a file that arrived an

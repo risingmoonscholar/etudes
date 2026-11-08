@@ -851,9 +851,11 @@ def sweep_profile_missing(probe):
 
 
 def sweep_profile_invalid(probe):
+    """A missing route folder is created by apply, so a file holding the name is the refusal."""
     (probe.state / "sweep-existing-profile.toml").write_text(
-        'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Folder That Is Absent"\n')
+        'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Name Held By A File"\n')
     tree = screenshots(probe.directory / "tree")
+    (tree / "Name Held By A File").write_bytes(b"synthetic file where the route folder belongs")
     return probe.run(tree, "--scheme", "existing", "--since", "0", "--json", codes=(2,))
 
 

@@ -4,7 +4,7 @@
 # honest, recoverable state rather than claiming a clean completed apply.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 D="$W/Desktop"; mkdir -p "$D"
 for i in $(seq 1 500); do
   printf 'same-root payload %s\n' "$i" > "$D/Screenshot 2026-01-01 at 10.00.00 AM ($i).png"

@@ -178,11 +178,15 @@ pub fn propose(plan: &BoundPlan, proposal: &[u8]) -> Result<Proposed, Refusal> {
         let index = parse_item_id(item)
             .filter(|index| *index < items.len())
             .ok_or_else(|| {
-                Refusal::UnknownItem(format!("item {item:?} is not in this plan's eligible list"))
+                Refusal::UnknownItem(format!(
+                    "item {} is not in this plan's eligible list",
+                    crate::shown_text(item)
+                ))
             })?;
         if !seen.insert(index) {
             return Err(Refusal::ItemAssignedTwice(format!(
-                "item {item:?} is named more than once"
+                "item {} is named more than once",
+                crate::shown_text(item)
             )));
         }
         let Decision::Move { folder, .. } = decision else {
@@ -197,14 +201,16 @@ pub fn propose(plan: &BoundPlan, proposal: &[u8]) -> Result<Proposed, Refusal> {
         let target = root.join(folder).join(&entry.name);
         if std::fs::symlink_metadata(&target).is_ok() {
             return Err(Refusal::DestinationExists(format!(
-                "{:?} already exists in {folder:?}; a file keeps its name",
-                entry.name
+                "{} already exists in {}; a file keeps its name",
+                crate::shown_text(&entry.name),
+                crate::shown_text(folder)
             )));
         }
         if !taken.insert((folder.to_lowercase(), entry.name.to_lowercase())) {
             return Err(Refusal::DestinationExists(format!(
-                "two items would both become {:?} in {folder:?}",
-                entry.name
+                "two items would both become {} in {}",
+                crate::shown_text(&entry.name),
+                crate::shown_text(folder)
             )));
         }
         if !by_folder.contains_key(folder) {
@@ -297,7 +303,8 @@ fn check_folder_name(folder: &str) -> Result<(), Refusal> {
         || folder.len() > MAX_FOLDER_BYTES
     {
         return Err(Refusal::DestinationOutsideRoot(format!(
-            "{folder:?} is not one plain folder name directly under the plan root"
+            "{} is not one plain folder name directly under the plan root",
+            crate::shown_text(folder)
         )));
     }
     Ok(())
@@ -311,18 +318,21 @@ fn check_folder_exists(plan: &BoundPlan, root: &Path, folder: &str) -> Result<()
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(Refusal::FolderMissing(format!(
-                "folder {folder:?} does not exist; this proposal never creates one"
+                "folder {} does not exist; this proposal never creates one",
+                crate::shown_text(folder)
             )));
         }
         Err(error) => {
             return Err(Refusal::PlanStale(format!(
-                "folder {folder:?} cannot be checked ({error}); export a fresh plan"
+                "folder {} cannot be checked ({error}); export a fresh plan",
+                crate::shown_text(folder)
             )));
         }
     };
     if !metadata.is_dir() {
         return Err(Refusal::DestinationExists(format!(
-            "{folder:?} exists but is not a folder"
+            "{} exists but is not a folder",
+            crate::shown_text(folder)
         )));
     }
     #[cfg(unix)]
@@ -334,7 +344,8 @@ fn check_folder_exists(plan: &BoundPlan, root: &Path, folder: &str) -> Result<()
     let current = (0, 0);
     if plan.observed_directory_identity(&path) != Some(current) {
         return Err(Refusal::PlanStale(format!(
-            "folder {folder:?} was not in the plan's observation, or was replaced; export a fresh plan"
+            "folder {} was not in the plan's observation, or was replaced; export a fresh plan",
+            crate::shown_text(folder)
         )));
     }
     Ok(())
@@ -359,10 +370,18 @@ fn parse(bytes: &[u8]) -> Result<Parsed, Refusal> {
             "plan_digest" => &mut digest,
             "rest" => &mut rest,
             "decisions" => &mut decisions,
-            other => return Err(invalid(format!("unknown proposal field {other:?}"))),
+            other => {
+                return Err(invalid(format!(
+                    "unknown proposal field {}",
+                    crate::shown_text(other)
+                )));
+            }
         };
         if slot.replace(value).is_some() {
-            return Err(invalid(format!("proposal field {key:?} appears twice")));
+            return Err(invalid(format!(
+                "proposal field {} appears twice",
+                crate::shown_text(&key)
+            )));
         }
     }
     match version {
@@ -409,13 +428,15 @@ fn decision(value: Json, number: usize) -> Result<Decision, Refusal> {
             "skip" => &mut skip,
             other => {
                 return Err(invalid(format!(
-                    "decision {number}: unknown decision field {other:?}"
+                    "decision {number}: unknown decision field {}",
+                    crate::shown_text(other)
                 )));
             }
         };
         if slot.replace(value).is_some() {
             return Err(invalid(format!(
-                "decision {number}: field {key:?} appears twice"
+                "decision {number}: field {} appears twice",
+                crate::shown_text(&key)
             )));
         }
     }
@@ -671,6 +692,17 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_refusals_show_the_name_without_debug_quotes() {
+        let Err(Refusal::DestinationOutsideRoot(text)) = check_folder_name("a/b \"c\"\nd") else {
+            panic!("expected a refusal");
+        };
+        assert_eq!(
+            text,
+            "a/b \"c\"?d is not one plain folder name directly under the plan root"
+        );
+    }
 
     #[test]
     fn item_ids_have_one_spelling() {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Routing advice works as printed; saved profiles are private and invalidate replay.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 CODE=0
 mkdir -p "$W/home"
 HOME="$W/home" python3 -u - "$SWEEP" "$W" > "$W/checks" <<'PY' || CODE=$?

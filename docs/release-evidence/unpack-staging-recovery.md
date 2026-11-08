@@ -94,6 +94,11 @@ considered. Removal requires all of:
   A copy of a leftover has another inode, so it proves nothing and stays.
 - A nonblocking exclusive lock, followed by directory and lock identity checks.
 
+These checks do not stop code running as you. It can forge the marker for a
+folder of its choosing, and the final removal names the folder by path after
+the last check, so a swap at that moment by code running as you could delete
+another folder. See [SECURITY.md](../../SECURITY.md).
+
 The initialized marker closes the race between creating the lock file and
 taking its first lock. A second cleaner that opened a subsequently removed
 lock cannot use the unlinked descriptor to authorize deletion at its old path.

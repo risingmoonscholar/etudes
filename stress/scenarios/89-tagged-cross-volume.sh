@@ -15,7 +15,7 @@ cleanup() {
 trap cleanup EXIT
 
 TAGATTR=com.apple.metadata:_kMDItemUserTags
-W=$(workdir)
+W=$(workdir) || exit 1
 OUTER="$W/outer"
 IMG="$W/inner.dmg"
 INNER="$OUTER/aaa_innervol"

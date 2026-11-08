@@ -21,7 +21,7 @@ if [ "$(uname -s)" != Darwin ]; then
 fi
 require python3 "writes and decodes tag values independently of the tool" || exit 0
 
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 TAGATTR=com.apple.metadata:_kMDItemUserTags
 COMMENTATTR=com.apple.metadata:kMDItemFinderComment
 export TAGATTR

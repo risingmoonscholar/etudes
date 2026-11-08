@@ -1,7 +1,7 @@
 {
   "10-desktop-mid-project": 10,
   "101-cli-flags-and-next-steps": 42,
-  "102-sweep-existing": 12,
+  "102-sweep-existing": 19,
   "103-stash-item-restore": 8,
   "104-sweep-progress-json": 13,
   "15-agent-mappings": 14,
@@ -69,7 +69,7 @@
   "98-unpack-parallel-zip": 1,
   "105-permission-denied-messages": 48,
   "106-failure-steps-are-true": 235,
-  "107-sweep-and-plan-messages": 509,
+  "107-sweep-and-plan-messages": 511,
   "108-stash-messages": 560,
   "109-unpack-messages": 668,
   "110-final-message-consistency": 438,
@@ -79,5 +79,10 @@
   "114-unpack-staging-recovery": 42,
   "115-non-utf8-arguments": 98,
   "116-moves-into-checked-folders": 18,
-  "117-journal-barrier-kill-and-recover": 16
+  "117-journal-barrier-kill-and-recover": 16,
+  "118-stash-record-outlives-prune": 29,
+  "122-failed-move-leaves-no-copy": 20,
+  "119-names-without-debug-quotes": 33,
+  "127-existing-route-creates-folder": 81,
+  "128-moves-from-checked-source-folders": 24
 }

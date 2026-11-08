@@ -53,8 +53,12 @@ FLAGS
     --save-routes    apply: remember --map routes after all moves succeed
                       (existing direct folders only; journal required).
                       Undo moves files back but keeps saved routes
-    --scheme folders  group by file type and other built-in folder rules (default)
-    --scheme existing use the saved, versioned existing-folder profile
+    --scheme folders  group by file type and other built-in folder rules (default).
+                      A new folder needs 3 or more files; a folder of that
+                      name already here takes any number
+    --scheme existing use the saved, versioned existing-folder profile. A
+                      route moves any number of files; a missing route
+                      folder is created only when files move
     --scheme tags     add Finder tags and move nothing (macOS); needs --map
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
@@ -190,17 +194,6 @@ fn run_main(args: Vec<String>) -> ExitCode {
     // else in this run can look in the new location and find it empty while
     // the old one still has what it's looking for.
     etude_core::journal::migrate_legacy_state_dir();
-
-    // Journals past their TTL are dropped before anything else. Keeping an
-    // index of the user's filenames forever keeps the exposure forever.
-    let expired = etude_core::journal::prune_expired();
-    etude_cli_support::envelope::effect("expired_journals_removed", expired);
-    if expired > 0 {
-        eprintln!(
-            "sweep: dropped {} older than 30 days",
-            etude_cli_support::counted(expired, "undo record", "undo records")
-        );
-    }
 
     match args.first().map(String::as_str) {
         None => run_scan(&std::env::current_dir().unwrap_or_default(), &args),
@@ -627,8 +620,9 @@ fn cmd_lesson(args: &[String]) -> ExitCode {
             Ok(n) if (1..=LESSON.len()).contains(&n) => n,
             _ => {
                 eprintln!(
-                    "sweep: lesson takes a step from 1 to {}, got {v:?}",
-                    LESSON.len()
+                    "sweep: lesson takes a step from 1 to {}, got {}",
+                    LESSON.len(),
+                    etude_cli_support::shown_text(v)
                 );
                 return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
@@ -668,7 +662,8 @@ fn parse_scheme(args: &[String]) -> Result<(), String> {
                 .to_string(),
         ),
         Some(name) => Err(format!(
-            "unsupported scheme {name:?}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`"
+            "unsupported scheme {}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`",
+            etude_cli_support::shown_text(&name)
         )),
     }
 }
@@ -682,7 +677,10 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
         None => Ok(1),
         Some(v) => match v.parse::<u8>() {
             Ok(d) if (1..=8).contains(&d) => Ok(d),
-            _ => Err(format!("--depth must be a number from 1 to 8, got {v:?}")),
+            _ => Err(format!(
+                "--depth must be a number from 1 to 8, got {}",
+                etude_cli_support::shown_text(&v)
+            )),
         },
     }
 }
@@ -731,7 +729,10 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
         // who typos --since 6hh and is shown the ordinary 24h result has been
         // told their instruction was obeyed when it was discarded.
         let n: u64 = digits.parse().map_err(|_| {
-            format!("--since must be a number, optionally with h or d, got {raw:?}")
+            format!(
+                "--since must be a number, optionally with h or d, got {}",
+                etude_cli_support::shown_text(raw)
+            )
         })?;
         // Overflow is a wrong window, and a wrong window silently changes
         // which files are held back. Unchecked, this panicked in debug and
@@ -745,7 +746,10 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
                 3600 => (u64::MAX / 3600, "h"),
                 _ => (u64::MAX / (24 * 60 * 60), "d"),
             };
-            format!("--since {raw:?} is too large. The longest window is {most}{sym}")
+            format!(
+                "--since {} is too large. The longest window is {most}{sym}",
+                etude_cli_support::shown_text(raw)
+            )
         })?;
         return Ok(Some(std::time::Duration::from_secs(secs)));
     }
@@ -1233,9 +1237,12 @@ fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
             let v = args
                 .get(i + 1)
                 .ok_or_else(|| "--map needs EXT=Folder, like --map bpy=Blender".to_string())?;
-            let (ext, folder) = v
-                .split_once('=')
-                .ok_or_else(|| format!("--map {v:?}: expected EXT=Folder"))?;
+            let (ext, folder) = v.split_once('=').ok_or_else(|| {
+                format!(
+                    "--map {}: expected EXT=Folder",
+                    etude_cli_support::shown_text(v)
+                )
+            })?;
             out.push((ext.to_string(), folder.to_string()));
             i += 2;
             continue;
@@ -1368,6 +1375,8 @@ fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, SchemeEr
                 ));
             }
             let profile = existing_profile::ExistingProfile::load()?;
+            // A missing route folder is not a problem: apply creates it for
+            // the first file that moves, and the plan says so first.
             let maps = plan::validate_existing_maps(&profile.routes, root).map_err(|why| {
                 SchemeError::ProfileInvalid(existing_profile::route_problem(&why))
             })?;
@@ -2100,6 +2109,11 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     } else if unclear > 1 {
         println!("  {unclear} files matched no group and were left where they are");
     }
+    if unclear > 0 {
+        for (folder, n) in p.below_floor() {
+            println!("  {}", below_floor_line(&p.root, folder, n));
+        }
+    }
     if in_place == 1 {
         println!("  1 file is already in its destination and was left in place");
     } else if in_place > 1 {
@@ -2263,32 +2277,109 @@ fn hold_hint(p: &plan::Plan) -> String {
     }
 }
 
-/// Say when a folder name came from an agent rather than from the files.
+/// Say when a folder name came from an agent rather than from the files, and
+/// which folders a saved route will create.
 ///
 /// The invariant this qualifies is the oldest in the repo: destination names
 /// are derived from the filesystem, never coined. --map with a folder that
-/// does not exist yet is the one sanctioned exception, and an exception the
-/// output does not announce would just be the invariant quietly gone.
+/// does not exist yet is the one sanctioned agent exception, and an exception
+/// the output does not announce would just be the invariant quietly gone. A
+/// saved route names the person's own folder; when it is missing, the plan
+/// says sweep creates it before anything moves.
 fn print_agent_named_note(p: &plan::Plan) {
-    let coined: Vec<&str> = p
+    if let Some(note) = agent_named_note(p) {
+        println!("{note}");
+    }
+}
+
+fn agent_named_note(p: &plan::Plan) -> Option<String> {
+    let coined: Vec<String> = p
         .groups
         .iter()
         .filter_map(|g| match &g.signal {
-            plan::Signal::Mapped { created: true, .. } => Some(g.name.as_str()),
+            plan::Signal::Mapped {
+                created: true,
+                saved: false,
+                ..
+            } => Some(etude_core::shown_text(&g.name)),
             _ => None,
         })
         .collect();
-    match coined.len() {
-        0 => {}
-        1 => println!(
-            "\n  the folder name {:?} was chosen by your agent, not derived from your files",
+    let mut note = match coined.len() {
+        0 => String::new(),
+        1 => format!(
+            "\n  the folder name {} was chosen by your agent, not derived from your files",
             coined[0]
         ),
-        _ => println!(
+        _ => format!(
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
             coined.len(),
             coined.join(", ")
         ),
+    };
+    let saved: Vec<String> = p
+        .groups
+        .iter()
+        .filter(|g| {
+            matches!(
+                g.signal,
+                plan::Signal::Mapped {
+                    created: true,
+                    saved: true,
+                    ..
+                }
+            )
+        })
+        .map(|g| shown_folder_name(&g.name))
+        .collect();
+    match saved.len() {
+        0 => {}
+        1 => note.push_str(&format!(
+            "\n  sweep creates the folder {} for your saved route; undo removes it if it is empty",
+            saved[0]
+        )),
+        _ => note.push_str(&format!(
+            "\n  sweep creates {} folders for your saved routes: {}; undo removes each one that is empty",
+            saved.len(),
+            saved.join(", ")
+        )),
+    }
+    (!note.is_empty()).then_some(note)
+}
+
+/// Why files of a built-in kind stayed: too few for a new folder, or the name
+/// is held here by a link or a file that sweep never moves anything into.
+fn below_floor_line(root: &Path, folder: &str, n: usize) -> String {
+    let files = etude_cli_support::counted(n, "file", "files");
+    let held = match std::fs::symlink_metadata(root.join(folder)) {
+        Ok(meta) if meta.file_type().is_symlink() => Some("a link"),
+        Ok(meta) if !meta.is_dir() => Some("a file"),
+        _ => None,
+    };
+    if let Some(what) = held {
+        return format!(
+            "{files} would go to {folder}, but {folder} here is {what}, not a folder, so sweep moves nothing into it. Use a plain folder named {folder}"
+        );
+    }
+    let article = if folder.starts_with(['A', 'E', 'I', 'O', 'U']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!(
+        "{files} would go to {folder}: sweep makes a new folder only for 3 or more files, and moves any number into {article} {folder} folder that is already here"
+    )
+}
+
+/// A folder name for a plan line. Control characters show as `?`, and a name
+/// that starts or ends with a space is put in single quotes, so `Docs ` does
+/// not read as `Docs`.
+fn shown_folder_name(name: &str) -> String {
+    let shown = etude_core::shown_text(name);
+    if shown.trim() != shown {
+        format!("'{shown}'")
+    } else {
+        shown
     }
 }
 
@@ -2486,6 +2577,31 @@ impl etude_core::journal::Sealer for KeychainSeal {
     }
     fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
         etude_keep::open(&self.key, sealed).map_err(|_| "wrong key or the journal was altered")
+    }
+}
+
+/// Drop undo records past their TTL, and say how many.
+///
+/// Keeping an index of the user's filenames forever keeps the exposure
+/// forever, so a record past 30 days is dropped by the next run that opens
+/// records: an apply or an undo with a journal. Only those runs call this,
+/// with the key they already hold for their own work; no run reads the key
+/// just to prune, so a scan, `status` or `verify` never touches the keychain
+/// for it and prunes nothing.
+///
+/// Stash records are kept: their files may still be in a holding folder, and
+/// only `stash pop` can tell that nothing is left. A record must open with this
+/// key before it is dropped. One that does not is the record `sweep undo` tells
+/// the person to keep, because the right key opens it again.
+fn prune_old_records(seal: &dyn etude_core::journal::Sealer) {
+    let expired = etude_core::journal::prune_expired(seal);
+    etude_cli_support::envelope::effect("expired_journals_removed", expired);
+    if expired > 0 {
+        eprintln!(
+            "sweep: dropped {} older than {} days",
+            etude_cli_support::counted(expired, "undo record", "undo records"),
+            etude_core::journal::TTL_DAYS
+        );
     }
 }
 
@@ -2746,6 +2862,14 @@ fn refuse_apply(
                 shown(path)
             )
         }
+        E::SourceDirectoryChanged(path) => eprintln!(
+            "sweep: {doing}: {} was moved or replaced while sweep was working, so nothing more was moved out of it.",
+            shown(path)
+        ),
+        E::SourceItemChanged(path) => eprintln!(
+            "sweep: {doing}: {} was moved or replaced while sweep was working, so it was not moved.",
+            shown(path)
+        ),
         E::StalePlan(_) | E::Injected(_) => eprintln!("sweep: {doing} in {folder}: {e}"),
     }
 }
@@ -2802,9 +2926,11 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError, moved: usize) -> ExitCode 
                 Some(Subject::wait("destination", None)),
             )
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => {
-            refusal(Code::PlanStale, Some(Subject::wait("plan", None)))
-        }
+        StalePlan(_)
+        | DestinationDirectoryChanged(_)
+        | SourceDirectoryChanged(_)
+        | SourceItemChanged(_)
+        | DestinationLocked(_) => refusal(Code::PlanStale, Some(Subject::wait("plan", None))),
         DestinationExists(_) | DestinationCollision(_) => refusal(
             Code::DestinationExists,
             Some(Subject::wait("destination", None)),
@@ -3016,6 +3142,12 @@ fn run_apply_with_routes(
 ) -> ExitCode {
     if let Err(code) = verify_existing_profile(&context.profile) {
         return code;
+    }
+    // Before the apply: its own record does not exist yet, so this cannot
+    // remove it, and older records go before any history is consulted, as they
+    // always have.
+    if let Some(seal) = sl.as_ref() {
+        prune_old_records(seal);
     }
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
     let mut progress =
@@ -3284,6 +3416,12 @@ fn report_apply(
                 etude_cli_support::envelope::status("refused");
                 if p.adds_tags {
                     eprintln!("No tags were added, so there is nothing to undo.");
+                } else if let Some(text) = etude_cli_support::problems::report_copy_left(
+                    failure.copy_left.as_deref(),
+                    false,
+                    false,
+                ) {
+                    eprintln!("{text}");
                 } else {
                     eprintln!("Nothing was moved, so there is nothing to undo.");
                 }
@@ -3317,9 +3455,48 @@ fn report_apply(
                     if moved == 1 { "it" } else { "they" }
                 );
             }
+            if let Some(text) =
+                created_folders_text(&failure.created_folders, &p.root, journal_enabled)
+            {
+                eprintln!("{text}");
+            }
+            if let Some(text) = etude_cli_support::problems::report_copy_left(
+                failure.copy_left.as_deref(),
+                true,
+                false,
+            ) {
+                eprintln!("{text}");
+            }
             apply_exit_code(&e, moved)
         }
     }
+}
+
+/// Name the folders a stopped apply created and left behind, and say what
+/// becomes of them, so a person who sees a new folder knows where it came from.
+fn created_folders_text(folders: &[PathBuf], root: &Path, journal: bool) -> Option<String> {
+    let names: Vec<String> = folders
+        .iter()
+        .map(|folder| {
+            shown_folder_name(
+                &folder
+                    .strip_prefix(root)
+                    .unwrap_or(folder)
+                    .display()
+                    .to_string(),
+            )
+        })
+        .collect();
+    let (what, it) = match names.len() {
+        0 => return None,
+        1 => (format!("the folder {}", names[0]), "it"),
+        _ => (format!("the folders {}", names.join(", ")), "each one"),
+    };
+    Some(if journal {
+        format!("This apply created {what}; undo removes {it} once it is empty.")
+    } else {
+        format!("This apply created {what}; with --no-journal, undo cannot remove {it}.")
+    })
 }
 
 /// The id in an undo record's file name.
@@ -3634,7 +3811,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         })
     {
         eprintln!(
-            "sweep: routes were not saved: every --map route needs a selected group of at least three eligible files. Nothing was moved. Drop --save-routes to apply the selected groups only."
+            "sweep: routes were not saved: every --map route needs a selected group with at least one eligible file. Nothing was moved. Drop --save-routes to apply the selected groups only."
         );
         if let Some(pending) = &pending {
             routes_saved_detail(
@@ -4129,10 +4306,17 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return ExitCode::from(2);
     };
+    let code = undo_with(args, &sl);
+    // After the undo, not before: when the person brings back the key that
+    // opens an old record, the run that uses it must still find that record.
+    prune_old_records(&sl);
+    code
+}
 
+fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     // check_positionals has already refused a folder beside it and a bad id.
     if let Some(id) = undo_id(args) {
-        return undo_by_id(id, &sl);
+        return undo_by_id(id, sl);
     }
 
     // A named path reverses that folder's apply, whichever one it was.
@@ -4158,9 +4342,9 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     .report();
             }
         };
-        return match sweep_journal_for_root(&sl, &target) {
-            Err(record) => refuse_unreadable_record(&record, &sl, UndoAsked::Folder),
-            Ok(Some(mut j)) => finish_undo(&mut j, &sl, UndoAsked::Folder),
+        return match sweep_journal_for_root(sl, &target) {
+            Err(record) => refuse_unreadable_record(&record, sl, UndoAsked::Folder),
+            Ok(Some(mut j)) => finish_undo(&mut j, sl, UndoAsked::Folder),
             Ok(None) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
@@ -4182,10 +4366,10 @@ fn cmd_undo(args: &[String]) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    match newest_undoable(&sl) {
-        Ok(Some(mut j)) => return finish_undo(&mut j, &sl, UndoAsked::Newest),
+    match newest_undoable(sl) {
+        Ok(Some(mut j)) => return finish_undo(&mut j, sl, UndoAsked::Newest),
         Ok(None) => {}
-        Err(record) => return refuse_unreadable_record(&record, &sl, UndoAsked::Newest),
+        Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     }
     // Everything readable has been reversed, or nothing is on record. Which of
     // the two decides the answer below.
@@ -4195,7 +4379,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         Err(error) => {
             return refuse_unreadable_record(
                 &RecordError { id: None, error },
-                &sl,
+                sl,
                 UndoAsked::Newest,
             );
         }
@@ -4206,7 +4390,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
-    let mut j = match newest.load("sweep", &sl) {
+    let mut j = match newest.load("sweep", sl) {
         Ok(j) => j,
         Err(error) => {
             return refuse_unreadable_record(
@@ -4214,12 +4398,12 @@ fn cmd_undo(args: &[String]) -> ExitCode {
                     id: Some(newest.id.clone()),
                     error,
                 },
-                &sl,
+                sl,
                 UndoAsked::Newest,
             );
         }
     };
-    if journal_is_fully_undone(&j, &sl) {
+    if journal_is_fully_undone(&j, sl) {
         // Say which operation this is about. The newest journal being already
         // restored is a fact about an earlier run, and a user who just applied
         // something reads it as a fact about that. If they used --no-journal
@@ -4232,7 +4416,7 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
-    finish_undo(&mut j, &sl, UndoAsked::Newest)
+    finish_undo(&mut j, sl, UndoAsked::Newest)
 }
 
 /// How the person chose the record. It decides which step can be printed: a
@@ -4254,6 +4438,45 @@ fn finish_undo(
     let code = run_undo(j, sl, asked, &mut progress);
     progress.finish(code);
     code
+}
+
+/// What to say after an undo when the routes profile still holds a route for
+/// files this undo put back. The journal does not record that an apply saved
+/// routes, so the answer comes from the profile: a route whose extension and
+/// folder match a restored file's. Undo never edits the profile.
+fn routes_kept_line(j: &etude_core::Journal) -> Option<String> {
+    let profile = existing_profile::ExistingProfile::load().ok()?;
+    let kept = kept_routes(j, &profile.routes);
+    if kept.is_empty() {
+        return None;
+    }
+    let list = kept
+        .iter()
+        .map(|(ext, folder)| format!(".{ext} -> {}", etude_cli_support::shown_text(folder)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "  Saved routes stay in the routes profile ({list}). To drop one, delete its [[routes]] block from {}",
+        etude_cli_support::shown(&existing_profile::profile_location())
+    ))
+}
+
+/// The profile routes that match a file this journal's undo put back.
+fn kept_routes(j: &etude_core::Journal, routes: &[(String, String)]) -> Vec<(String, String)> {
+    routes
+        .iter()
+        .filter(|(ext, folder)| {
+            j.entries.iter().any(|entry| {
+                entry.state == etude_core::journal::EntryState::Reversed
+                    && entry
+                        .to
+                        .extension()
+                        .is_some_and(|e| e.to_string_lossy().to_lowercase() == *ext)
+                    && entry.to.parent() == Some(j.root.join(folder).as_path())
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 fn run_undo(
@@ -4407,6 +4630,9 @@ fn run_undo(
                 etude_cli_support::counted(r.restored, "file", "files")
             );
         }
+    }
+    if !tag_journal && let Some(line) = routes_kept_line(j) {
+        println!("{line}");
     }
     if !r.skipped_changed.is_empty() {
         if tag_journal {
@@ -4603,7 +4829,10 @@ fn run_undo(
         refuse_apply(&err, &root, doing, &items, work);
         match saved {
             Ok(()) => {
-                if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path) = &err {
+                if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path)
+                | etude_core::apply::ApplyError::SourceDirectoryChanged(path)
+                | etude_core::apply::ApplyError::SourceItemChanged(path) = &err
+                {
                     eprintln!(
                         "Move it back to {}, then run: {retry}",
                         etude_cli_support::shown(path),
@@ -4761,6 +4990,52 @@ fn refuse_shared_key_destroy(removed_nothing: bool) -> ExitCode {
     refusal(etude_cli_support::reason::Code::InvalidArguments, None)
 }
 
+/// Why forget stops for stash records, and what the person can do about them.
+///
+/// Forget removes only sweep's records. A stash record may be the only way
+/// back for files in a holding folder, and no tool removes one it cannot open:
+/// sweep's prune skips stash records and `stash pop` drops only records that
+/// open and hold nothing. So a record nobody can open stays until the person
+/// removes it, and this says how, without reading the key to sort them.
+fn explain_kept_stash_records(records: &[PathBuf], shown_dir: &str) {
+    const LISTED: usize = 10;
+    let key = if std::env::var_os("ETUDE_JOURNAL_KEY").is_some() {
+        "the key in ETUDE_JOURNAL_KEY, which forget cannot destroy, or the keychain key"
+    } else {
+        "ETUDE_JOURNAL_KEY, or the keychain key that forget destroys if you agree"
+    };
+    eprintln!(
+        "sweep: {} in {shown_dir}. Forget keeps them, because they may still restore files.\n\
+         \x20      See which still open: stash status --all\n\
+         \x20      One that opens: restore it with `stash pop --id ID`, using the key it was\n\
+         \x20      made with ({key}).\n\
+         \x20      One that `stash status --all` says cannot be opened is never removed by\n\
+         \x20      these tools. Once you are sure its files are back, remove that file by\n\
+         \x20      hand. Each record is the file stash-ID.journal:",
+        etude_cli_support::counted(records.len(), "stash record is", "stash records are")
+    );
+    for path in records.iter().take(LISTED) {
+        eprintln!("         rm {}", etude_cli_support::quoted_path(path));
+    }
+    if records.len() > LISTED {
+        eprintln!(
+            "         ({} more in {shown_dir}, named stash-ID.journal)",
+            records.len() - LISTED
+        );
+    }
+}
+
+/// Said before `--yes` destroys the keychain key while stash records exist:
+/// the records it made stop opening, and their files stay where stash put them.
+fn warn_stash_records_lose_their_key(count: usize) {
+    eprintln!(
+        "sweep: --yes destroys the keychain key now. {} made with it will no longer\n\
+         \x20      open, and their files stay in the hidden .stash- folders. To keep them,\n\
+         \x20      do not use --yes: pop each first with `stash pop --id ID`, then forget.",
+        etude_cli_support::counted(count, "stash record", "stash records")
+    );
+}
+
 fn cmd_forget(args: &[String]) -> ExitCode {
     use std::io::IsTerminal;
 
@@ -4768,7 +5043,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     let dir = etude_core::journal::state_dir();
     let shown_dir = etude_cli_support::shown(&dir);
     let mut n = 0;
-    let mut stash_present = false;
+    let mut stash_records = Vec::new();
     let mut not_removed = 0;
     let mut first_error = None;
     let mut sweep_journals = Vec::new();
@@ -4786,7 +5061,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
                 let name = e.file_name().to_string_lossy().into_owned();
                 match classify_journal_filename(&name) {
                     JournalOwner::Sweep => sweep_journals.push(e.path()),
-                    JournalOwner::Stash => stash_present = true,
+                    JournalOwner::Stash => stash_records.push(e.path()),
                     JournalOwner::Other => {}
                 }
             }
@@ -4818,7 +5093,15 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     }
     // Decide before removing anything: a command that ends in this refusal must
     // leave everything as it found it.
-    let gate = forget_key_gate(args, stash_present, std::io::stdin().is_terminal());
+    stash_records.sort();
+    let gate = forget_key_gate(
+        args,
+        !stash_records.is_empty(),
+        std::io::stdin().is_terminal(),
+    );
+    if !stash_records.is_empty() {
+        explain_kept_stash_records(&stash_records, &shown_dir);
+    }
     if gate == ForgetKeyGate::Refuse {
         return refuse_shared_key_destroy(true);
     }
@@ -4849,7 +5132,12 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     }
 
     match gate {
-        ForgetKeyGate::Proceed => destroy_shared_key(),
+        ForgetKeyGate::Proceed => {
+            if !stash_records.is_empty() && std::env::var_os("ETUDE_JOURNAL_KEY").is_none() {
+                warn_stash_records_lose_their_key(stash_records.len());
+            }
+            destroy_shared_key()
+        }
         ForgetKeyGate::Ask if forget_shared_key_consent() => destroy_shared_key(),
         ForgetKeyGate::Ask | ForgetKeyGate::Refuse => refuse_shared_key_destroy(false),
     }
@@ -4949,6 +5237,28 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_named_note_escapes_control_characters_in_every_name() {
+        let group = |name: &str| plan::Group {
+            name: name.to_owned(),
+            signal: plan::Signal::Mapped {
+                ext: "bpy".into(),
+                created: true,
+                saved: false,
+            },
+            members: Vec::new(),
+            accepted: true,
+        };
+        let plan = plan::Plan::display_only(
+            PathBuf::from("/x"),
+            vec![group("A\x1b[2Jone"), group("B\ntwo")],
+        );
+        assert_eq!(
+            agent_named_note(&plan).unwrap(),
+            "\n  2 folder names were chosen by your agent, not derived from your files: A?[2Jone, B?two"
+        );
+    }
 
     // unknown flags must fail even after a valid path, or consent can move files.
     #[test]
