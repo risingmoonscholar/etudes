@@ -226,3 +226,34 @@ fn forget_names_the_stash_records_it_keeps_and_how_to_remove_one() {
     assert!(err.contains(&format!("rm '{}'", record.display())), "{err}");
     assert!(record.exists(), "forget removed a stash record");
 }
+
+/// `--yes` skips the question, not the explanation. With a supplied key forget
+/// destroys no key, and says so in the explanation.
+#[test]
+fn forget_yes_still_names_the_stash_records_it_keeps() {
+    let base = temp("forget-yes");
+    let record = base.0.join("state").join("stash-kept.journal");
+    std::fs::write(&record, b"sealed under a key nobody has").unwrap();
+    let sweep_record = base.0.join("state").join("sweep-gone.journal");
+    std::fs::write(&sweep_record, b"sealed").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+        .env("HOME", base.0.join("home"))
+        .env("ETUDE_STATE_DIR", base.0.join("state"))
+        .env("ETUDE_JOURNAL_KEY", KEY)
+        .args(["forget", "--yes"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("1 stash record is in"), "{err}");
+    assert!(err.contains("says cannot be opened"), "{err}");
+    assert!(err.contains("which forget cannot destroy"), "{err}");
+    assert!(err.contains(&format!("rm '{}'", record.display())), "{err}");
+    assert!(
+        !err.contains("--yes destroys the keychain key"),
+        "a supplied key is not destroyed: {err}"
+    );
+    assert!(record.exists(), "forget removed a stash record");
+    assert!(!sweep_record.exists(), "forget kept a sweep record");
+}

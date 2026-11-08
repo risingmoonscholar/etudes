@@ -4797,12 +4797,17 @@ fn refuse_shared_key_destroy(removed_nothing: bool) -> ExitCode {
 /// removes it, and this says how, without reading the key to sort them.
 fn explain_kept_stash_records(records: &[PathBuf], shown_dir: &str) {
     const LISTED: usize = 10;
+    let key = if std::env::var_os("ETUDE_JOURNAL_KEY").is_some() {
+        "the key in ETUDE_JOURNAL_KEY, which forget cannot destroy, or the keychain key"
+    } else {
+        "ETUDE_JOURNAL_KEY, or the keychain key that forget destroys if you agree"
+    };
     eprintln!(
         "sweep: {} in {shown_dir}. Forget keeps them, because they may still restore files.\n\
          \x20      See which still open: stash status --all\n\
          \x20      One that opens: restore it with `stash pop --id ID`, using the key it was\n\
-         \x20      made with (ETUDE_JOURNAL_KEY, or the keychain key this would destroy).\n\
-         \x20      One that `stash status --all` reports as unreadable is never removed by\n\
+         \x20      made with ({key}).\n\
+         \x20      One that `stash status --all` says cannot be opened is never removed by\n\
          \x20      these tools. Once you are sure its files are back, remove that file by\n\
          \x20      hand. Each record is the file stash-ID.journal:",
         etude_cli_support::counted(records.len(), "stash record is", "stash records are")
@@ -4816,6 +4821,17 @@ fn explain_kept_stash_records(records: &[PathBuf], shown_dir: &str) {
             records.len() - LISTED
         );
     }
+}
+
+/// Said before `--yes` destroys the keychain key while stash records exist:
+/// the records it made stop opening, and their files stay where stash put them.
+fn warn_stash_records_lose_their_key(count: usize) {
+    eprintln!(
+        "sweep: --yes destroys the keychain key now. {} made with it will no longer\n\
+         \x20      open, and their files stay in the hidden .stash- folders. To keep them,\n\
+         \x20      do not use --yes: pop each first with `stash pop --id ID`, then forget.",
+        etude_cli_support::counted(count, "stash record", "stash records")
+    );
 }
 
 fn cmd_forget(args: &[String]) -> ExitCode {
@@ -4881,7 +4897,7 @@ fn cmd_forget(args: &[String]) -> ExitCode {
         !stash_records.is_empty(),
         std::io::stdin().is_terminal(),
     );
-    if gate != ForgetKeyGate::Proceed {
+    if !stash_records.is_empty() {
         explain_kept_stash_records(&stash_records, &shown_dir);
     }
     if gate == ForgetKeyGate::Refuse {
@@ -4914,7 +4930,12 @@ fn cmd_forget(args: &[String]) -> ExitCode {
     }
 
     match gate {
-        ForgetKeyGate::Proceed => destroy_shared_key(),
+        ForgetKeyGate::Proceed => {
+            if !stash_records.is_empty() && std::env::var_os("ETUDE_JOURNAL_KEY").is_none() {
+                warn_stash_records_lose_their_key(stash_records.len());
+            }
+            destroy_shared_key()
+        }
         ForgetKeyGate::Ask if forget_shared_key_consent() => destroy_shared_key(),
         ForgetKeyGate::Ask | ForgetKeyGate::Refuse => refuse_shared_key_destroy(false),
     }
