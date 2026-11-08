@@ -2570,3 +2570,212 @@ fn undo_refuses_a_source_folder_swapped_for_an_outside_link_just_before_the_move
         undo.error
     );
 }
+
+/// A plan that moves `root/Inbox/file.qoi` into the existing `root/Reading`,
+/// with a different file of the same name waiting in the outside folder.
+fn source_swap_plan(root: &std::path::Path, outside: &std::path::Path) -> (PathBuf, PathBuf, Plan) {
+    let inbox = root.join("Inbox");
+    fs::create_dir(&inbox).expect("create source folder");
+    let source = inbox.join("file.qoi");
+    fs::write(&source, b"fixture").expect("write source");
+    let destination = root.join("Reading");
+    fs::create_dir(&destination).expect("create planned destination");
+    fs::write(outside.join("file.qoi"), b"outside bytes").expect("write outside file");
+    let out = scan::scan(root, &ScanConfig::default()).expect("scan source and destination");
+    let p = Plan::with_groups(
+        &out,
+        vec![plan::Group {
+            name: "Reading".into(),
+            signal: plan::Signal::Mapped {
+                ext: "qoi".into(),
+                created: false,
+                saved: false,
+            },
+            members: vec![source.clone()],
+            accepted: true,
+        }],
+    );
+    (inbox, destination, p)
+}
+
+/// The folder the item is in passes every check, then is swapped for a link to
+/// a folder outside the root that holds a file of the same name, in the instant
+/// before the move. The move must take the item from the folder that was
+/// checked, so it refuses: nothing leaves the outside folder and the item stays.
+#[cfg(unix)]
+#[test]
+fn apply_refuses_a_source_folder_swapped_for_an_outside_link_just_before_the_move() {
+    use std::os::unix::fs::symlink;
+
+    let _g = lock();
+    let (cleanup, root, outside) = swap_scene("apply_source");
+    let (inbox, destination, p) = source_swap_plan(&root, &outside);
+    let displaced = cleanup.0.join("displaced");
+    let mut swapped = false;
+    let mut swap = |_: usize, _: &std::path::Path| {
+        fs::rename(&inbox, &displaced).expect("move the checked source folder aside");
+        symlink(&outside, &inbox).expect("install outside link");
+        swapped = true;
+    };
+    let result = apply::apply_with_faults_for_tests(
+        &p,
+        "test",
+        Some(&TestSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut swap),
+            ..Default::default()
+        },
+    );
+
+    assert!(swapped, "the swap point was not reached");
+    assert_eq!(
+        fs::read(outside.join("file.qoi")).expect("the outside file stays"),
+        b"outside bytes",
+        "the outside file was taken through the swapped link: {result:?}"
+    );
+    assert_eq!(fs::read_dir(&outside).expect("list outside").count(), 1);
+    assert_eq!(
+        fs::read_dir(&destination)
+            .expect("list destination")
+            .count(),
+        0,
+        "something was moved into the destination"
+    );
+    assert_eq!(
+        fs::read(displaced.join("file.qoi")).expect("the item stays in its folder"),
+        b"fixture"
+    );
+    let failure = result.expect_err("a swapped source folder must refuse");
+    assert!(
+        matches!(failure.error, ApplyError::SourceDirectoryChanged(ref folder) if *folder == inbox),
+        "{:?}",
+        failure.error
+    );
+    let message = failure.error.to_string();
+    assert!(
+        message.contains("source folder identity changed")
+            && message.contains("nothing moved for this file"),
+        "{message}"
+    );
+    assert_eq!(failure.moved, 0);
+}
+
+/// The item itself is replaced by another file of the same name, in its own
+/// checked folder, in the instant before the move. The move must not take the
+/// replacement.
+#[cfg(unix)]
+#[test]
+fn apply_refuses_a_source_item_replaced_just_before_the_move() {
+    let _g = lock();
+    let (cleanup, root, outside) = swap_scene("apply_source_item");
+    let (inbox, destination, p) = source_swap_plan(&root, &outside);
+    let source = inbox.join("file.qoi");
+    let parked = cleanup.0.join("parked.qoi");
+    let mut swapped = false;
+    let mut swap = |_: usize, _: &std::path::Path| {
+        fs::rename(&source, &parked).expect("move the checked item aside");
+        fs::write(&source, b"someone else's").expect("put another file in its place");
+        swapped = true;
+    };
+    let result = apply::apply_with_faults_for_tests(
+        &p,
+        "test",
+        Some(&TestSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut swap),
+            ..Default::default()
+        },
+    );
+
+    assert!(swapped, "the swap point was not reached");
+    assert_eq!(
+        fs::read(&source).expect("replacement stays"),
+        b"someone else's"
+    );
+    assert_eq!(fs::read(&parked).expect("item kept"), b"fixture");
+    assert_eq!(
+        fs::read_dir(&destination)
+            .expect("list destination")
+            .count(),
+        0,
+        "the replacement was moved: {result:?}"
+    );
+    let failure = result.expect_err("a replaced item must refuse");
+    assert!(
+        matches!(failure.error, ApplyError::SourceItemChanged(ref item) if *item == source),
+        "{:?}",
+        failure.error
+    );
+    assert_eq!(failure.moved, 0);
+}
+
+/// Undo takes a moved file back out of the folder apply moved it into. That
+/// folder is swapped for a link to a folder outside the root, holding a file of
+/// the same name, after undo checked the file and before the move back. Undo
+/// must refuse: nothing leaves the outside folder, nothing reaches the origin,
+/// and the moved file stays where apply put it.
+#[cfg(unix)]
+#[test]
+fn undo_refuses_a_moved_location_swapped_for_an_outside_link_just_before_the_move() {
+    use std::os::unix::fs::symlink;
+
+    let _g = lock();
+    let (cleanup, root, outside) = swap_scene("undo_source");
+    let origin = root.join("Inbox");
+    fs::create_dir(&origin).expect("create origin folder");
+    let group = root.join("Reading");
+    fs::create_dir(&group).expect("create destination");
+    let from = origin.join("file.qoi");
+    let to = group.join("file.qoi");
+    fs::write(&to, b"fixture").expect("write moved file");
+    fs::write(outside.join("file.qoi"), b"outside bytes").expect("write outside file");
+    let (size, mtime, inode, edge) = etude_core::journal::fingerprint(&to).expect("fingerprint");
+    let mut j = Journal {
+        id: "undo-source-swap".into(),
+        tool: "test".into(),
+        root: root.clone(),
+        entries: vec![Entry {
+            from: from.clone(),
+            to: to.clone(),
+            method: Method::Rename,
+            size,
+            mtime_secs: mtime,
+            inode,
+            edge_hash: edge,
+            state: etude_core::journal::EntryState::Moved,
+            tag: None,
+        }],
+        created_directories: Vec::new(),
+        validated_directories: vec![directory_guard(&origin)],
+        progress_tail_damaged: false,
+    };
+    j.save_sealed(&TestSeal).expect("save journal");
+
+    let displaced = cleanup.0.join("displaced");
+    let mut swapped = false;
+    let mut swap = |_: usize, _: &std::path::Path| {
+        fs::rename(&group, &displaced).expect("move the checked folder aside");
+        symlink(&outside, &group).expect("install outside link");
+        swapped = true;
+    };
+    let undo = apply::undo_with_faults_for_tests(&mut j, &TestSeal, &mut swap);
+
+    assert!(swapped, "the swap point was not reached");
+    assert_eq!(
+        fs::read(outside.join("file.qoi")).expect("the outside file stays"),
+        b"outside bytes",
+        "the outside file was taken through the swapped link"
+    );
+    assert_eq!(fs::read_dir(&outside).expect("list outside").count(), 1);
+    assert!(!from.exists(), "something was moved back to the origin");
+    assert_eq!(
+        fs::read(displaced.join("file.qoi")).expect("the moved file stays"),
+        b"fixture"
+    );
+    assert_eq!(undo.restored, 0);
+    assert!(
+        matches!(undo.error, Some(ApplyError::SourceDirectoryChanged(ref folder)) if *folder == group),
+        "{:?}",
+        undo.error
+    );
+}

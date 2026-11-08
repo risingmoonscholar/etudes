@@ -2862,6 +2862,14 @@ fn refuse_apply(
                 shown(path)
             )
         }
+        E::SourceDirectoryChanged(path) => eprintln!(
+            "sweep: {doing}: {} was moved or replaced while sweep was working, so nothing more was moved out of it.",
+            shown(path)
+        ),
+        E::SourceItemChanged(path) => eprintln!(
+            "sweep: {doing}: {} was moved or replaced while sweep was working, so it was not moved.",
+            shown(path)
+        ),
         E::StalePlan(_) | E::Injected(_) => eprintln!("sweep: {doing} in {folder}: {e}"),
     }
 }
@@ -2918,9 +2926,11 @@ fn apply_exit_code(e: &etude_core::apply::ApplyError, moved: usize) -> ExitCode 
                 Some(Subject::wait("destination", None)),
             )
         }
-        StalePlan(_) | DestinationDirectoryChanged(_) | DestinationLocked(_) => {
-            refusal(Code::PlanStale, Some(Subject::wait("plan", None)))
-        }
+        StalePlan(_)
+        | DestinationDirectoryChanged(_)
+        | SourceDirectoryChanged(_)
+        | SourceItemChanged(_)
+        | DestinationLocked(_) => refusal(Code::PlanStale, Some(Subject::wait("plan", None))),
         DestinationExists(_) | DestinationCollision(_) => refusal(
             Code::DestinationExists,
             Some(Subject::wait("destination", None)),
@@ -4819,7 +4829,10 @@ fn run_undo(
         refuse_apply(&err, &root, doing, &items, work);
         match saved {
             Ok(()) => {
-                if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path) = &err {
+                if let etude_core::apply::ApplyError::DestinationDirectoryChanged(path)
+                | etude_core::apply::ApplyError::SourceDirectoryChanged(path)
+                | etude_core::apply::ApplyError::SourceItemChanged(path) = &err
+                {
                     eprintln!(
                         "Move it back to {}, then run: {retry}",
                         etude_cli_support::shown(path),
