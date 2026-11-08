@@ -85,6 +85,12 @@ A missing folder is exit 3 with `missing_input` on `sweep status PATH`, `stash
 status PATH` and `stash pop PATH`. A scan whose plan is blocked by a file holding a
 group folder's name adds `details.blocked_folders` and stays exit 0.
 
+A `sweep` or `stash` apply whose failed move left a copy or second name it
+could not remove at the destination adds `details.copy_left`: that path, or
+`"<redacted>"` for `stash select`, whose result shows no holding path. Undo does
+not know about that copy. The field is absent otherwise, and its presence does
+not change the status, reason or exit code.
+
 Stash also returns `download_in_flight` for a folder still downloading and
 `unknown_item` for an item id its stash does not hold. `stash pop` exits 3 with
 `operation_incomplete` when any item is left behind, and its details add

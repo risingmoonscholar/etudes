@@ -449,9 +449,15 @@ impl DurableWrite for fs::File {
         unsafe extern "C" {
             fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
         }
-        if unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
+        #[cfg(test)]
+        let refused = test_hooks::BARRIER_REFUSED.get();
+        #[cfg(not(test))]
+        let refused = false;
+        if !refused && unsafe { fcntl(self.as_raw_fd(), F_BARRIERFSYNC) } == 0 {
             return Ok(());
         }
+        #[cfg(test)]
+        test_hooks::BARRIER_FALLBACKS.set(test_hooks::BARRIER_FALLBACKS.get() + 1);
         // A filesystem without barriers (SMB, some FUSE mounts) refuses the
         // call. The full sync it falls back to is slower and still correct.
         fs::File::sync_all(self)
@@ -475,6 +481,8 @@ impl<W: DurableWrite> ProgressWriter<W> {
     /// Make every frame written so far durable. A run calls this once, before
     /// it reports success, so a finished run survives a power cut.
     pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        test_hooks::FINISHES.set(test_hooks::FINISHES.get() + 1);
         self.file.sync_all().map_err(JournalError::Io)
     }
 
@@ -488,6 +496,57 @@ impl<W: DurableWrite> ProgressWriter<W> {
             format!("done\t{index}\t{}\n", method.tag()).as_bytes(),
             sealer,
         )
+    }
+}
+
+/// The progress writer of one apply. Every frame it, or any other writer,
+/// added to the journal is made durable once when the run ends, whichever way
+/// it ends: by [`RunWriter::finish`] on success, which reports a failed flush,
+/// or on drop when an error return leaves the run early.
+pub(crate) struct RunWriter<W: DurableWrite = fs::File> {
+    writer: ProgressWriter<W>,
+    finished: bool,
+}
+
+impl<W: DurableWrite> RunWriter<W> {
+    pub(crate) fn record_done(
+        &mut self,
+        index: usize,
+        method: Method,
+        sealer: &dyn Sealer,
+    ) -> Result<(), JournalError> {
+        self.writer.record_done(index, method, sealer)
+    }
+
+    /// Flush the run once, before it reports success.
+    pub(crate) fn finish(&mut self) -> Result<(), JournalError> {
+        self.finished = true;
+        self.writer.finish()
+    }
+}
+
+impl<W: DurableWrite> Drop for RunWriter<W> {
+    fn drop(&mut self) {
+        // An error return. The run already has an error to report; a failed
+        // flush here cannot replace it.
+        if !self.finished {
+            let _ = self.writer.finish();
+        }
+    }
+}
+
+/// Test-only switches and counters for the journal's durable writes.
+#[cfg(test)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) mod test_hooks {
+    use std::cell::Cell;
+    thread_local! {
+        /// Make `F_BARRIERFSYNC` count as refused, as on a volume without it.
+        pub(crate) static BARRIER_REFUSED: Cell<bool> = const { Cell::new(false) };
+        /// How often a refused barrier fell back to a full sync.
+        pub(crate) static BARRIER_FALLBACKS: Cell<usize> = const { Cell::new(0) };
+        /// How often a writer made its frames durable with a full sync.
+        pub(crate) static FINISHES: Cell<usize> = const { Cell::new(0) };
     }
 }
 
@@ -715,6 +774,14 @@ impl Journal {
             .open(self.path())
             .map_err(JournalError::Io)?;
         Ok(ProgressWriter { file })
+    }
+
+    /// The progress writer for one apply run; see [`RunWriter`].
+    pub(crate) fn run_writer(&self) -> Result<RunWriter, JournalError> {
+        Ok(RunWriter {
+            writer: self.progress_writer()?,
+            finished: false,
+        })
     }
 
     /// Make the progress frames appended by one-off writers durable. Undo calls
@@ -1951,6 +2018,179 @@ mod tests {
 
     // ETUDE_STATE_DIR is process-global; serialize tests that touch it.
     static STATE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A real folder of three files and a throwaway state folder, for the
+    /// tests that run a whole apply against the journal's durable writes.
+    struct RunScene {
+        dir: std::path::PathBuf,
+        sources: Vec<std::path::PathBuf>,
+        _env: RestoreEnvVar,
+    }
+
+    impl RunScene {
+        fn new(name: &str, ext: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("etudes_run_{name}_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(dir.join("root")).unwrap();
+            let env = RestoreEnvVar::set("ETUDE_STATE_DIR", dir.join("state"));
+            let root = dir.join("root").canonicalize().unwrap();
+            let sources = (0..3)
+                .map(|i| {
+                    let path = root.join(format!("file{i}.{ext}"));
+                    fs::write(&path, format!("payload {i}")).unwrap();
+                    path
+                })
+                .collect();
+            Self {
+                dir,
+                sources,
+                _env: env,
+            }
+        }
+
+        fn move_plan(&self) -> crate::plan::Plan {
+            let root = self.dir.join("root").canonicalize().unwrap();
+            let scan = crate::scan::scan(
+                &root,
+                &crate::scan::ScanConfig {
+                    grace: None,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            crate::plan::Plan::with_groups(
+                &scan,
+                vec![crate::plan::Group {
+                    name: "Collected".into(),
+                    signal: crate::plan::Signal::Collected { count: 3 },
+                    members: self.sources.clone(),
+                    accepted: true,
+                }],
+            )
+        }
+
+        // Only the macOS tag-apply test uses it; Finder tags exist only there.
+        #[cfg(target_os = "macos")]
+        fn tag_plan(&self) -> crate::plan::Plan {
+            let mut plan = self.move_plan();
+            plan.adds_tags = true;
+            plan.groups[0].name = "Work".into();
+            plan.groups[0].signal = crate::plan::Signal::Tagged {
+                ext: "pdf".into(),
+                new: true,
+                entry: "Work".into(),
+            };
+            plan
+        }
+    }
+
+    impl Drop for RunScene {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    struct PlainSeal;
+    impl Sealer for PlainSeal {
+        fn seal(&self, plain: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(plain.to_vec())
+        }
+        fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, &'static str> {
+            Ok(sealed.to_vec())
+        }
+    }
+
+    /// A move apply that stops with an error after it wrote a record still
+    /// makes its records durable, exactly once.
+    #[test]
+    fn a_failed_apply_flushes_its_records_once() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("flush_move", "txt");
+        let before = test_hooks::FINISHES.get();
+        let error = crate::apply::apply_with_structured_progress(
+            &scene.move_plan(),
+            "flushtest",
+            Some(&PlainSeal),
+            Some(1),
+            |_| {},
+        )
+        .expect_err("the injected failure stops the apply");
+        assert!(matches!(error, crate::apply::ApplyError::Injected(1)));
+        assert_eq!(
+            test_hooks::FINISHES.get() - before,
+            1,
+            "one flush on the error path"
+        );
+        let id = candidates_by_recency("flushtest").unwrap().remove(0);
+        let mut journal = id.load("flushtest", &PlainSeal).unwrap();
+        assert_eq!(journal.entries[0].state, EntryState::Moved);
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+        assert_eq!(undo.restored, 1);
+    }
+
+    /// The same for a tag apply.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_tag_apply_flushes_its_records_once() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("flush_tag", "pdf");
+        let before = test_hooks::FINISHES.get();
+        let error = crate::apply::apply_with_structured_progress(
+            &scene.tag_plan(),
+            "flushtag",
+            Some(&PlainSeal),
+            Some(1),
+            |_| {},
+        )
+        .expect_err("the injected failure stops the apply");
+        assert!(matches!(error, crate::apply::ApplyError::Injected(1)));
+        assert_eq!(
+            test_hooks::FINISHES.get() - before,
+            1,
+            "one flush on the error path"
+        );
+        let id = candidates_by_recency("flushtag").unwrap().remove(0);
+        let mut journal = id.load("flushtag", &PlainSeal).unwrap();
+        assert_eq!(journal.entries[0].state, EntryState::Moved);
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+    }
+
+    /// A volume that refuses `F_BARRIERFSYNC` gets a full sync instead. The
+    /// records still reach the file and the run succeeds.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_refused_barrier_falls_back_and_the_records_still_land() {
+        let _lock = STATE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scene = RunScene::new("barrier_refused", "txt");
+        test_hooks::BARRIER_REFUSED.set(true);
+        let before = test_hooks::BARRIER_FALLBACKS.get();
+        let result = crate::apply::apply_with_structured_progress(
+            &scene.move_plan(),
+            "barriertest",
+            Some(&PlainSeal),
+            None,
+            |_| {},
+        );
+        test_hooks::BARRIER_REFUSED.set(false);
+        let report = result.expect("the run succeeds on the fallback");
+        assert_eq!(report.moved, 3);
+        assert!(
+            test_hooks::BARRIER_FALLBACKS.get() - before >= 3,
+            "every record took the fallback"
+        );
+        let mut journal = Journal::load_sealed("barriertest", &report.journal_id, &PlainSeal)
+            .expect("journal reloads");
+        assert!(journal.entries.iter().all(|e| e.state == EntryState::Moved));
+        let undo = crate::apply::undo(&mut journal, &PlainSeal);
+        assert!(undo.error.is_none(), "{:?}", undo.error);
+        assert_eq!(undo.restored, 3);
+        for (i, source) in scene.sources.iter().enumerate() {
+            assert_eq!(fs::read(source).unwrap(), format!("payload {i}").as_bytes());
+        }
+    }
 
     /// A record with no entries is written only when an apply is refused
     /// before it moves anything. Nothing was planned into it and nothing

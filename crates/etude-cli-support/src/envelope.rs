@@ -167,6 +167,12 @@ pub fn detail_field(key: &str, value: String) {
     });
 }
 
+/// The details payloads gathered so far, for tests.
+#[cfg(test)]
+pub(crate) fn payloads_for_tests() -> Vec<String> {
+    RESULT.with(|state| state.borrow().payloads.clone())
+}
+
 pub fn status(value: &'static str) {
     assert!(["done", "nothing_to_do", "refused", "incomplete", "error"].contains(&value));
     RESULT.with(|state| state.borrow_mut().status = Some(value));

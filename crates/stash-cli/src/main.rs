@@ -1054,7 +1054,14 @@ fn execute_stash(
             // Decided from the count of moves, never from the kind of failure.
             if moved == 0 {
                 etude_cli_support::envelope::status("refused");
-                eprintln!("Nothing was moved, so there is nothing to restore.");
+                match etude_cli_support::problems::report_copy_left(
+                    failure.copy_left.as_deref(),
+                    false,
+                    false,
+                ) {
+                    Some(text) => eprintln!("{text}"),
+                    None => eprintln!("Nothing was moved, so there is nothing to restore."),
+                }
                 return apply_exit_code(&e);
             }
             etude_cli_support::envelope::status("incomplete");
@@ -1069,6 +1076,13 @@ fn execute_stash(
                     "{what} --no-journal removed undo. Move {them} back by hand from {}.",
                     etude_cli_support::shown(&bound.root.join(&bound.groups[0].name))
                 ),
+            }
+            if let Some(text) = etude_cli_support::problems::report_copy_left(
+                failure.copy_left.as_deref(),
+                true,
+                false,
+            ) {
+                eprintln!("{text}");
             }
             apply_exit_code(&e)
         }
@@ -1294,7 +1308,14 @@ fn cmd_select(args: &[String]) -> ExitCode {
                 // The private folder made for this attempt holds nothing.
                 let _ = std::fs::remove_dir(&root);
                 etude_cli_support::envelope::status("refused");
-                eprintln!("Nothing was moved, so there is nothing to restore.");
+                match etude_cli_support::problems::report_copy_left(
+                    failure.copy_left.as_deref(),
+                    false,
+                    true,
+                ) {
+                    Some(text) => eprintln!("{text}"),
+                    None => eprintln!("Nothing was moved, so there is nothing to restore."),
+                }
                 return apply_exit_code(&error);
             }
             etude_cli_support::envelope::status("incomplete");
@@ -1310,6 +1331,13 @@ fn cmd_select(args: &[String]) -> ExitCode {
                     if moved == 1 { "It is" } else { "They are" },
                     etude_cli_support::shown(&root)
                 ),
+            }
+            if let Some(text) = etude_cli_support::problems::report_copy_left(
+                failure.copy_left.as_deref(),
+                true,
+                true,
+            ) {
+                eprintln!("{text}");
             }
             apply_exit_code(&error)
         }
