@@ -74,12 +74,17 @@ followed. An item apply finds tagged after its move goes back to its source
 folder the same way, or stays at its destination and is counted as not
 returned. The source side is held the same way: on macOS the folder the item
 is in is opened without following a link and checked against the device and
-inode recorded before the first move (for undo, the folder apply moved the
-item into), the item's own device and inode are checked inside that open
-folder, and the rename, the link-then-unlink fallback, and the cross-disk copy
+inode recorded before the first move, the item's own device and inode are
+checked inside that open folder, and the rename, the link-then-unlink fallback, and the cross-disk copy
 and removal of the original are all made relative to the two open folders. A
 source folder swapped for a link to somewhere else after the check is refused,
-and nothing is moved for that file. Two checks still go by path: the Finder tag
+and nothing is moved for that file. Undo takes each file back out of the
+folder apply moved it into, opened the same way. That folder is held to the
+identity apply recorded only if apply created it; a destination folder that
+already existed has no recorded identity, so undo holds it to its identity
+when undo checks the file, and a swap before that check is not detected. The
+file is held to the inode the journal recorded when it was renamed, and to its
+identity at undo's check when it was copied across disks. Two checks still go by path: the Finder tag
 check, because macOS has no call that reads an extended attribute relative to
 a folder descriptor, and the locked-flag check. A lock set after its check
 still makes the system refuse the rename. What remains: a checked folder can
