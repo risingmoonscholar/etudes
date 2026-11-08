@@ -23,6 +23,7 @@ pub const FIELDS: &[&str] = &[
 #[derive(Default)]
 struct ResultState {
     enabled: bool,
+    tool: String,
     version: String,
     operation: String,
     operation_id: String,
@@ -82,6 +83,7 @@ pub fn begin(tool: &str, version: &str, args: &[String]) {
     RESULT.with(|state| {
         *state.borrow_mut() = ResultState {
             enabled: args.iter().any(|arg| arg == "--json") || operation == "contract",
+            tool: tool.into(),
             version: version.into(),
             operation,
             operation_id: format!(
@@ -281,7 +283,7 @@ pub fn finish(code: ExitCode) {
                 ("unproven", j::arr([j::str("effects outside reported operation accounting; zero counters do not prove no effects")])),
             ])),
             ("verification", j::arr([claim("command_completed", if code == ExitCode::SUCCESS || code == ExitCode::from(1) { "pass" } else { "fail" }), claim("complete_read_coverage", "unproven"), claim("subprocess_network_absence", "unproven")])),
-            ("recovery", j::obj(&[("mode", j::str(recovery)), ("conditions", j::arr(if state.journal_enabled && !state.no_undo_needed && matches!(state.operation.as_str(), "apply" | "stash" | "review" | "undo" | "pop" | "apply_exported_plan") { vec![j::str("readable_journal_and_same_key"), j::str("unchanged_items_and_vacant_original_paths"), j::str("journal_not_expired_and_progress_writable")] } else { vec![] })), ("verification", j::str("unproven; consult operation details and filesystem before retrying")), ("operation", j::str(state.recovery_operation.as_deref().unwrap_or("")))])),
+            ("recovery", j::obj(&[("mode", j::str(recovery)), ("conditions", j::arr(if state.journal_enabled && !state.no_undo_needed && matches!(state.operation.as_str(), "apply" | "stash" | "review" | "undo" | "pop" | "apply_exported_plan") { vec![j::str("readable_journal_and_same_key"), j::str("unchanged_items_and_vacant_original_paths"), j::str(if state.tool == "stash" { "progress_writable" } else { "journal_not_expired_and_progress_writable" })] } else { vec![] })), ("verification", j::str("unproven; consult operation details and filesystem before retrying")), ("operation", j::str(state.recovery_operation.as_deref().unwrap_or("")))])),
             ("disclosure", j::obj(&[("receipt_contains", j::str("read categories and outcomes only; no contents, keys or environment values")), ("zero_counters", j::str("not evidence of no access")), ("details", j::str("may contain operation paths; treat as sensitive"))])),
             ("details", details),
             ("reason", reason),

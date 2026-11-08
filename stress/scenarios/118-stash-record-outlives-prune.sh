@@ -61,8 +61,9 @@ if [ ! -e "$ETUDE_STATE_DIR/$sweep_record" ]; then pass "the old sweep record is
 if grep -q 'dropped 1 undo record older than 30 days' "$W/apply2.err"; then pass "sweep says it dropped one record"; else fail "sweep's prune message: $(cat "$W/apply2.err")"; fi
 if [ "$(ls "$ETUDE_STATE_DIR" | grep -c '^sweep-.*\.journal$')" = 1 ]; then pass "the apply's own new record is kept"; else fail "the apply's own record is missing"; fi
 
-"$STASH" pop "$W/held" >/dev/null 2>"$W/pop.err"
+"$STASH" pop "$W/held" --json >"$W/pop.json" 2>"$W/pop.err"
 assert_eq 0 "$?" "pop of the 40-day-old stash succeeds"
+if python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["recovery"]["conditions"]; sys.exit(not (c and not any("expired" in x for x in c)))' "$W/pop.json"; then pass "pop's recovery conditions do not claim a stash record expires"; else fail "pop's recovery conditions: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recovery"])' "$W/pop.json")"; fi
 (cd "$W/held" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256) >"$W/after.sum"
 if cmp -s "$W/before.sum" "$W/after.sum"; then pass "every stashed file is back with its bytes"; else fail "restored files differ: $(diff "$W/before.sum" "$W/after.sum" | head -5)"; fi
 if ls -A "$W/held" | grep -q '^\.stash-'; then fail "a holding folder is left after pop"; else pass "no holding folder is left"; fi
