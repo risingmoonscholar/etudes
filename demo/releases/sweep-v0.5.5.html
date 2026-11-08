@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>sweep v0.5.5 candidate — remembered routes and checked moves · études</title>
+  <meta name="description" content="Sweep 0.5.5 can remember --map routes, moves any number of files into a saved route or a folder that is already there, and moves each file from and into the folders it checked.">
+  <meta property="og:title" content="sweep v0.5.5 candidate — remembered routes and checked moves">
+  <meta property="og:description" content="Save a validated route after a complete apply; a folder swapped during apply is refused, not followed.">
+  <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/sweep-progress.gif">
+  <link rel="stylesheet" href="release.css">
+</head>
+<body>
+  <main class="wrap">
+    <header class="chrome">
+      <a href="../index.html">études / demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes">GitHub repository</a>
+    </header>
+
+    <article>
+      <p class="release-id">sweep · v0.5.5 candidate</p>
+      <h1>sweep v0.5.5 candidate — remembered routes and checked moves</h1>
+      <div class="release-copy">
+        <p>Sweep can now remember a route you chose, and each move takes the file from the folder it checked and puts it into the folder it checked.</p>
+        <ul>
+          <li><code>sweep apply PATH --map EXT=Folder --save-routes --yes</code> saves the routes to the existing-folder profile after an apply that moved every planned file. Only a route to an existing, visible folder directly inside the scanned folder is saved, and it needs an undo journal. A clash with a saved route is refused before anything moves. Your own text and comments in the profile stay. Undo moves the files back but keeps the route.</li>
+          <li>A refused, failed or partial apply saves nothing; <code>details.routes_saved</code> says why. If the save fails after the files moved, the result is <code>incomplete</code> with <code>profile_write_failed</code>, and the message prints the lines to add by hand.</li>
+          <li>A saved route moves any number of matching files, one or two included. If the route's folder is missing, sweep creates it, but only when the run moves at least one file into it, and the plan says so before anything moves. Undo removes that folder if it is empty after the files go back.</li>
+          <li>A new folder still needs 3 or more files. A built-in group's folder, such as <code>Documents</code>, or a <code>--map</code> folder that is already there takes one or two files of that kind. The plan says when files stay because sweep would have to make a new folder for them.</li>
+          <li>A routes profile that starts with a UTF-8 byte order mark, which some macOS editors write, is read. Saving routes keeps the mark and every other byte you wrote.</li>
+          <li><code>sweep undo</code> of an apply that saved routes says the routes stay in the profile, names it, and says how to drop a route.</li>
+          <li>A scan that leaves files with no group says so and gives a step that runs as printed: a <code>--map</code> command to a new folder named <code>Routed Files</code> for you to rename, or <code>sweep propose --help</code>. It never names a folder or file it found. <code>--json</code> keeps it as <code>details.routing_hint</code>.</li>
+          <li>On macOS each move goes into the destination folder that passed the check: the folder is opened without following a link and its device and inode are checked on the open folder. A folder swapped for a link during apply is refused instead of followed. Undo's move back works the same way. A write-only folder still takes a move.</li>
+          <li>On macOS each move also takes the file from the source folder that was checked. The folder is opened without following a link and checked against the device and inode recorded before the first move. A source folder swapped during apply stops the run with <code>plan_stale</code>; files moved before the swap stay moved, and the message gives the undo step. The Finder tag check and the locked-flag check still read by path, because macOS cannot read a tag through a folder descriptor.</li>
+          <li>A move that failed after its copy to another disk landed no longer leaves that copy behind while saying nothing moved. The copy is removed before the message. If it cannot be removed, the message names it, says undo cannot see it, and gives the step; <code>--json</code> adds <code>details.copy_left</code>.</li>
+          <li>An undo record that does not open with the current key is kept past 30 days, so the right key can still undo it; <code>sweep forget</code> still removes it. Sweep no longer drops stash records. A scan, <code>status</code> or <code>verify</code> no longer drops records at all.</li>
+          <li>Folder names, extensions, schemes and durations you typed are shown as you typed them, without debug quotes and backslashes.</li>
+          <li>Files and folders with the locked flag are left in place and counted under <code>skipped.locked_skipped</code>; an item locked after the scan is counted as <code>held_locked</code>. Every message says how to clear the flag.</li>
+          <li>Finder aliases are skipped. Sweep reads only the alias flag, never resolves the alias and never reads its contents.</li>
+          <li>A folder held back only because its files are too recent says to retry <code>later</code> when those files would form a group once the window passes.</li>
+          <li><code>--progress-json</code> now also covers <code>sweep undo</code>.</li>
+          <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
+          <li>On macOS each journal record is ordered behind its move with a barrier sync instead of a full drive flush. On 9,999 small files apply measured 50.3–56.7 s before and 19.4–21.3 s after.</li>
+        </ul>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The sweep capability declaration is version 17; it lists routing under <code>routing</code>.</p>
+        <p><strong>Plans:</strong> an exported plan written by an earlier version still reads. A plan that holds a saved-route group needs 0.5.5 to read: an earlier sweep refuses it.</p>
+      </div>
+    </article>
+
+    <section class="demo" aria-labelledby="demo-title">
+      <h2 id="demo-title">The demo</h2>
+      <figure>
+        <img src="../gifs/sweep-progress.gif" alt="A light terminal demo applies sweep to a synthetic 9,999-item folder, shows progress, then undoes the changes while leaving personal records untouched." width="860" height="294">
+        <figcaption>A synthetic large folder: apply, bounded progress, then undo. The terminal recording is shown in its original light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <h2 id="install-title">Install sweep 0.5.5</h2>
+      <p>0.5.5 is a release candidate. This pin works only after the tag is published:</p>
+      <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.5 sweep-cli</code></pre>
+    </section>
+
+    <footer class="footer">
+      <a href="../index.html">All tool demos</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
+    </footer>
+  </main>
+</body>
+</html>

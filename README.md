@@ -60,16 +60,21 @@ What the tools promise:
 
 ## Getting Started
 
-Install the latest release with Cargo:
+**0.5.5 is a release candidate, not a published release.** The commands below
+are the proposed release pins and will work only after those tags are published.
+For currently published versions, see [Releases](https://github.com/risingmoonscholar/etudes/releases).
+To try this candidate from a checkout, use
+`cargo install --path crates/sweep-cli --locked`
+(or `crates/stash-cli`, `crates/unpack-cli`).
 
 ```sh
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.4 sweep-cli
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.4 stash-cli
-cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.4 unpack-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.5 sweep-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.5 stash-cli
+cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.5 unpack-cli
 ```
 
 This installs `sweep`, `stash` and `unpack` in `~/.cargo/bin`. `--tag` pins
-each tool to a released version; without it you get whatever `main` is that
+each tool to a tagged version; without it you get whatever `main` is that
 day. Security properties, and the ones the tools do not have, are in
 [SECURITY.md](SECURITY.md).
 

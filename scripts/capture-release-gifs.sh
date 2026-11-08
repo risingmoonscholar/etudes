@@ -40,6 +40,6 @@ PY
   echo "wrote demo/gifs/$name.gif"
 }
 
-record sweep-progress "sweep 0.5.4 — progress and undo" 2.4
-record stash-custody "stash 0.5.4 — clear now, restore later" 2.5
-record unpack-safety "unpack 0.5.4 — accept and refuse" 1.2
+record sweep-progress "sweep 0.5.5 — progress and undo" 2.4
+record stash-custody "stash 0.5.5 — clear now, restore later" 2.5
+record unpack-safety "unpack 0.5.5 — accept and refuse" 1.2
