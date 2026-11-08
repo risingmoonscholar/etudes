@@ -16,7 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null
 require python3 "builds the fixture tree" || exit 0
 
-W=$(workdir)
+W=$(workdir) || exit 1
 pid=""
 cleanup() {
   if [ -n "$pid" ]; then
