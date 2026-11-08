@@ -485,7 +485,10 @@ sweep would create its folder; when the folder already exists as a direct child
 of the root, any number moves into it, and files already directly inside it
 are reported in place. Apply, review and exported-plan apply declare the write
 `selected_tree_route_folders_if_missing`. An exported plan marks a saved
-route's group with its own tag (8); a plan written earlier reads as it did. The
-plan artifact schema and the result envelope (version 4) are unchanged.
+route's group with a new signal tag (8), stated in `routing.saved_route_plans`.
+A plan written by an earlier version reads as it did. A plan that holds a
+saved-route group needs this version: an earlier one cannot read it and refuses
+it as an invalid or unsupported plan binding. `plan_binding.artifact_schema_version`
+stays 1, and the result envelope stays at version 4.
 `v17/sweep.json` pins this declaration and `v1/sweep.json` mirrors it;
 `v16/sweep.json` remains retained.
