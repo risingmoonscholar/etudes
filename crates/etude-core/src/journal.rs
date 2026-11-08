@@ -1949,6 +1949,8 @@ mod tests {
             )
         }
 
+        // Only the macOS tag-apply test uses it; Finder tags exist only there.
+        #[cfg(target_os = "macos")]
         fn tag_plan(&self) -> crate::plan::Plan {
             let mut plan = self.move_plan();
             plan.adds_tags = true;
