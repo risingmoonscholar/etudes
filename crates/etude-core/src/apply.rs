@@ -28,6 +28,10 @@ use crate::plan::{BindingContext, BoundPlan, Plan};
 
 const COPY_MISMATCH: &str = "cross-device copy size mismatch";
 
+/// A Finder tag arrived on the original while it was copied to another
+/// disk, and the copy could not be removed. The original keeps its tag.
+const TAG_ARRIVED_DURING_COPY: &str = "a Finder tag was added to the original while it was copied to another disk, so the original was kept with its tag";
+
 /// A copy to another disk came out a different size from the original. The
 /// original is kept when this happens.
 pub fn is_copy_mismatch(error: &io::Error) -> bool {
@@ -64,6 +68,18 @@ pub fn is_copy_left_behind(error: &io::Error) -> bool {
     error
         .get_ref()
         .is_some_and(|inner| inner.is::<CopyLeftBehind>())
+}
+
+/// Why a move that left a copy failed, for the caller to print beside the
+/// copy's path. The tag refusal says the item "was left in place"; with a copy
+/// left too, it says only what is true of both.
+fn left_copy_reason(error: io::Error) -> io::Error {
+    let error = without_copy_left(error);
+    if is_tagged_across_volumes(&error) {
+        io::Error::new(error.kind(), TAG_ARRIVED_DURING_COPY)
+    } else {
+        error
+    }
 }
 
 /// The error that stopped the move, without the copy-left marker.
@@ -914,7 +930,7 @@ fn apply_plan_with_structured_progress(
                 // Stop, and name that copy: the item was not moved.
                 Err(error) if is_copy_left_behind(&error) => {
                     copy_left = Some(to.clone());
-                    return Err(ApplyError::Io(without_copy_left(error)));
+                    return Err(ApplyError::Io(left_copy_reason(error)));
                 }
                 Err(error) if is_folder_changed(&error) => {
                     return Err(ApplyError::DestinationDirectoryChanged(
@@ -1540,6 +1556,11 @@ fn move_into_validated(from: &Path, to: &Path, expected: Option<(u64, u64)>) -> 
 ///   `O_EXEC 0x40000000`, `O_SEARCH (O_EXEC | O_DIRECTORY)`, `AT_FDCWD -2`, and
 ///   `int openat(int, const char *, int, ...)`.
 /// - `.../MacOSX.sdk/usr/include/sys/unistd.h`: `linkat` and `unlinkat`.
+/// - `.../MacOSX.sdk/usr/include/sys/stat.h`: `int fstatat(int, const char *,
+///   struct stat *, int) __DARWIN_INODE64(fstatat)`, and the 64-bit-inode
+///   `struct stat` begins `dev_t st_dev` (4 bytes), `mode_t st_mode`,
+///   `nlink_t st_nlink` (2 bytes each), then `__darwin_ino64_t st_ino` at
+///   byte 8. `sys/fcntl.h`: `AT_SYMLINK_NOFOLLOW 0x0020`.
 /// - `.../MacOSX.sdk/usr/include/sys/errno.h`: `ENOENT 2`, `EXDEV 18`,
 ///   `ENOTDIR 20`, `ENOTSUP 45`, `ELOOP 62`.
 #[cfg(target_os = "macos")]
@@ -1558,6 +1579,7 @@ mod at {
     pub const ENOTDIR: i32 = 20;
     pub const ENOTSUP: i32 = 45;
     pub const ELOOP: i32 = 62;
+    pub const AT_SYMLINK_NOFOLLOW: core::ffi::c_int = 0x0020;
 
     unsafe extern "C" {
         pub fn renameatx_np(
@@ -1589,6 +1611,15 @@ mod at {
         pub fn unlinkat(
             fd: core::ffi::c_int,
             path: *const core::ffi::c_char,
+            flags: core::ffi::c_int,
+        ) -> core::ffi::c_int;
+        // The 64-bit-inode `struct stat`. On x86_64 the header selects it
+        // with the `$INODE64` suffix; on arm64 the plain name is that one.
+        #[cfg_attr(target_arch = "x86_64", link_name = "fstatat$INODE64")]
+        pub fn fstatat(
+            fd: core::ffi::c_int,
+            path: *const core::ffi::c_char,
+            buf: *mut core::ffi::c_void,
             flags: core::ffi::c_int,
         ) -> core::ffi::c_int;
         pub fn fcopyfile(
@@ -1743,18 +1774,49 @@ fn unlink_at(folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Result<()> {
 /// in `folder`, before the source was removed. Remove that name only while
 /// the source still exists, so the item is never left with no copy at all.
 /// If the name stays, say so in the error.
+/// The name `leaf` in `folder` must still be the file this move made, given
+/// by its device and inode; a file put there by anyone else is never removed.
 #[cfg(target_os = "macos")]
 fn undo_copy(
     error: io::Error,
     source_exists: bool,
     folder: &fs::File,
     leaf: &std::ffi::OsStr,
+    made: (u64, u64),
 ) -> io::Error {
-    if source_exists && unlink_at(folder, leaf).is_ok() {
+    let still_ours = identity_at(folder, leaf).is_ok_and(|now| now == made);
+    if source_exists && still_ours && unlink_at(folder, leaf).is_ok() {
         error
     } else {
         copy_left_behind(error)
     }
+}
+
+/// Device and inode of the name `leaf` inside an opened folder, not followed
+/// if it is a link, as `MetadataExt::dev` and `ino` report them.
+#[cfg(target_os = "macos")]
+fn identity_at(folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Result<(u64, u64)> {
+    use std::os::fd::AsRawFd;
+    let name = c_path(leaf)?;
+    // Larger than the 144-byte `struct stat`, and 8-byte aligned.
+    let mut buf = [0u64; 32];
+    // SAFETY: a valid NUL-terminated string, an open descriptor, and a
+    // buffer larger than the structure the call fills.
+    let rc = unsafe {
+        at::fstatat(
+            folder.as_raw_fd(),
+            name.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            at::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // st_dev is a signed 32-bit dev_t in the first four bytes; std widens it
+    // the same way. st_ino is the u64 at byte 8.
+    let dev = i32::from_ne_bytes(buf[0].to_ne_bytes()[..4].try_into().expect("4 bytes"));
+    Ok((dev as u64, buf[1]))
 }
 
 /// Test-only window onto `move_one`, so the no-clobber promise its comment
@@ -1933,7 +1995,8 @@ fn link_unlink_at(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io:
                 use std::os::unix::fs::MetadataExt;
                 let source_exists = fs::symlink_metadata(from)
                     .is_ok_and(|now| (now.dev(), now.ino()) == (metadata.dev(), metadata.ino()));
-                return Err(undo_copy(error, source_exists, folder, leaf));
+                let linked = (metadata.dev(), metadata.ino());
+                return Err(undo_copy(error, source_exists, folder, leaf, linked));
             }
             return Ok(Method::Rename);
         }
@@ -1968,6 +2031,7 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
         Err(e) if e.raw_os_error() == Some(18) => {
             // EXDEV: cross-device. rename(2) cannot do this, so copy, verify
             // the copy landed intact, and only then unlink the source.
+            let source_identity = file_identity(from);
             crate::scan::observe_read("cross_device_bytes", fs::copy(from, to))?;
             // The copy exists and the source has not been removed: every
             // failure removes the copy while the source is still there.
@@ -1982,13 +2046,33 @@ fn move_one(from: &Path, to: &Path) -> io::Result<Method> {
             })();
             match checked {
                 Ok(()) => Ok(Method::CopyUnlink),
-                Err(error) if fs::symlink_metadata(from).is_ok() && fs::remove_file(to).is_ok() => {
+                // Only while the source is still the file that was copied.
+                Err(error)
+                    if source_identity.is_some()
+                        && file_identity(from) == source_identity
+                        && fs::remove_file(to).is_ok() =>
+                {
                     Err(error)
                 }
                 Err(error) => Err(copy_left_behind(error)),
             }
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Device and inode of `path`, not followed if it is a link.
+#[cfg(not(target_os = "macos"))]
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
     }
 }
 
@@ -2010,6 +2094,10 @@ fn copy_unlink(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Re
         return Err(io::Error::from_raw_os_error(at::EXDEV));
     }
     let (source, copy) = copy_data_and_stat(from, folder, leaf)?;
+    let made = {
+        use std::os::unix::fs::MetadataExt;
+        copy.metadata().map(|m| (m.dev(), m.ino()))
+    };
     // From here the copy exists and the source has not been removed. Every
     // failure removes the copy, so a failed move leaves nothing behind.
     let checked = (|| {
@@ -2045,7 +2133,11 @@ fn copy_unlink(from: &Path, folder: &fs::File, leaf: &std::ffi::OsStr) -> io::Re
             // the copy as the only one, so the copy stays.
             use std::os::unix::fs::MetadataExt;
             let source_exists = source.metadata().is_ok_and(|now| now.nlink() > 0);
-            Err(undo_copy(error, source_exists, folder, leaf))
+            match made {
+                Ok(made) => Err(undo_copy(error, source_exists, folder, leaf, made)),
+                // Which file the copy is cannot be told, so it stays.
+                Err(_) => Err(copy_left_behind(error)),
+            }
         }
     }
 }
@@ -3834,6 +3926,60 @@ mod tests {
             .expect_err("the source read must fail");
         assert!(is_copy_left_behind(&error), "{error}");
         assert_eq!(fs::read(&m.destination).expect("copy kept"), b"payload");
+    }
+
+    /// `identity_at` reads the same device and inode that std reports, so
+    /// the hand-declared `struct stat` layout is the real one.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn identity_at_agrees_with_std() {
+        use std::os::unix::fs::MetadataExt;
+        let m = FailedMove::new("identity_at");
+        let folder = fs::File::open(m.dir.join("from")).expect("open folder");
+        let std = fs::symlink_metadata(&m.source).expect("lstat");
+        assert_eq!(
+            identity_at(&folder, std::ffi::OsStr::new("item.dat")).expect("fstatat"),
+            (std.dev(), std.ino())
+        );
+        std::os::unix::fs::symlink("item.dat", m.dir.join("from/link")).expect("symlink");
+        let link = fs::symlink_metadata(m.dir.join("from/link")).expect("lstat link");
+        assert_eq!(
+            identity_at(&folder, std::ffi::OsStr::new("link")).expect("fstatat link"),
+            (link.dev(), link.ino()),
+            "a link is not followed"
+        );
+    }
+
+    /// The copy was replaced by someone else's file before the cleanup. That
+    /// file is never removed; the failure reports the name as left.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_replaced_copy_is_not_removed() {
+        let m = FailedMove::new("copy_replaced");
+        m.lock("from");
+        let (destination, aside) = (m.destination.clone(), m.dir.join("to/aside.dat"));
+        COPY_MADE.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |_| {
+                fs::rename(&destination, &aside).expect("move the copy aside");
+                fs::write(&destination, b"someone else's").expect("replace");
+            }));
+        });
+        let error = move_one_macos_with(&m.source, &m.destination, exdev)
+            .expect_err("the source removal must fail");
+        assert!(is_copy_left_behind(&error), "{error}");
+        assert_eq!(fs::read(&m.destination).unwrap(), b"someone else's");
+        assert_eq!(fs::read(&m.source).expect("source kept"), b"payload");
+    }
+
+    /// A tag that arrived during the copy, with the copy left behind, is not
+    /// described as "left in place": the reason names only the original.
+    #[test]
+    fn a_left_copy_after_a_late_tag_does_not_say_left_in_place() {
+        let reason = left_copy_reason(copy_left_behind(tagged_across_volumes()));
+        assert!(!reason.to_string().contains("left in place"), "{reason}");
+        assert!(reason.to_string().contains("original was kept"), "{reason}");
+        let plain = left_copy_reason(copy_left_behind(io::Error::from_raw_os_error(13)));
+        assert_eq!(plain.raw_os_error(), Some(13));
     }
 
     /// Issue #20's contract: data and mtime survive, and nothing else is
