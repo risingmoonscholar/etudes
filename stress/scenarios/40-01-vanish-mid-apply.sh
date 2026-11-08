@@ -61,7 +61,7 @@ if [ ! -x "$DUMP" ]; then
   exit 0
 fi
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-W=$(workdir)
+W=$(workdir) || exit 1
 PID=""
 D=""
 cleanup() {

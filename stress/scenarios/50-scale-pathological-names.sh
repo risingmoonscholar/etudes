@@ -19,7 +19,7 @@
 # lines, so this fixture also guards newline-containing names.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 D="$W/tree"; mkdir -p "$D"
 
 TOK="_pathotoken.txt"

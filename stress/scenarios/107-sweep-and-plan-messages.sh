@@ -4,14 +4,14 @@
 # that fits the real cause. Each case checks the words, the exit and the reason.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done
   chflags -R nouchg "$W" 2>/dev/null; chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"
 }
 trap cleanup EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 if [ "$(id -u)" = 0 ]; then
   unproven "sweep and plan messages" "root ignores file modes"
   exit 0
@@ -378,7 +378,7 @@ say "no proposal file" 3 missing_input "no proposal file at $W/absent.json" -- "
 printf '{"schema_version":1,"rest":"leave","plan_digest":"%s","decisions":[{"item":"i-000000","skip":true},{"item":"i-000001"}]}' "$DIGEST" > "$W/shape.json"
 say "which decision" 2 invalid_arguments "decision 2 (item i-000001)" -- "${PROPOSE[@]}" --proposal "$W/shape.json"
 printf '{"schema_version":1,"rest":"leave","plan_digest":"%s","decisions":[{"item":"i-000000","folder":"Absent","mode":"require_existing"}]}' "$DIGEST" > "$W/absent-folder.json"
-say "proposed folder absent" 2 missing_input 'folder "Absent" does not exist' -- "${PROPOSE[@]}" --proposal "$W/absent-folder.json"
+say "proposed folder absent" 2 missing_input 'folder Absent does not exist' -- "${PROPOSE[@]}" --proposal "$W/absent-folder.json"
 
 # --- what apply and scan hold back (rows 107, 108) ---------------------------
 D="$W/recent"; shots "$D"

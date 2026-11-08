@@ -138,6 +138,14 @@ the link itself was still delivered.
   design than a private copy, and this tool does not have it. If another
   process is already running as you, it does not need unpack to do anything.
 
+- **A forged staging marker.** Cleanup of an abandoned staging folder checks
+  the exact name, a real directory you own, a lock file that is not a link,
+  singly linked, the right length and yours, holding that folder's device and
+  inode, and a free lock. Code running as you can write all of that for a
+  folder of its choosing, so it can make unpack remove a folder it names. The
+  final removal also names the folder by path after the last check, so a swap
+  at that moment by code running as you could delete another folder.
+
 - **Nested archives.** A zip inside a zip is just a file here; unpack does
   not recurse, so the bound applies per invocation, not to what you unpack
   next.
@@ -187,6 +195,12 @@ defends against a local attacker who already has your account.
 CI. There is no `cargo vet`, no reproducible build, no published checksum, and
 no signature. If you install from git you are trusting this repository and
 whatever `cargo` resolves.
+
+**A power cut can leave the newest move without its record.** Each journal
+record is ordered behind its move with a barrier sync, not a full drive flush,
+and a finished run is flushed once. After a power cut, every surviving move
+except the newest has its record. The newest move may lack one, or a record
+may survive without its move. Undo reconciles both; no file is lost.
 
 **No protection against a filesystem race.** A file that changes between plan
 and apply is handled — the apply re-checks — but this is not a hardened

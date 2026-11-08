@@ -27,7 +27,7 @@ exec </dev/null
 
 require python3 "builds fixture names and reads --json results" || exit 0
 
-W=$(workdir)
+W=$(workdir) || exit 1
 PID=""
 cleanup() {
   if [ -n "$PID" ]; then

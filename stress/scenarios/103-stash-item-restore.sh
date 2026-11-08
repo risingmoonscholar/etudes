@@ -2,7 +2,7 @@
 # Inspection exposes opaque item ids, and restoring one leaves two held.
 # A wrong item id restores nothing; restoring the rest returns every original byte.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 CODE=0
 python3 -u - "$STASH" "$W" > "$W/checks" <<'PY' || CODE=$?
 import json, pathlib, subprocess, sys

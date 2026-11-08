@@ -11,7 +11,7 @@ use etude_core::json as j;
 
 pub const SCHEMA_VERSION: u32 = 4;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Sweep,
     Stash,
@@ -142,7 +142,7 @@ pub fn declaration(
             "schema_version",
             j::num(match tool {
                 Tool::Sweep => SCHEMA_VERSION + 12,
-                Tool::Stash => 13,
+                Tool::Stash => 14,
                 Tool::Unpack => SCHEMA_VERSION + 4,
             }),
         ),
@@ -255,13 +255,17 @@ pub fn declaration(
                     "owned_artifacts",
                     strings(match tool {
                         Tool::Sweep => &[
-                            "expired_journals_all_tools",
+                            "expired_journals_that_open_except_stash",
                             "sweep_journals_on_forget",
                             "authorized_shared_key",
                             "empty_group_directories",
                             "case_probe_files",
                         ],
-                        Tool::Stash => &["empty_holding_directories", "case_probe_files"],
+                        Tool::Stash => &[
+                            "empty_holding_directories",
+                            "case_probe_files",
+                            "popped_stash_journals_past_ttl",
+                        ],
                         Tool::Unpack => &[
                             "private_archive_copy",
                             "failed_staging_tree",
@@ -285,7 +289,16 @@ pub fn declaration(
                 ),
                 (
                     "conditions",
-                    strings(if custody {
+                    strings(if tool == Tool::Stash {
+                        // A stash record never expires while it holds items.
+                        &[
+                            "readable_journal",
+                            "same_key",
+                            "unchanged_items",
+                            "vacant_original_paths",
+                            "journal_progress_writable",
+                        ]
+                    } else if custody {
                         &[
                             "readable_journal",
                             "same_key",
@@ -706,6 +719,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "sweep_existing_profile_bytes",
                     "finder_tag_names",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
@@ -713,6 +727,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "selected_tree_finder_tags",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -748,6 +763,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                     "sweep_existing_profile_bytes",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
@@ -755,6 +771,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "sweep_existing_profile_if_save_routes",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -768,12 +785,14 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "cross_device_source_bytes",
                     "journal_fingerprint_bytes",
                     "sweep_existing_profile_bytes",
+                    "expired_journal_store",
                 ],
                 &[
                     "selected_tree_entries",
                     "selected_tree_route_folders_if_missing",
                     "journal_store",
                     "keychain_if_no_supplied_key",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -792,6 +811,7 @@ fn operation_scopes(tool: Tool) -> Vec<String> {
                     "empty_group_directories",
                     "keychain_if_no_supplied_key",
                     "selected_tree_finder_tags",
+                    "expired_journals_that_open_except_stash",
                 ],
             ),
             scope(
@@ -941,7 +961,7 @@ fn startup_scope(tool: Tool) -> String {
         Tool::Sweep => scope(
             "startup_except_contract",
             &["journal_store_metadata", "legacy_state_metadata"],
-            &["legacy_state_migration", "expired_journals_all_tools"],
+            &["legacy_state_migration"],
         ),
         Tool::Stash => scope(
             "startup_except_contract",

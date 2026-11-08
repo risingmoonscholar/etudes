@@ -105,7 +105,7 @@ where judgment is the job -- and comes back with `--map bpy=Blender`. Sweep
 executes the mapping as one more table row, this run only: every refusal
 still wins over a map, the moves are journaled, `undo` reverses them, and
 `--map` with `--no-journal` is refused outright. If the folder does not
-already exist, the output says so plainly: *the folder name "Blender" was
+already exist, the output says so plainly: *the folder name Blender was
 chosen by your agent, not derived from your files* -- the one sanctioned
 exception to the naming rule, and it announces itself.
 
@@ -120,4 +120,4 @@ Handing over that index is exactly what the naming rule exists to prevent.
 
 ## Progress
 
-Every operation that takes time or writes takes `--progress-json`: `sweep apply`, `review` and `undo`, `stash`, `stash select`, `stash pop` and `restore`, and `unpack` extraction and `--list`. One shared layer writes versioned, bounded records on stderr; `--json` stdout remains one result envelope. Records distinguish planned entries, completed steps and durable journal acknowledgements, say so when a count is not known yet, and never state a count nobody observed. Unpack still parses nothing while extracting: it counts planned members in its private staging, from the walk its soft limit already makes. See [structured progress](progress.md) for the schema, what a killed run leaves, and measured cost. Journal persistence is unchanged; no speed improvement is claimed.
+Every operation that takes time or writes takes `--progress-json`: `sweep apply`, `review` and `undo`, `stash`, `stash select`, `stash pop` and `restore`, and `unpack` extraction and `--list`. One shared layer writes versioned, bounded records on stderr; `--json` stdout remains one result envelope. Records distinguish planned entries, completed steps and journal records written, say so when a count is not known yet, and never state a count nobody observed. Unpack still parses nothing while extracting: it counts planned members in its private staging, from the walk its soft limit already makes. See [structured progress](progress.md) for the schema, what a killed run leaves, and measured cost. Journal records are ordered behind their moves with a barrier sync and a finished run is flushed once; see [undo and journals](undo-and-journals.md).

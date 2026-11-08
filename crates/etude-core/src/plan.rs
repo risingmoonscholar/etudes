@@ -756,6 +756,8 @@ fn validate_maps_impl(
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for (ext_raw, folder) in raw {
+        let ext_shown = crate::shown_text(ext_raw);
+        let folder_shown = crate::shown_text(folder);
         // Strip at most ONE leading dot: ".bpy" is a courtesy spelling of
         // "bpy", but "..bpy" is a typo, and silently normalising a typo into
         // a different accepted instruction is how an agent's mistake becomes
@@ -764,9 +766,12 @@ fn validate_maps_impl(
             .strip_prefix('.')
             .unwrap_or(ext_raw)
             .to_ascii_lowercase();
+        if ext_raw.is_empty() {
+            return Err("--map: the extension before = is empty".to_owned());
+        }
         if ext.is_empty() || ext.contains('.') || ext.contains('/') || ext.len() > 32 {
             return Err(format!(
-                "--map: {ext_raw:?} is not a single extension (like bpy)"
+                "--map: {ext_shown} is not a single extension (like bpy)"
             ));
         }
         if !allow_built_in_extensions
@@ -787,8 +792,10 @@ fn validate_maps_impl(
             return Err(format!("--map: .{ext} is mapped twice"));
         }
         // The folder: exactly one component, visible, not a reserved name.
-        if folder.is_empty()
-            || folder == "."
+        if folder.is_empty() {
+            return Err("--map: the folder after = is empty".to_owned());
+        }
+        if folder == "."
             || folder == ".."
             || folder.contains('/')
             || folder.contains('\\')
@@ -797,7 +804,7 @@ fn validate_maps_impl(
             || folder.len() > 255
         {
             return Err(format!(
-                "--map: {folder:?} is not a plain visible folder name"
+                "--map: {folder_shown} is not a plain visible folder name"
             ));
         }
         if RESERVED_DESTINATIONS
@@ -806,7 +813,7 @@ fn validate_maps_impl(
             || folder.to_ascii_lowercase().starts_with("photos")
         {
             return Err(format!(
-                "--map: {folder:?} is a name sweep itself uses; routing files \
+                "--map: {folder_shown} is a name sweep itself uses; routing files \
                  there would fold them into a built-in group's count"
             ));
         }
@@ -818,11 +825,11 @@ fn validate_maps_impl(
         {
             return Err(if allow_built_in_extensions {
                 format!(
-                    "existing-folder profile: two extensions route to {folder:?}; each route needs its own folder"
+                    "existing-folder profile: two extensions route to {folder_shown}; each route needs its own folder"
                 )
             } else {
                 format!(
-                    "--map: two extensions map to {folder:?}; each mapping needs its own folder"
+                    "--map: two extensions map to {folder_shown}; each mapping needs its own folder"
                 )
             });
         }
@@ -846,8 +853,9 @@ fn validate_maps_impl(
                     && existing.to_lowercase() == folder.to_lowercase()
                     && e.path().is_dir()
                 {
+                    let existing_shown = crate::shown_text(&existing);
                     return Err(format!(
-                        "--map: {folder:?} differs from the existing folder {existing:?} \
+                        "--map: {folder_shown} differs from the existing folder {existing_shown} \
                          only by spelling; use the existing name"
                     ));
                 }
@@ -857,7 +865,9 @@ fn validate_maps_impl(
         let created = match std::fs::symlink_metadata(&dest) {
             Ok(m) if m.is_dir() => false,
             Ok(_) => {
-                return Err(format!("--map: {folder:?} exists here but is not a folder"));
+                return Err(format!(
+                    "--map: {folder_shown} exists here but is not a folder"
+                ));
             }
             Err(_) => true,
         };
@@ -1350,7 +1360,8 @@ pub fn validate_tag_maps(raw: &[(String, String)]) -> Result<Vec<TagSpec>, Strin
             .to_ascii_lowercase();
         if ext.is_empty() || ext.contains('.') || ext.contains('/') || ext.len() > 32 {
             return Err(format!(
-                "--map: {ext_raw:?} is not a single extension (like pdf)"
+                "--map: {} is not a single extension (like pdf)",
+                crate::shown_text(ext_raw)
             ));
         }
         if !seen.insert(ext.clone()) {
@@ -1552,6 +1563,46 @@ fn civil_date(secs: i64) -> (i64, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_messages_show_names_as_typed_without_debug_quotes() {
+        let root = std::env::temp_dir();
+        assert_eq!(
+            validate_maps(&[("".into(), "Box".into())], &root).unwrap_err(),
+            "--map: the extension before = is empty"
+        );
+        assert_eq!(
+            validate_maps(&[("bpy".into(), "".into())], &root).unwrap_err(),
+            "--map: the folder after = is empty"
+        );
+        let bad_ext = validate_maps(&[("a/b \"c\"".into(), "Box".into())], &root).unwrap_err();
+        assert_eq!(
+            bad_ext,
+            "--map: a/b \"c\" is not a single extension (like bpy)"
+        );
+        let bad_folder = validate_maps(&[("bpy".into(), ".hid\"den x".into())], &root).unwrap_err();
+        assert_eq!(
+            bad_folder,
+            "--map: .hid\"den x is not a plain visible folder name"
+        );
+        let twice = validate_maps(
+            &[
+                ("bpy".into(), "Blend\"er x".into()),
+                ("xyz".into(), "Blend\"er x".into()),
+            ],
+            &root,
+        )
+        .unwrap_err();
+        assert_eq!(
+            twice,
+            "--map: two extensions map to Blend\"er x; each mapping needs its own folder"
+        );
+        let tags = validate_tag_maps(&[("a/b\n\"c\"".into(), "Red".into())]).unwrap_err();
+        assert_eq!(
+            tags,
+            "--map: a/b?\"c\" is not a single extension (like pdf)"
+        );
+    }
 
     #[test]
     fn a_plan_fault_survives_inside_an_io_error() {

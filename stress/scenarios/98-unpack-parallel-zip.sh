@@ -5,7 +5,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require zip "the fixture needs zip" || exit 0
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 RUNS=1000; WORKERS=4
 mkdir -p "$W/src/nested" "$W/out"
 printf 'nested' > "$W/src/nested/ spaced  name.txt"

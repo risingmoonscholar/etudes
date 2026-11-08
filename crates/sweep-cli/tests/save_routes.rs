@@ -516,3 +516,42 @@ fn help_says_undo_keeps_saved_routes() {
         "{text}"
     );
 }
+
+#[test]
+fn undo_says_saved_routes_stay_in_the_profile() {
+    let f = Fixture::new();
+    f.files();
+    std::fs::create_dir(f.root.join("Blender Files")).unwrap();
+    let out = f.apply(&["--map", "bpy=Blender Files", "--save-routes"]);
+    assert!(out.status.success());
+    let profile_before = std::fs::read(f.profile()).unwrap();
+    let out = f.run(&["undo", f.root.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Restored 3 files."), "{text}");
+    let want = format!(
+        "  Saved routes stay in the routes profile (.bpy -> Blender Files). To drop one, delete its [[routes]] block from {}",
+        f.profile().display()
+    );
+    assert!(text.contains(&want), "{text}");
+    assert_eq!(std::fs::read(f.profile()).unwrap(), profile_before);
+}
+
+#[test]
+fn undo_of_an_apply_without_routes_says_nothing_about_them() {
+    let f = Fixture::new();
+    f.files();
+    std::fs::create_dir(f.root.join("Blender Files")).unwrap();
+    let out = f.apply(&["--map", "bpy=Blender Files"]);
+    assert!(out.status.success());
+    assert!(!f.profile().exists());
+    let out = f.run(&["undo", f.root.to_str().unwrap()]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Restored 3 files."), "{text}");
+    assert!(!text.contains("Saved routes"), "{text}");
+}

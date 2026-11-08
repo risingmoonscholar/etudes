@@ -8,7 +8,7 @@
 # names with separate greps would let a failed listing (or extra members) pass.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W"' EXIT
 
 SOURCE="$W/source"

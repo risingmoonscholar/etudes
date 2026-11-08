@@ -5,7 +5,7 @@
 # refuse. A relative archive gets the same free-space floor as an absolute one.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done
@@ -13,7 +13,7 @@ cleanup() {
   chmod -R u+rwx "${W:?}" 2>/dev/null; rm -rf "${W:?}"
 }
 trap cleanup EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 require python3 "the checks read JSON with Python" || exit 0
 export HOME="$W/home" ETUDE_STATE_DIR="$W/state" SWEEP_GRACE_SECS=0
 mkdir -p "$HOME" "$ETUDE_STATE_DIR"

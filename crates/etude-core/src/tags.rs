@@ -34,21 +34,27 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     }
     if name.chars().count() > MAX_NAME_CHARS {
         return Err(format!(
-            "tag name {name:?} is longer than {MAX_NAME_CHARS} characters"
+            "tag name {} is longer than {MAX_NAME_CHARS} characters",
+            crate::shown_text(name)
         ));
     }
     if name.chars().any(char::is_control) {
         return Err(format!(
-            "tag name {name:?} contains a control character or line break"
+            "tag name {} contains a control character or line break",
+            crate::shown_text(name)
         ));
     }
     if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
         return Err(format!(
-            "tag name {name:?} is not a plain name (no slash, backslash, . or ..)"
+            "tag name {} is not a plain name (no slash, backslash, . or ..)",
+            crate::shown_text(name)
         ));
     }
     if name != name.trim() {
-        return Err(format!("tag name {name:?} starts or ends with a space"));
+        return Err(format!(
+            "tag name {} starts or ends with a space",
+            crate::shown_text(name)
+        ));
     }
     Ok(())
 }
@@ -420,6 +426,22 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tag_name_messages_show_the_name_without_debug_quotes() {
+        assert_eq!(
+            validate_name("a/b \"c\"").unwrap_err(),
+            "tag name a/b \"c\" is not a plain name (no slash, backslash, . or ..)"
+        );
+        assert_eq!(
+            validate_name("x\ny \"z\"").unwrap_err(),
+            "tag name x?y \"z\" contains a control character or line break"
+        );
+        assert_eq!(
+            validate_name(" a \"b\" ").unwrap_err(),
+            "tag name  a \"b\"  starts or ends with a space"
+        );
+    }
 
     /// Produced by Python's plistlib for ["Red\n6"] and ["Work", "Zeta"].
     const ONE_RED: &[u8] = &[

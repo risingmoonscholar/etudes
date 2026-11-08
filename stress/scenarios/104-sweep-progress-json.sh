@@ -2,7 +2,7 @@
 # Apply emits versioned path-free progress on stderr while JSON stdout stays one envelope.
 # The terminal counts describe all three moved and journalled files; unsupported commands refuse.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 CODE=0
 python3 -u - "$SWEEP" "$W" > "$W/checks" <<'PY' || CODE=$?
 import json, pathlib, subprocess, sys

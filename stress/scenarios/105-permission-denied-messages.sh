@@ -3,7 +3,7 @@
 # the folder and what to do next. It is never reported as clear or as having no work.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"' EXIT
 if [ "$(id -u)" = 0 ]; then
   unproven "permission-denied messages" "root ignores file modes"

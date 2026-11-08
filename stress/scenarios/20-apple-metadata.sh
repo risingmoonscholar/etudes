@@ -16,7 +16,7 @@ if ! require python3 "writes the literal Icon<CR> filename unambiguously"; then
   exit 0
 fi
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 export ETUDE_STATE_DIR="$W/state"
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
 D="$W/Desktop"

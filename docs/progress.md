@@ -4,10 +4,10 @@ Every operation that takes time or writes takes one flag, `--progress-json`, and
 
 | Operation | Command | `planned` | `completed` | `journalled` |
 | --- | --- | --- | --- | --- |
-| `apply`, `review` | `sweep apply PATH --yes`, `sweep apply --plan`, `sweep review PATH` | entries after full preflight validation | successful moves or tag writes, including one whose done record failed | durable done records; zero with `--no-journal` |
-| `undo` | `sweep undo [PATH]`, `sweep undo --id ID` | journal entries | entries fully examined, including ones left alone or already restored | reversals this run made durable |
-| `stash` | `stash PATH`, `stash --plan`, `stash select` | entries after full preflight validation | successful moves | durable done records; zero with `--no-journal` |
-| `pop` | `stash pop`, `stash restore`, with `--id`; one with `--item` | journal entries, or one | entries fully examined | reversals this run made durable |
+| `apply`, `review` | `sweep apply PATH --yes`, `sweep apply --plan`, `sweep review PATH` | entries after full preflight validation | successful moves or tag writes, including one whose done record failed | done records written to the journal; zero with `--no-journal` |
+| `undo` | `sweep undo [PATH]`, `sweep undo --id ID` | journal entries | entries fully examined, including ones left alone or already restored | reversals this run recorded |
+| `stash` | `stash PATH`, `stash --plan`, `stash select` | entries after full preflight validation | successful moves | done records written to the journal; zero with `--no-journal` |
+| `pop` | `stash pop`, `stash restore`, with `--id`; one with `--item` | journal entries, or one | entries fully examined | reversals this run recorded |
 | `extract` | `unpack ARCHIVE` | distinct members of the judged listing, without metadata unpack drops | planned members seen in private staging, see below | zero |
 | `list` | `unpack ARCHIVE --list` | members in the plain listing | the same, once the listing returned | zero |
 
@@ -30,7 +30,7 @@ Records begin once work begins. A refusal before that, such as a missing archive
 
 Every record describes something that had already happened when it was written, so nothing written before a kill can be untrue afterwards. A killed run has no terminal record: the absence is how a reader knows the outcome was never reported, and the records say only how far it got. SIGTERM to unpack ends in `error` with the last observed count. A recovered panic ends a started stream in `error` with its last counts.
 
-For apply, each move's done record is persisted before the callback and before the next move begins, and the journal base before any move. Tests reload the sealed journal during callbacks and check that later sources remain untouched. Output errors do not change this order. Undo persists each reversal before counting it. This makes progress observable; it makes no speed claim.
+For apply, the journal base is saved before any move. Each move's done record is written before the callback and before the next move begins, and ordered behind its move with a barrier sync, not a full flush. One full flush ends the run, before it reports success. After a power cut, every surviving move except the newest has its record. The newest move may lack one, or a record may survive without its move, and undo reconciles both. Tests reload the sealed journal during callbacks and check that later sources remain untouched. Output errors do not change this order. Undo records each reversal the same way before counting it.
 
 ## Unpack's count
 
