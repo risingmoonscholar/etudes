@@ -53,8 +53,12 @@ FLAGS
     --save-routes    apply: remember --map routes after all moves succeed
                       (existing direct folders only; journal required).
                       Undo moves files back but keeps saved routes
-    --scheme folders  group by file type and other built-in folder rules (default)
-    --scheme existing use the saved, versioned existing-folder profile
+    --scheme folders  group by file type and other built-in folder rules (default).
+                      A new folder needs 3 or more files; a folder of that
+                      name already here takes any number
+    --scheme existing use the saved, versioned existing-folder profile. A
+                      route moves any number of files; a missing route
+                      folder is created only when files move
     --scheme tags     add Finder tags and move nothing (macOS); needs --map
     --depth N       recursion depth (default 1, max 8)
     --since N[h|d]  leave files changed in the last N alone (default 1d, 0 off)
@@ -1371,6 +1375,8 @@ fn resolve_scheme(args: &[String], root: &Path) -> Result<SchemeConfig, SchemeEr
                 ));
             }
             let profile = existing_profile::ExistingProfile::load()?;
+            // A missing route folder is not a problem: apply creates it for
+            // the first file that moves, and the plan says so first.
             let maps = plan::validate_existing_maps(&profile.routes, root).map_err(|why| {
                 SchemeError::ProfileInvalid(existing_profile::route_problem(&why))
             })?;
@@ -2103,6 +2109,11 @@ fn print_left_alone_notes(p: &plan::Plan, explain: bool) {
     } else if unclear > 1 {
         println!("  {unclear} files matched no group and were left where they are");
     }
+    if unclear > 0 {
+        for (folder, n) in p.below_floor() {
+            println!("  {}", below_floor_line(&p.root, folder, n));
+        }
+    }
     if in_place == 1 {
         println!("  1 file is already in its destination and was left in place");
     } else if in_place > 1 {
@@ -2266,12 +2277,15 @@ fn hold_hint(p: &plan::Plan) -> String {
     }
 }
 
-/// Say when a folder name came from an agent rather than from the files.
+/// Say when a folder name came from an agent rather than from the files, and
+/// which folders a saved route will create.
 ///
 /// The invariant this qualifies is the oldest in the repo: destination names
 /// are derived from the filesystem, never coined. --map with a folder that
-/// does not exist yet is the one sanctioned exception, and an exception the
-/// output does not announce would just be the invariant quietly gone.
+/// does not exist yet is the one sanctioned agent exception, and an exception
+/// the output does not announce would just be the invariant quietly gone. A
+/// saved route names the person's own folder; when it is missing, the plan
+/// says sweep creates it before anything moves.
 fn print_agent_named_note(p: &plan::Plan) {
     if let Some(note) = agent_named_note(p) {
         println!("{note}");
@@ -2283,23 +2297,89 @@ fn agent_named_note(p: &plan::Plan) -> Option<String> {
         .groups
         .iter()
         .filter_map(|g| match &g.signal {
-            plan::Signal::Mapped { created: true, .. } => {
-                Some(etude_cli_support::shown_text(&g.name))
-            }
+            plan::Signal::Mapped {
+                created: true,
+                saved: false,
+                ..
+            } => Some(etude_core::shown_text(&g.name)),
             _ => None,
         })
         .collect();
-    match coined.len() {
-        0 => None,
-        1 => Some(format!(
+    let mut note = match coined.len() {
+        0 => String::new(),
+        1 => format!(
             "\n  the folder name {} was chosen by your agent, not derived from your files",
             coined[0]
-        )),
-        _ => Some(format!(
+        ),
+        _ => format!(
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
             coined.len(),
             coined.join(", ")
+        ),
+    };
+    let saved: Vec<String> = p
+        .groups
+        .iter()
+        .filter(|g| {
+            matches!(
+                g.signal,
+                plan::Signal::Mapped {
+                    created: true,
+                    saved: true,
+                    ..
+                }
+            )
+        })
+        .map(|g| shown_folder_name(&g.name))
+        .collect();
+    match saved.len() {
+        0 => {}
+        1 => note.push_str(&format!(
+            "\n  sweep creates the folder {} for your saved route; undo removes it if it is empty",
+            saved[0]
         )),
+        _ => note.push_str(&format!(
+            "\n  sweep creates {} folders for your saved routes: {}; undo removes each one that is empty",
+            saved.len(),
+            saved.join(", ")
+        )),
+    }
+    (!note.is_empty()).then_some(note)
+}
+
+/// Why files of a built-in kind stayed: too few for a new folder, or the name
+/// is held here by a link or a file that sweep never moves anything into.
+fn below_floor_line(root: &Path, folder: &str, n: usize) -> String {
+    let files = etude_cli_support::counted(n, "file", "files");
+    let held = match std::fs::symlink_metadata(root.join(folder)) {
+        Ok(meta) if meta.file_type().is_symlink() => Some("a link"),
+        Ok(meta) if !meta.is_dir() => Some("a file"),
+        _ => None,
+    };
+    if let Some(what) = held {
+        return format!(
+            "{files} would go to {folder}, but {folder} here is {what}, not a folder, so sweep moves nothing into it. Use a plain folder named {folder}"
+        );
+    }
+    let article = if folder.starts_with(['A', 'E', 'I', 'O', 'U']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!(
+        "{files} would go to {folder}: sweep makes a new folder only for 3 or more files, and moves any number into {article} {folder} folder that is already here"
+    )
+}
+
+/// A folder name for a plan line. Control characters show as `?`, and a name
+/// that starts or ends with a space is put in single quotes, so `Docs ` does
+/// not read as `Docs`.
+fn shown_folder_name(name: &str) -> String {
+    let shown = etude_core::shown_text(name);
+    if shown.trim() != shown {
+        format!("'{shown}'")
+    } else {
+        shown
     }
 }
 
@@ -3365,6 +3445,11 @@ fn report_apply(
                     if moved == 1 { "it" } else { "they" }
                 );
             }
+            if let Some(text) =
+                created_folders_text(&failure.created_folders, &p.root, journal_enabled)
+            {
+                eprintln!("{text}");
+            }
             if let Some(text) = etude_cli_support::problems::report_copy_left(
                 failure.copy_left.as_deref(),
                 true,
@@ -3375,6 +3460,33 @@ fn report_apply(
             apply_exit_code(&e, moved)
         }
     }
+}
+
+/// Name the folders a stopped apply created and left behind, and say what
+/// becomes of them, so a person who sees a new folder knows where it came from.
+fn created_folders_text(folders: &[PathBuf], root: &Path, journal: bool) -> Option<String> {
+    let names: Vec<String> = folders
+        .iter()
+        .map(|folder| {
+            shown_folder_name(
+                &folder
+                    .strip_prefix(root)
+                    .unwrap_or(folder)
+                    .display()
+                    .to_string(),
+            )
+        })
+        .collect();
+    let (what, it) = match names.len() {
+        0 => return None,
+        1 => (format!("the folder {}", names[0]), "it"),
+        _ => (format!("the folders {}", names.join(", ")), "each one"),
+    };
+    Some(if journal {
+        format!("This apply created {what}; undo removes {it} once it is empty.")
+    } else {
+        format!("This apply created {what}; with --no-journal, undo cannot remove {it}.")
+    })
 }
 
 /// The id in an undo record's file name.
@@ -3689,7 +3801,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
         })
     {
         eprintln!(
-            "sweep: routes were not saved: every --map route needs a selected group of at least three eligible files. Nothing was moved. Drop --save-routes to apply the selected groups only."
+            "sweep: routes were not saved: every --map route needs a selected group with at least one eligible file. Nothing was moved. Drop --save-routes to apply the selected groups only."
         );
         if let Some(pending) = &pending {
             routes_saved_detail(
@@ -5120,6 +5232,7 @@ mod tests {
             signal: plan::Signal::Mapped {
                 ext: "bpy".into(),
                 created: true,
+                saved: false,
             },
             members: Vec::new(),
             accepted: true,

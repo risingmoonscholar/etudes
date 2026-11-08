@@ -350,8 +350,12 @@ hasnt "traversal route: not --map" "$LAST" "--map"
 printf 'schema_version = 1\n\n[[routes]]\ncolor = "red"\n' > "$PROFILE"
 say "unknown field" 2 profile_invalid 'line 4: unknown field "color". Allowed: extension, folder.' -- "$SWEEP" "$D" --scheme existing
 has "unknown field: names the file" "$LAST" "$PROFILE"
-printf 'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Absent"\n' > "$PROFILE"
-say "route to an absent folder" 2 profile_invalid "does not exist; create it or edit the profile" -- "$SWEEP" "$D" --scheme existing
+printf 'schema_version = 1\n[[routes]]\nextension = "xyz"\nfolder = "Held"\n' > "$PROFILE"
+printf 'synthetic file holding the route name' > "$D/Held"
+say "route to a name held by a file" 2 profile_invalid "routes .xyz to $D/Held, which is a file, not a folder, so nothing moved." -- "$SWEEP" "$D" --scheme existing
+has "route held by a file: next step" "$LAST" "Change the .xyz route's folder in that profile."
+hasnt "route held by a file: no debug quotes" "$LAST" '"Held"'
+rm "$D/Held"
 chmod 000 "$PROFILE"
 say "denied profile" 2 profile_invalid "cannot read the profile at $PROFILE: permission denied" -- "$SWEEP" "$D" --scheme existing
 chmod 600 "$PROFILE"; rm "$PROFILE"; mkdir "$PROFILE"

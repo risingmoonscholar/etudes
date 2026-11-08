@@ -56,7 +56,7 @@ What the tools promise:
 - **Nothing in the background.** No daemon, no menu-bar app, nothing starts at
   login. `stash` tells you when files are due back and waits to be asked.
 - **Small and checkable.** `etude-core` has zero dependencies. The suite has
-  812 tests, and the stress harness has 84 scenarios.
+  824 tests, and the stress harness has 85 scenarios.
 
 ## Getting Started
 

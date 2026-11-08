@@ -28,12 +28,21 @@ fn profile_path() -> PathBuf {
 
 /// A route the plan rejected, in terms of the profile rather than of `--map`,
 /// which the person did not type.
-pub fn route_problem(why: &str) -> String {
-    let why = why.strip_prefix("--map: ").unwrap_or(why);
-    format!(
-        "the profile at {}: {why}. Edit that file.",
-        etude_cli_support::shown(&profile_path())
-    )
+pub fn route_problem(why: &etude_core::plan::ExistingRouteError) -> String {
+    use etude_core::plan::ExistingRouteError;
+    let profile = etude_cli_support::shown(&profile_path());
+    match why {
+        ExistingRouteError::Invalid(why) => {
+            let why = why.strip_prefix("--map: ").unwrap_or(why);
+            format!("the profile at {profile}: {why}. Edit that file.")
+        }
+        ExistingRouteError::NotAFolder { ext, path, link } => format!(
+            "the profile at {profile} routes .{ext} to {}, which is {}, not a folder, so nothing moved. \
+             Change the .{ext} route's folder in that profile.",
+            etude_cli_support::shown(path),
+            if *link { "a link" } else { "a file" }
+        ),
+    }
 }
 
 impl ExistingProfile {
@@ -518,7 +527,7 @@ impl PendingRoutes {
                 format!(
                     "cannot save {}: {}",
                     route_list(&added),
-                    plain_route_problem(&why)
+                    plain_route_problem(&why.to_string())
                 ),
                 "Change the --map folder, or drop --save-routes".into(),
             )
