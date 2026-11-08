@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 12,
+                Tool::Sweep => SCHEMA_VERSION + 13,
                 Tool::Stash => 14,
                 Tool::Unpack => SCHEMA_VERSION + 4,
             }),
@@ -479,8 +479,9 @@ pub fn declaration(
     if matches!(tool, Tool::Sweep) {
         fields.push(("routing", j::obj(&[
             ("map", j::str("--map EXT=Folder")),
+            ("new_folder_floor", j::str("a group needs three eligible files only when sweep would create its folder; when the folder already exists as a direct child of the root, observed by the scan, any number moves into it (built-in groups and --map alike) and files already directly inside it are reported in place; saved routes have no floor; files below the floor are left_alone.no_clear_group")),
             ("save_routes", j::str("sweep apply PATH --map EXT=Folder --save-routes --yes; journal required; incompatible with tags")),
-            ("existing", j::str("--scheme existing; a saved route whose direct visible folder is missing has it created by apply only when at least one file moves into it, listed in the plan first and recorded in the journal; undo removes it when empty; a route with no files here is ignored and creates nothing; a file or link holding the name refuses before moves; routed files never fall to built-in groups")),
+            ("existing", j::str("--scheme existing; a saved route moves any number of matching files, with no three-file floor; a saved route whose direct visible folder is missing has it created by apply only when at least one file moves into it, listed in the plan first and recorded in the journal; undo removes it when empty; a route with no files here is ignored and creates nothing; a file or link holding the name refuses before moves; routed files never fall to built-in groups")),
             ("profile_path", j::str("ETUDE_STATE_DIR/sweep-existing-profile.toml; default HOME/Library/Application Support/etudes/sweep-existing-profile.toml")),
             ("profile_schema", j::str("schema_version = 1; [[routes]] extension = quoted string, folder = quoted string")),
             ("save_policy", j::str("validated existing direct visible destinations only, checked against this tree for added routes only; conflicts refuse before moves; complete apply only; nothing new writes nothing; new routes are appended so existing text and comments stay; mode 0600 same-folder per-writer locked temporary file, fsync, rename; stale temporary files of dead writers are removed; undo keeps saved routes")),

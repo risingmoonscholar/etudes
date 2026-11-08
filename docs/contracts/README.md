@@ -105,7 +105,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v16/sweep.json`, `v14/stash.json` and `v8/unpack.json` are the
+later declaration: `v17/sweep.json`, `v14/stash.json` and `v8/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -470,15 +470,22 @@ already reads and writes `journal_store` and reads
 `journal_recorded_paths_metadata`. `v16/sweep.json` and `v14/stash.json` pin
 these declarations and `v1/` mirrors them; the result envelope stays at version 4.
 
-**Declaration version 16 (sweep)** lets `--scheme existing` create a saved
-route's folder. When a route's direct visible folder is missing, apply creates
-it only for a group that moves at least one file, through the same checked path
-as a `--map` folder: the plan lists it first (signal `.EXT (saved route, new
-folder sweep creates)`), the journal records it, and undo removes it when it is
-empty. A route with no files in the selected folder is ignored and creates
-nothing. A file or link holding the route's folder name still refuses with
-`profile_invalid` before anything moves, and routed files never fall to a
-built-in group. Apply, review and exported-plan apply declare the write
-`selected_tree_route_folders_if_missing`. The plan artifact schema and the
-result envelope (version 4) are unchanged. `v16/sweep.json` pins this
-declaration and `v1/sweep.json` mirrors it; `v15/sweep.json` remains retained.
+**Declaration version 17 (sweep)** lets `--scheme existing` create a saved
+route's folder, and limits the three-file floor to new folders. When a route's
+direct visible folder is missing, apply creates it only for a group that moves
+at least one file, through the same checked path as a `--map` folder: the plan
+lists it first (signal `.EXT (saved route, new folder sweep creates)`), the
+journal records it, and undo removes it when it is empty. A route with no files
+in the selected folder is ignored and creates nothing. A file or link holding
+the route's folder name still refuses with `profile_invalid` before anything
+moves, and routed files never fall to a built-in group. A saved route has no
+floor: one or two matching files move. `routing.new_folder_floor` states the
+rest: a built-in group or a `--map` group needs three eligible files only when
+sweep would create its folder; when the folder already exists as a direct child
+of the root, any number moves into it, and files already directly inside it
+are reported in place. Apply, review and exported-plan apply declare the write
+`selected_tree_route_folders_if_missing`. An exported plan marks a saved
+route's group with its own tag (8); a plan written earlier reads as it did. The
+plan artifact schema and the result envelope (version 4) are unchanged.
+`v17/sweep.json` pins this declaration and `v1/sweep.json` mirrors it;
+`v16/sweep.json` remains retained.
