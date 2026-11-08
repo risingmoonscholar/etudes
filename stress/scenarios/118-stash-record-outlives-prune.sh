@@ -72,8 +72,10 @@ if ls -A "$W/held" | grep -q '^\.stash-'; then fail "a holding folder is left af
 touch -t "$OLD" "$ETUDE_STATE_DIR/$stash_record"
 "$SWEEP" undo "$W/swept2" >/dev/null 2>&1
 if [ -f "$ETUDE_STATE_DIR/$stash_record" ]; then pass "sweep's prune leaves even a popped stash record to stash"; else fail "sweep's prune deleted a stash record"; fi
-"$STASH" pop "$W/scan" >/dev/null 2>"$W/pop2.err"
-assert_eq 1 "$?" "pop of a folder with nothing stashed exits 1"
+stash_id=${stash_record#stash-}; stash_id=${stash_id%.journal}
+"$STASH" pop --id "$stash_id" >"$W/pop2.out" 2>"$W/pop2.err"
+assert_eq 1 "$?" "pop by id of the old popped stash exits 1"
+if grep -q 'already popped' "$W/pop2.out"; then pass "it still answers already popped, then drops the record"; else fail "pop by id of an old popped stash: $(cat "$W/pop2.out" "$W/pop2.err")"; fi
 if [ ! -e "$ETUDE_STATE_DIR/$stash_record" ]; then pass "the popped stash record expires once 30 days old"; else fail "a popped stash record outlived its 30 days"; fi
 if grep -q 'dropped 1 undo record older than 30 days' "$W/pop2.err"; then pass "stash says it dropped one record"; else fail "stash's prune message: $(cat "$W/pop2.err")"; fi
 

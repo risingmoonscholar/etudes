@@ -1903,7 +1903,9 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
-    prune_popped(&sl);
+    // After the pop, on every path out: a pop of a finished record past 30
+    // days still answers "already popped" before that record is dropped.
+    let _prune = PruneOnExit(&sl);
     // An id no journal holds is the same answer `status --id` gives. A folder
     // with nothing stashed is a different question and keeps its own reason.
     let asked_id = match &selector {
@@ -3060,6 +3062,14 @@ impl etude_core::journal::Sealer for KeychainSeal {
 /// is open, so a record that shows nothing is still held can expire. A pop
 /// rewrites the record, so it is dropped 30 days after the pop that finished
 /// it. A record this key cannot open is kept.
+/// Runs [`prune_popped`] when `cmd_pop` returns, whichever way it returns.
+struct PruneOnExit<'a>(&'a KeychainSeal);
+impl Drop for PruneOnExit<'_> {
+    fn drop(&mut self) {
+        prune_popped(self.0);
+    }
+}
+
 fn prune_popped(sl: &dyn etude_core::journal::Sealer) {
     let dropped = etude_core::journal::prune_finished("stash", sl);
     if dropped > 0 {
