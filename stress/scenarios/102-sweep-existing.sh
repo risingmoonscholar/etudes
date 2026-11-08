@@ -79,7 +79,10 @@ write_profile(route)
 (root / 'c.pdf').unlink()
 small = tree()
 result = run('apply', root, '--scheme', 'existing', '--yes', '--json')
-check(result.returncode == 1 and tree() == small, 'two eligible routed files do not form a group')
+check(result.returncode == 0 and not (root / 'a.pdf').exists() and not (root / 'b.pdf').exists() and
+      all((root / 'Reading' / name).read_bytes() == original[name] for name in ('a.pdf', 'b.pdf')),
+      'two eligible routed files move: a saved route has no three-file floor')
+check(run('undo', root).returncode == 0 and tree() == small, 'undo brings the two routed files back')
 (root / 'c.pdf').write_bytes(original['c.pdf'])
 plan = work / 'plan'
 result = run(root, '--scheme', 'existing', '--export-plan', plan, '--json')
