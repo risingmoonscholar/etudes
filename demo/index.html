@@ -130,14 +130,14 @@ fixture. The text panels are captured command output; the short GIFs are termina
 recordings with small script-written labels around the real output. Nothing runs in your
 browser. <a href="#provenance">How the recordings are made.</a></p>
 
-<p>Release notes: <a href="releases/sweep-v0.5.4.html">sweep 0.5.4</a> ·
-<a href="releases/stash-v0.5.4.html">stash 0.5.4</a> ·
-<a href="releases/unpack-v0.5.4.html">unpack 0.5.4</a>.</p>
+<p>Release notes: <a href="releases/sweep-v0.5.5.html">sweep 0.5.5</a> ·
+<a href="releases/stash-v0.5.5.html">stash 0.5.5</a> ·
+<a href="releases/unpack-v0.5.5.html">unpack 0.5.5</a>.</p>
 
 <hr>
 
 <section id="sweep" class="tool" data-tool="sweep"></section>
-<p class="tool-note">With a saved existing-folder profile, sweep names a missing destination and stops; it never falls through to a different built-in folder. Files already directly inside a route destination are reported in place.</p>
+<p class="tool-note">With a saved existing-folder profile, sweep moves any number of matching files and creates a missing destination folder only when files move into it; it never falls through to a different built-in folder. Files already directly inside a route destination are reported in place.</p>
 <hr>
 <section id="stash" class="tool" data-tool="stash"></section>
 <hr>
@@ -162,7 +162,7 @@ the source sessions are preserved in <code>demo/recordings/</code>. They use dis
 synthetic files and local journal state. The clips illustrate behavior; tests and stress
 scenarios remain the evidence for safety claims.</p>
 
-<p>Version 0.5.4 also changes the JSON result shape: its outer envelope is
+<p>Since version 0.5.4 the JSON result shape is different: its outer envelope is
 <code>schema_version: 4</code>, and operation fields formerly at the top level
 now live under <code>details</code>. Agents that parse JSON must check the
 schema version and update those field paths before upgrading. Capability-contract
