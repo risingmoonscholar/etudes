@@ -33,9 +33,7 @@ pub fn shell_word(text: &str) -> Option<String> {
 /// A name the caller typed, in full, for an error message. Control characters
 /// are replaced so a hostile name cannot send escape codes to the terminal.
 pub fn shown_text(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { '?' } else { c })
-        .collect()
+    etude_core::shown_text(text)
 }
 
 /// A path the caller typed, for an error message. See [`shown_text`]. Names of

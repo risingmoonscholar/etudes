@@ -91,6 +91,9 @@ fn parse_string(value: &str) -> Result<String, String> {
 }
 
 fn parse(source: &str) -> Result<Vec<(String, String)>, String> {
+    // Some macOS editors write a byte order mark first. It is not part of the
+    // first line.
+    let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut version = None;
     let mut routes = Vec::new();
     // A route being read, and the line its header is on.
@@ -357,9 +360,11 @@ fn remove_stale_pending(dir: &std::path::Path) {
         let Ok(file) = options.open(&path) else {
             continue;
         };
-        let same = file
-            .metadata()
-            .is_ok_and(|now| now.ino() == before.ino() && now.dev() == before.dev());
+        // A file with other names is not a leftover of ours: never unlink a
+        // hard link that carries the pending name.
+        let same = file.metadata().is_ok_and(|now| {
+            now.ino() == before.ino() && now.dev() == before.dev() && now.nlink() == 1
+        });
         if same {
             let _ = std::fs::remove_file(&path);
         }
@@ -801,6 +806,62 @@ mod writer_tests {
         drop(other);
         drop(held);
         assert_eq!(pending_files(&state), vec!["notes.pending".to_owned()]);
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_is_accepted_and_kept() {
+        let routes = vec![("bpy".to_owned(), "Box".to_owned())];
+        let text =
+            "\u{feff}schema_version = 1\n[[routes]]\nextension = \"bpy\"\nfolder = \"Box\"\n";
+        assert_eq!(parse(text).unwrap(), routes);
+        // A file holding only the mark is refused like an empty file, not as a
+        // broken line.
+        assert_eq!(
+            parse("\u{feff}").unwrap_err(),
+            "the file needs one schema_version = 1 entry."
+        );
+        // Saving a new route keeps every byte the person wrote, mark included.
+        let (base, _cleanup) = temp_dir();
+        std::fs::create_dir(base.join("Box")).unwrap();
+        std::fs::create_dir(base.join("Other")).unwrap();
+        let path = base.join("profile.toml");
+        std::fs::write(&path, text).unwrap();
+        let pending =
+            PendingRoutes::prepare_at(&base, &[map("xyz", "Other")], path.clone()).unwrap();
+        assert!(pending.save().unwrap().written);
+        let after = std::fs::read(&path).unwrap();
+        assert!(after.starts_with(text.as_bytes()), "{after:?}");
+        let after = String::from_utf8(after).unwrap();
+        assert_eq!(parse(&after).unwrap().len(), 2);
+    }
+
+    // The lock that tells a leftover from a live file is macOS-only.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_hard_link_with_the_pending_name_is_never_removed() {
+        let (base, _cleanup) = temp_dir();
+        std::fs::create_dir(base.join("Box")).unwrap();
+        let state = base.join("state");
+        std::fs::create_dir(&state).unwrap();
+        let precious = base.join("precious.txt");
+        std::fs::write(&precious, b"keep me").unwrap();
+        let linked = state.join(".sweep-existing-profile.1-2.pending");
+        std::fs::hard_link(&precious, &linked).unwrap();
+        let pending =
+            PendingRoutes::prepare_at(&base, &[map("bpy", "Box")], state.join("profile.toml"))
+                .unwrap();
+        assert!(linked.exists(), "the hard link was unlinked");
+        assert_eq!(std::fs::read(&precious).unwrap(), b"keep me");
+        drop(pending);
+        assert!(linked.exists());
+        // A leftover with one name is still removed.
+        std::fs::remove_file(&linked).unwrap();
+        std::fs::write(&linked, b"x").unwrap();
+        let again =
+            PendingRoutes::prepare_at(&base, &[map("bpy", "Box")], state.join("profile.toml"))
+                .unwrap();
+        assert!(!linked.exists());
+        drop(again);
     }
 
     #[test]

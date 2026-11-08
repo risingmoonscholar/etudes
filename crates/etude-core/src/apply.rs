@@ -2,14 +2,18 @@
 //!
 //! Ordering rule for `apply()`: the journal is written before the first move,
 //! and each entry is marked done only after its move succeeds. So the journal
-//! never claims a move that did not happen.
+//! never claims a move that did not happen, unless a power cut persists a
+//! record without its move (see below). Each done record is ordered behind its
+//! move with a barrier sync, and one full flush ends the run.
 //!
-//! A crash between a move succeeding and its progress frame reaching disk
-//! leaves the entry reading as not done. `undo` recovers that one entry — and
-//! only that one — because apply moves in order, so the successor of the last
-//! recorded done is the single place a crash can hide. On macOS the move
-//! itself is one atomic syscall, so the window only exists at all on the
-//! link+unlink fallback path and in journals written before the change.
+//! A crash or power cut between a move succeeding and its progress frame
+//! reaching disk leaves the entry reading as not done. Records persist as an
+//! in-order prefix, so after a power cut every surviving move except the
+//! newest has its record. `undo` recovers that one entry, and only that one,
+//! because apply moves in order: the successor of the last recorded done is
+//! the single place a loss can hide. A record may also persist without its
+//! move; undo reconciles that too. On macOS the move itself is one atomic
+//! syscall.
 //!
 //! `undo()` persists its own progress per entry and self-heals an entry whose
 //! move landed but whose record did not. See its doc comment for exactly what

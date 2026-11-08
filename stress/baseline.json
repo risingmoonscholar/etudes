@@ -81,5 +81,6 @@
   "116-moves-into-checked-folders": 18,
   "117-journal-barrier-kill-and-recover": 16,
   "118-stash-record-outlives-prune": 29,
-  "122-failed-move-leaves-no-copy": 20
+  "122-failed-move-leaves-no-copy": 20,
+  "119-names-without-debug-quotes": 33
 }

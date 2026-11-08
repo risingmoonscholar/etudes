@@ -616,8 +616,9 @@ fn cmd_lesson(args: &[String]) -> ExitCode {
             Ok(n) if (1..=LESSON.len()).contains(&n) => n,
             _ => {
                 eprintln!(
-                    "sweep: lesson takes a step from 1 to {}, got {v:?}",
-                    LESSON.len()
+                    "sweep: lesson takes a step from 1 to {}, got {}",
+                    LESSON.len(),
+                    etude_cli_support::shown_text(v)
                 );
                 return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
             }
@@ -657,7 +658,8 @@ fn parse_scheme(args: &[String]) -> Result<(), String> {
                 .to_string(),
         ),
         Some(name) => Err(format!(
-            "unsupported scheme {name:?}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`"
+            "unsupported scheme {}; this version supports `--scheme folders`, `--scheme existing` and `--scheme tags`",
+            etude_cli_support::shown_text(&name)
         )),
     }
 }
@@ -671,7 +673,10 @@ fn parse_depth(args: &[String]) -> Result<u8, String> {
         None => Ok(1),
         Some(v) => match v.parse::<u8>() {
             Ok(d) if (1..=8).contains(&d) => Ok(d),
-            _ => Err(format!("--depth must be a number from 1 to 8, got {v:?}")),
+            _ => Err(format!(
+                "--depth must be a number from 1 to 8, got {}",
+                etude_cli_support::shown_text(&v)
+            )),
         },
     }
 }
@@ -720,7 +725,10 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
         // who typos --since 6hh and is shown the ordinary 24h result has been
         // told their instruction was obeyed when it was discarded.
         let n: u64 = digits.parse().map_err(|_| {
-            format!("--since must be a number, optionally with h or d, got {raw:?}")
+            format!(
+                "--since must be a number, optionally with h or d, got {}",
+                etude_cli_support::shown_text(raw)
+            )
         })?;
         // Overflow is a wrong window, and a wrong window silently changes
         // which files are held back. Unchecked, this panicked in debug and
@@ -734,7 +742,10 @@ fn since_flag(args: &[String]) -> Result<Option<std::time::Duration>, String> {
                 3600 => (u64::MAX / 3600, "h"),
                 _ => (u64::MAX / (24 * 60 * 60), "d"),
             };
-            format!("--since {raw:?} is too large. The longest window is {most}{sym}")
+            format!(
+                "--since {} is too large. The longest window is {most}{sym}",
+                etude_cli_support::shown_text(raw)
+            )
         })?;
         return Ok(Some(std::time::Duration::from_secs(secs)));
     }
@@ -1222,9 +1233,12 @@ fn map_flags(args: &[String]) -> Result<Vec<(String, String)>, String> {
             let v = args
                 .get(i + 1)
                 .ok_or_else(|| "--map needs EXT=Folder, like --map bpy=Blender".to_string())?;
-            let (ext, folder) = v
-                .split_once('=')
-                .ok_or_else(|| format!("--map {v:?}: expected EXT=Folder"))?;
+            let (ext, folder) = v.split_once('=').ok_or_else(|| {
+                format!(
+                    "--map {}: expected EXT=Folder",
+                    etude_cli_support::shown_text(v)
+                )
+            })?;
             out.push((ext.to_string(), folder.to_string()));
             i += 2;
             continue;
@@ -2259,25 +2273,33 @@ fn hold_hint(p: &plan::Plan) -> String {
 /// does not exist yet is the one sanctioned exception, and an exception the
 /// output does not announce would just be the invariant quietly gone.
 fn print_agent_named_note(p: &plan::Plan) {
-    let coined: Vec<&str> = p
+    if let Some(note) = agent_named_note(p) {
+        println!("{note}");
+    }
+}
+
+fn agent_named_note(p: &plan::Plan) -> Option<String> {
+    let coined: Vec<String> = p
         .groups
         .iter()
         .filter_map(|g| match &g.signal {
-            plan::Signal::Mapped { created: true, .. } => Some(g.name.as_str()),
+            plan::Signal::Mapped { created: true, .. } => {
+                Some(etude_cli_support::shown_text(&g.name))
+            }
             _ => None,
         })
         .collect();
     match coined.len() {
-        0 => {}
-        1 => println!(
-            "\n  the folder name {:?} was chosen by your agent, not derived from your files",
+        0 => None,
+        1 => Some(format!(
+            "\n  the folder name {} was chosen by your agent, not derived from your files",
             coined[0]
-        ),
-        _ => println!(
+        )),
+        _ => Some(format!(
             "\n  {} folder names were chosen by your agent, not derived from your files: {}",
             coined.len(),
             coined.join(", ")
-        ),
+        )),
     }
 }
 
@@ -4296,6 +4318,45 @@ fn finish_undo(
     code
 }
 
+/// What to say after an undo when the routes profile still holds a route for
+/// files this undo put back. The journal does not record that an apply saved
+/// routes, so the answer comes from the profile: a route whose extension and
+/// folder match a restored file's. Undo never edits the profile.
+fn routes_kept_line(j: &etude_core::Journal) -> Option<String> {
+    let profile = existing_profile::ExistingProfile::load().ok()?;
+    let kept = kept_routes(j, &profile.routes);
+    if kept.is_empty() {
+        return None;
+    }
+    let list = kept
+        .iter()
+        .map(|(ext, folder)| format!(".{ext} -> {}", etude_cli_support::shown_text(folder)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "  Saved routes stay in the routes profile ({list}). To drop one, delete its [[routes]] block from {}",
+        etude_cli_support::shown(&existing_profile::profile_location())
+    ))
+}
+
+/// The profile routes that match a file this journal's undo put back.
+fn kept_routes(j: &etude_core::Journal, routes: &[(String, String)]) -> Vec<(String, String)> {
+    routes
+        .iter()
+        .filter(|(ext, folder)| {
+            j.entries.iter().any(|entry| {
+                entry.state == etude_core::journal::EntryState::Reversed
+                    && entry
+                        .to
+                        .extension()
+                        .is_some_and(|e| e.to_string_lossy().to_lowercase() == *ext)
+                    && entry.to.parent() == Some(j.root.join(folder).as_path())
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 fn run_undo(
     j: &mut etude_core::Journal,
     sl: &dyn etude_core::journal::Sealer,
@@ -4447,6 +4508,9 @@ fn run_undo(
                 etude_cli_support::counted(r.restored, "file", "files")
             );
         }
+    }
+    if !tag_journal && let Some(line) = routes_kept_line(j) {
+        println!("{line}");
     }
     if !r.skipped_changed.is_empty() {
         if tag_journal {
@@ -5048,6 +5112,27 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_named_note_escapes_control_characters_in_every_name() {
+        let group = |name: &str| plan::Group {
+            name: name.to_owned(),
+            signal: plan::Signal::Mapped {
+                ext: "bpy".into(),
+                created: true,
+            },
+            members: Vec::new(),
+            accepted: true,
+        };
+        let plan = plan::Plan::display_only(
+            PathBuf::from("/x"),
+            vec![group("A\x1b[2Jone"), group("B\ntwo")],
+        );
+        assert_eq!(
+            agent_named_note(&plan).unwrap(),
+            "\n  2 folder names were chosen by your agent, not derived from your files: A?[2Jone, B?two"
+        );
+    }
 
     // unknown flags must fail even after a valid path, or consent can move files.
     #[test]

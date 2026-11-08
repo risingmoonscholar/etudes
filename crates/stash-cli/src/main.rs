@@ -704,7 +704,10 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         Some(d) => match parse_duration(&d) {
             Some(secs) => Some(now_secs() + secs),
             None => {
-                eprintln!("stash: cannot read duration {d:?}. Try 30m, 2h, 3d or 1w.");
+                eprintln!(
+                    "stash: cannot read duration {}. Try 30m, 2h, 3d or 1w.",
+                    etude_cli_support::shown_text(&d)
+                );
                 return refuse(etude_cli_support::reason::Code::InvalidArguments);
             }
         },
@@ -1191,7 +1194,10 @@ fn cmd_select(args: &[String]) -> ExitCode {
             match parse_duration(value).and_then(|seconds| now_secs().checked_add(seconds)) {
                 Some(deadline) => Some(deadline),
                 None => {
-                    eprintln!("stash: cannot read duration {value:?}. Try 30m, 2h, 3d or 1w.");
+                    eprintln!(
+                        "stash: cannot read duration {}. Try 30m, 2h, 3d or 1w.",
+                        etude_cli_support::shown_text(value)
+                    );
                     return refuse(etude_cli_support::reason::Code::InvalidArguments);
                 }
             }
