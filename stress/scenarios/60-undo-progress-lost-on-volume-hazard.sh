@@ -32,7 +32,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-W=$(workdir)
+W=$(workdir) || exit 1
 OUTER="$W/outer"
 IMG="$W/inner.dmg"
 # Sorts before the group's own filenames, so its entries get LOWER indices

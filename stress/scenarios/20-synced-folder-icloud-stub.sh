@@ -11,7 +11,7 @@
 # stub stays put while ordinary files move and undo exactly.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 
 # --- Detection breadth: every documented marker refuses by default ---
 for provider in "Dropbox" "OneDrive" "Sync.com" "pCloud Drive"; do

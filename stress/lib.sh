@@ -11,6 +11,9 @@
 # its own temporary directory and removes it on exit.
 
 set -uo pipefail
+# A scenario run by hand has no SCENARIO; name it after the script so messages
+# and scratch folders still work under set -u.
+SCENARIO="${SCENARIO:-$(basename "$0" .sh)}"
 
 # A scenario that dies before its first assertion used to be invisible: no ok,
 # no FAIL, and the runner counted it as nothing at all. Worse, without `set -e`
@@ -250,9 +253,16 @@ trap() {
   builtin trap "$@"
 }
 
-# A scratch tree, unique per scenario, removed on exit.
+# A scratch tree, unique per scenario, removed on exit. A scenario run by hand
+# has no SCENARIO set; name the tree after the script instead of failing, and
+# never return an empty path: a caller that resolves an empty path with cd lands
+# in its current folder, and its exit trap would then remove that folder.
 workdir() {
-  local d; d=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-${SCENARIO}-XXXXXX")
+  local d; d=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-${SCENARIO:-$(basename "$0" .sh)}-XXXXXX") || d=""
+  if [ -z "$d" ] || [ ! -d "$d" ]; then
+    echo "stress: could not make a scratch folder; stopping before any cleanup can touch the current folder" >&2
+    return 1
+  fi
   echo "$d"
 }
 

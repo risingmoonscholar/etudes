@@ -23,7 +23,7 @@
 #      not a live reproduction.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 cleanup() {
   [ -n "${W:-}" ] && [ -e "$W" ] || return 0
   t0=$(date +%s.%N)

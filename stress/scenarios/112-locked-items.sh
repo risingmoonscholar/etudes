@@ -19,7 +19,7 @@ json_get() {
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"
 }
 
-W=$(workdir)
+W=$(workdir) || exit 1
 cleanup() {
   chflags -R nouchg "$W" 2>/dev/null || true
   rm -rf "$W"

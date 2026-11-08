@@ -43,7 +43,7 @@ journal_file() {
 }
 
 # --- Build one fully-applied tree and snapshot its intact journal ----------
-D=$(workdir)/D
+D=$(workdir) || exit 1; D=$D/D
 N=60
 make_tree "$D" "$N"
 BEFORE_SET=$(find "$D" -maxdepth 1 -type f -exec basename {} \; | sort)

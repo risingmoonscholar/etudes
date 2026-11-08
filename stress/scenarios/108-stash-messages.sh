@@ -4,14 +4,14 @@
 # 0 from pop means every item came back.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done
   chflags -R nouchg "$W" 2>/dev/null; chmod -R u+rwx "$W" 2>/dev/null; rm -rf "$W"
 }
 trap cleanup EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 if [ "$(id -u)" = 0 ]; then
   unproven "stash messages" "root ignores file modes"
   exit 0

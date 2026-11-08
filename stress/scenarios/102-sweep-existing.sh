@@ -2,7 +2,7 @@
 # Existing-folder routes move only eligible files into folders already present.
 # Invalid profiles and stale exported plans refuse without changing the tree.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
-W=$(workdir); trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
 CODE=0
 python3 -u - "$SWEEP" "$W" > "$W/checks" <<'PY' || CODE=$?
 import json, os, pathlib, subprocess, sys

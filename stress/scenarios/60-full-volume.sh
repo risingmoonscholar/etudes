@@ -32,7 +32,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-W=$(workdir)
+W=$(workdir) || exit 1
 IMG="$W/full.dmg"
 MNT="$W/mnt"
 mkdir -p "$MNT"
