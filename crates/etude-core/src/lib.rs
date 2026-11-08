@@ -43,8 +43,9 @@ pub enum Untouched {
     LooksPersonal(Category),
     /// No detector claimed it with enough confidence.
     NoClearGroup,
-    /// The file is already directly inside the destination selected by an
-    /// existing-folder profile route; it does not need to move.
+    /// The file is already directly inside the folder its group moves files
+    /// into (a saved route's folder, or a group folder that is already here);
+    /// it does not need to move.
     AlreadyInDestination,
     /// Changed within the grace window. Too recent to judge: a file someone
     /// touched an hour ago is one they are using, and a file that arrived an

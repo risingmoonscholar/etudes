@@ -405,7 +405,26 @@ impl Plan {
             .count()
     }
 
-    /// Files already directly inside the destination selected by a profile.
+    /// Files with no group whose type has a built-in folder, by that folder.
+    /// They stay only because sweep would have had to make the folder and
+    /// there were fewer than three of them: a folder of that name already
+    /// here takes any number.
+    pub fn below_floor(&self) -> Vec<(&'static str, usize)> {
+        let mut by_family: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for (path, reason) in &self.untouched {
+            if *reason == Untouched::NoClearGroup
+                && let Some(family) = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .and_then(classify::type_family)
+            {
+                *by_family.entry(family).or_default() += 1;
+            }
+        }
+        by_family.into_iter().collect()
+    }
+
+    /// Files already directly inside the folder their group moves files into.
     pub fn already_in_destination(&self) -> usize {
         self.untouched
             .iter()
@@ -637,9 +656,61 @@ impl Plan {
     }
 }
 
-/// Minimum members before a shared token justifies a group. Below this, the
-/// grouping is noise and the honest answer is "no clear group".
+/// Minimum members before sweep makes a NEW folder from its own rule. Below
+/// this, the grouping is a guess from too few files and the honest answer is
+/// "no clear group". The floor guards folder creation only: when the
+/// destination folder is already a direct child of the root, or a saved route
+/// names it, any number of files moves into it.
 const MIN_STRUCTURAL_GROUP: usize = 3;
+
+/// True when `name` is a real directory directly under the root, as the scan
+/// snapshot observed it. Apply checks the same observation before each move
+/// into it, so a folder that is gone by then is refused, never re-created for
+/// a group the floor would not have formed. No snapshot means not observed.
+fn folder_observed(scan: &ScanOutcome, name: &str) -> bool {
+    let Some(snapshot) = &scan.snapshot else {
+        return false;
+    };
+    let committed = crate::scan::TreeSnapshot::path_commitment(std::path::Path::new(name));
+    snapshot
+        .entries
+        .iter()
+        .any(|entry| entry.path == committed && entry.identity.kind == 2)
+}
+
+/// Settle one group whose folder is `name`. When that folder is already here,
+/// files directly inside it stay where they are (they are already home) and
+/// any number of the rest moves in. When sweep would have to make the folder,
+/// the floor applies. Returns the files to move, or `None` when there is no
+/// group; only the returned files and the in-place files are claimed.
+fn settle<'a>(
+    scan: &ScanOutcome,
+    name: &str,
+    candidates: Vec<&'a Entry>,
+    claimed: &mut Vec<PathBuf>,
+    untouched: &mut Vec<(PathBuf, Untouched)>,
+) -> Option<Vec<&'a Entry>> {
+    if !folder_observed(scan, name) {
+        if candidates.len() < MIN_STRUCTURAL_GROUP {
+            return None;
+        }
+        claimed.extend(candidates.iter().map(|e| e.path.clone()));
+        return Some(candidates);
+    }
+    let destination = scan.root.join(name);
+    let (in_place, members): (Vec<&Entry>, Vec<&Entry>) = candidates
+        .into_iter()
+        .partition(|e| e.path.parent() == Some(destination.as_path()));
+    for entry in in_place {
+        claimed.push(entry.path.clone());
+        untouched.push((entry.path.clone(), Untouched::AlreadyInDestination));
+    }
+    if members.is_empty() {
+        return None;
+    }
+    claimed.extend(members.iter().map(|e| e.path.clone()));
+    Some(members)
+}
 /// Window within which camera files count as one burst.
 const BURST_DAYS: u32 = 3;
 
@@ -1065,9 +1136,10 @@ fn group_entries(
     // The CLI checked each destination: an existing direct folder keeps
     // `created: false`, which tells apply never to create it if it
     // disappears; a missing one is `created: true` and apply makes it for
-    // the first file that moves. A routed extension's files never fall to a
-    // built-in group: below the floor they stay where they are, and no
-    // folder is made for them.
+    // the first file that moves. A route is the person's own choice, not a
+    // guess, so it has no floor: one matching file moves, and a missing
+    // folder is made for it. A routed extension's files never fall to a
+    // built-in group.
     if profile_routes {
         for m in maps {
             let destination = scan.root.join(&m.folder);
@@ -1088,15 +1160,10 @@ fn group_entries(
                 .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
                 .copied()
                 .collect();
-            claimed.extend(members.iter().map(|e| e.path.clone()));
-            if members.len() < MIN_STRUCTURAL_GROUP {
-                untouched.extend(
-                    members
-                        .iter()
-                        .map(|e| (e.path.clone(), Untouched::NoClearGroup)),
-                );
+            if members.is_empty() {
                 continue;
             }
+            claimed.extend(members.iter().map(|e| e.path.clone()));
             groups.push(Group {
                 name: m.folder.clone(),
                 signal: Signal::Mapped {
@@ -1116,8 +1183,7 @@ fn group_entries(
         .copied()
         .filter(|e| classify::is_screenshot(e) && !claimed.contains(&e.path))
         .collect();
-    if shots.len() >= MIN_STRUCTURAL_GROUP {
-        claimed.extend(shots.iter().map(|e| e.path.clone()));
+    if let Some(shots) = settle(scan, "Screenshots", shots, &mut claimed, &mut untouched) {
         groups.push(Group {
             name: "Screenshots".to_string(),
             signal: Signal::Screenshot,
@@ -1153,12 +1219,13 @@ fn group_entries(
         }
     }
     let cams: Vec<&Entry> = camera_candidates[best_start..best_start + best_len].to_vec();
-    if cams.len() >= MIN_STRUCTURAL_GROUP {
-        claimed.extend(cams.iter().map(|e| e.path.clone()));
-        let name = match date_range(&cams) {
-            Some(r) => format!("Photos, {r}"),
-            None => "Photos".to_string(),
-        };
+    let name = match date_range(&cams) {
+        Some(r) => format!("Photos, {r}"),
+        None => "Photos".to_string(),
+    };
+    if !cams.is_empty()
+        && let Some(cams) = settle(scan, &name, cams, &mut claimed, &mut untouched)
+    {
         groups.push(Group {
             name,
             signal: Signal::CameraBurst { days: BURST_DAYS },
@@ -1172,8 +1239,7 @@ fn group_entries(
         .copied()
         .filter(|e| classify::is_installer(e) && !claimed.contains(&e.path))
         .collect();
-    if inst.len() >= MIN_STRUCTURAL_GROUP {
-        claimed.extend(inst.iter().map(|e| e.path.clone()));
+    if let Some(inst) = settle(scan, "Installers", inst, &mut claimed, &mut untouched) {
         groups.push(Group {
             name: "Installers".to_string(),
             signal: Signal::Installer,
@@ -1214,10 +1280,9 @@ fn group_entries(
             }
         }
         for (family, members) in by_family {
-            if members.len() < MIN_STRUCTURAL_GROUP {
+            let Some(members) = settle(scan, family, members, &mut claimed, &mut untouched) else {
                 continue;
-            }
-            claimed.extend(members.iter().map(|e| e.path.clone()));
+            };
             groups.push(Group {
                 name: family.to_string(),
                 signal: Signal::TypeFamily {
@@ -1233,9 +1298,11 @@ fn group_entries(
     // built-in pass declined. A mapping can never take a file from a
     // detector, and nothing here runs before the refusals -- a personal
     // record, a held document's reference surface, a fresh file or an
-    // in-flight download never reaches this point. Same three-file floor as
-    // every structural group: below it, --map would be an arbitrary
-    // one-file move command wearing a safety vocabulary.
+    // in-flight download never reaches this point. A --map folder that sweep
+    // would have to make keeps the three-file floor of every structural
+    // group: below it, --map would be an arbitrary one-file move command
+    // wearing a safety vocabulary. Into a folder that is already here, any
+    // number moves, the same as a built-in group.
     for m in maps.iter().filter(|_| !profile_routes) {
         let members: Vec<&Entry> = remaining
             .iter()
@@ -1243,10 +1310,9 @@ fn group_entries(
             .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
             .copied()
             .collect();
-        if members.len() < MIN_STRUCTURAL_GROUP {
+        let Some(members) = settle(scan, &m.folder, members, &mut claimed, &mut untouched) else {
             continue;
-        }
-        claimed.extend(members.iter().map(|e| e.path.clone()));
+        };
         groups.push(Group {
             name: m.folder.clone(),
             signal: Signal::Mapped {
@@ -1832,17 +1898,19 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// The route wins even below the three-file floor: two routed PDFs stay
-    /// where they are rather than joining the built-in Documents group, and
-    /// a group that does form carries the created folder and the saved mark.
+    /// A saved route has no floor: two routed PDFs and one routed .heic form
+    /// their saved groups instead of joining a built-in group or being
+    /// reported as having no group, and a group carries the created folder
+    /// and the saved mark.
     #[test]
-    fn a_routed_extension_below_the_floor_is_never_taken_by_a_built_in_group() {
+    fn a_saved_route_moves_one_or_two_files_and_never_reports_them_ungrouped() {
         let entries = vec![
             cam_entry("a.pdf", 1000),
             cam_entry("b.pdf", 1000),
             cam_entry("c.docx", 1000),
             cam_entry("d.docx", 1000),
             cam_entry("e.docx", 1000),
+            cam_entry("only.heic", 1000),
             cam_entry("one.qoi", 1000),
             cam_entry("two.qoi", 1000),
             cam_entry("three.qoi", 1000),
@@ -1855,34 +1923,43 @@ mod tests {
                 created: true,
             },
             MapSpec {
+                ext: "heic".into(),
+                folder: "Phone".into(),
+                created: true,
+            },
+            MapSpec {
                 ext: "qoi".into(),
                 folder: "Images Of Mine".into(),
                 created: true,
             },
         ];
         let p = build_existing(&scan, &maps);
-        assert!(
-            !p.groups.iter().any(|g| g.name == "Reading"),
-            "a group formed below the floor"
-        );
-        for g in &p.groups {
-            assert!(
-                !g.members
-                    .iter()
-                    .any(|m| m.extension().is_some_and(|e| e == "pdf")),
-                "{} took a routed PDF",
-                g.name
-            );
-        }
-        assert_eq!(
-            p.untouched
+        let members = |name: &str| -> Vec<String> {
+            let group = p
+                .groups
                 .iter()
-                .filter(|(path, why)| *why == Untouched::NoClearGroup
-                    && path.extension().is_some_and(|e| e == "pdf"))
-                .count(),
-            2,
-            "the routed PDFs are not reported as left in place"
+                .find(|g| g.name == name)
+                .unwrap_or_else(|| panic!("no {name} group"));
+            let mut names: Vec<String> = group
+                .members
+                .iter()
+                .map(|m| m.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(members("Reading"), ["a.pdf", "b.pdf"]);
+        assert_eq!(members("Phone"), ["only.heic"]);
+        assert_eq!(members("Documents"), ["c.docx", "d.docx", "e.docx"]);
+        assert!(p.unclaimed.is_empty(), "{:?}", p.unclaimed);
+        assert_eq!(p.no_clear_group(), 0, "routed files reported as no group");
+        let json = p.to_json();
+        assert!(
+            json.contains("\"no_clear_group\":0"),
+            "routed files counted as no group: {json}"
         );
+        assert!(json.contains("\"no_clear_group_paths\":[]"), "{json}");
+        assert!(json.contains("\"unknown_extensions\":{}"), "{json}");
         let routed = p
             .groups
             .iter()
@@ -1900,6 +1977,82 @@ mod tests {
             routed.signal.describe(),
             ".qoi (saved route, new folder sweep creates)"
         );
+    }
+
+    /// The floor guards folder creation only. Two PDFs with no Documents
+    /// folder stay as "no clear group"; one or two move when a Documents
+    /// folder is already here; a PDF already inside it stays in place; and a
+    /// `--map` folder follows the same rule.
+    #[test]
+    fn the_floor_applies_only_when_sweep_would_make_the_folder() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("sweep_floor_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cfg = |depth| crate::scan::ScanConfig {
+            depth,
+            grace: Some(Duration::ZERO),
+            ..Default::default()
+        };
+        let plan_at = |depth| build(&crate::scan::scan(&root, &cfg(depth)).unwrap());
+        let group_of = |p: &Plan, name: &str| -> Option<Vec<String>> {
+            p.groups.iter().find(|g| g.name == name).map(|g| {
+                let mut names: Vec<String> = g
+                    .members
+                    .iter()
+                    .map(|m| m.file_name().unwrap().to_string_lossy().into_owned())
+                    .collect();
+                names.sort();
+                names
+            })
+        };
+
+        fs::write(root.join("a.pdf"), b"a").unwrap();
+        fs::write(root.join("b.pdf"), b"b").unwrap();
+        let p = plan_at(1);
+        assert_eq!(
+            group_of(&p, "Documents"),
+            None,
+            "a new folder from two files"
+        );
+        assert_eq!(p.no_clear_group(), 2);
+
+        fs::create_dir(root.join("Documents")).unwrap();
+        let p = plan_at(1);
+        assert_eq!(group_of(&p, "Documents").unwrap(), ["a.pdf", "b.pdf"]);
+        assert_eq!(p.no_clear_group(), 0);
+        fs::remove_file(root.join("b.pdf")).unwrap();
+        let p = plan_at(1);
+        assert_eq!(group_of(&p, "Documents").unwrap(), ["a.pdf"]);
+
+        fs::write(root.join("Documents/inside.pdf"), b"i").unwrap();
+        let p = plan_at(2);
+        assert_eq!(group_of(&p, "Documents").unwrap(), ["a.pdf"]);
+        assert_eq!(p.already_in_destination(), 1);
+        fs::remove_file(root.join("a.pdf")).unwrap();
+        let p = plan_at(2);
+        assert_eq!(
+            group_of(&p, "Documents"),
+            None,
+            "a group with nothing to move"
+        );
+        assert_eq!(p.already_in_destination(), 1);
+        assert_eq!(p.no_clear_group(), 0);
+
+        fs::remove_dir_all(root.join("Documents")).unwrap();
+        fs::write(root.join("one.bpy"), b"1").unwrap();
+        fs::write(root.join("two.bpy"), b"2").unwrap();
+        let missing = validate_maps(&[("bpy".into(), "Fresh".into())], &root).unwrap();
+        let scan = crate::scan::scan(&root, &cfg(1)).unwrap();
+        assert_eq!(group_of(&build_mapped(&scan, &missing), "Fresh"), None);
+        fs::create_dir(root.join("Blender")).unwrap();
+        let here = validate_maps(&[("bpy".into(), "Blender".into())], &root).unwrap();
+        let scan = crate::scan::scan(&root, &cfg(1)).unwrap();
+        assert_eq!(
+            group_of(&build_mapped(&scan, &here), "Blender").unwrap(),
+            ["one.bpy", "two.bpy"]
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// A mapping claims only what every built-in pass declined.
