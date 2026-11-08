@@ -6,7 +6,7 @@
 # The case uses three selected objects and one small supplied test key, with no real credentials or payloads.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require python3 "exact selection needs Python fixture generation" || exit 0
-W=$(workdir)
+W=$(workdir) || exit 1
 trap 'rm -rf "$W"' EXIT
 if python3 - "$UNPACK" "$STASH" "$W" <<'PYTHON'
 import pathlib,subprocess,json,sys,os

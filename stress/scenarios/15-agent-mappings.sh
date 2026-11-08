@@ -5,7 +5,7 @@
 # the journal required for undo.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 MP="$W/Mapped"; mkdir -p "$MP"
 for n in a b c; do printf 'model-%s\n' "$n" > "$MP/model_$n.bpy"; done
 printf 'tax record\n' > "$MP/tax_return_2025.bpy"

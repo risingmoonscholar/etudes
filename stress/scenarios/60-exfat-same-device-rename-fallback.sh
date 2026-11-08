@@ -29,7 +29,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MNT="$W/exfat"
 IMG="$W/exfat.dmg"
 mkdir -p "$MNT"

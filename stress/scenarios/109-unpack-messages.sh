@@ -4,14 +4,14 @@
 # unsafe archive stays a refusal. Steps that are the point of a fix are followed.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir)
+W=$(workdir) || exit 1
 MOUNTS=()
 cleanup() {
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do hdiutil detach "$m" -force >/dev/null 2>&1; done
   chmod -R u+rwx "${W:?}" 2>/dev/null; rm -rf "${W:?}"
 }
 trap cleanup EXIT
-W=$(cd "$W" && pwd -P)
+W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 require python3 "the archives here are built with Python" || exit 0
 export HOME="$W/home" ETUDE_STATE_DIR="$W/state"
 mkdir -p "$HOME" "$ETUDE_STATE_DIR"

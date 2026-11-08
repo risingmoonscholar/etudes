@@ -9,7 +9,7 @@
 # successful apply moves the eligible files, and undo returns the exact tree.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 
 for provider in "Dropbox" "Google Drive" "OneDrive"; do
   d="$W/$provider/Projects"

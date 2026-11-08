@@ -7,7 +7,7 @@ require tar "the fixture needs tar" || exit 0
 require zip "the fixture needs zip" || exit 0
 require pgrep "stopping the surviving extractor needs pgrep" || exit 0
 
-W=$(workdir); trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 python3 - "$W/payload" <<'PYTHON'
 from pathlib import Path
 import sys
