@@ -44,6 +44,14 @@ then claims eligible files; an agent `--map` can claim only what those built-in
 rules leave behind. This is the policy order, not a claim that sweep detects
 every filesystem state. The schemes are `folders`, `existing` and `tags`.
 
+Sweep makes a new folder only for three or more files of one kind, so it does
+not guess a folder from one or two files. When the folder is already a direct
+folder of the selected directory (for example `Documents`), any number of files
+of that kind moves into it, one or two included, and at `--depth 2` files
+already inside it are reported as in place. A `--map` folder follows the same
+rule. Fewer than three files with no folder of their own stay where they are,
+and the plan says which folder would take them.
+
 ### Tag files, move nothing
 
 `sweep --scheme tags` adds Finder tags and moves nothing. You name the tag for
@@ -125,8 +133,9 @@ the run moves at least one file into it. The plan lists the folder before
 anything moves, and undo removes it again if it is empty after the files go
 back. A route whose extension has no files here is ignored and creates nothing.
 If a file or a link holds the folder's name, sweep refuses before anything
-moves and names it. A route needs at least three eligible files to form a
-group; fewer stay where they are, and no built-in rule takes them. Each
+moves and names it. A route moves any number of matching files, one or two
+included: a saved route is your own choice, so the three-file floor for new
+folders does not apply to it. No built-in rule takes a routed file. Each
 extension needs its own destination. Duplicate or invalid routes refuse before anything
 moves. Safety refusals still take precedence over the profile; eligible profile
 routes take precedence over built-in grouping. A routed file is claimed once,
