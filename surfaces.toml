@@ -34,7 +34,7 @@ what = "every number and version stated in README, CHANGELOG, the site"
 watched_by = ["check-claims.sh"]
 
 [surface.website]
-what = "the site: site/index.html and the transcripts it shows, the release pages, and the docs pages built from the public docs"
+what = "the site: the home page built from site/tools.json and site/changelog/, the demo page site/demo/index.html and the transcripts it shows, the release pages, and the docs pages built from the public docs"
 watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh", "check-site.py"]
 
 [surface.issues]

@@ -57,7 +57,7 @@ fi
 tests_actual=$(printf '%s\n' "$tests_output" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
-for f in README.md docs/testing.md site/index.html; do
+for f in README.md docs/testing.md site/demo/index.html; do
   claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
 
@@ -67,10 +67,10 @@ done
 # a bug in the first version of this fix: it read 36 with one file untracked,
 # so the readme was corrected to a number no clone would ever see.
 scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
-# Every file that states the number, not just the readme. site/index.html is
+# Every file that states the number, not just the readme. site/demo/index.html is
 # the published site: it can be wrong in front of everyone while CI is green,
 # which is the exact failure this script exists to catch, one file over.
-for f in README.md docs/testing.md site/index.html; do
+for f in README.md docs/testing.md site/demo/index.html; do
   claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 done
 
@@ -158,7 +158,7 @@ inline_check=$(python3 - <<'PY_INNER'
 import json, re, sys
 try:
     ext = json.load(open("site/transcripts.json"))
-    html = open("site/index.html").read()
+    html = open("site/demo/index.html").read()
     m = re.search(r'<script type="application/json" id="transcripts-inline">(.*?)</script>', html, re.S)
     if not m:
         print("MISSING"); sys.exit(0)
@@ -169,8 +169,8 @@ PY_INNER
 )
 case "$inline_check" in
   SAME) ok "the page's inline transcripts are byte-identical to site/transcripts.json" ;;
-  MISSING) bad "site/index.html has no inline transcript block; a local copy of the page would show nothing" ;;
-  DRIFTED) bad "site/index.html's inline transcripts differ from site/transcripts.json. A hosted page and a local one would witness different output. Re-run scripts/capture-demos.sh" ;;
+  MISSING) bad "site/demo/index.html has no inline transcript block; a local copy of the page would show nothing" ;;
+  DRIFTED) bad "site/demo/index.html's inline transcripts differ from site/transcripts.json. A hosted page and a local one would witness different output. Re-run scripts/capture-demos.sh" ;;
   *) bad "could not compare the inline transcripts with site/transcripts.json: $inline_check" ;;
 esac
 

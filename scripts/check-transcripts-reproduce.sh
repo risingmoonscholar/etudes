@@ -30,10 +30,10 @@ fi
 # put them back whichever way this goes.
 tmp="$(mktemp -d)"
 cp "$committed" "$tmp/committed.json"
-cp site/index.html "$tmp/index.html"
+cp site/demo/index.html "$tmp/index.html"
 restore() {
   cp "$tmp/committed.json" "$committed"
-  cp "$tmp/index.html" site/index.html
+  cp "$tmp/index.html" site/demo/index.html
   rm -rf "$tmp"
 }
 trap restore EXIT

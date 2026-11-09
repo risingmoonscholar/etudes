@@ -87,7 +87,7 @@ jobs:
           print(f'{n} transcripts, captured at {d.get(\"commit\",\"?\")}')
           "
 
-      # The build copies site/index.html and site/transcripts.json byte for
+      # The build copies site/demo/index.html and site/transcripts.json byte for
       # byte, and the check refuses a build where they differ, so the panels
       # check-transcripts-reproduce.sh proves are the panels published.
       - name: Build the site and refuse a broken link or anchor

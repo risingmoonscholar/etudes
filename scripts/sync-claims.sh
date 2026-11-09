@@ -3,7 +3,7 @@
 #
 # check-claims.sh compares two documented counts against reality and fails on
 # drift. Adding a test moves the count, so every change that adds one has to
-# update README.md and site/index.html too. Asking a person -- or a model --
+# update README.md and site/demo/index.html too. Asking a person -- or a model --
 # to carry a number they can measure is the wrong shape, and it has been the
 # single most expensive mistake in this repo's factory loop: four of eight
 # cycles on one unit were spent on it, once by writing 256 when reality was
@@ -20,7 +20,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-FILES="README.md docs/testing.md site/index.html"
+FILES="README.md docs/testing.md site/demo/index.html"
 
 # Measured exactly as check-claims.sh measures. Test count from the suite's
 # own report; scenario count from what git TRACKS, because a reader gets what

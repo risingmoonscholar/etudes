@@ -81,7 +81,7 @@ def check_inline_copy(payload, html):
         html, re.DOTALL,
     )
     if not match:
-        raise ValueError("site/index.html has no inline transcript copy")
+        raise ValueError("site/demo/index.html has no inline transcript copy")
     try:
         inline = json.loads(match.group(1))
     except json.JSONDecodeError as error:
@@ -118,7 +118,7 @@ def check_page(payload, releases, html=None):
 def main():
     try:
         payload = json.loads((ROOT / "site/transcripts.json").read_text())
-        html = (ROOT / "site/index.html").read_text()
+        html = (ROOT / "site/demo/index.html").read_text()
         published = check_page(payload, fetch_published_releases(), html)
     except (OSError, json.JSONDecodeError, ValueError) as error:
         print(f"FAIL Pages release gate: stable release lookup or validation failed: {error}",
