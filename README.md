@@ -1,7 +1,5 @@
 <h1 align="center">Études</h1>
 
-<p align="center">Three command-line tools that move and extract files on macOS.</p>
-
 <p align="center">
 <a href="https://risingmoonscholar.github.io/etudes/"><b>Documentation</b></a> |
 <a href="https://github.com/risingmoonscholar/etudes/releases"><b>Releases</b></a> |
@@ -9,21 +7,22 @@
 <a href="CONTRIBUTING.md"><b>Contributing</b></a>
 </p>
 
----
 
-## The tools
+## What Études is
 
-Études is the name of this project. It contains three tools for macOS. You
-install each tool on its own.
+Études is a set of three command-line tools for files on macOS. Each tool
+installs and runs on its own.
 
-- **`sweep`** sorts the files in a folder into groups. It shows a plan first
-  and moves nothing until you run `sweep apply`.
-- **`stash`** moves files out of a folder without deleting them. `stash pop`
-  moves them back.
-- **`unpack`** extracts an archive into one new folder. If the extraction
-  fails, `unpack` puts no files in place.
+- **sweep** is a tool that sorts the files in a folder into groups. It shows
+  you a plan first and moves nothing until you apply the plan. See
+  [sweep](docs/sweep.md).
+- **stash** is a tool that moves files out of a folder for a time that you
+  set. It does not delete the files, and it moves them back when you tell it
+  to. See [stash](docs/stash.md).
+- **unpack** is a tool that extracts an archive into one new folder. If the
+  extraction fails, it puts no files in place. See [unpack](docs/unpack.md).
 
-## What the tools do
+## What the tools promise
 
 **A plan before a change.** A plan is the list of moves that a tool will do.
 `sweep` shows a plan and moves nothing until you run `sweep apply`. `sweep`
@@ -34,10 +33,10 @@ later. `unpack` lists and checks each archive member before it writes a file.
 **Undo.** `sweep undo` and `stash pop` move the files back. To do this, they
 use a journal. A journal is an encrypted record of the moves that a tool did.
 
-**Extraction.** `unpack` has no undo. It extracts into a private folder, checks each path in
-that folder, and then moves the folder into place with one rename. If the run
-fails, `unpack` removes the private folder. If it cannot remove the folder, it
-tells you where the folder is.
+**Extraction without undo.** `unpack` has no undo. It extracts into a private
+folder, checks each path in that folder, and then moves the folder into place
+with one rename. If the run fails, `unpack` removes the private folder. If it
+cannot remove the folder, it tells you where the folder is.
 
 **The same exit codes.** All three tools use the same exit codes: `0` done,
 `1` nothing to do, `2` refused, `3` error. A refusal is not an error. Each
@@ -48,10 +47,6 @@ help.
 metadata only; it never reads file contents to decide. When it moves a file it
 reads the first and last 4 KiB, so undo can tell if that file changed.
 `sweep` does not move or tag files that look like personal records.
-
-**Folders that you choose.** With `--map`, `sweep` sends a file type to a
-folder that you choose. A route is this link from a file type to a folder.
-`--save-routes` keeps the route for later runs.
 
 **macOS only.** The tools run only on macOS.
 
@@ -108,7 +103,11 @@ For the full usage of a tool, run `sweep help`, `stash help` or `unpack help`.
 To try the tools on a generated folder instead of a real folder, see
 [testing](docs/testing.md#try-it-without-risking-a-real-folder).
 
-## Safety and security
+To make `sweep` send a file type to a folder that you choose, use `--map`.
+A route is this link from a file type to a folder. To keep a route for later runs, use
+`--save-routes`.
+
+## Security
 
 [SECURITY.md](SECURITY.md) lists the security properties of the tools. It also
 lists the properties that the tools do not have.
