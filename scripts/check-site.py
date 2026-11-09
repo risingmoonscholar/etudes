@@ -10,6 +10,8 @@ Fails when:
     holds a page that is not on that list;
   - a page links to a file that is not in the build, or to an anchor that is
     not on the page it names (links that leave the site are not fetched);
+  - a stylesheet's url() names a file that is not in the build (a font, say);
+  - a page has two elements with the same id, or an empty id;
   - a docs page shows raw Markdown: **, ```, |--- or ]( outside code;
   - the published home page or transcripts.json differs from site/, so the
     panels check-transcripts-reproduce.sh proves are the panels published;
@@ -35,10 +37,13 @@ class Page(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.ids = set()
+        self.id_list = []
         self.links = []
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if "id" in attrs:
+            self.id_list.append(attrs["id"] or "")
         if attrs.get("id"):
             self.ids.add(attrs["id"])
         if tag == "a" and attrs.get("name"):
@@ -125,6 +130,30 @@ def check(out):
                     problems.append(f"{page_rel}: {url} names #{frag}, which is not on {target.relative_to(out).as_posix()}")
     notes.append(f"{checked} internal links and anchors across {len(pages)} pages resolve")
 
+    # Anchors have to be unique and named, or a link lands on the wrong place.
+    for page_path in pages:
+        page_rel = page_path.relative_to(out).as_posix()
+        ids = parse(page_path, cache).id_list
+        if "" in ids:
+            problems.append(f"{page_rel}: an element has an empty id")
+        dupes = sorted({i for i in ids if i and ids.count(i) > 1})
+        if dupes:
+            problems.append(f"{page_rel}: duplicate id(s): {', '.join(dupes)}")
+    notes.append("every id on every page is unique and not empty")
+
+    # Files a stylesheet loads: fonts, images.
+    css_refs = 0
+    for css in sorted(out.rglob("*.css")):
+        css_rel = css.relative_to(out).as_posix()
+        for url in re.findall(r"url\(\s*['\"]?([^'\")]+?)['\"]?\s*\)", css.read_text(encoding="utf-8")):
+            if url.startswith(("data:", "#")) or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", url):
+                continue
+            css_refs += 1
+            target, _ = target_file(out, css_rel, url)
+            if target in ("ABSOLUTE", "OUTSIDE") or not Path(target).is_file():
+                problems.append(f"{css_rel}: url({url}) is not in the build")
+    notes.append(f"{css_refs} files the stylesheets load are in the build")
+
     # Raw Markdown on a built docs page, outside code.
     for page_path in sorted((out / "docs").rglob("index.html")) if (out / "docs").is_dir() else []:
         text = page_path.read_text(encoding="utf-8")
@@ -147,6 +176,10 @@ def check(out):
         if not built.is_file() or built.read_bytes() != (ROOT / "site" / name).read_bytes():
             problems.append(f"the published {name} is not byte-identical to site/{name}")
     notes.append("the published home page and transcripts.json are byte-identical to site/")
+
+    for name in ("tools.json", "docs.json"):
+        if (out / name).exists():
+            problems.append(f"{name} is published; the build reads it and no page needs it")
 
     fonts = list(out.rglob("*.ttf")) + list(out.rglob("*.woff2"))
     if fonts and not all((f.parent / "OFL.txt").is_file() for f in fonts):
