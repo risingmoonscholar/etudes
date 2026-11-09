@@ -1,0 +1,44 @@
+{
+  "_about": "The shared docs pages on the site, in sidebar order. Only the files listed here and in tools.json are published; nothing else from the repo goes on the site.",
+  "sections": [
+    {
+      "title": "Using the tools",
+      "pages": [
+        {
+          "source": "docs/stash-batches.md",
+          "title": "Stash batches"
+        },
+        {
+          "source": "docs/undo-and-journals.md",
+          "title": "Undo and journals"
+        },
+        {
+          "source": "docs/plan-binding.md",
+          "title": "Plan binding"
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "pages": [
+        {
+          "source": "docs/json-and-exit-codes.md",
+          "title": "JSON and exit codes"
+        }
+      ]
+    },
+    {
+      "title": "Trust",
+      "pages": [
+        {
+          "source": "docs/testing.md",
+          "title": "Testing"
+        },
+        {
+          "source": "SECURITY.md",
+          "title": "Security"
+        }
+      ]
+    }
+  ]
+}
