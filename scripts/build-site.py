@@ -4,24 +4,35 @@
     scripts/build-site.py              build into _site/
     scripts/build-site.py --out DIR    build into DIR
 
-Everything under site/ is copied as it is, so the home page, the release pages,
-the GIFs and transcripts.json keep their URLs and stay byte-identical to what
-check-claims.sh and check-transcripts-reproduce.sh check. Then each public doc
-becomes /docs/<slug>/index.html in the docs layout.
+Everything under site/ is copied as it is (except the two data files the build
+reads), so the home page, the release pages, the GIFs and transcripts.json keep
+their URLs and stay byte-identical to what check-claims.sh and
+check-transcripts-reproduce.sh check. Then each public doc becomes
+/docs/<slug>/index.html in the docs layout.
 
 Which docs are public is data: site/tools.json (one entry per tool) and
 site/docs.json (the shared pages). Nothing else from the repo goes on the site.
 
-The Markdown converter below covers exactly what those docs use: ATX headings,
-paragraphs, flat lists, fenced code, tables, inline code, links and emphasis.
-Anything else (block quotes, raw HTML blocks, images, reference links, rules,
-nested lists) stops the build with the file and line, rather than reaching the
-page as raw Markdown.
+The Markdown converter below renders: ATX headings, paragraphs, flat bullet
+and ordered lists (any start number), fenced code at the left margin, tables,
+code spans, links (including a ")" inside a balanced URL), <https://...>
+autolinks, * and _ emphasis, ** and __ strong, backslash escapes and HTML
+entities. Everything else stops the build with the file and line: block
+quotes, HTML blocks and inline HTML, images, reference links and definitions,
+link titles, rules and underlined headings, nested lists, indented code, fences
+that do not start at the left margin, and link schemes other than http, https
+and mailto.
+
+One rule changes content. A sentence "Back to the [README](path)." whose link
+points at a repo file that is not on the site is navigation for readers on
+GitHub; the site has its own, so the build leaves that sentence out. The page's
+meta description is the first paragraph that remains.
 
 Standard library only. Exit 0 built, 1 a doc or link could not be built,
 2 the output folder could not be used.
 """
 import html
+import html.entities
 import json
 import posixpath
 import re
@@ -37,7 +48,12 @@ TREE_URL = REPO_URL + "/tree/main/"
 # The changelog pages are a later change; until then the top bar points at the
 # changelog file itself.
 CHANGELOG_URL = BLOB_URL + "CHANGELOG.md"
-MARKER = ".etudes-site-build"
+# Every built docs page carries this, so a rebuild can tell its own output
+# folder from someone else's before it deletes anything.
+GENERATOR = '<meta name="generator" content="scripts/build-site.py">'
+# Read by the build, not by any page.
+BUILD_ONLY = ("tools.json", "docs.json", ".DS_Store")
+SCHEMES = ("http", "https", "mailto")
 
 
 class BuildError(Exception):
@@ -101,14 +117,28 @@ class Linker:
     def __init__(self, pages):
         self.by_source = {p["source"]: p for p in pages}
 
+    def repo_path(self, source, target):
+        """The repo path a relative link names, or None for a scheme or anchor."""
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target) or target.startswith("#"):
+            return None
+        path = target.partition("#")[0]
+        return posixpath.normpath(posixpath.join(posixpath.dirname(source), path))
+
+    def on_site(self, source, target):
+        return self.repo_path(source, target) in self.by_source
+
     def resolve(self, source, page_dir, target):
         """Turn a link as written in SOURCE into a URL for the page at PAGE_DIR."""
-        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", target):
+        scheme = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):", target)
+        if scheme:
+            if scheme.group(1).lower() not in SCHEMES:
+                raise BuildError(f"{source}: link {target!r} uses the scheme "
+                                 f"{scheme.group(1)}:, which the site does not link to")
             return target
         if target.startswith("#"):
             return target
-        path, _, frag = target.partition("#")
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path))
+        frag = target.partition("#")[2]
+        resolved = self.repo_path(source, target)
         if resolved.startswith("../") or resolved == "..":
             raise BuildError(f"{source}: link {target!r} leaves the repository")
         suffix = f"#{frag}" if frag else ""
@@ -124,8 +154,21 @@ class Linker:
 
 # --- markdown ---------------------------------------------------------------
 
+ENTITY = re.compile(r"&(#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};|[A-Za-z][A-Za-z0-9]{1,31};)")
+
+
 def esc(text):
-    return html.escape(text, quote=False)
+    """Escape for HTML text, keeping entity references the author wrote."""
+    out, pos = [], 0
+    for m in ENTITY.finditer(text):
+        ref = m.group(1)
+        if ref[0] != "#" and ref not in html.entities.html5:
+            continue
+        out.append(html.escape(text[pos:m.start()], quote=False))
+        out.append("&" + ref)
+        pos = m.end()
+    out.append(html.escape(text[pos:], quote=False))
+    return "".join(out)
 
 
 def esc_attr(text):
@@ -139,35 +182,120 @@ def heading_id(text):
     return slug.replace(" ", "-")
 
 
-CODE_SPAN = re.compile(r"(`+)(.+?)(?<!`)\1(?!`)", re.S)
-LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
-STRONG = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.S)
-EM = re.compile(r"(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])", re.S)
+class Ids:
+    """Unique, non-empty anchors for one page."""
+
+    def __init__(self):
+        self.used = set()
+
+    def make(self, text):
+        base = heading_id(text) or "section"
+        candidate, n = base, 0
+        while candidate in self.used:
+            n += 1
+            candidate = f"{base}-{n}"
+        self.used.add(candidate)
+        return candidate
+
+
+PUNCT = r"!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~"
+# Leftmost of: a code span, a backslash escape, an autolink, or anything that
+# looks like inline HTML.
+INLINE_TOKEN = re.compile(
+    r"(?P<code>(?P<ticks>`+)(?P<body>.+?)(?<!`)(?P=ticks)(?!`))"
+    rf"|\\(?P<escaped>[{PUNCT}])"
+    r"|<(?P<auto>(?:https?|mailto):[^\s<>]+)>"
+    r"|(?P<html></?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>|<!--|<\?|<![A-Za-z])",
+    re.S,
+)
+STRONG = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*|(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)", re.S)
+EM = re.compile(r"(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])"
+                r"|(?<![\w_])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![\w_])", re.S)
 
 
 def emphasis(text):
-    text = STRONG.sub(r"<strong>\1</strong>", text)
-    return EM.sub(r"<em>\1</em>", text)
+    text = STRONG.sub(lambda m: f"<strong>{m.group(1) or m.group(2)}</strong>", text)
+    return EM.sub(lambda m: f"<em>{m.group(1) or m.group(2)}</em>", text)
+
+
+def find_link(text, start=0):
+    """The next [text](dest) at or after START: (begin, end, label, dest) or None.
+
+    The destination may hold balanced parentheses, as in a Wikipedia URL.
+    """
+    i = text.find("[", start)
+    while i >= 0:
+        depth, j = 0, i
+        while j < len(text):
+            if text[j] == "\\":
+                j += 2
+                continue
+            if text[j] == "[":
+                depth += 1
+            elif text[j] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if j >= len(text):
+            return None
+        if j + 1 < len(text) and text[j + 1] == "(":
+            k, parens = j + 2, 1
+            while k < len(text):
+                if text[k] == "\\":
+                    k += 2
+                    continue
+                if text[k] == "(":
+                    parens += 1
+                elif text[k] == ")":
+                    parens -= 1
+                    if parens == 0:
+                        return i, k + 1, text[i + 1:j], text[j + 2:k]
+                k += 1
+            return None
+        i = text.find("[", i + 1)
+    return None
 
 
 def plain(text):
-    """Heading text with the inline markup removed, for anchors and the TOC."""
-    text = CODE_SPAN.sub(lambda m: m.group(2).strip(), text)
-    text = LINK.sub(lambda m: m.group(1), text)
-    return re.sub(r"\*+", "", text)
+    """Text with the inline markup removed, for anchors, the TOC and descriptions."""
+    text = INLINE_TOKEN.sub(lambda m: (m.group("body") or "").strip() if m.group("code")
+                            else m.group("escaped") or m.group("auto") or "", text)
+    out, pos = [], 0
+    while (link := find_link(text, pos)):
+        begin, end, label, _ = link
+        out.append(text[pos:begin] + label)
+        pos = end
+    out.append(text[pos:])
+    text = "".join(out)
+    text = STRONG.sub(lambda m: m.group(1) or m.group(2), text)
+    text = EM.sub(lambda m: m.group(1) or m.group(2), text)
+    return html.unescape(text)
+
+
+# A trailing "Back to the [README](../README.md)." sentence.
+BACK_LINK = re.compile(r"(?:^|(?<=[.!?])\s+)Back to the \[[^\]]+\]\((?P<dest>[^)\s]+)\)\.\s*$")
 
 
 class Converter:
+    FENCE = re.compile(r"^(```+|~~~+)\s*([\w+-]*)\s*$")
+    HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+    ITEM = re.compile(r"^([-*+]|\d{1,9}[.)])(\s+)(.*)$")
+    TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+
     def __init__(self, source, page_dir, linker):
         self.source = source
         self.page_dir = page_dir
         self.linker = linker
-        self.ids = {}
+        self.ids = Ids()
         self.headings = []
         self.title = None
+        self.description = None
 
     def fail(self, lineno, why):
         raise BuildError(f"{self.source}:{lineno}: {why}")
+
+    # -- inline --
 
     def inline(self, text, lineno):
         kept = []
@@ -176,53 +304,75 @@ class Converter:
             kept.append(fragment)
             return f"\x00{len(kept) - 1}\x00"
 
-        def code(m):
-            body = m.group(2).replace("\n", " ")
-            if body.startswith(" ") and body.endswith(" ") and body.strip():
-                body = body[1:-1]
-            return keep(f"<code>{esc(body)}</code>")
+        def token(m):
+            if m.group("code"):
+                body = m.group("body").replace("\n", " ")
+                if body.startswith(" ") and body.endswith(" ") and body.strip():
+                    body = body[1:-1]
+                return keep(f"<code>{html.escape(body, quote=False)}</code>")
+            if m.group("escaped"):
+                return keep(html.escape(m.group("escaped"), quote=False))
+            if m.group("auto"):
+                href = self.linker.resolve(self.source, self.page_dir, m.group("auto"))
+                return keep(f'<a href="{esc_attr(href)}">{esc(m.group("auto"))}</a>')
+            self.fail(lineno, f"inline HTML {m.group('html')!r} is not supported by the site build")
 
-        def link(m):
-            if m.start() > 0 and text_now[m.start() - 1] == "!":
+        text = INLINE_TOKEN.sub(token, text)
+
+        out, pos = [], 0
+        while (link := find_link(text, pos)):
+            begin, end, label, dest = link
+            if begin > 0 and text[begin - 1] == "!":
                 self.fail(lineno, "images are not supported by the site build")
-            href = self.linker.resolve(self.source, self.page_dir, m.group(2))
-            return keep(f'<a href="{esc_attr(href)}">{emphasis(esc(m.group(1)))}</a>')
+            if re.search(r"\s", dest):
+                self.fail(lineno, f"link {dest!r} has a title or a space, which the site build does not support")
+            href = self.linker.resolve(self.source, self.page_dir, dest)
+            out.append(text[pos:begin])
+            out.append(keep(f'<a href="{esc_attr(href)}">{emphasis(esc(label))}</a>'))
+            pos = end
+        out.append(text[pos:])
+        text = "".join(out)
 
-        text_now = CODE_SPAN.sub(code, text)
-        text_now = LINK.sub(link, text_now)
-        out = emphasis(esc(text_now))
-        while "\x00" in out:
-            out = re.sub(r"\x00(\d+)\x00", lambda m: kept[int(m.group(1))], out)
-        return out
+        if re.search(r"!\[|\]\[[^\]]*\]|\[[^\]]+\]\[", text):
+            self.fail(lineno, "images and reference links are not supported by the site build")
 
-    def unique_id(self, text):
-        base = heading_id(text)
-        n = self.ids.get(base, 0)
-        self.ids[base] = n + 1
-        return base if n == 0 else f"{base}-{n}"
+        rendered = emphasis(esc(text))
+        while "\x00" in rendered:
+            rendered = re.sub(r"\x00(\d+)\x00", lambda m: kept[int(m.group(1))], rendered)
+        return rendered
 
-    # Block starts that end a paragraph.
-    FENCE = re.compile(r"^(```+|~~~+)\s*([\w+-]*)\s*$")
-    HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-    ITEM = re.compile(r"^([-*+]|\d+[.)])\s+(.*)$")
-    TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+    # -- blocks --
 
     def unsupported(self, line, lineno):
         stripped = line.strip()
         if stripped.startswith(">"):
             self.fail(lineno, "block quotes are not supported by the site build")
-        if re.match(r"^<[a-zA-Z/!]", stripped):
+        if re.match(r"^<[a-zA-Z/!?]", stripped) and not re.match(r"^<(https?|mailto):", stripped):
             self.fail(lineno, "raw HTML blocks are not supported by the site build")
         if re.match(r"^(\*\s*){3,}$|^(-\s*){3,}$|^(_\s*){3,}$|^=+$", stripped):
             self.fail(lineno, "rules and underlined headings are not supported by the site build")
         if re.match(r"^\[[^\]]+\]:\s", stripped):
-            self.fail(lineno, "reference links are not supported by the site build")
+            self.fail(lineno, "reference link definitions are not supported by the site build")
         if stripped.startswith("!["):
             self.fail(lineno, "images are not supported by the site build")
+        if line != line.lstrip() and self.FENCE.match(stripped):
+            self.fail(lineno, "a code fence that does not start at the left margin "
+                              "(for example inside a list item) is not supported by the site build")
 
     def starts_block(self, line):
         return bool(self.FENCE.match(line) or self.HEADING.match(line)
                     or re.match(r"^([-*+]|1[.)])\s+", line) or line.startswith("|"))
+
+    def paragraph(self, text, lineno):
+        """Render one paragraph, leaving out a GitHub-only back link."""
+        back = BACK_LINK.search(text)
+        if back and not self.linker.on_site(self.source, back.group("dest")):
+            text = text[:back.start()].rstrip()
+        if not text.strip():
+            return None
+        if self.description is None:
+            self.description = re.sub(r"\s+", " ", plain(text)).strip()
+        return f"<p>{self.inline(text, lineno)}</p>"
 
     def convert(self, text):
         lines = text.split("\n")
@@ -234,6 +384,8 @@ class Converter:
             if not line.strip():
                 i += 1
                 continue
+            if line.startswith("    ") or line.startswith("\t"):
+                self.fail(lineno, "indented code blocks are not supported by the site build; use a fence")
             fence = self.FENCE.match(line)
             if fence:
                 marker, lang = fence.group(1), fence.group(2)
@@ -246,14 +398,14 @@ class Converter:
                     self.fail(lineno, "code fence is never closed")
                 i += 1
                 cls = f' class="language-{esc_attr(lang)}"' if lang else ""
-                out.append(f"<pre><code{cls}>{esc(chr(10).join(body))}</code></pre>")
+                out.append(f"<pre><code{cls}>{html.escape(chr(10).join(body), quote=False)}</code></pre>")
                 continue
             heading = self.HEADING.match(line)
             if heading:
                 level = len(heading.group(1))
                 raw = heading.group(2)
                 text_plain = plain(raw)
-                hid = self.unique_id(text_plain)
+                hid = self.ids.make(text_plain)
                 inner = self.inline(raw, lineno)
                 if level == 1 and self.title is None:
                     self.title = text_plain.strip()
@@ -279,7 +431,9 @@ class Converter:
                 self.unsupported(lines[i], i + 1)
                 para.append(lines[i])
                 i += 1
-            out.append(f"<p>{self.inline(chr(10).join(para), lineno)}</p>")
+            rendered = self.paragraph(chr(10).join(para), lineno)
+            if rendered:
+                out.append(rendered)
         return "\n".join(out)
 
     @staticmethod
@@ -323,13 +477,20 @@ class Converter:
     def list_block(self, lines, i, out):
         first = self.ITEM.match(lines[i])
         ordered = first.group(1)[0].isdigit()
-        items = []  # each: (lineno, [paragraph lines...] per paragraph)
+        start = int(first.group(1)[:-1]) if ordered else 1
+        items = []  # (lineno, [paragraph lines] per paragraph)
         while i < len(lines):
             m = self.ITEM.match(lines[i])
             if not m or m.group(1)[0].isdigit() != ordered:
                 break
             lineno = i + 1
-            paras = [[m.group(2)]]
+            content_indent = len(m.group(1)) + len(m.group(2))
+            if len(m.group(2)) > 4:
+                self.fail(lineno, "a list item that starts with indented code is not supported by the site build")
+            self.unsupported(m.group(3), lineno)
+            if self.FENCE.match(m.group(3)):
+                self.fail(lineno, "a code fence inside a list item is not supported by the site build")
+            paras = [[m.group(3)]]
             i += 1
             while i < len(lines):
                 line = lines[i]
@@ -340,8 +501,12 @@ class Converter:
                     while k < len(lines) and not lines[k].strip():
                         k += 1
                     if k < len(lines) and lines[k].startswith("  ") and not self.ITEM.match(lines[k]):
+                        indent = len(lines[k]) - len(lines[k].lstrip())
                         if self.ITEM.match(lines[k].lstrip()):
                             self.fail(k + 1, "nested lists are not supported by the site build")
+                        if indent >= content_indent + 4:
+                            self.fail(k + 1, "indented code inside a list item is not supported by the site build")
+                        self.unsupported(lines[k], k + 1)
                         paras.append([])
                         i = k
                         continue
@@ -360,7 +525,8 @@ class Converter:
             if i < len(lines) and not lines[i].strip():
                 break
         tag = "ol" if ordered else "ul"
-        parts = [f"<{tag}>"]
+        start_attr = f' start="{start}"' if ordered and start != 1 else ""
+        parts = [f"<{tag}{start_attr}>"]
         for lineno, paras in items:
             rendered = [self.inline("\n".join(p), lineno) for p in paras if p]
             if len(rendered) == 1:
@@ -418,6 +584,7 @@ def layout(*, title, description, page_dir, pages, content, headings):
 <title>{esc(title)} · Études</title>
 <meta name="description" content="{esc_attr(description)}">
 <meta name="color-scheme" content="light dark">
+{GENERATOR}
 <link rel="stylesheet" href="{root}assets/site.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 </head>
@@ -451,13 +618,15 @@ def layout(*, title, description, page_dir, pages, content, headings):
 
 # --- pages ------------------------------------------------------------------
 
-def first_sentence(markdown):
-    for block in markdown.split("\n\n"):
-        block = block.strip()
-        if block and not block.startswith(("#", "```", "|", "-")):
-            text = re.sub(r"\s+", " ", plain(block))
-            return re.split(r"(?<=\.)\s", text, maxsplit=1)[0][:200]
-    return ""
+def summary(text, limit=200):
+    """A paragraph cut to whole sentences, or whole words, within LIMIT."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if end > 0:
+        return cut[:end + 1]
+    return cut.rsplit(" ", 1)[0] + "…"
 
 
 def build_doc(page, pages, linker):
@@ -467,9 +636,11 @@ def build_doc(page, pages, linker):
     body = conv.convert(text)
     if not conv.title:
         raise BuildError(f"{source}: no top-level heading to use as the page title")
+    if not conv.description:
+        raise BuildError(f"{source}: no paragraph to use as the page description")
     foot = (f'<p class="pagefoot">This page is built from '
             f'<a href="{BLOB_URL}{source}"><code>{esc(source)}</code></a>.</p>')
-    return layout(title=conv.title, description=first_sentence(text), page_dir=page["dir"],
+    return layout(title=conv.title, description=summary(conv.description), page_dir=page["dir"],
                   pages=pages, content=body + "\n" + foot, headings=conv.headings)
 
 
@@ -480,6 +651,9 @@ def build_index(pages):
         f'<span class="desc">{esc(p["description"])}</span></a>'
         for p in tools
     )
+    ids = Ids()
+    ids.make("docs")
+    tools_id = ids.make("Tools")
     sections, order = {}, []
     for p in pages:
         if p["tool"]:
@@ -488,8 +662,9 @@ def build_index(pages):
             sections[p["group"]] = []
             order.append(p["group"])
         sections[p["group"]].append(f'<li><a href="{rel_dir("docs", p["dir"])}">{esc(p["title"])}</a></li>')
+    group_ids = {g: ids.make(g) for g in order}
     shared = "".join(
-        f'<h2 id="{heading_id(g)}"><a class="anchor" href="#{heading_id(g)}">{esc(g)}</a></h2>'
+        f'<h2 id="{group_ids[g]}"><a class="anchor" href="#{group_ids[g]}">{esc(g)}</a></h2>'
         f'<ul class="pagelist">{"".join(sections[g])}</ul>'
         for g in order
     )
@@ -497,10 +672,10 @@ def build_index(pages):
         '<h1 id="docs">Docs</h1>\n'
         '<p class="lead">Études is a set of careful file tools for macOS. Each tool installs '
         "and runs on its own. Every move is checked first, and every failure says why.</p>\n"
-        '<h2 id="tools"><a class="anchor" href="#tools">Tools</a></h2>\n'
+        f'<h2 id="{tools_id}"><a class="anchor" href="#{tools_id}">Tools</a></h2>\n'
         f'<div class="cards">{cards}</div>\n{shared}'
     )
-    headings = [(2, "tools", "Tools")] + [(2, heading_id(g), esc(g)) for g in order]
+    headings = [(2, tools_id, "Tools")] + [(2, group_ids[g], esc(g)) for g in order]
     return layout(title="Docs", description="How to use the Études tools, and the rules they share.",
                   page_dir="docs", pages=pages, content=content, headings=headings)
 
@@ -509,12 +684,13 @@ def prepare_out(out):
     if out.exists():
         if not out.is_dir():
             raise SystemExit(f"FAIL {out} exists and is not a folder; nothing was written")
-        if any(out.iterdir()) and not (out / MARKER).is_file():
+        index = out / "docs" / "index.html"
+        ours = index.is_file() and GENERATOR in index.read_text(encoding="utf-8", errors="replace")
+        if any(out.iterdir()) and not ours:
             raise SystemExit(f"FAIL {out} is not empty and was not made by this script; "
                              "nothing was written. Choose an empty or new folder with --out.")
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    (out / MARKER).write_text("Made by scripts/build-site.py. Safe to delete.\n")
 
 
 def build(out):
@@ -523,7 +699,7 @@ def build(out):
     rendered = {page["dir"]: build_doc(page, pages, linker) for page in pages}
     rendered["docs"] = build_index(pages)
     prepare_out(out)
-    shutil.copytree(SITE, out, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".DS_Store"))
+    shutil.copytree(SITE, out, dirs_exist_ok=True, ignore=shutil.ignore_patterns(*BUILD_ONLY))
     for page_dir, page_html in rendered.items():
         target = out / page_dir / "index.html"
         if target.exists():
