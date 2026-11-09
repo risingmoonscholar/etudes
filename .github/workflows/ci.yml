@@ -83,6 +83,10 @@ jobs:
       - run: bash scripts/no-network-test.sh
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
+      - name: The site builds and every internal link and anchor resolves
+        run: python3 scripts/check-site.py
+      - name: The site check rejects a broken link, a missing page and raw Markdown
+        run: python3 -m unittest discover -s scripts -p 'test_check_site.py' -v
 
       - name: Release checks reject missing tags and false success
         run: python3 -m unittest discover -s scripts -p 'test_check_release.py' -v

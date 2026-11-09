@@ -27,6 +27,7 @@ step "fmt";            cargo fmt --all --check >/dev/null 2>&1 && ok || bad
 step "clippy";         cargo clippy --all-targets --all-features -- -D warnings >/dev/null 2>&1 && ok || bad
 step "tests";          cargo test --all >/dev/null 2>&1 && ok || bad
 step "claims match";   bash scripts/check-claims.sh >/dev/null 2>&1 && ok || bad
+step "site builds";    python3 scripts/check-site.py >/dev/null 2>&1 && ok || bad
 step "no-network";     bash scripts/no-network-test.sh >/dev/null 2>&1 && ok || bad
 step "release build";  cargo build --release >/dev/null 2>&1 && ok || bad
 

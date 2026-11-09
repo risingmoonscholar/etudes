@@ -1,17 +1,19 @@
 name: pages
 
-# Publishes site/ to GitHub Pages only after a GitHub Release is published.
-# The version manifest must match the newest public per-tool tags before the
-# artifact can be uploaded. A demo-only edit cannot publish or advance the page.
+# Builds the site and publishes it to GitHub Pages only after a GitHub Release
+# is published. The version manifest must match the newest public per-tool tags
+# before the artifact can be uploaded. A site-only edit cannot publish or
+# advance the page.
 #
-# The demo lives next to the code that produces it on purpose: every terminal
-# block on that page is captured by scripts/capture-demos.sh from binaries built
-# out of this tree. Hosting it anywhere else would let the page drift from the
-# tool without anything noticing.
+# The site lives next to the code that produces it on purpose: every terminal
+# block on the home page is captured by scripts/capture-demos.sh from binaries
+# built out of this tree, and the docs pages are built from the docs in this
+# tree. Hosting it anywhere else would let the page drift from the tool without
+# anything noticing.
 #
-# It uploads site/ as an artifact rather than publishing from a branch, so the
-# gitignored docs/ decision stays untouched and there is no gh-pages branch to
-# keep in sync.
+# scripts/build-site.py copies site/ unchanged and adds the docs pages, into
+# _site/, which is not committed. It is uploaded as an artifact rather than
+# published from a branch, so there is no gh-pages branch to keep in sync.
 
 on:
   release:
@@ -85,9 +87,17 @@ jobs:
           print(f'{n} transcripts, captured at {d.get(\"commit\",\"?\")}')
           "
 
+      # The build copies site/index.html and site/transcripts.json byte for
+      # byte, and the check refuses a build where they differ, so the panels
+      # check-transcripts-reproduce.sh proves are the panels published.
+      - name: Build the site and refuse a broken link or anchor
+        run: |
+          python3 scripts/build-site.py --out _site
+          python3 scripts/check-site.py --dir _site
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: _site
       - id: deploy
         uses: actions/deploy-pages@v4

@@ -34,8 +34,8 @@ what = "every number and version stated in README, CHANGELOG, the site"
 watched_by = ["check-claims.sh"]
 
 [surface.website]
-what = "site/index.html and the transcripts it shows"
-watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh"]
+what = "the site: site/index.html and the transcripts it shows, the release pages, and the docs pages built from the public docs"
+watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh", "check-site.py"]
 
 [surface.issues]
 what = "public issue bodies, comments, and prior versions"
@@ -99,6 +99,10 @@ failable = "it is the failability check: a fault that survives or fails for an u
 [check."check-transcripts-reproduce.sh"]
 guards = "the site's captured output still comes out of these binaries"
 failable = "verified by tampering with stdout, an exit code, and a missing transcript"
+
+[check."check-site.py"]
+guards = "the site builds, every internal link and anchor resolves, only the listed docs are published, no docs page shows raw Markdown, and the published home page and transcripts are byte-identical to site/"
+failable = "test_check_site.py breaks a real build with a missing anchor, a missing page, an unlisted page, raw Markdown, drifted transcripts and an absolute link, and each must fail"
 
 [check."check-issues.py"]
 guards = "public issues and PRs read as defect reports, not working sessions"
