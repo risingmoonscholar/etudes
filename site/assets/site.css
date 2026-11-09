@@ -236,7 +236,7 @@ th { font-weight: 600; background: var(--code-bg); }
 .band .intro { max-width: 680px; margin: 0 0 24px; color: var(--muted); font-size: 18px; line-height: 28px; }
 
 .hero { padding: 96px 0 0; }
-.hero h1 { font-family: var(--serif); font-weight: 400; font-size: 72px; line-height: 1; letter-spacing: -0.02em; margin: 0 0 24px; }
+.hero h1 { max-width: 680px; font-family: var(--serif); font-weight: 400; font-size: 48px; line-height: 1; letter-spacing: -0.02em; margin: 0 0 16px; text-wrap: balance; }
 .hero .sub { max-width: 680px; font-size: 20px; line-height: 28px; color: var(--muted); margin: 0 0 40px; text-wrap: balance; }
 .toolrow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .toolcard {
@@ -358,9 +358,8 @@ th { font-weight: 600; background: var(--code-bg); }
 @media (max-width: 768px) {
   .home main { padding: 0 16px; }
   .hero { padding-top: 48px; }
-  .hero h1 { font-size: 48px; }
+  .hero h1 { font-size: 36px; line-height: 40px; }
   .hero .sub { font-size: 18px; margin-bottom: 32px; }
-  .hero .sub br { display: none; }
   .band { padding-top: 64px; }
   .home h2 { font-size: 30px; line-height: 36px; }
   .entry { padding: 16px; }

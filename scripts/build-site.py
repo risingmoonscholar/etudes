@@ -900,8 +900,8 @@ def build_home(pages):
 {topbar(root, "home")}
 <main id="main">
 <section class="hero" aria-labelledby="title">
-<h1 id="title">Études</h1>
-<p class="sub">Études is a set of file tools for macOS. <br>Each tool installs and runs on its own.</p>
+<h1 id="title">Études is a set of file tools for macOS.</h1>
+<p class="sub">Each tool installs and runs on its own.</p>
 <ul class="toolrow" aria-label="The tools">{cards}</ul>
 </section>
 
