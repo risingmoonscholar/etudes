@@ -71,11 +71,11 @@ fi
 
 # Scenario count, from what git TRACKS rather than what happens to be sitting
 # in the working tree. A reader gets what a clone contains, so an untracked
-# scenario is not one the readme can claim. Counting the filesystem here was
+# scenario is not one the docs can claim. Counting the filesystem here was
 # a bug in the first version of this fix: it read 36 with one file untracked,
-# so the readme was corrected to a number no clone would ever see.
+# so the docs were corrected to a number no clone would ever see.
 scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
-# Every file that states the number, not just the readme. site/index.html is
+# Every file that states the number, not just docs/testing.md. site/index.html is
 # the published site: it can be wrong in front of everyone while CI is green,
 # which is the exact failure this script exists to catch, one file over.
 for f in docs/testing.md site/index.html; do
@@ -149,12 +149,13 @@ else
 fi
 
 # etude-core's zero dependencies, the claim the no-network argument rests on.
-# Checked against the manifest, not against the sentence in the readme.
+# Checked against the manifest, not against the sentence in docs/testing.md
+# and SECURITY.md.
 core_deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && NF && $0 !~ /^#/' crates/etude-core/Cargo.toml | wc -l | tr -d ' ')
 if [ "$core_deps" = "0" ]; then
   ok "etude-core declares zero dependencies in its manifest"
 else
-  bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
+  bad "docs/testing.md and SECURITY.md say etude-core has zero dependencies; its manifest lists $core_deps"
 fi
 
 # The page carries the transcripts twice: fetched from site/transcripts.json

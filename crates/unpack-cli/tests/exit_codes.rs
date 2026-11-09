@@ -86,7 +86,8 @@ fn an_unrecognised_archive_type_is_a_refusal_with_exit_2() {
     );
 }
 
-/// The README claims the exit-code contract is uniform across the tools.
+/// docs/json-and-exit-codes.md claims the exit-code contract is uniform across
+/// the tools.
 /// It was not: `unpack --frobnicate` took the typo as an archive name and
 /// reported "not a file" with exit 3, so a caller could not tell a usage
 /// mistake from a missing archive. `sweep` and `stash` both answer 2 here.
