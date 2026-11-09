@@ -109,7 +109,7 @@ jobs:
       - name: The voice gate can still tell a defect report from a design doc
         run: python3 scripts/check-issues.py --self-test
 
-      # check-claims.sh proves the page and demo/transcripts.json agree with
+      # check-claims.sh proves the page and site/transcripts.json agree with
       # each other. Two equally stale copies agree with each other too. This
       # runs the binaries again and diffs what they print against what is
       # committed, which is the claim the site actually makes.
@@ -130,7 +130,7 @@ jobs:
       - name: The refusal demo still tells the truth
         run: |
           mkdir -p "$RUNNER_TEMP/evidence"
-          EVIDENCE_DIR="$RUNNER_TEMP/evidence" bash demo/refusal/run.sh
+          EVIDENCE_DIR="$RUNNER_TEMP/evidence" bash site/refusal/run.sh
 
       # Retained so a reader can check the claim without rebuilding two tagged
       # binaries and cloning a 70 MB fixture. The job is the evidence; this is

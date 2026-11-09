@@ -34,7 +34,7 @@ what = "every number and version stated in README, CHANGELOG, the site"
 watched_by = ["check-claims.sh"]
 
 [surface.website]
-what = "demo/index.html and the transcripts it shows"
+what = "site/index.html and the transcripts it shows"
 watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh"]
 
 [surface.issues]
@@ -66,7 +66,7 @@ unwatched = "empty as of 2026-08-23; disable it or check it before anything land
 
 [surface.demo-evidence]
 what = "the refusal demo's asserted numbers"
-watched_by = ["demo/refusal/run.sh"]
+watched_by = ["site/refusal/run.sh"]
 
 [surface.security-posture]
 what = "the claims SECURITY.md makes about what holds"
@@ -104,7 +104,7 @@ failable = "verified by tampering with stdout, an exit code, and a missing trans
 guards = "public issues and PRs read as defect reports, not working sessions"
 failable = "self-tests every rule against known-bad text before judging, and refuses to run if one has gone dead"
 
-[check."demo/refusal/run.sh"]
+[check."site/refusal/run.sh"]
 guards = "the nine numbers the refusal demo states"
 failable = "verified by tampering with each asserted count and the exit code"
 

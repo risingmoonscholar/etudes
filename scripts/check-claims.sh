@@ -57,7 +57,7 @@ fi
 tests_actual=$(printf '%s\n' "$tests_output" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
-for f in README.md docs/testing.md demo/index.html; do
+for f in README.md docs/testing.md site/index.html; do
   claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
 
@@ -67,10 +67,10 @@ done
 # a bug in the first version of this fix: it read 36 with one file untracked,
 # so the readme was corrected to a number no clone would ever see.
 scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
-# Every file that states the number, not just the readme. demo/index.html is
+# Every file that states the number, not just the readme. site/index.html is
 # the published site: it can be wrong in front of everyone while CI is green,
 # which is the exact failure this script exists to catch, one file over.
-for f in README.md docs/testing.md demo/index.html; do
+for f in README.md docs/testing.md site/index.html; do
   claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 done
 
@@ -109,7 +109,7 @@ check_pin unpack-cli crates/unpack-cli/Cargo.toml
 site_version=$(python3 -c "
 import json,sys
 try:
-    d=json.load(open('demo/transcripts.json'))
+    d=json.load(open('site/transcripts.json'))
     print(d.get('version',''))
 except Exception:
     print('')
@@ -120,7 +120,7 @@ except Exception:
 for tool in sweep stash unpack; do
   panel_v=$(python3 -c "
 import json
-d=json.load(open('demo/transcripts.json'))
+d=json.load(open('site/transcripts.json'))
 print(d.get('versions',{}).get('$tool',''))")
   manifest_v=$(grep -m1 '^version' "crates/$tool-cli/Cargo.toml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
   if [ -z "$panel_v" ]; then
@@ -133,7 +133,7 @@ print(d.get('versions',{}).get('$tool',''))")
 done
 real_version=$(grep -m1 '^version' crates/sweep-cli/Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 if [ -z "$site_version" ]; then
-  bad "demo/transcripts.json records no version; the site cannot show one. Re-run scripts/capture-demos.sh"
+  bad "site/transcripts.json records no version; the site cannot show one. Re-run scripts/capture-demos.sh"
 elif [ "$site_version" = "$real_version" ]; then
   ok "the site shows v$site_version, which is what the binaries report"
 else
@@ -149,7 +149,7 @@ else
   bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
 fi
 
-# The page carries the transcripts twice: fetched from demo/transcripts.json
+# The page carries the transcripts twice: fetched from site/transcripts.json
 # when hosted, and inline when the file is opened locally. The generator says
 # it writes "the same data, same step" -- and they had drifted anyway, so the
 # hosted page witnessed one output contract and a double-clicked copy
@@ -157,8 +157,8 @@ fi
 inline_check=$(python3 - <<'PY_INNER'
 import json, re, sys
 try:
-    ext = json.load(open("demo/transcripts.json"))
-    html = open("demo/index.html").read()
+    ext = json.load(open("site/transcripts.json"))
+    html = open("site/index.html").read()
     m = re.search(r'<script type="application/json" id="transcripts-inline">(.*?)</script>', html, re.S)
     if not m:
         print("MISSING"); sys.exit(0)
@@ -168,10 +168,10 @@ except Exception as e:
 PY_INNER
 )
 case "$inline_check" in
-  SAME) ok "the page's inline transcripts are byte-identical to demo/transcripts.json" ;;
-  MISSING) bad "demo/index.html has no inline transcript block; a local copy of the page would show nothing" ;;
-  DRIFTED) bad "demo/index.html's inline transcripts differ from demo/transcripts.json. A hosted page and a local one would witness different output. Re-run scripts/capture-demos.sh" ;;
-  *) bad "could not compare the inline transcripts with demo/transcripts.json: $inline_check" ;;
+  SAME) ok "the page's inline transcripts are byte-identical to site/transcripts.json" ;;
+  MISSING) bad "site/index.html has no inline transcript block; a local copy of the page would show nothing" ;;
+  DRIFTED) bad "site/index.html's inline transcripts differ from site/transcripts.json. A hosted page and a local one would witness different output. Re-run scripts/capture-demos.sh" ;;
+  *) bad "could not compare the inline transcripts with site/transcripts.json: $inline_check" ;;
 esac
 
 # The API panel is the tool's own help, captured. If a help stops being
@@ -181,7 +181,7 @@ esac
 helps=$(python3 - <<'PY_INNER'
 import json
 try:
-    d = json.load(open("demo/transcripts.json"))
+    d = json.load(open("site/transcripts.json"))
     have = {t["label"] for t in d["transcripts"]}
     missing = [f"{t}-help" for t in ("sweep", "stash", "unpack") if f"{t}-help" not in have]
     print(",".join(missing) if missing else "ALL")

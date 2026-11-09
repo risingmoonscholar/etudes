@@ -14,7 +14,7 @@ trap 'rm -rf "$work"' EXIT
 export ETUDE_STATE_DIR="$work/state"
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export ETUDES_DEMO_BIN="$root/target/release"
-mkdir -p "$root/demo/recordings" "$root/demo/gifs"
+mkdir -p "$root/site/recordings" "$root/site/gifs"
 cd "$root"
 
 echo "building the three candidate binaries"
@@ -23,11 +23,11 @@ cargo build --release -p sweep-cli -p stash-cli -p unpack-cli
 record() {
   local name="$1" title="$2" speed="$3"
   ETUDES_DEMO_WORK="$work/$name" asciinema rec --quiet --overwrite --title "$title" --window-size 100x14 \
-    --command "bash demo/recordings/$name.sh" \
-    "$root/demo/recordings/$name.cast"
+    --command "bash site/recordings/$name.sh" \
+    "$root/site/recordings/$name.cast"
   # asciinema succeeds even when the demo fails. A recording of an error is
   # not a demo: require the demo's own exit status to be 0 before rendering.
-  python3 - "$root/demo/recordings/$name.cast" <<'PY'
+  python3 - "$root/site/recordings/$name.cast" <<'PY'
 import json, sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8").read().splitlines()[1:] if line.strip()]
 exits = [e for e in events if len(e) >= 3 and e[1] == "x"]
@@ -36,8 +36,8 @@ if not exits or str(exits[-1][2]) != "0":
 PY
   agg --quiet --theme github-light --font-size 14 --cols 100 --rows 14 \
     --speed "$speed" --idle-time-limit 1.3 --last-frame-duration 4 \
-    "$root/demo/recordings/$name.cast" "$root/demo/gifs/$name.gif"
-  echo "wrote demo/gifs/$name.gif"
+    "$root/site/recordings/$name.cast" "$root/site/gifs/$name.gif"
+  echo "wrote site/gifs/$name.gif"
 }
 
 record sweep-progress "sweep 0.5.5 — progress and undo" 2.4

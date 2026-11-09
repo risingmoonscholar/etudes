@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Capture real terminal output from the real binaries, for the web demos.
 #
-# Nothing here is authored by hand. Every transcript in demo/transcripts.json is
+# Nothing here is authored by hand. Every transcript in site/transcripts.json is
 # terminal output from binaries built out of this tree, run against the synthetic fixture
 # that `mkfx` generates. A transcript that no longer matches the tool is a build
 # failure, not a stale doc -- and scripts/check-transcripts-reproduce.sh is what
@@ -68,8 +68,8 @@ capture unpack-help   'unpack help'                    "$bin/unpack" help
 cp -R "$home/Desktop" "$home/Stashable"
 capture stash-put     'stash ~/Desktop --for 3d'       "$bin/stash" "$home/Stashable" --for 3d
 
-mkdir -p demo
-python3 - "$caps" "$home" "$work" demo/transcripts.json "$bin" <<'PY'
+mkdir -p site
+python3 - "$caps" "$home" "$work" site/transcripts.json "$bin" <<'PY'
 import json, os, re, subprocess, sys
 
 caps, home, work, out = sys.argv[1:5]
@@ -143,7 +143,7 @@ payload = {
 json.dump(payload, open(out, "w"), indent=2)
 print(f"wrote {out}: {len(transcripts)} transcripts at {rev}")
 
-# Same payload, written a second place: an inline <script> in demo/index.html,
+# Same payload, written a second place: an inline <script> in site/index.html,
 # between two HTML comment markers, so a double-clicked file:// copy of the
 # page works without a server. fetch() stays the primary path in the page's
 # own JS; this is only the fallback it reaches for when fetch() is blocked.
@@ -158,7 +158,7 @@ if start in html and end in html:
     inline_json = json.dumps(payload).replace("</", "<\\/")
     block = (
         f"{start}\n"
-        "<!-- Written by scripts/capture-demos.sh alongside demo/transcripts.json, same\n"
+        "<!-- Written by scripts/capture-demos.sh alongside site/transcripts.json, same\n"
         "     data, same step, so a double-clicked file:// copy works without a server.\n"
         "     fetch() is still tried first below; this is the fallback, not the source. -->\n"
         f'<script type="application/json" id="transcripts-inline">{inline_json}</script>\n'
