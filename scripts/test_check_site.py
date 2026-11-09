@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -123,11 +124,58 @@ class CheckSiteTest(unittest.TestCase):
             f.write("\n")
         self.assertFails(self.check(out), "transcripts.json is not byte-identical")
 
-    def test_drifted_home_page_fails(self):
+    def test_drifted_demo_page_fails(self):
+        out = self.copy("demo")
+        with open(out / "demo/index.html", "a", encoding="utf-8") as f:
+            f.write("<!-- edited after the build -->\n")
+        self.assertFails(self.check(out), "demo/index.html is not byte-identical")
+
+    def test_edited_home_page_fails(self):
         out = self.copy("home")
         with open(out / "index.html", "a", encoding="utf-8") as f:
             f.write("<!-- edited after the build -->\n")
-        self.assertFails(self.check(out), "index.html is not byte-identical")
+        self.assertFails(self.check(out), "index.html is not what scripts/build-site.py renders")
+
+    def test_install_version_other_than_cargo_toml_fails(self):
+        out = self.copy("version")
+        version = tomllib.loads((ROOT / "crates/stash-cli/Cargo.toml").read_text())["package"]["version"]
+        self.edit(out / "index.html", f"--tag stash-v{version} stash-cli", "--tag stash-v0.0.1 stash-cli")
+        self.assertFails(self.check(out),
+                         f"the install block names stash 0.0.1; crates/stash-cli/Cargo.toml declares {version}")
+
+    def test_install_block_missing_a_tool_fails(self):
+        out = self.copy("missing-tool")
+        page = out / "index.html"
+        text, n = re.subn(r"cargo install --locked --git \S+ --tag unpack-v\S+ unpack-cli", "", page.read_text())
+        self.assertGreater(n, 0)
+        page.write_text(text)
+        self.assertFails(self.check(out), "the install block has no install line for unpack")
+
+    def test_install_from_another_repo_fails(self):
+        out = self.copy("repo")
+        self.edit(out / "index.html", "--git https://github.com/risingmoonscholar/etudes --tag sweep",
+                  "--git https://example.com/etudes --tag sweep")
+        self.assertFails(self.check(out), "installs from https://example.com/etudes")
+
+    def test_home_output_other_than_transcripts_fails(self):
+        out = self.copy("home-output")
+        self.edit(out / "index.html", "Stashed 112 items.", "Stashed 113 items.")
+        self.assertFails(self.check(out), "the home page's 'stash-put' output differs from site/transcripts.json")
+
+    def test_changelog_data_is_not_published(self):
+        self.assertFalse((self.clean / "changelog").exists())
+
+    def test_install_works_without_javascript(self):
+        # Every install line sits in the page as text; the tab row and the
+        # copy buttons start hidden and only the script shows them.
+        page = (self.clean / "index.html").read_text()
+        self.assertIn('role="tablist" aria-label="Which tools to install" hidden', page)
+        self.assertEqual(page.count('class="copy"'), page.count('class="copy" data-copy='))
+        for button in re.findall(r'<button type="button" class="copy"[^>]*>', page):
+            self.assertIn(" hidden", button)
+        for tool in ("sweep", "stash", "unpack"):
+            self.assertIn(f'id="install-{tool}"', page)
+            self.assertNotIn(f'id="install-{tool}" hidden', page)
 
     def test_missing_font_license_fails(self):
         out = self.copy("ofl")
@@ -154,6 +202,51 @@ class CheckSiteTest(unittest.TestCase):
         out = self.copy("data")
         shutil.copy(ROOT / "site/tools.json", out / "tools.json")
         self.assertFails(self.check(out), "tools.json is published")
+
+
+def load_check():
+    spec = importlib.util.spec_from_file_location("check_site", CHECK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class EntryTest(unittest.TestCase):
+    """The What's new footer says "not tagged yet" only while that is true."""
+
+    def entry(self, **after):
+        builds = {"before": {"commit": "de8f307"}, "after": {"commit": "40fc3d3", "tagged": False}}
+        builds["after"].update(after)
+        return {"tool": "sweep", "version": "0.5.5", "builds": builds,
+                "footer": "Builds: de8f307, and the release candidate at 40fc3d3, not tagged yet."}
+
+    def test_untagged_entry_passes_before_the_tag(self):
+        self.assertEqual(load_check().check_entry(self.entry(), tag_exists=False), [])
+
+    def test_untagged_entry_fails_once_the_tag_exists(self):
+        problems = load_check().check_entry(self.entry(), tag_exists=True)
+        self.assertTrue(any("the tag sweep-v0.5.5 exists" in p for p in problems), problems)
+
+    def test_footer_missing_a_commit_fails(self):
+        entry = self.entry()
+        entry["footer"] = entry["footer"].replace("40fc3d3", "abcdef0")
+        problems = load_check().check_entry(entry, tag_exists=False)
+        self.assertTrue(any("after build's commit '40fc3d3'" in p for p in problems), problems)
+
+    def test_tagged_entry_that_says_untagged_fails(self):
+        problems = load_check().check_entry(self.entry(tagged=True), tag_exists=True)
+        self.assertTrue(any("records a tagged build" in p for p in problems), problems)
+
+    def test_published_entry_matches_its_data(self):
+        build = load_build()
+        entry = build.latest_entry()
+        page = build.render_entry(entry)
+        for side in ("before", "after"):
+            for run in entry[side]["runs"]:
+                self.assertIn(run["command"], page)
+                for line in run["output"]:
+                    self.assertIn(build.html.escape(line, quote=False), page)
+                self.assertIn(f"exit {run['exit']}", page)
 
 
 class ConverterTest(unittest.TestCase):

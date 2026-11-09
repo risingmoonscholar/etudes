@@ -13,23 +13,33 @@ Fails when:
   - a stylesheet's url() names a file that is not in the build (a font, say);
   - a page has two elements with the same id, or an empty id;
   - a docs page shows raw Markdown: **, ```, |--- or ]( outside code;
-  - the published home page or transcripts.json differs from site/, so the
+  - the published demo page or transcripts.json differs from site/, so the
     panels check-transcripts-reproduce.sh proves are the panels published;
+  - the home page's install block names a version other than the one in that
+    tool's Cargo.toml (the source check-release.py holds the README pins to),
+    or leaves a tool out;
+  - captured output on the home page differs from site/transcripts.json, or a
+    command it explains is not a usage line of that tool's captured help;
+  - the home page is not what the build renders from its data;
   - fonts are published without their license.
 
 Standard library only. Exit 0 checked and clean, 1 a failure, 2 could not run.
 """
+import html
+import importlib.util
 import json
 import posixpath
 import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_URL = "https://github.com/risingmoonscholar/etudes"
 LEAKS = ("**", "```", "|---", "](")
 
 
@@ -79,6 +89,124 @@ def target_file(out, page_rel, url):
     if path.endswith("/") or target.is_dir():
         target = target / "index.html"
     return target, parts.fragment
+
+
+def load_build():
+    spec = importlib.util.spec_from_file_location("build_site", ROOT / "scripts/build-site.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+INSTALL = re.compile(r"cargo install --locked --git (\S+) --tag ([a-z][a-z0-9-]*?)-v(\d+\.\d+\.\d+) ([A-Za-z0-9_-]+)")
+
+
+def manifest_versions(tools):
+    """{tool: (package, version)} read straight from each Cargo.toml, as check-release.py reads them."""
+    found = {}
+    for tool in tools:
+        package = tomllib.loads((ROOT / tool["crate"] / "Cargo.toml").read_text())["package"]
+        found[tool["name"]] = (package["name"], package["version"])
+    return found
+
+
+def check_entry(entry, tag_exists):
+    """Problems with a release entry's footer. TAG_EXISTS: is <tool>-v<version> a tag here?"""
+    problems = []
+    footer = entry.get("footer", "")
+    for side in ("before", "after"):
+        commit = entry.get("builds", {}).get(side, {}).get("commit")
+        if not commit or commit not in footer:
+            problems.append(f"the What's new footer does not name the {side} build's commit {commit!r}")
+    tag = f"{entry['tool']}-v{entry['version']}"
+    says_untagged = "not tagged yet" in footer
+    if entry.get("builds", {}).get("after", {}).get("tagged") is False:
+        if not says_untagged:
+            problems.append("the What's new entry's after build is not tagged, and its footer does not say so")
+        if tag_exists:
+            problems.append(f"the What's new footer says the {entry['version']} build is not tagged yet, "
+                            f"but the tag {tag} exists. Run the entry again on the tag and update "
+                            f"site/changelog/{entry['tool']}-{entry['version']}.json")
+    elif says_untagged:
+        problems.append("the What's new footer says not tagged yet, but the entry records a tagged build")
+    return problems
+
+
+def check_home(out):
+    """The home page: its install lines, its captured output, and that it is what the build renders."""
+    problems, notes = [], []
+    home = out / "index.html"
+    if not home.is_file():
+        return ["index.html (the home page) was not built"], notes
+    text = home.read_text(encoding="utf-8")
+    tools = json.loads((ROOT / "site/tools.json").read_text())["tools"]
+
+    # Install versions: every install line names the version in that tool's
+    # Cargo.toml, the same source check-release.py holds the README pins to.
+    expected = manifest_versions(tools)
+    lines = INSTALL.findall(html.unescape(text))
+    named = set()
+    for repo, tool, version, package in lines:
+        named.add(tool)
+        if repo != REPO_URL:
+            problems.append(f"the install line for {tool} installs from {repo}, not {REPO_URL}")
+        if tool not in expected:
+            problems.append(f"the install block names {tool}-v{version}, and {tool} is not in site/tools.json")
+            continue
+        want_package, want_version = expected[tool]
+        if version != want_version:
+            problems.append(f"the install block names {tool} {version}; "
+                            f"{tools[[t['name'] for t in tools].index(tool)]['crate']}/Cargo.toml declares {want_version}")
+        if package != want_package:
+            problems.append(f"the install block installs {package} for {tool}; its crate is {want_package}")
+    for tool in expected:
+        if tool not in named:
+            problems.append(f"the install block has no install line for {tool}")
+    notes.append(f"{len(lines)} install lines name the versions in the tools' Cargo.toml")
+
+    # Captured output on the home page is the captured output in transcripts.json.
+    captured = {t["label"]: t for t in json.loads((ROOT / "site/transcripts.json").read_text())["transcripts"]}
+    shown = re.findall(r'<pre class="term out" data-transcript="([^"]+)"><code>(.*?)</code></pre>', text, re.S)
+    for label, body in shown:
+        if label not in captured:
+            problems.append(f"the home page shows a run {label!r} that site/transcripts.json does not hold")
+        elif html.unescape(body) != captured[label]["output"].rstrip():
+            problems.append(f"the home page's {label!r} output differs from site/transcripts.json")
+    # And each command it explains is a usage line of that tool's captured help.
+    for tool in tools:
+        help_text = captured.get(f"{tool['name']}-help", {}).get("output", "")
+        for command in tool.get("commands", []):
+            if not re.search(rf"^\s*{re.escape(command['usage'])}(\s|$)", help_text, re.M):
+                problems.append(f"site/tools.json: {tool['name']}: {command['usage']!r} is not a usage line "
+                                f"in the captured {tool['name']} help")
+    notes.append(f"{len(shown)} captured runs on the home page match site/transcripts.json; "
+                 "every command shown is in its tool's help")
+
+    # The What's new footer names the builds the runs came from, and says
+    # "not tagged yet" only while that stays true.
+    try:
+        entry = load_build().latest_entry()
+    except Exception as error:
+        problems.append(f"the What's new entry could not be read: {error}")
+    else:
+        tag = f"{entry['tool']}-v{entry['version']}"
+        tags = subprocess.run(["git", "tag", "--list", tag], cwd=ROOT, capture_output=True, text=True)
+        problems += check_entry(entry, tags.returncode == 0 and tags.stdout.strip() == tag)
+    notes.append("the What's new footer names its builds, and says not tagged only while it is not")
+
+    # The page is exactly what the build renders from the data today, so a
+    # hand edit, or data that changed after the build, is caught.
+    try:
+        build = load_build()
+        rendered = build.build_home(build.public_pages())
+    except Exception as error:  # the build's own error says what is wrong
+        problems.append(f"the home page could not be rendered for comparison: {error}")
+    else:
+        if rendered != text:
+            problems.append("the published index.html is not what scripts/build-site.py renders "
+                            "from site/tools.json, site/changelog/ and the Cargo.toml versions")
+    notes.append("the home page is what the build renders from its data")
+    return problems, notes
 
 
 def check(out):
@@ -157,7 +285,7 @@ def check(out):
     # Raw Markdown on a built docs page, outside code.
     for page_path in sorted((out / "docs").rglob("index.html")) if (out / "docs").is_dir() else []:
         text = page_path.read_text(encoding="utf-8")
-        main = re.search(r'<main class="content">(.*)</main>', text, re.S)
+        main = re.search(r'<main class="content"[^>]*>(.*)</main>', text, re.S)
         if not main:
             problems.append(f"{page_path.relative_to(out).as_posix()}: no content area")
             continue
@@ -171,13 +299,17 @@ def check(out):
     notes.append("no raw Markdown outside code on any docs page")
 
     # The published panels are the checked panels.
-    for name in ("index.html", "transcripts.json"):
+    for name in ("demo/index.html", "transcripts.json"):
         built = out / name
         if not built.is_file() or built.read_bytes() != (ROOT / "site" / name).read_bytes():
             problems.append(f"the published {name} is not byte-identical to site/{name}")
-    notes.append("the published home page and transcripts.json are byte-identical to site/")
+    notes.append("the published demo page and transcripts.json are byte-identical to site/")
 
-    for name in ("tools.json", "docs.json"):
+    home_problems, home_notes = check_home(out)
+    problems += home_problems
+    notes += home_notes
+
+    for name in ("tools.json", "docs.json", "changelog"):
         if (out / name).exists():
             problems.append(f"{name} is published; the build reads it and no page needs it")
 
