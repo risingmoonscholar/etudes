@@ -39,8 +39,11 @@
   --serif: "Geist Serif", ui-serif, Georgia, serif;
   --topbar-h: 56px;
 }
+/* Light by default; dark when the system asks, unless the page pins light;
+   dark whenever the page pins dark. Same three states as the home page. */
+:root[data-theme="light"] { color-scheme: light; }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0a0a0a;
     --fg: #ededed;
     --muted: #a1a1a1;
@@ -50,6 +53,17 @@
     --hover-bg: #1a1a1a;
     --link: #ededed;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+    --bg: #0a0a0a;
+    --fg: #ededed;
+    --muted: #a1a1a1;
+    --border: #262626;
+    --border-strong: #3a3a3a;
+    --code-bg: #161616;
+    --hover-bg: #1a1a1a;
+    --link: #ededed;
 }
 
 * { box-sizing: border-box; }
