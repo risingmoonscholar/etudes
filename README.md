@@ -44,10 +44,9 @@ tells you where the folder is.
 `--json` result gives a reason code. It also tells you if a new attempt can
 help.
 
-**File contents.** `sweep` uses only file system data, such as names and
-dates, and Finder data to sort files. It does not read file contents to make a
-decision. When `sweep` moves a file, it reads the first 4 KiB and the last
-4 KiB of the file. Undo uses these bytes to find out if the file changed.
+**File contents.** Sweep decides from filesystem and Finder organization
+metadata only; it never reads file contents to decide. When it moves a file it
+reads the first and last 4 KiB, so undo can tell if that file changed.
 `sweep` does not move or tag files that look like personal records.
 
 **Folders that you choose.** With `--map`, `sweep` sends a file type to a
