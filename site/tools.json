@@ -1,0 +1,20 @@
+{
+  "_about": "The tools Études ships. The docs sidebar and the docs index read this list; a new tool is one new entry.",
+  "tools": [
+    {
+      "name": "sweep",
+      "description": "Sorts a messy folder into groups, and moves nothing until you have seen the plan.",
+      "docs": "docs/sweep.md"
+    },
+    {
+      "name": "stash",
+      "description": "Moves files out of the way without deleting them, and brings them back.",
+      "docs": "docs/stash.md"
+    },
+    {
+      "name": "unpack",
+      "description": "Opens an archive into one clean folder, or places nothing at all.",
+      "docs": "docs/unpack.md"
+    }
+  ]
+}

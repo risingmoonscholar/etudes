@@ -2,7 +2,7 @@
 # The script the recording follows. Committed so the clip is auditable: every
 # command in the GIF is here, in order, and nothing else runs.
 #
-# This is the ILLUSTRATION. The evidence is demo/refusal/run.sh and the CI job
+# This is the ILLUSTRATION. The evidence is site/refusal/run.sh and the CI job
 # that runs it -- that is what asserts the numbers. A recording proves what
 # pixels a renderer emitted, which is why it is not the artifact anyone is
 # asked to trust.

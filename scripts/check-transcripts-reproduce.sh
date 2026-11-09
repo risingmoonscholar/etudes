@@ -20,20 +20,20 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-committed="demo/transcripts.json"
+committed="site/transcripts.json"
 if [ ! -f "$committed" ]; then
   echo "FAIL no $committed to check"
   exit 1
 fi
 
-# capture-demos.sh rewrites the demo/ files in place, so keep the originals and
+# capture-demos.sh rewrites the site/ files in place, so keep the originals and
 # put them back whichever way this goes.
 tmp="$(mktemp -d)"
 cp "$committed" "$tmp/committed.json"
-cp demo/index.html "$tmp/index.html"
+cp site/index.html "$tmp/index.html"
 restore() {
   cp "$tmp/committed.json" "$committed"
-  cp "$tmp/index.html" demo/index.html
+  cp "$tmp/index.html" site/index.html
   rm -rf "$tmp"
 }
 trap restore EXIT

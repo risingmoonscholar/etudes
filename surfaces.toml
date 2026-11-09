@@ -34,8 +34,8 @@ what = "every number and version stated in README, CHANGELOG, the site"
 watched_by = ["check-claims.sh"]
 
 [surface.website]
-what = "demo/index.html and the transcripts it shows"
-watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh"]
+what = "the site: site/index.html and the transcripts it shows, the release pages, and the docs pages built from the public docs"
+watched_by = ["check-claims.sh", "check-transcripts-reproduce.sh", "check-site.py"]
 
 [surface.issues]
 what = "public issue bodies, comments, and prior versions"
@@ -66,7 +66,7 @@ unwatched = "empty as of 2026-08-23; disable it or check it before anything land
 
 [surface.demo-evidence]
 what = "the refusal demo's asserted numbers"
-watched_by = ["demo/refusal/run.sh"]
+watched_by = ["site/refusal/run.sh"]
 
 [surface.security-posture]
 what = "the claims SECURITY.md makes about what holds"
@@ -100,11 +100,15 @@ failable = "it is the failability check: a fault that survives or fails for an u
 guards = "the site's captured output still comes out of these binaries"
 failable = "verified by tampering with stdout, an exit code, and a missing transcript"
 
+[check."check-site.py"]
+guards = "the site builds, every internal link, anchor and stylesheet url() resolves, ids are unique and not empty, only the listed docs are published, no docs page shows raw Markdown, and the published home page and transcripts are byte-identical to site/"
+failable = "test_check_site.py breaks a real build with a missing anchor, page, file, font and font license, a link outside the site, an absolute link, an unlisted page, each raw-Markdown token, a duplicate and an empty id, a published data file, and a drifted home page and transcripts, and each must fail; it also feeds the Markdown converter every construct it claims to render or refuse"
+
 [check."check-issues.py"]
 guards = "public issues and PRs read as defect reports, not working sessions"
 failable = "self-tests every rule against known-bad text before judging, and refuses to run if one has gone dead"
 
-[check."demo/refusal/run.sh"]
+[check."site/refusal/run.sh"]
 guards = "the nine numbers the refusal demo states"
 failable = "verified by tampering with each asserted count and the exit code"
 

@@ -12,3 +12,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+The fonts in site/assets/fonts/ (Geist, Geist Mono, Geist Serif) are
+Copyright The Geist Project Authors and licensed under the SIL Open Font
+License, Version 1.1. See site/assets/fonts/OFL.txt. They are not covered by
+the Apache License.

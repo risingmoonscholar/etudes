@@ -10,6 +10,10 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+### Added
+
+- The site has docs pages. Each tool and each shared rule gets a page built from the docs in this repository, with the doc tree on the left and an "On this page" list on the right; at phone width the tree folds into a menu. The home page, the release pages and the GIFs keep their addresses. Their sources moved from `demo/` to `site/`, and `scripts/check-site.py` fails when the site does not build or a link or anchor on it goes nowhere.
+
 ## [0.5.5] candidate — sweep, stash and unpack
 
 This version is prepared but not published. No release date or completed

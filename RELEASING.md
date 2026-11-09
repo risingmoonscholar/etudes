@@ -9,8 +9,10 @@ Use a branch and pull request, including documentation-only changes. Update the
 affected CLI manifests, lockfile, README pins and changelog together. Keep the
 README explicit about candidate status until publication is authorized.
 
-Run the normal CI checks, capture fresh demo transcripts, then install and
-exercise the candidate without changing a user's installation:
+Run the normal CI checks, capture fresh demo transcripts with
+`scripts/capture-demos.sh` (it writes `site/transcripts.json` and the copy inside
+`site/index.html`), check the site with `python3 scripts/check-site.py`, then
+install and exercise the candidate without changing a user's installation:
 
 ```sh
 python3 -m unittest discover -s scripts -p 'test_check_release.py' -v
