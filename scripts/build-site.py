@@ -4,11 +4,16 @@
     scripts/build-site.py              build into _site/
     scripts/build-site.py --out DIR    build into DIR
 
-Everything under site/ is copied as it is (except the two data files the build
-reads), so the home page, the release pages, the GIFs and transcripts.json keep
-their URLs and stay byte-identical to what check-claims.sh and
-check-transcripts-reproduce.sh check. Then each public doc becomes
-/docs/<slug>/index.html in the docs layout.
+Everything under site/ is copied as it is (except the data the build reads:
+tools.json, docs.json and changelog/), so the demo page, the release pages,
+the GIFs and transcripts.json keep their URLs and stay byte-identical to what
+check-claims.sh and check-transcripts-reproduce.sh check. Then each public doc
+becomes /docs/<slug>/index.html in the docs layout.
+
+The home page, /index.html, is built: the tools from site/tools.json, the
+install lines with versions read from each tool's Cargo.toml, What's new from
+the newest entry in site/changelog/, and captured output from
+site/transcripts.json. check-site.py renders it again and compares.
 
 Which docs are public is data: site/tools.json (one entry per tool) and
 site/docs.json (the shared pages). Nothing else from the repo goes on the site.
@@ -38,6 +43,7 @@ import posixpath
 import re
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +59,8 @@ CHANGELOG_URL = BLOB_URL + "CHANGELOG.md"
 GENERATOR = '<meta name="generator" content="scripts/build-site.py">'
 # Read by the build, not by any page.
 BUILD_ONLY = ("tools.json", "docs.json", ".DS_Store")
+# Folders under site/ the build reads and does not publish as they are.
+BUILD_ONLY_DIRS = ("changelog",)
 SCHEMES = ("http", "https", "mailto")
 
 
@@ -84,7 +92,7 @@ def public_pages():
         raise BuildError("site/docs.json has no sections list")
     pages = []
     for tool in tools:
-        for key in ("name", "description", "docs"):
+        for key in ("name", "description", "what", "docs"):
             if not isinstance(tool.get(key), str) or not tool[key].strip():
                 raise BuildError(f"site/tools.json: a tool has no {key}: {tool!r}")
         pages.append({"source": tool["docs"], "title": tool["name"], "group": "Tools",
@@ -540,6 +548,21 @@ class Converter:
 
 # --- layout -----------------------------------------------------------------
 
+def topbar(root, current):
+    """The bar every page shares. CURRENT is "home" or "docs"."""
+    brand_cur = ' aria-current="page"' if current == "home" else ""
+    docs_cur = ' aria-current="true"' if current == "docs" else ""
+    return (f'<a class="skip" href="#main">Skip to content</a>\n'
+            f'<header class="topbar">\n'
+            f'<a class="brand" href="{root}"{brand_cur}>Études</a>\n'
+            f'<nav class="topnav" aria-label="Site">\n'
+            f'<a href="{root}docs/"{docs_cur}>Docs</a>\n'
+            f'<a href="{CHANGELOG_URL}">Changelog</a>\n'
+            f'<a href="{REPO_URL}">GitHub</a>\n'
+            f'</nav>\n'
+            f'</header>')
+
+
 def sidebar(pages, current_dir):
     def link(href_dir, label, mono=False):
         href = rel_dir(current_dir, href_dir)
@@ -589,14 +612,7 @@ def layout(*, title, description, page_dir, pages, content, headings):
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 </head>
 <body>
-<header class="topbar">
-<a class="brand" href="{root}">Études</a>
-<nav class="topnav" aria-label="Site">
-<a href="{root}docs/" aria-current="true">Docs</a>
-<a href="{CHANGELOG_URL}">Changelog</a>
-<a href="{REPO_URL}">GitHub</a>
-</nav>
-</header>
+{topbar(root, "docs")}
 <div class="layout">
 <details class="menu"><summary>Menu</summary><nav aria-label="Docs menu">
 {nav}
@@ -606,11 +622,335 @@ def layout(*, title, description, page_dir, pages, content, headings):
 {nav}
 </nav>
 </aside>
-<main class="content">
+<main class="content" id="main">
 {content}
 </main>
 {right}
 </div>
+</body>
+</html>
+"""
+
+
+# --- home -------------------------------------------------------------------
+
+# The home page is built, not copied: its install lines carry versions read
+# from each tool's Cargo.toml, its "What's new" comes from the newest entry in
+# site/changelog/, and its tool blocks come from site/tools.json and the
+# captured runs in site/transcripts.json. check-site.py renders it again and
+# refuses a published home page that differs.
+
+def tool_versions(tools):
+    """{tool: (package name, version)} from each tool's Cargo.toml."""
+    versions = {}
+    for tool in tools:
+        manifest = ROOT / tool.get("crate", "") / "Cargo.toml"
+        try:
+            package = tomllib.loads(manifest.read_text(encoding="utf-8"))["package"]
+            versions[tool["name"]] = (package["name"], package["version"])
+        except (OSError, KeyError, tomllib.TOMLDecodeError) as error:
+            raise BuildError(f"site/tools.json: {tool['name']}: cannot read the version from "
+                             f"{tool.get('crate', '(no crate)')}/Cargo.toml: {error}") from error
+    return versions
+
+
+def install_line(tool, package, version):
+    return f"cargo install --locked --git {REPO_URL} --tag {tool}-v{version} {package}"
+
+
+def latest_entry():
+    """The newest release entry in site/changelog/, by date then version."""
+    entries = []
+    for path in sorted((SITE / "changelog").glob("*.json")):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise BuildError(f"site/changelog/{path.name} cannot be read: {error}") from error
+        for key in ("tool", "version", "date", "label", "headline", "lead",
+                    "before", "after", "next", "footer"):
+            if key not in entry:
+                raise BuildError(f"site/changelog/{path.name} has no {key}")
+        version = tuple(int(n) for n in entry["version"].split("."))
+        entries.append(((entry["date"], version), entry))
+    if not entries:
+        raise BuildError("site/changelog/ holds no release entry for What's new")
+    return max(entries, key=lambda e: e[0])[1]
+
+
+def rich(parts):
+    """Text parts as written in a changelog entry: {"text": ...} or {"code": ...}."""
+    out = []
+    for part in parts:
+        if "code" in part:
+            out.append(f"<code>{html.escape(part['code'], quote=False)}</code>")
+        else:
+            out.append(html.escape(part["text"], quote=False))
+    return "".join(out)
+
+
+def terminal(runs):
+    """Commands, their output lines and exit codes, as one block."""
+    blocks = []
+    for run in runs:
+        lines = [f'<span class="prompt">$ </span>{html.escape(run["command"], quote=False)}']
+        lines += [html.escape(line, quote=False) for line in run["output"]]
+        lines.append(f'<span class="exitline">exit {int(run["exit"])}</span>')
+        blocks.append("\n".join(lines))
+    return '<pre class="term"><code>' + "\n\n".join(blocks) + "</code></pre>"
+
+
+def entry_side(side, data):
+    title = "Before" if side == "before" else "After"
+    files = "".join(f"<li><code>{esc(name)}</code></li>" for name in data["result"]["files"])
+    return (f'<div class="side {side}">'
+            f'<div class="side-head"><span class="who"><span class="dot" aria-hidden="true"></span>{title}</span>'
+            f'<span class="build">{esc(data["build"])}</span></div>'
+            f'{terminal(data["runs"])}'
+            f'<div class="result"><p class="result-label">{esc(data["result"]["label"])}</p>'
+            f'<ul>{files}</ul></div>'
+            f'<p class="side-exit">exit code <strong>{int(data["exit"])}</strong></p>'
+            f'</div>')
+
+
+def render_entry(entry):
+    nxt = entry["next"]
+    return (f'<article class="entry" aria-labelledby="entry-title">'
+            f'<p class="entry-meta"><span class="entry-ver">{esc(entry["tool"])} {esc(entry["version"])}</span>'
+            f'<span class="pill">{esc(entry["label"])}</span></p>'
+            f'<h3 id="entry-title" class="entry-title">{esc(entry["headline"])}</h3>'
+            f'<p class="entry-lead">{rich(entry["lead"])}</p>'
+            f'<div class="compare">{entry_side("before", entry["before"])}{entry_side("after", entry["after"])}</div>'
+            f'<p class="entry-note">{rich(nxt["note"])}</p>'
+            f'{terminal([nxt])}'
+            f'<p class="entry-foot">{esc(entry["footer"])}</p>'
+            f'</article>')
+
+
+def copyable(text, label):
+    return (f'<div class="cmd"><pre><code>{html.escape(text, quote=False)}</code></pre>'
+            f'<button type="button" class="copy" data-copy="{esc_attr(text)}" '
+            f'aria-label="Copy {esc_attr(label)}" hidden>Copy</button></div>')
+
+
+def install_block(tools, versions):
+    tabs = [("all", f"All {NUMBER_WORDS.get(len(tools), str(len(tools)))}",
+             [install_line(t["name"], *versions[t["name"]]) for t in tools])]
+    tabs += [(t["name"], t["name"], [install_line(t["name"], *versions[t["name"]])]) for t in tools]
+    buttons = "".join(
+        f'<button type="button" role="tab" id="tab-{key}" aria-controls="install-{key}" '
+        f'aria-selected="{"true" if n == 0 else "false"}" tabindex="{0 if n == 0 else -1}">{esc(label)}</button>'
+        for n, (key, label, _) in enumerate(tabs))
+    panels = "".join(
+        f'<section class="tabpanel" id="install-{key}" aria-labelledby="label-{key}">'
+        f'<h3 class="panel-label" id="label-{key}">{esc(label)}</h3>'
+        f'{copyable(chr(10).join(lines), "the install " + ("commands" if len(lines) > 1 else "command") + " for " + label)}'
+        f'</section>'
+        for key, label, lines in tabs)
+    return (f'<div class="install" data-tabs>'
+            f'<div class="tablist" role="tablist" aria-label="Which tools to install" hidden>{buttons}</div>'
+            f'{panels}</div>')
+
+
+NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+def tool_block(tool, transcripts, root):
+    name = tool["name"]
+    items = []
+    for command in tool.get("commands", []):
+        out = ""
+        label = command.get("transcript")
+        if label:
+            captured = transcripts.get(label)
+            if captured is None:
+                raise BuildError(f"site/tools.json: {name}: no captured run {label!r} in site/transcripts.json")
+            if captured["command"] != command["command"]:
+                raise BuildError(f"site/tools.json: {name}: {command['command']!r} is not the command "
+                                 f"captured as {label!r} ({captured['command']!r})")
+            out = (f'<pre class="term out" data-transcript="{esc_attr(label)}"><code>'
+                   f'{html.escape(captured["output"].rstrip(), quote=False)}</code></pre>'
+                   f'<p class="out-note">Captured output, exit {int(captured["exit"])}. '
+                   f'The fixture folder is shown as <code>~/Desktop</code>.</p>')
+        items.append(f'<li><pre class="line"><code><span class="prompt">$ </span>'
+                     f'{html.escape(command["command"], quote=False)}</code></pre>'
+                     f'<p>{esc(command["says"])}</p>{out}</li>')
+    docs_dir = f"docs/{slug_for(tool['docs'])}/"
+    links = [f'<a href="{root}{docs_dir}">Read the {esc(name)} docs</a>']
+    if tool.get("demo"):
+        links.append(f'<a href="{root}{esc_attr(tool["demo"])}">See it run</a>')
+    return (f'<section class="tool" id="{esc_attr(name)}" aria-labelledby="tool-{esc_attr(name)}">'
+            f'<h3 id="tool-{esc_attr(name)}"><code>{esc(name)}</code></h3>'
+            f'<p class="tool-desc">{esc(tool["what"])}</p>'
+            f'<ol class="commands">{"".join(items)}</ol>'
+            f'<p class="tool-links">{" ".join(links)}</p></section>')
+
+
+# The docs index says the same, in one sentence.
+TAGLINE = ["Every move is checked first.", "Every failure says why."]
+
+HOME_SCRIPT = """
+(function () {
+  document.documentElement.classList.add("js");
+  // Install tabs. Without JavaScript every panel shows, each under its own label.
+  document.querySelectorAll("[data-tabs]").forEach(function (box) {
+    var list = box.querySelector("[role=tablist]");
+    var tabs = Array.prototype.slice.call(list.querySelectorAll("[role=tab]"));
+    function select(tab, focus) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        t.tabIndex = on ? 0 : -1;
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      });
+      if (focus) tab.focus();
+    }
+    tabs.forEach(function (tab, i) {
+      var panel = document.getElementById(tab.getAttribute("aria-controls"));
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", tab.id);
+      panel.tabIndex = 0;
+      tab.addEventListener("click", function () { select(tab, false); });
+      tab.addEventListener("keydown", function (e) {
+        var n = null;
+        if (e.key === "ArrowRight") n = (i + 1) % tabs.length;
+        else if (e.key === "ArrowLeft") n = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === "Home") n = 0;
+        else if (e.key === "End") n = tabs.length - 1;
+        if (n !== null) { e.preventDefault(); select(tabs[n], true); }
+      });
+    });
+    list.hidden = false;
+    box.classList.add("tabbed");
+    select(tabs[0], false);
+  });
+  // Copy buttons. Shown only where the browser can copy; the text stays selectable.
+  if (navigator.clipboard && window.isSecureContext) {
+    var status = document.getElementById("copy-status");
+    document.querySelectorAll("button.copy").forEach(function (button) {
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        navigator.clipboard.writeText(button.getAttribute("data-copy")).then(function () {
+          button.textContent = "Copied";
+          status.textContent = "Copied to the clipboard.";
+        }, function () {
+          button.textContent = "Copy failed";
+          status.textContent = "Copy failed. Select the text and copy it instead.";
+        });
+        setTimeout(function () { button.textContent = "Copy"; }, 2000);
+      });
+    });
+  }
+  // The tagline: each word goes from muted to full as it crosses the middle of
+  // the screen. Without JavaScript, or with reduced motion, it is shown in full.
+  var words = document.querySelectorAll(".tagline .w");
+  if (!words.length) return;
+  var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (still || !("IntersectionObserver" in window)) return;
+  document.documentElement.classList.add("reveal");
+  var seen = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (entry.isIntersecting) { entry.target.classList.add("on"); seen.unobserve(entry.target); }
+    });
+  }, { rootMargin: "0px 0px -45% 0px" });
+  words.forEach(function (w, i) { w.style.transitionDelay = (i % 8) * 40 + "ms"; seen.observe(w); });
+})();
+"""
+
+
+def build_home(pages):
+    tools = load_json("tools.json")["tools"]
+    versions = tool_versions(tools)
+    captured = {t["label"]: t for t in load_json("transcripts.json").get("transcripts", [])}
+    entry = latest_entry()
+    root = "./"
+    count = NUMBER_WORDS.get(len(tools), str(len(tools)))
+    cards = "".join(
+        f'<li><a class="toolcard" href="docs/{slug_for(t["docs"])}/">'
+        f'<span class="name">{esc(t["name"])}</span>'
+        f'<span class="desc">{esc(t["what"])}</span>'
+        f'<span class="more">{esc(t["name"])} docs</span></a></li>'
+        for t in tools)
+    checks = "\n".join(f"{t['name']} --version" for t in tools)
+    first = tools[0]["name"]
+    update = install_line(first, versions[first][0], "X.Y.Z")
+    tagline = "<br>".join(
+        " ".join(f'<span class="w">{esc(word)}</span>' for word in line.split()) for line in TAGLINE)
+    blocks = "".join(tool_block(t, captured, root) for t in tools)
+    entry_tag = f'{entry["tool"]}-v{entry["version"]}'
+    release_page = SITE / "releases" / f"{entry_tag}.html"
+    release_link = (f'<p class="entry-more"><a href="releases/{entry_tag}.html">Release notes for '
+                    f'{esc(entry["tool"])} {esc(entry["version"])}</a></p>' if release_page.is_file() else "")
+    description = ("Études: careful file tools for macOS. " +
+                   " ".join(f"{t['name']}: {t['description']}" for t in tools))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Études: careful file tools for macOS</title>
+<meta name="description" content="{esc_attr(summary(description, 300))}">
+<meta property="og:title" content="Études">
+<meta property="og:description" content="Careful file tools for macOS: {esc_attr(', '.join(t['name'] for t in tools))}.">
+<meta name="color-scheme" content="light dark">
+{GENERATOR}
+<link rel="stylesheet" href="assets/site.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
+</head>
+<body class="home">
+{topbar(root, "home")}
+<main id="main">
+<section class="hero" aria-labelledby="title">
+<h1 id="title">Études</h1>
+<p class="sub">Études is a set of file tools for macOS. <br>Each tool installs and runs on its own.</p>
+<ul class="toolrow" aria-label="The tools">{cards}</ul>
+</section>
+
+<section class="band" id="install" aria-labelledby="install-title">
+<h2 id="install-title">Install</h2>
+<p class="intro">Each tool installs on its own with Cargo. Pick one, or all {count}.</p>
+{install_block(tools, versions)}
+<p class="needs">Needs Rust. Get it from <a href="https://rustup.rs">rustup.rs</a>.</p>
+<p class="visually-hidden" id="copy-status" role="status" aria-live="polite"></p>
+<div class="after-install">
+<div>
+<h3 id="check-it-worked">Check it worked</h3>
+<p>Each tool prints its name and version.</p>
+{copyable(checks, "the version checks")}
+</div>
+<div>
+<h3 id="update">Update</h3>
+<p>Run the same line with the new tag. Replace <code>X.Y.Z</code> with the version from the <a href="{CHANGELOG_URL}">changelog</a>.</p>
+<div class="cmd"><pre><code>{html.escape(update, quote=False)}</code></pre></div>
+</div>
+</div>
+</section>
+
+<section class="band" id="whats-new" aria-labelledby="whats-new-title">
+<h2 id="whats-new-title">What's new</h2>
+{render_entry(entry)}
+{release_link}
+</section>
+
+<section class="tagline" aria-label="How the tools behave">
+<p>{tagline}</p>
+</section>
+
+<section class="band" id="tools" aria-labelledby="tools-title">
+<h2 id="tools-title">Commands for each tool</h2>
+{blocks}
+</section>
+</main>
+<footer class="sitefoot">
+<p>Études is open source under the <a href="{BLOB_URL}LICENSE">Apache 2.0 license</a>.</p>
+<nav aria-label="Footer">
+<a href="docs/">Docs</a>
+<a href="docs/security/">Security</a>
+<a href="demo/">Demos</a>
+<a href="{CHANGELOG_URL}">Changelog</a>
+<a href="{REPO_URL}">GitHub</a>
+</nav>
+</footer>
+<script>{HOME_SCRIPT}</script>
 </body>
 </html>
 """
@@ -698,10 +1038,19 @@ def build(out):
     linker = Linker(pages)
     rendered = {page["dir"]: build_doc(page, pages, linker) for page in pages}
     rendered["docs"] = build_index(pages)
+    rendered[""] = build_home(pages)
     prepare_out(out)
-    shutil.copytree(SITE, out, dirs_exist_ok=True, ignore=shutil.ignore_patterns(*BUILD_ONLY))
+    plain_ignore = shutil.ignore_patterns(*BUILD_ONLY)
+
+    def ignore(folder, names):
+        skipped = set(plain_ignore(folder, names))
+        if Path(folder) == SITE:
+            skipped |= {n for n in names if n in BUILD_ONLY_DIRS}
+        return skipped
+
+    shutil.copytree(SITE, out, dirs_exist_ok=True, ignore=ignore)
     for page_dir, page_html in rendered.items():
-        target = out / page_dir / "index.html"
+        target = out / page_dir / "index.html" if page_dir else out / "index.html"
         if target.exists():
             raise BuildError(f"{page_dir}/index.html is both a file in site/ and a built page")
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -724,7 +1073,7 @@ def main(argv):
     except SystemExit as error:
         print(error, file=sys.stderr)
         return 2
-    print(f"ok   built {len(pages)} docs pages and the docs index into {out}")
+    print(f"ok   built the home page, {len(pages)} docs pages and the docs index into {out}")
     return 0
 
 
