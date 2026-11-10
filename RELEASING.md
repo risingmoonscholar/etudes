@@ -52,10 +52,14 @@ The entry does not say whether the release is tagged, or give a date.
 - The tag names the commit the after build ran at, or a commit with the same
   source for that tool (its crate, the crates it uses by path, the workspace
   `Cargo.toml` and `Cargo.lock`, and any `rust-toolchain` or `.cargo/config`
-  file): the entry is tagged. This compares source, not the built bytes. The changelog shows the
-  tag's date, and the footer names the tag.
+  file): the entry is tagged, and the footer names the tag. This compares
+  source, not the built bytes.
 - The tag names a commit whose source for that tool differs: the site does not
   build until the entry is run again on the tag.
+
+A release date on the site comes only from an annotated tag (`git tag -a`):
+the tagger date. A lightweight tag shows "Tagged" with no date. Nothing falls
+back to the date in CHANGELOG.md or to a commit date.
 
 Steps:
 
@@ -66,10 +70,19 @@ Steps:
    `scripts/release-runs.py sweep 0.5.5 --before sweep-v0.5.4 --after HEAD`.
    Write the label, headline, lead and next note in the JSON. Commit the entry
    and its logs in `site/changelog/logs/sweep-0.5.5/`.
-3. Tag. If the tag is on the commit the entry ran at, or the tool's source did
-   not change after it, nothing else is needed: the site shows the release as
-   tagged, with the tag's date. If the source changed, run it again on the tag
-   and commit the result before publishing:
+3. Tag with an annotated tag, which carries the release date:
+
+   ```sh
+   git tag -a sweep-v0.5.5 -m "sweep 0.5.5"
+   ```
+
+   `scripts/check-site.py` fails on a lightweight tag for the version in the
+   tool's `Cargo.toml`, and `scripts/check-release.py --published` fails on a
+   lightweight tag for any version the README pins. Older lightweight tags do
+   not fail either check. If the tag is on the commit the entry ran at, or the
+   tool's source did not change after it, nothing else is needed: the site
+   shows the release as tagged, with the tagger date. If the source changed,
+   run it again on the tag and commit the result before publishing:
 
    ```sh
    scripts/release-runs.py sweep 0.5.5 --before sweep-v0.5.4 --after sweep-v0.5.5
@@ -112,8 +125,8 @@ not run it.
 
 After successful required review and the normal publication authorization,
 finalize the release date and candidate wording through the PR. Recheck the
-resolved release tree before tagging. Publish new tags and release notes; never
-move an existing release tag to different code.
+resolved release tree before tagging. Tag with `git tag -a`. Publish new tags
+and release notes; never move an existing release tag to different code.
 
 Verify the exact advertised pins from the public remote:
 

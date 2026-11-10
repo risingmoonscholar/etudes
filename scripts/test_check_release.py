@@ -37,6 +37,21 @@ class ReleaseGate(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unpublished tags"):
             release.check_tags(self.expected, listing)
 
+    def test_a_lightweight_release_tag_fails(self):
+        annotated = "\n".join(f"{'a' * 40}\trefs/tags/{tag}\n{'b' * 40}\trefs/tags/{tag}^{{}}"
+                               for tag in self.expected.values())
+        release.check_annotated(self.expected, annotated)
+        light = annotated.replace(f"refs/tags/stash-v0.5.3^{{}}", "refs/tags/other^{}")
+        with self.assertRaisesRegex(RuntimeError, "lightweight release tags.*stash-v0.5.3"):
+            release.check_annotated(self.expected, light)
+
+    def test_older_lightweight_tags_do_not_fail(self):
+        # Only the pinned tags are checked; an older lightweight tag is not.
+        listing = "\n".join(f"{'a' * 40}\trefs/tags/{tag}\n{'b' * 40}\trefs/tags/{tag}^{{}}"
+                             for tag in self.expected.values())
+        listing += f"\n{'c' * 40}\trefs/tags/stash-v0.5.2"
+        release.check_annotated(self.expected, listing)
+
     def test_wrong_installed_version_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(release, "run", return_value="sweep 0.5.2\n"):
