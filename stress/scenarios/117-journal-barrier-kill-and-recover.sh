@@ -76,6 +76,7 @@ if [ "$paused" = 1 ]; then
   assert_eq 0 "$(bytes_ok "$D")" "every file has its original bytes"
   assert_eq 0 "$(find "$D/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')" "nothing is left in Screenshots"
 else
+  kill -CONT "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null; pid=""
   unproven "kill part way through sweep apply" "the apply finished before it could be paused"
 fi

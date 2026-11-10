@@ -69,7 +69,7 @@ if ! hdiutil attach "$IMG" -mountpoint "$INNER" -nobrowse -readonly >/dev/null 2
   exit 0
 fi
 
-UNDO1_OUT=$("$SWEEP" undo 2>&1)
+UNDO1_OUT=$("$SWEEP" undo "$OUTER" 2>&1)
 UNDO1_CODE=$?
 
 RESTORED_TO_OUTER=0
@@ -78,10 +78,8 @@ STILL_STUCK=0
 for f in alpha bravo; do [ -f "$OUTER/Documents/stuck_$f.txt" ] && STILL_STUCK=$((STILL_STUCK+1)); done
 
 if [ "$RESTORED_TO_OUTER" != 3 ] || [ "$STILL_STUCK" != 2 ]; then
-  # The engineered split didn't land the way it was designed to -- report
-  # honestly rather than asserting on a premise that didn't hold this run.
-  unproven "undo does not silently drop partial-restore progress on error" \
-    "expected a 3-restored/2-stuck split after the read-only remount, got restored=$RESTORED_TO_OUTER stuck=$STILL_STUCK (undo exit=$UNDO1_CODE output=[$UNDO1_OUT])"
+  # Both mounts were verified; a missing restored file is now a failure.
+  fail "expected a 3-restored/2-stuck split after the read-only remount, got restored=$RESTORED_TO_OUTER stuck=$STILL_STUCK (undo exit=$UNDO1_CODE output=[$UNDO1_OUT])"
   exit 0
 fi
 
@@ -120,7 +118,7 @@ fi
 hdiutil detach "$INNER" -force >/dev/null 2>&1
 hdiutil attach "$IMG" -mountpoint "$INNER" -nobrowse >/dev/null 2>&1
 
-UNDO2_OUT=$("$SWEEP" undo 2>&1)
+UNDO2_OUT=$("$SWEEP" undo "$OUTER" 2>&1)
 UNDO2_CODE=$?
 assert_eq 0 "$UNDO2_CODE" "a second undo call (volume writable again) finishes the job"
 

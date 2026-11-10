@@ -123,7 +123,7 @@ if [ -n "$ID" ]; then
   clean "inspect of one item" "$OUT"
   has "inspect of one item: count" "$OUT" "1 of 1 item remains held"
 else
-  unproven "inspect of one item" "status gave no id"
+  fail "status --json omitted details.id for the recorded stash"
 fi
 "$STASH" pop "$ONE2" >/dev/null 2>&1 </dev/null
 python3 -I - "$W/one.zip" <<'PY'

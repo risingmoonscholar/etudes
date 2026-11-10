@@ -58,8 +58,8 @@ mkdir -p "$PROJ"
 # group size. Two of them are the SAME name except for case: a legal pair on
 # this filesystem, and a real collision on the default case-insensitive one.
 for f in alpha beta gamma delta; do : > "$PROJ/photoset_$f.txt"; done
-: > "$PROJ/photoset_report.txt"
-: > "$PROJ/PHOTOSET_REPORT.txt"
+printf 'lowercase payload' > "$PROJ/photoset_report.txt"
+printf 'uppercase payload' > "$PROJ/PHOTOSET_REPORT.txt"
 BEFORE=$(find "$PROJ" -type f | wc -l | tr -d ' ')
 assert_eq 6 "$BEFORE" "case-sensitive volume: both differently-cased files coexist on disk (fixture sanity check)"
 
@@ -75,6 +75,8 @@ APPLY_CODE=$?
 
 if [ "$APPLY_CODE" = 0 ]; then
   pass "case-sensitive volume: apply succeeded -- the case-fold collision bug is not (or no longer) present"
+  assert_eq 'lowercase payload' "$(cat "$PROJ/Documents/photoset_report.txt" 2>/dev/null)" "lowercase name retains its own bytes"
+  assert_eq 'uppercase payload' "$(cat "$PROJ/Documents/PHOTOSET_REPORT.txt" 2>/dev/null)" "uppercase name retains its own bytes"
   AFTER=$(find "$PROJ" -type f | wc -l | tr -d ' ')
   assert_eq "$BEFORE" "$AFTER" "case-sensitive volume: successful apply lost no files"
 else
@@ -87,6 +89,8 @@ sanity check above) but apply() folds every destination path to lowercase \
 before deduplicating (etude-core/src/apply.rs, planned_destinations.insert(dst.to_string_lossy().to_lowercase())), \
 so it reports a DestinationCollision and refuses the ENTIRE group of 6 files \
 -- not just the 2 that (wrongly) look identical to it. exit=$APPLY_CODE output=[$APPLY_OUT]"
+  assert_eq 'lowercase payload' "$(cat "$PROJ/Documents/photoset_report.txt" 2>/dev/null)" "lowercase name retains its own bytes"
+  assert_eq 'uppercase payload' "$(cat "$PROJ/Documents/PHOTOSET_REPORT.txt" 2>/dev/null)" "uppercase name retains its own bytes"
   AFTER=$(find "$PROJ" -type f | wc -l | tr -d ' ')
   assert_eq "$BEFORE" "$AFTER" "case-sensitive volume: the wrongful refusal at least lost no files"
 fi

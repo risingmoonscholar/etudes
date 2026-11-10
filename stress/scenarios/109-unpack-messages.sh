@@ -326,16 +326,26 @@ PY
   STEP=$(step_after 'extract it by hand: ' "$LAST")
   assert_exit 0 "mark cannot be carried: the printed step works" -- bash -c "$STEP"
   chmod -R u+rwx "$A/locked" 2>/dev/null; rm -rf "$A/locked" "$A/locked.tar"
+else
+  unproven "download warning preservation refusal" "xattr unavailable"
 fi
 "$UNPACK" "$A/raced.zip" >"$W/raced.out" 2>&1 &
 PID=$!
 RACED=
 for _ in $(seq 1 3000); do
-  if ls -d "$A"/.raced.unpack-*.partial >/dev/null 2>&1; then mkdir "$A/raced"; RACED=1; break; fi
+  if ls -d "$A"/.raced.unpack-*.partial >/dev/null 2>&1; then
+    kill -STOP "$PID" 2>/dev/null || break
+    if ps -o state= -p "$PID" 2>/dev/null | grep -q T && ls -d "$A"/.raced.unpack-*.partial >/dev/null 2>&1 && mkdir "$A/raced" 2>/dev/null; then
+      RACED=1
+    fi
+    kill -CONT "$PID" 2>/dev/null || true
+    break
+  fi
   kill -0 "$PID" 2>/dev/null || break
 done
 wait "$PID"; rc=$?
-if [ -n "$RACED" ] && [ -d "$A/raced" ] && [ -z "$(ls -A "$A/raced")" ] && [ "$rc" != 0 ]; then
+if [ -n "$RACED" ]; then
+  assert_eq "" "$(ls -A "$A/raced")" "raced destination remains empty"
   OUT=$(cat "$W/raced.out")
   clean "a folder appeared" "$OUT"
   assert_eq 2 "$rc" "a folder appeared: exit"
@@ -357,11 +367,18 @@ has "many.zip: the manual route" "$OUT" "extract it by hand: unzip '$A/many.zip'
 PID=$!
 SENT=
 for _ in $(seq 1 3000); do
-  if ls -d "$A"/.large.unpack-*.partial >/dev/null 2>&1; then kill -TERM "$PID"; SENT=1; break; fi
+  if ls -d "$A"/.large.unpack-*.partial >/dev/null 2>&1; then
+    kill -STOP "$PID" 2>/dev/null || break
+    if ps -o state= -p "$PID" | grep -q T && ls -d "$A"/.large.unpack-*.partial >/dev/null 2>&1; then
+      kill -TERM "$PID"; SENT=1
+    fi
+    kill -CONT "$PID" 2>/dev/null || true
+    break
+  fi
   kill -0 "$PID" 2>/dev/null || break
 done
 wait "$PID"; rc=$?
-if [ -n "$SENT" ] && [ "$rc" != 0 ]; then
+if [ -n "$SENT" ]; then
   clean "stopped" "$(cat "$W/stop.err")"
   assert_eq 2 "$rc" "stopped: exit"
   assert_eq refused "$(field status "$W/stop.json")" "stopped: status"
