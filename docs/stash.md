@@ -1,6 +1,6 @@
 # stash
 
-Stash moves files out of the way, and brings them back. Back to the [README](../README.md).
+Stash moves files into a hidden holding folder in the same folder, without deleting them. Nothing happens on its own; `stash pop` moves them back. Back to the [README](../README.md).
 
 To save a plan and apply exactly that plan later, see [Apply the plan you exported](sweep.md#rules-the-tools-share). For restoring batches, see [independent stash batches](stash-batches.md).
 

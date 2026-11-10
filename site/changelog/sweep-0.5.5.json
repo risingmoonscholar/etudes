@@ -1,0 +1,107 @@
+{
+  "_about": "One release entry in the release format. The build renders it on the home page (What's new); the changelog pages reuse it. Every output line is copied from a real run; whole lines are cut to fit, no line is edited. The exit lines are the recorded exit codes.",
+  "tool": "sweep",
+  "version": "0.5.5",
+  "date": "2026-11-08",
+  "label": "Behavior change",
+  "headline": "sweep now continues the sorting you already started",
+  "lead": [
+    {
+      "text": "If a folder such as "
+    },
+    {
+      "code": "Documents"
+    },
+    {
+      "text": " is already there, sweep 0.5.5 moves one or two matching files into it and exits with code 0. Version 0.5.4 left those 2 files where they were and exited with code 1."
+    }
+  ],
+  "folder": "inbox",
+  "before": {
+    "build": "sweep 0.5.4",
+    "runs": [
+      {
+        "command": "sweep inbox",
+        "output": [
+          "  2 files matched no group and were left where they are",
+          "Nothing here needs organising."
+        ],
+        "exit": 1
+      },
+      {
+        "command": "sweep apply inbox --yes",
+        "output": [
+          "sweep: nothing to apply."
+        ],
+        "exit": 1
+      }
+    ],
+    "result": {
+      "label": "Still loose in inbox",
+      "files": [
+        "reading-list.pdf",
+        "conference-agenda.pdf"
+      ]
+    },
+    "exit": 1
+  },
+  "after": {
+    "build": "sweep 0.5.5",
+    "runs": [
+      {
+        "command": "sweep inbox",
+        "output": [
+          "  Documents       2 files   .pdf"
+        ],
+        "exit": 0
+      },
+      {
+        "command": "sweep apply inbox --yes",
+        "output": [
+          "Moved 2 files."
+        ],
+        "exit": 0
+      }
+    ],
+    "result": {
+      "label": "Now in Documents",
+      "files": [
+        "reading-list.pdf",
+        "conference-agenda.pdf"
+      ]
+    },
+    "exit": 0
+  },
+  "next": {
+    "note": [
+      {
+        "text": "A new folder still needs 3 or more files. No flag needed. To put the 2 files back, run "
+      },
+      {
+        "code": "sweep undo inbox"
+      },
+      {
+        "text": "."
+      }
+    ],
+    "command": "sweep undo inbox",
+    "output": [
+      "Restored 2 files."
+    ],
+    "exit": 0
+  },
+  "builds": {
+    "before": {
+      "name": "tag sweep-v0.5.4",
+      "commit": "de8f307",
+      "sha256": "49ccc1f9ffcb34f3f82b02f04a7de108dabfb57ba490aa739c3dcd9d89bbffe1"
+    },
+    "after": {
+      "name": "the 0.5.5 release candidate",
+      "commit": "40fc3d3",
+      "tagged": false,
+      "sha256": "a86bbbb00828e78d06c878977313042f3ab467a0b315a754deb982e263fd396a"
+    }
+  },
+  "footer": "Both outputs come from real runs of two builds: tag sweep-v0.5.4 (commit de8f307) and the 0.5.5 release candidate at commit 40fc3d3, not tagged yet. Each ran the same commands on a fresh copy of one synthetic folder, inbox: a Documents folder with 3 PDFs, and 2 new PDFs loose next to it. Output is shortened to fit by cutting whole lines. Nothing outside the scratch folder was touched."
+}

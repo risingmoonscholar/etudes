@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Études: careful file tools for macOS</title>
+<title>Demos · Études</title>
 <meta name="description" content="Three command-line tools that tidy a folder without reading your private files. Every demo below is a recorded terminal session.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 <style>
@@ -115,9 +115,9 @@ td code{white-space:nowrap}
 <body>
 <div class="wrap">
 
-<nav class="chrome" aria-label="Site"><a href="docs/">Docs</a> · <a href="https://github.com/risingmoonscholar/etudes/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/risingmoonscholar/etudes">GitHub</a></nav>
+<nav class="chrome" aria-label="Site"><a href="../">Home</a> · <a href="../docs/">Docs</a> · <a href="https://github.com/risingmoonscholar/etudes/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/risingmoonscholar/etudes">GitHub</a></nav>
 
-<h1>Études</h1>
+<h1>Études demos</h1>
 <p class="lede">Three command-line tools for macOS. Tidy a folder, put it aside for later, or unpack an archive.</p>
 
 <p>An étude is a short piece written to master one technique, and in the right hands
@@ -130,9 +130,9 @@ fixture. The text panels are captured command output; the short GIFs are termina
 recordings with small script-written labels around the real output. Nothing runs in your
 browser. <a href="#provenance">How the recordings are made.</a></p>
 
-<p>Release notes: <a href="releases/sweep-v0.5.5.html">sweep 0.5.5</a> ·
-<a href="releases/stash-v0.5.5.html">stash 0.5.5</a> ·
-<a href="releases/unpack-v0.5.5.html">unpack 0.5.5</a>.</p>
+<p>Release notes: <a href="../releases/sweep-v0.5.5.html">sweep 0.5.5</a> ·
+<a href="../releases/stash-v0.5.5.html">stash 0.5.5</a> ·
+<a href="../releases/unpack-v0.5.5.html">unpack 0.5.5</a>.</p>
 
 <hr>
 
@@ -232,17 +232,17 @@ Apache-2.0 · <a href="https://github.com/risingmoonscholar/etudes">source</a>
 const API = {
   sweep: {
     title: "organise the obvious, leave the private alone",
-    recording: { src: "gifs/sweep-progress.gif", alt: "sweep applies an organization plan to a large synthetic camera folder, shows progress, then undoes the move while leaving synthetic tax records untouched", caption: "A large synthetic camera folder: apply, visible progress, then undo." },
+    recording: { src: "../gifs/sweep-progress.gif", alt: "sweep applies an organization plan to a large synthetic camera folder, shows progress, then undoes the move while leaving synthetic tax records untouched", caption: "A large synthetic camera folder: apply, visible progress, then undo." },
     demos: ["sweep-plan", "sweep-explain", "sweep-json"]
   },
   stash: {
     title: "clean now, decide later",
-    recording: { src: "gifs/stash-custody.gif", alt: "stash clears a synthetic screenshot folder, reports a hidden item left behind, then restores the visible items", caption: "A synthetic screenshot folder: stash, then pop it back. The hidden item stays in place." },
+    recording: { src: "../gifs/stash-custody.gif", alt: "stash clears a synthetic screenshot folder, reports a hidden item left behind, then restores the visible items", caption: "A synthetic screenshot folder: stash, then pop it back. The hidden item stays in place." },
     demos: ["stash-put"]
   },
   unpack: {
     title: "stop thinking about archive formats",
-    recording: { src: "gifs/unpack-safety.gif", alt: "unpack extracts a normal synthetic archive and refuses a symlink archive before creating an output folder", caption: "A normal archive extracts; a symlink archive is refused before an output folder is created." },
+    recording: { src: "../gifs/unpack-safety.gif", alt: "unpack extracts a normal synthetic archive and refuses a symlink archive before creating an output folder", caption: "A normal archive extracts; a symlink archive is refused before an output folder is created." },
     demos: ["unpack-help"]
   },
 };
@@ -270,7 +270,7 @@ function paint(data) {
   }
 }
 
-fetch("transcripts.json")
+fetch("../transcripts.json")
   .then(r => r.ok ? r.json() : Promise.reject(r.status))
   .then(paint)
   .catch(() => {

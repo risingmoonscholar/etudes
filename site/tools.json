@@ -1,20 +1,82 @@
 {
-  "_about": "The tools Études ships. The docs sidebar and the docs index read this list; a new tool is one new entry.",
+  "_about": "The tools Études ships. The home page, the docs sidebar and the docs index read this list; a new tool is one new entry. description is the short line for the docs; what is the home page's \"<tool> is ...\" sentence. crate is the folder whose Cargo.toml gives the install version. Each command's usage must be a line of that tool's captured help in site/transcripts.json; transcript names a captured run whose output the home page shows. Text in description, what and says may use `backticks` for code.",
   "tools": [
     {
       "name": "sweep",
-      "description": "Sorts a messy folder into groups, and moves nothing until you have seen the plan.",
-      "docs": "docs/sweep.md"
+      "description": "Sorts a messy folder into groups. It shows a plan first. Nothing moves until you run `sweep apply`.",
+      "what": "sweep is a command that sorts a messy folder into groups. It shows a plan first. Nothing moves until you run `sweep apply`, and `sweep undo` puts the moves back.",
+      "docs": "docs/sweep.md",
+      "crate": "crates/sweep-cli",
+      "demo": "demo/#sweep",
+      "commands": [
+        {
+          "command": "sweep ~/Desktop",
+          "usage": "sweep [PATH] [FLAGS]",
+          "says": "Builds a plan and shows it. Changes nothing.",
+          "transcript": "sweep-plan"
+        },
+        {
+          "command": "sweep apply ~/Desktop --yes",
+          "usage": "sweep apply PATH --yes",
+          "says": "Moves every group in the plan."
+        },
+        {
+          "command": "sweep undo ~/Desktop",
+          "usage": "sweep undo [PATH]",
+          "says": "Reverses the most recent apply in that folder."
+        }
+      ]
     },
     {
       "name": "stash",
-      "description": "Moves files out of the way without deleting them, and brings them back.",
-      "docs": "docs/stash.md"
+      "description": "Moves files into a hidden holding folder in the same folder, without deleting them. Nothing happens on its own; `stash pop` moves them back.",
+      "what": "stash is a command that moves files out of the way, into a hidden holding folder in the same folder. It deletes nothing, and nothing happens on its own. The files come back when you run `stash pop`.",
+      "docs": "docs/stash.md",
+      "crate": "crates/stash-cli",
+      "demo": "demo/#stash",
+      "commands": [
+        {
+          "command": "stash ~/Desktop --for 3d",
+          "usage": "stash [PATH] [--for DURATION]",
+          "says": "Moves the folder's visible items into a hidden holding folder, due back in 3 days. Nothing happens on its own when they are due.",
+          "transcript": "stash-put"
+        },
+        {
+          "command": "stash status ~/Desktop",
+          "usage": "stash status [PATH]",
+          "says": "Shows what is stashed, and when it is due back."
+        },
+        {
+          "command": "stash pop ~/Desktop",
+          "usage": "stash pop [PATH]",
+          "says": "Moves the batch for that folder back where it was."
+        }
+      ]
     },
     {
       "name": "unpack",
       "description": "Opens an archive into one clean folder, or places nothing at all.",
-      "docs": "docs/unpack.md"
+      "what": "unpack is a command that opens an archive into one clean folder. If the archive is unsafe, it places nothing at all.",
+      "docs": "docs/unpack.md",
+      "crate": "crates/unpack-cli",
+      "demo": "demo/#unpack",
+      "commands": [
+        {
+          "command": "unpack photos.zip --list",
+          "usage": "unpack ARCHIVE --list",
+          "says": "Shows what is inside. Extracts nothing."
+        },
+        {
+          "command": "unpack photos.zip",
+          "usage": "unpack ARCHIVE [--into DIR]",
+          "says": "Extracts into its own folder."
+        },
+        {
+          "command": "unpack photos.zip --into ~/Desktop/photos",
+          "usage": "unpack ARCHIVE [--into DIR]",
+          "says": "Extracts into the folder you name."
+        }
+      ]
     }
   ]
 }

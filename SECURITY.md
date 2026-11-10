@@ -96,6 +96,12 @@ defends against hostile code running as the same user.
 **`--json` discloses less than the human output.** For files that look like
 personal records it carries counts by category and never the paths.
 
+**Nothing runs in the background.** The tools install no daemon (a program
+that runs in the background), no menu-bar app and no login item. A tool runs
+only when you start it. `stash` tells you when files are due back, but it does
+not move them back on that date. It moves them back only when you run
+`stash pop`.
+
 ## unpack: what it refuses, and what that is worth
 
 unpack dispatches to the system `unzip`, `tar` and `gunzip`. It parses no

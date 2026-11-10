@@ -143,13 +143,13 @@ payload = {
 json.dump(payload, open(out, "w"), indent=2)
 print(f"wrote {out}: {len(transcripts)} transcripts at {rev}")
 
-# Same payload, written a second place: an inline <script> in site/index.html,
+# Same payload, written a second place: an inline <script> in site/demo/index.html,
 # between two HTML comment markers, so a double-clicked file:// copy of the
 # page works without a server. fetch() stays the primary path in the page's
 # own JS; this is only the fallback it reaches for when fetch() is blocked.
 # "</" is escaped inside the JSON so no captured output can accidentally close
 # the surrounding <script> tag early.
-index_path = os.path.join(os.path.dirname(out), "index.html")
+index_path = os.path.join(os.path.dirname(out), "demo", "index.html")
 start, end = "<!-- TRANSCRIPTS_INLINE_START -->", "<!-- TRANSCRIPTS_INLINE_END -->"
 html = open(index_path).read()
 if start in html and end in html:

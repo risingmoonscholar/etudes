@@ -67,6 +67,10 @@ jobs:
           # GITHUB_SHA is the commit GitHub associated with this release event;
           # pinning it prevents a moved tag from changing a workflow rerun.
           ref: ${{ github.sha }}
+          # All history and tags, so check-site.py can see the release tag:
+          # the home page's What's new must not say "not tagged yet" once the
+          # tag exists, and this is the job that publishes it.
+          fetch-depth: 0
 
       - name: Refuse unpublished or stale page versions
         run: python3 scripts/check-pages-release.py
@@ -87,7 +91,7 @@ jobs:
           print(f'{n} transcripts, captured at {d.get(\"commit\",\"?\")}')
           "
 
-      # The build copies site/index.html and site/transcripts.json byte for
+      # The build copies site/demo/index.html and site/transcripts.json byte for
       # byte, and the check refuses a build where they differ, so the panels
       # check-transcripts-reproduce.sh proves are the panels published.
       - name: Build the site and refuse a broken link or anchor
