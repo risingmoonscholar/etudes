@@ -1,0 +1,10 @@
+
+Scanned 2 items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep 0.5.5
+
+  Documents       2 files   .pdf
+
+Nothing has been moved.  Nothing left this machine.
+Note: this listing is in your terminal scrollback.
+Review: sweep review inbox
+Apply:  sweep apply inbox --yes
+Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed.

@@ -1,0 +1,7 @@
+
+Moved 2 files.
+Undo with: sweep undo '/private/var/folders/1z/r3hvhpx17vx5kvs_jh7tg8700000gn/T/etudes-release-runs-jub3viis/run-after/work/inbox'
+Undo record id: 1794282657184690000-74987-0-98573b70b9e8b8f8
+Encrypted journal: /var/folders/1z/r3hvhpx17vx5kvs_jh7tg8700000gn/T/etudes-release-runs-jub3viis/run-after/state/sweep-1794282657184690000-74987-0-98573b70b9e8b8f8.journal
+
+Nothing left this machine.

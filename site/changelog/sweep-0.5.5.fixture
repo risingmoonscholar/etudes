@@ -1,0 +1,62 @@
+{
+  "_about": "The test folder and commands for the sweep 0.5.5 entry. scripts/release-runs.py runs setup with /bin/sh -eu inside an empty scratch folder, once per build, then each command in that folder in order. show lists, per build, the whole lines of the output the page shows: each regular expression picks the next line it matches. result names the files listed under each side after its commands; new means only files that were not there before the commands ran. next runs on the after build only, after its commands.",
+  "folder": "inbox",
+  "describe": "a Documents folder with 3 PDFs, and 2 new PDFs loose next to it",
+  "setup": [
+    "# Ported from the 0.5.5 gate 1 runs (run-fixture-9533530.sh): the same files, contents and times.",
+    "mkpdf() { # minimal valid one-page PDF with a title line",
+    "  printf '%%PDF-1.4\\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\\n%% %s\\ntrailer<</Root 1 0 R>>\\n%%%%EOF\\n' \"$2\" > \"$1\"",
+    "}",
+    "d=inbox",
+    "mkdir -p \"$d/Documents\"",
+    "mkpdf \"$d/Documents/user-guide.pdf\"      \"user guide\"",
+    "mkpdf \"$d/Documents/style-notes.pdf\"     \"style notes\"",
+    "mkpdf \"$d/Documents/workshop-slides.pdf\" \"workshop slides\"",
+    "mkpdf \"$d/reading-list.pdf\"      \"reading list\"",
+    "mkpdf \"$d/conference-agenda.pdf\" \"conference agenda\"",
+    "# old enough that the default --since 1d window does not hold them back",
+    "find \"$d\" -exec touch -t 202610010900 {} +"
+  ],
+  "runs": [
+    {
+      "command": "sweep inbox",
+      "show": {
+        "before": [
+          "files matched no group",
+          "^Nothing here needs organising\\.$"
+        ],
+        "after": [
+          "^  Documents +2 files"
+        ]
+      }
+    },
+    {
+      "command": "sweep apply inbox --yes",
+      "show": {
+        "before": [
+          "^sweep: nothing to apply\\.$"
+        ],
+        "after": [
+          "^Moved 2 files\\.$"
+        ]
+      }
+    }
+  ],
+  "result": {
+    "before": {
+      "label": "Still loose in inbox",
+      "glob": "inbox/*.pdf"
+    },
+    "after": {
+      "label": "Now in Documents",
+      "glob": "inbox/Documents/*",
+      "new": true
+    }
+  },
+  "next": {
+    "command": "sweep undo inbox",
+    "show": [
+      "^Restored "
+    ]
+  }
+}

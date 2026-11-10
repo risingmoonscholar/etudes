@@ -1,5 +1,5 @@
 {
-  "_about": "One release entry in the release format. The build renders it on the home page (What's new); the changelog pages reuse it. Every output line is copied from a real run; whole lines are cut to fit, no line is edited. The exit lines are the recorded exit codes.",
+  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files, builds and footer come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only date, label, headline, lead, next.note and film are written by hand.",
   "tool": "sweep",
   "version": "0.5.5",
   "date": "2026-11-08",
@@ -39,8 +39,8 @@
     "result": {
       "label": "Still loose in inbox",
       "files": [
-        "reading-list.pdf",
-        "conference-agenda.pdf"
+        "conference-agenda.pdf",
+        "reading-list.pdf"
       ]
     },
     "exit": 1
@@ -66,8 +66,8 @@
     "result": {
       "label": "Now in Documents",
       "files": [
-        "reading-list.pdf",
-        "conference-agenda.pdf"
+        "conference-agenda.pdf",
+        "reading-list.pdf"
       ]
     },
     "exit": 0
@@ -94,14 +94,16 @@
     "before": {
       "name": "tag sweep-v0.5.4",
       "commit": "de8f307",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
       "sha256": "49ccc1f9ffcb34f3f82b02f04a7de108dabfb57ba490aa739c3dcd9d89bbffe1"
     },
     "after": {
       "name": "the 0.5.5 release candidate",
-      "commit": "9533530",
-      "tagged": false,
-      "sha256": "4baa751954e8dd00eebf6b24ff57cbec7cceb190281b2a5d54000f37c57930d0"
+      "commit": "a0ea3af",
+      "rev": "a0ea3afa8d826adffe447f8b78f8c6b79e99f1a0",
+      "sha256": "4baa751954e8dd00eebf6b24ff57cbec7cceb190281b2a5d54000f37c57930d0",
+      "tagged": false
     }
   },
-  "footer": "Both outputs come from real runs of two builds: tag sweep-v0.5.4 (commit de8f307) and the 0.5.5 release candidate at commit 9533530, not tagged yet. Each ran the same commands on a fresh copy of one synthetic folder, inbox: a Documents folder with 3 PDFs, and 2 new PDFs loose next to it. Output is shortened to fit by cutting whole lines. Nothing outside the scratch folder was touched."
+  "footer": "Both outputs come from real runs of two builds: tag sweep-v0.5.4 (commit de8f307) and the 0.5.5 release candidate at commit a0ea3af, not tagged yet. Each ran the same commands on a fresh copy of one synthetic folder, inbox: a Documents folder with 3 PDFs, and 2 new PDFs loose next to it. Output is shortened to fit by cutting whole lines. Nothing outside the scratch folder was touched."
 }
