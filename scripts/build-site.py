@@ -677,6 +677,15 @@ def latest_entry():
     return max(entries, key=lambda e: e[0])[1]
 
 
+def code_text(text):
+    """Plain data text where `backticks` mark code, as HTML."""
+    pieces = text.split("`")
+    if len(pieces) % 2 == 0:
+        raise BuildError(f"site/tools.json: unmatched backtick in {text!r}")
+    return "".join(f"<code>{esc(piece)}</code>" if n % 2 else esc(piece)
+                   for n, piece in enumerate(pieces))
+
+
 def rich(parts):
     """Text parts as written in a changelog entry: {"text": ...} or {"code": ...}."""
     out = []
@@ -773,14 +782,14 @@ def tool_block(tool, transcripts, root):
                    f'The fixture folder is shown as <code>~/Desktop</code>.</p>')
         items.append(f'<li><pre class="line"><code><span class="prompt">$ </span>'
                      f'{html.escape(command["command"], quote=False)}</code></pre>'
-                     f'<p>{esc(command["says"])}</p>{out}</li>')
+                     f'<p>{code_text(command["says"])}</p>{out}</li>')
     docs_dir = f"docs/{slug_for(tool['docs'])}/"
     links = [f'<a href="{root}{docs_dir}">Read the {esc(name)} docs</a>']
     if tool.get("demo"):
         links.append(f'<a href="{root}{esc_attr(tool["demo"])}">See it run</a>')
     return (f'<section class="tool" id="{esc_attr(name)}" aria-labelledby="tool-{esc_attr(name)}">'
             f'<h3 id="tool-{esc_attr(name)}"><code>{esc(name)}</code></h3>'
-            f'<p class="tool-desc">{esc(tool["what"])}</p>'
+            f'<p class="tool-desc">{code_text(tool["what"])}</p>'
             f'<ol class="commands">{"".join(items)}</ol>'
             f'<p class="tool-links">{" ".join(links)}</p></section>')
 
@@ -836,7 +845,7 @@ HOME_SCRIPT = """
           button.textContent = "Copy failed";
           status.textContent = "Copy failed. Select the text and copy it instead.";
         });
-        setTimeout(function () { button.textContent = "Copy"; }, 2000);
+        setTimeout(function () { button.textContent = "Copy"; status.textContent = ""; }, 2000);
       });
     });
   }
@@ -846,8 +855,10 @@ HOME_SCRIPT = """
   if (!words.length) return;
   var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (still || !("IntersectionObserver" in window)) return;
-  document.documentElement.classList.add("reveal");
+  // Dim the words only once the observer has reported: if it never runs,
+  // the tagline stays at full strength.
   var seen = new IntersectionObserver(function (entries) {
+    document.documentElement.classList.add("reveal");
     entries.forEach(function (entry) {
       if (entry.isIntersecting) { entry.target.classList.add("on"); seen.unobserve(entry.target); }
     });
@@ -867,7 +878,7 @@ def build_home(pages):
     cards = "".join(
         f'<li><a class="toolcard" href="docs/{slug_for(t["docs"])}/">'
         f'<span class="name">{esc(t["name"])}</span>'
-        f'<span class="desc">{esc(t["what"])}</span>'
+        f'<span class="desc">{code_text(t["what"])}</span>'
         f'<span class="more">{esc(t["name"])} docs</span></a></li>'
         for t in tools)
     checks = "\n".join(f"{t['name']} --version" for t in tools)
@@ -880,17 +891,18 @@ def build_home(pages):
     release_page = SITE / "releases" / f"{entry_tag}.html"
     release_link = (f'<p class="entry-more"><a href="releases/{entry_tag}.html">Release notes for '
                     f'{esc(entry["tool"])} {esc(entry["version"])}</a></p>' if release_page.is_file() else "")
-    description = ("Études: careful file tools for macOS. " +
-                   " ".join(f"{t['name']}: {t['description']}" for t in tools))
+    names = ", ".join(t["name"] for t in tools[:-1]) + f" and {tools[-1]['name']}"
+    description = (f"Études is a set of file tools for macOS: {names}. "
+                   "Each tool installs and runs on its own.")
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Études: careful file tools for macOS</title>
-<meta name="description" content="{esc_attr(summary(description, 300))}">
+<meta name="description" content="{esc_attr(description)}">
 <meta property="og:title" content="Études">
-<meta property="og:description" content="Careful file tools for macOS: {esc_attr(', '.join(t['name'] for t in tools))}.">
+<meta property="og:description" content="{esc_attr(description)}">
 <meta name="color-scheme" content="light dark">
 {GENERATOR}
 <link rel="stylesheet" href="assets/site.css">
@@ -988,7 +1000,7 @@ def build_index(pages):
     tools = [p for p in pages if p["tool"]]
     cards = "".join(
         f'<a class="card" href="{rel_dir("docs", p["dir"])}"><span class="name">{esc(p["title"])}</span>'
-        f'<span class="desc">{esc(p["description"])}</span></a>'
+        f'<span class="desc">{code_text(p["description"])}</span></a>'
         for p in tools
     )
     ids = Ids()
