@@ -2,6 +2,10 @@
 # unzip calls stat on the path it is given, and on macOS stat on /dev/fd/N can
 # fail while another process uses the same N. One run must not refuse a safe
 # zip because other runs are extracting at the same time.
+#
+# Two runs can still hold the same N, so unpack starts unzip again, up to 3
+# times in total, when unzip says it cannot open that path. Before that, about
+# 1 run of this scenario in 10 had one refusal (3 of 31, in 0.5.4 and 0.5.5).
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require zip "the fixture needs zip" || exit 0
 
