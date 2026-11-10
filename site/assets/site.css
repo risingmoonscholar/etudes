@@ -379,7 +379,9 @@ th { font-weight: 600; background: var(--code-bg); }
 /* Changelog. The entry keeps its home layout; the page heading is the headline. */
 .changelog .entry { margin: 0 0 24px; }
 .changelog .entry-title { margin: 0 0 16px; }
-.changelog .entry-meta time { font-family: var(--mono); font-size: 14px; line-height: 24px; color: var(--muted); }
+.entry-meta time { font-family: var(--mono); font-size: 14px; line-height: 24px; color: var(--muted); }
+.pill.rc { border-style: dashed; color: var(--muted); border-color: var(--muted); }
+.term .jsonfield { color: var(--muted); }
 .cl-item { padding: 32px 0; border-top: 1px solid var(--border); }
 .cl-item:first-of-type { border-top: 0; padding-top: 8px; }
 .cl-item h2 { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 36px; margin: 0 0 12px; padding: 0; }

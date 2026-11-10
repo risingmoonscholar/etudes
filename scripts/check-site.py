@@ -22,15 +22,18 @@ Fails when:
     command it explains is not a usage line of that tool's captured help;
   - the home page is not what the build renders from its data, or its What's
     new is not the newest entry in site/changelog/;
+  - a changelog log or record names a machine's own folder (/var/folders,
+    /Users, /tmp) instead of <scratch>;
   - a changelog entry has no fixture or no raw logs, a log differs from the
     sha256 its record.json holds, or the entry differs from what
     scripts/release-runs.py derives from the record, the logs and the fixture
-    (an output line, exit code, command, result file, build or footer edited
+    (an output line, exit code, command, result file, build or runs note edited
     by hand); or the fixture's setup, commands or result globs changed after
     the runs;
-  - an entry's untagged after build is not an ancestor of HEAD, a tagged one
-    is not the commit its tag names, or the entry's before tag does not name
-    its before commit;
+  - with no <tool>-v<version> tag, an entry's after build is not an ancestor
+    of HEAD; with the tag, the tag names a commit whose tool source differs
+    from the after build's; or the entry's before tag does not name its
+    before commit;
   - a changelog page is not what the build renders, or the changelog's data,
     fixtures or logs are published;
   - fonts are published without their license.
@@ -144,28 +147,6 @@ def manifest_versions(tools):
     return found
 
 
-def check_entry(entry, tag_exists):
-    """Problems with a release entry's footer. TAG_EXISTS: is <tool>-v<version> a tag here?"""
-    problems = []
-    footer = entry.get("footer", "")
-    for side in ("before", "after"):
-        commit = entry.get("builds", {}).get(side, {}).get("commit")
-        if not commit or commit not in footer:
-            problems.append(f"the What's new footer does not name the {side} build's commit {commit!r}")
-    tag = f"{entry['tool']}-v{entry['version']}"
-    says_untagged = "not tagged yet" in footer
-    if entry.get("builds", {}).get("after", {}).get("tagged") is False:
-        if not says_untagged:
-            problems.append("the What's new entry's after build is not tagged, and its footer does not say so")
-        if tag_exists:
-            problems.append(f"the What's new footer says the {entry['version']} build is not tagged yet, "
-                            f"but the tag {tag} exists. Run the entry again on the tag and update "
-                            f"site/changelog/{entry['tool']}-{entry['version']}.json")
-    elif says_untagged:
-        problems.append("the What's new footer says not tagged yet, but the entry records a tagged build")
-    return problems
-
-
 def check_home(out):
     """The home page: its install lines, its captured output, and that it is what the build renders."""
     problems, notes = [], []
@@ -216,13 +197,20 @@ def check_home(out):
     notes.append(f"{len(shown)} captured runs on the home page match site/transcripts.json; "
                  "every command shown is in its tool's help")
 
-    # What's new shows the newest entry: the latest date, then the highest
-    # version, worked out here and not by the build.
+    # What's new shows the newest entry: a release candidate first, then the
+    # latest tag date, then the highest version. The order is worked out here,
+    # from the tag state git gives, not taken from the build's own sort.
     try:
+        build = load_build()
         entries = [json.loads(p.read_text(encoding="utf-8"))
                    for p in sorted((ROOT / "site/changelog").glob("*.json"))]
-        newest = max(entries, key=lambda e: (e["date"], tuple(int(n) for n in e["version"].split("."))))
-        article = load_build().render_entry(newest)
+
+        def order(e):
+            state = build.release_state(e)
+            return (0 if state["tagged"] else 1, state.get("date", ""),
+                    tuple(int(n) for n in e["version"].split(".")))
+        newest = max(entries, key=order)
+        article = build.render_entry(newest)
     except Exception as error:
         problems.append(f"the newest changelog entry could not be read: {error}")
     else:
@@ -248,26 +236,32 @@ def check_home(out):
 
 
 def check_builds(entry):
-    """Problems with the commits an entry names, as git sees them here."""
+    """Problems with the commits an entry names, as git sees them here.
+
+    The before build's tag must name its commit. The release's own tag state
+    is not stored in the entry; scripts/build-site.py reads it from git. Here:
+    with no tag, the after build is a candidate and must be an ancestor of
+    HEAD; with a tag, the tag must name that commit or one with the same tool
+    source (build-site.py's release_state says which, or stops).
+    """
     problems = []
     name = f"site/changelog/{entry['tool']}-{entry['version']}.json"
     builds = entry.get("builds", {})
     before, after = builds.get("before", {}), builds.get("after", {})
-    tag = f"{entry['tool']}-v{entry['version']}"
-    if before.get("name", "").startswith("tag "):
-        before_tag = before["name"][4:]
+    if before.get("tag"):
+        before_tag = before["tag"]
         rev = tag_rev(before_tag)
         if rev and rev != before.get("rev"):
             problems.append(f"{name}: the before build is {before_tag}, which names {rev[:7]}, "
                             f"not {before.get('commit')}")
         elif not rev and not shallow():
             problems.append(f"{name}: the before build is {before_tag}, and this repository has no such tag")
-    if after.get("tagged"):
-        rev = tag_rev(tag)
-        if rev != after.get("rev") and (rev or not shallow()):
-            problems.append(f"{name}: the after build is recorded as tagged, but the tag {tag} "
-                            + (f"names {rev[:7]}, not {after.get('commit')}" if rev else "does not exist"))
-    else:
+    try:
+        state = load_build().release_state(entry)
+    except Exception as error:  # the build's own error says what to run
+        problems.append(f"{name}: {error}")
+        return problems
+    if not state["tagged"]:
         known = git("cat-file", "-e", f"{after.get('rev')}^{{commit}}").returncode == 0
         if not known:
             if not shallow():
@@ -317,6 +311,10 @@ def check_entries(folder=None):
             log = logs / run["log"]
             if not log.is_file() or runs.sha256_file(log) != run["sha256"]:
                 bad_logs.append(run["log"])
+        for log in sorted(logs.iterdir()):
+            if runs.MACHINE_PATH.search(log.read_text(encoding="utf-8", errors="replace")):
+                problems.append(f"site/changelog/logs/{path.stem}/{log.name} holds a machine's own folder "
+                                f"path; the logs write the scratch folder as {runs.SCRATCH}. {rerun}")
         if bad_logs:
             problems.append(f"{name}: the raw log(s) {', '.join(bad_logs)} differ from the sha256 in "
                             f"site/changelog/logs/{path.stem}/record.json. {rerun}")
@@ -335,8 +333,6 @@ def check_entries(folder=None):
             problems.append(f"{name} differs from its raw logs in {', '.join(keys)}: an output line, exit code "
                             f"or build was edited by hand, or the fixture's cuts changed. Run the runs "
                             f"again, or put the field back as scripts/release-runs.py writes it")
-        tag = f"{tool}-v{version}"
-        problems += [f"{name}: {p}" for p in check_entry(entry, tag_rev(tag) is not None)]
         problems += check_builds(entry)
     notes.append(f"{len(paths)} changelog entries match their fixtures, raw logs and builds")
     if shallow():

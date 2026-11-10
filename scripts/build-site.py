@@ -41,11 +41,13 @@ Standard library only. Exit 0 built, 1 a doc or link could not be built,
 2 the output folder could not be used.
 """
 import html
+import functools
 import html.entities
 import json
 import posixpath
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -666,9 +668,103 @@ def install_line(tool, package, version):
     return f"cargo install --locked --git {REPO_URL} --tag {tool}-v{version} {package}"
 
 
+# --- release state, from git ---------------------------------------------------
+#
+# An entry does not say whether its release is tagged, or when: that changes
+# after the runs (the tag comes later) and git is the record of it. So the
+# build asks git, every time:
+#   - no <tool>-v<version> tag: a release candidate, no date;
+#   - the tag names the commit the after build ran at: tagged, the tag's date;
+#   - the tag names another commit whose source for that tool is the same:
+#     tagged, and the footer says the run's build had the same source. "Same"
+#     means `git diff` finds no change between the two commits in the tool's
+#     crate, the crates it depends on by path (read from both commits'
+#     Cargo.toml files), the workspace Cargo.toml and Cargo.lock. Those are
+#     exactly the inputs of `cargo build --release --locked -p <tool>-cli`, so
+#     the binary the entry ran is the binary the tag builds. A change anywhere
+#     else (another tool, docs, the site) does not touch it;
+#   - the tag names a commit with different source: the build stops, because
+#     the entry no longer shows that release. Run scripts/release-runs.py on
+#     the tag.
+
+def git_out(*args):
+    done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def crate_paths(rev, crate, seen=None):
+    """The crate folder and every crate it depends on by path, at REV."""
+    seen = set() if seen is None else seen
+    if crate in seen:
+        return seen
+    seen.add(crate)
+    text = git_out("show", f"{rev}:{crate}/Cargo.toml")
+    if text is None:
+        return seen
+    manifest = tomllib.loads(text)
+    for table in ("dependencies", "build-dependencies"):
+        for dep in manifest.get(table, {}).values():
+            if isinstance(dep, dict) and "path" in dep:
+                crate_paths(rev, posixpath.normpath(posixpath.join(crate, dep["path"])), seen)
+    return seen
+
+
+def same_tool_source(tool, rev_a, rev_b):
+    paths = sorted(crate_paths(rev_a, f"crates/{tool}-cli") | crate_paths(rev_b, f"crates/{tool}-cli"))
+    done = subprocess.run(["git", "diff", "--quiet", rev_a, rev_b, "--", *paths, "Cargo.toml", "Cargo.lock"],
+                          cwd=ROOT, capture_output=True, text=True)
+    if done.returncode not in (0, 1):
+        raise BuildError(f"cannot compare {rev_a[:7]} with {rev_b[:7]}: {done.stderr.strip()}. "
+                         "Fetch the full history and tags (git fetch --tags --unshallow).")
+    return done.returncode == 0
+
+
+@functools.lru_cache(maxsize=None)
+def _release_state(tool, version, rev):
+    tag = f"{tool}-v{version}"
+    tag_rev = git_out("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
+    if not tag_rev:
+        return {"tagged": False, "tag": tag}
+    date = git_out("for-each-ref", "--format=%(creatordate:short)", f"refs/tags/{tag}")
+    if tag_rev != rev and not same_tool_source(tool, rev, tag_rev):
+        raise BuildError(f"the tag {tag} names {tag_rev[:7]}, whose {tool} source differs from "
+                         f"commit {rev[:7]}, where the entry's after build ran. Run "
+                         f"scripts/release-runs.py {tool} {version} --before <previous tag> --after {tag}")
+    return {"tagged": True, "tag": tag, "tag_commit": tag_rev[:7], "date": date, "same_rev": tag_rev == rev}
+
+
+def release_state(entry):
+    """{"tagged", "tag", and when tagged "tag_commit", "date", "same_rev"}, from git."""
+    return dict(_release_state(entry["tool"], entry["version"], entry["builds"]["after"]["rev"]))
+
+
+def footer(entry):
+    state = release_state(entry)
+    before, after = entry["builds"]["before"], entry["builds"]["after"]
+    before_label = (f"tag {before['tag']} (commit {before['commit']})" if before.get("tag")
+                    else f"commit {before['commit']}")
+    if not state["tagged"]:
+        after_label = f"the {entry['version']} release candidate at commit {after['commit']}, not tagged yet"
+    elif state["same_rev"]:
+        after_label = f"tag {state['tag']} (commit {after['commit']})"
+    else:
+        after_label = (f"tag {state['tag']} (commit {state['tag_commit']}), built and run at commit "
+                       f"{after['commit']}, which has the same {entry['tool']} source")
+    return f"Both outputs come from real runs of two builds: {before_label} and {after_label}. {entry['runs_note']}"
+
+
+def release_meta(entry):
+    """The date of a tagged release, or the release-candidate mark."""
+    state = release_state(entry)
+    if state["tagged"]:
+        return f'<time datetime="{esc_attr(state["date"])}">{esc(state["date"])}</time>'
+    return '<span class="pill rc">Release candidate</span>'
+
+
 def entry_order(entry):
-    """Newest first sorts by this, descending: the date, then the version."""
-    return entry["date"], tuple(int(n) for n in entry["version"].split("."))
+    """Newest first sorts by this, descending: candidates, then tag date, then version."""
+    state = release_state(entry)
+    return (not state["tagged"], state.get("date", ""), tuple(int(n) for n in entry["version"].split(".")))
 
 
 def changelog_entries():
@@ -679,12 +775,12 @@ def changelog_entries():
             entry = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise BuildError(f"site/changelog/{path.name} cannot be read: {error}") from error
-        for key in ("tool", "version", "date", "label", "headline", "lead",
-                    "before", "after", "next", "footer"):
+        for key in ("tool", "version", "label", "headline", "lead",
+                    "before", "after", "next", "builds", "runs_note"):
             if key not in entry:
                 raise BuildError(f"site/changelog/{path.name} has no {key}")
         # Written by hand after scripts/release-runs.py made the entry.
-        for key in ("date", "label", "headline", "lead"):
+        for key in ("label", "headline", "lead"):
             if not entry[key]:
                 raise BuildError(f"site/changelog/{path.name}: {key} is empty; write it by hand")
         if not entry["next"].get("note"):
@@ -723,12 +819,22 @@ def rich(parts):
     return "".join(out)
 
 
+def json_field(field):
+    """One key of a --json run, as a shell comment so it never reads as output."""
+    if not field["present"]:
+        text = f'# --json has no {field["path"]} key'
+    else:
+        text = f'# --json {field["path"]}: {json.dumps(field["value"])}'
+    return f'<span class="jsonfield">{html.escape(text, quote=False)}</span>'
+
+
 def terminal(runs):
     """Commands, their output lines and exit codes, as one block."""
     blocks = []
     for run in runs:
         lines = [f'<span class="prompt">$ </span>{html.escape(run["command"], quote=False)}']
         lines += [html.escape(line, quote=False) for line in run["output"]]
+        lines += [json_field(field) for field in run.get("fields", [])]
         lines.append(f'<span class="exitline">exit {int(run["exit"])}</span>')
         blocks.append("\n".join(lines))
     return '<pre class="term"><code>' + "\n\n".join(blocks) + "</code></pre>"
@@ -752,13 +858,13 @@ def render_entry(entry, level=3):
     nxt = entry["next"]
     return (f'<article class="entry" aria-labelledby="entry-title">'
             f'<p class="entry-meta"><span class="entry-ver">{esc(entry["tool"])} {esc(entry["version"])}</span>'
-            f'<span class="pill">{esc(entry["label"])}</span></p>'
+            f'<span class="pill">{esc(entry["label"])}</span>{release_meta(entry)}</p>'
             f'<h{level} id="entry-title" class="entry-title">{esc(entry["headline"])}</h{level}>'
             f'<p class="entry-lead">{rich(entry["lead"])}</p>'
             f'<div class="compare">{entry_side("before", entry["before"])}{entry_side("after", entry["after"])}</div>'
             f'<p class="entry-note">{rich(nxt["note"])}</p>'
             f'{terminal([nxt])}'
-            f'<p class="entry-foot">{esc(entry["footer"])}</p>'
+            f'<p class="entry-foot">{esc(footer(entry))}</p>'
             f'</article>')
 
 
@@ -1133,8 +1239,8 @@ def build_changelog_index(pages, entries):
         name = f'{entry["tool"]} {entry["version"]}'
         items.append(
             f'<section class="cl-item" aria-labelledby="{hid}">'
-            f'<p class="entry-meta"><time datetime="{esc_attr(entry["date"])}">{esc(entry["date"])}</time>'
-            f'<span class="entry-ver">{esc(name)}</span><span class="pill">{esc(entry["label"])}</span></p>'
+            f'<p class="entry-meta"><span class="entry-ver">{esc(name)}</span>'
+            f'<span class="pill">{esc(entry["label"])}</span>{release_meta(entry)}</p>'
             f'<h2 id="{hid}"><a href="{slug}/">{esc(entry["headline"])}</a></h2>'
             f'<p class="entry-lead">{rich(entry["lead"])}</p></section>')
         headings.append((2, hid, esc(name)))
