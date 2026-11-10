@@ -375,3 +375,28 @@ th { font-weight: 600; background: var(--code-bg); }
 @media (prefers-reduced-motion: reduce) {
   .toolcard, .copy, .tablist [role=tab], .reveal .tagline .w { transition: none; }
 }
+
+/* Changelog. The entry keeps its home layout; the page heading is the headline. */
+.changelog .entry { margin: 0 0 24px; }
+.changelog .entry-title { margin: 0 0 16px; }
+.entry-meta time { font-family: var(--mono); font-size: 14px; line-height: 24px; color: var(--muted); }
+.pill.rc { border-style: dashed; color: var(--muted); border-color: var(--muted); }
+.term .jsonfield { color: var(--muted); }
+.cl-item { padding: 32px 0; border-top: 1px solid var(--border); }
+.cl-item:first-of-type { border-top: 0; padding-top: 8px; }
+.cl-item h2 { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 36px; margin: 0 0 12px; padding: 0; }
+.cl-item h2 a { color: var(--fg); text-decoration: none; }
+.cl-item h2 a:hover { text-decoration: underline; text-decoration-color: var(--border-strong); }
+.cl-item .entry-lead { margin: 0; color: var(--muted); }
+.film { margin: 0 0 24px; }
+.film video { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 12px; }
+.film figcaption:empty { display: none; }
+@media (max-width: 768px) {
+  .changelog .entry { padding: 16px; }
+  .cl-item h2 { font-size: 24px; line-height: 32px; }
+}
+/* At phone width a long output line wraps on the changelog pages instead of
+   hiding past the edge, so the entry image shows every line in full. */
+@media (max-width: 768px) {
+  .changelog .entry .term code { white-space: pre-wrap; overflow-wrap: anywhere; }
+}

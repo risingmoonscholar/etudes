@@ -1,0 +1,121 @@
+{
+  "tool": "sweep",
+  "version": "0.5.5",
+  "fixture": "sweep-0.5.5.fixture",
+  "runs_sha256": "0af49fee5c97901788e99086a4bcdee62c5d8ab6001198683870c90fd3d69113",
+  "env": [
+    "PATH=<scratch>/bin:/usr/bin:/bin:/usr/sbin:/sbin (bin holds a security that only refuses)",
+    "HOME=<scratch>/home",
+    "ETUDE_STATE_DIR=<scratch>/state",
+    "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
+    "TMPDIR=<scratch>/tmp/",
+    "LANG=en_US.UTF-8",
+    "stdin closed",
+    "sandbox-exec: no file writes outside the scratch folder, no exec of /usr/bin/security"
+  ],
+  "logs": "each log is the command's output with the scratch folder's path written as <scratch>",
+  "builds": {
+    "before": {
+      "ref": "sweep-v0.5.4",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "commit": "de8f307",
+      "tag": "sweep-v0.5.4",
+      "build": "cargo build --release --locked -p sweep-cli",
+      "version_output": "sweep 0.5.4",
+      "sha256": "49ccc1f9ffcb34f3f82b02f04a7de108dabfb57ba490aa739c3dcd9d89bbffe1"
+    },
+    "after": {
+      "ref": "a0ea3af",
+      "rev": "a0ea3afa8d826adffe447f8b78f8c6b79e99f1a0",
+      "commit": "a0ea3af",
+      "tag": null,
+      "build": "cargo build --release --locked -p sweep-cli",
+      "version_output": "sweep 0.5.5",
+      "sha256": "4baa751954e8dd00eebf6b24ff57cbec7cceb190281b2a5d54000f37c57930d0"
+    }
+  },
+  "sides": {
+    "before": {
+      "listing_before": [
+        "inbox/",
+        "inbox/Documents/",
+        "inbox/Documents/style-notes.pdf",
+        "inbox/Documents/user-guide.pdf",
+        "inbox/Documents/workshop-slides.pdf",
+        "inbox/conference-agenda.pdf",
+        "inbox/reading-list.pdf"
+      ],
+      "runs": [
+        {
+          "command": "sweep inbox",
+          "exit": 1,
+          "log": "before-1.txt",
+          "sha256": "df7442092f67dcbfecbfd04d1649c52da475a7bfbbfe523b9d241652aa17e6e9"
+        },
+        {
+          "command": "sweep apply inbox --yes",
+          "exit": 1,
+          "log": "before-2.txt",
+          "sha256": "cb172607cc9032b06d335e30747096f233abdc4eababa591bf26000b1ebeede4"
+        }
+      ],
+      "result_files": [
+        "conference-agenda.pdf",
+        "reading-list.pdf"
+      ],
+      "listing_after": [
+        "inbox/",
+        "inbox/Documents/",
+        "inbox/Documents/style-notes.pdf",
+        "inbox/Documents/user-guide.pdf",
+        "inbox/Documents/workshop-slides.pdf",
+        "inbox/conference-agenda.pdf",
+        "inbox/reading-list.pdf"
+      ]
+    },
+    "after": {
+      "listing_before": [
+        "inbox/",
+        "inbox/Documents/",
+        "inbox/Documents/style-notes.pdf",
+        "inbox/Documents/user-guide.pdf",
+        "inbox/Documents/workshop-slides.pdf",
+        "inbox/conference-agenda.pdf",
+        "inbox/reading-list.pdf"
+      ],
+      "runs": [
+        {
+          "command": "sweep inbox",
+          "exit": 0,
+          "log": "after-1.txt",
+          "sha256": "b9dce323670a55c94672f42af92f796256a555c0e4048c7c902d599991831cf2"
+        },
+        {
+          "command": "sweep apply inbox --yes",
+          "exit": 0,
+          "log": "after-2.txt",
+          "sha256": "83772db2a658b692d1568f2ff5e43081f16ddcf06f9e8cda3f364ce09c5c0ed5"
+        }
+      ],
+      "result_files": [
+        "conference-agenda.pdf",
+        "reading-list.pdf"
+      ],
+      "listing_after": [
+        "inbox/",
+        "inbox/Documents/",
+        "inbox/Documents/style-notes.pdf",
+        "inbox/Documents/user-guide.pdf",
+        "inbox/Documents/workshop-slides.pdf",
+        "inbox/conference-agenda.pdf",
+        "inbox/reading-list.pdf"
+      ]
+    }
+  },
+  "next": {
+    "command": "sweep undo inbox",
+    "exit": 0,
+    "log": "next.txt",
+    "sha256": "85c092a56976fe79ee58f4ef5cda2f9c668051ee2cc026f0e19db71663f96096"
+  }
+}

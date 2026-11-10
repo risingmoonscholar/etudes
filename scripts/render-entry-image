@@ -1,0 +1,36 @@
+#!/bin/bash
+# Render one changelog entry to a phone-width JPEG: the release format's image.
+#
+#   scripts/render-entry-image TOOL-VERSION [OUT.jpg]
+#   scripts/render-entry-image sweep-0.5.5 ~/Desktop/sweep-0.5.5-entry.jpg
+#
+# Builds the site into a temp folder, compiles scripts/render-entry-image.swift
+# there, and renders the entry on /changelog/TOOL-VERSION/ (the article, with
+# 16 px around it) at 390 CSS pixels wide, light theme, offscreen with WebKit.
+# The page and the image come from the same site/changelog/TOOL-VERSION.json,
+# so they cannot disagree. WIDTH=430 picks another width.
+#
+# Local only, macOS with the Xcode command line tools (swiftc); not run in CI.
+# It opens no window and drives no app. Writes OUT.jpg (default
+# $TMPDIR/etudes-entry-images/TOOL-VERSION.jpg) and nothing else; the temp
+# folder is removed on exit.
+set -euo pipefail
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+  sed -n '4,5p' "$0" | sed 's/^# *//' >&2
+  exit 2
+fi
+slug=$1
+root=$(cd "$(dirname "$0")/.." && pwd)
+if [ ! -f "$root/site/changelog/$slug.json" ]; then
+  echo "FAIL site/changelog/$slug.json does not exist. Entries: $(cd "$root/site/changelog" && ls *.json | sed 's/\.json$//' | tr '\n' ' ')" >&2
+  exit 2
+fi
+tmp=${TMPDIR:-/tmp}
+out=${2:-$tmp/etudes-entry-images/$slug.jpg}
+work=$(mktemp -d "${tmp%/}/etudes-entry-image.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+python3 "$root/scripts/build-site.py" --out "$work/site" >/dev/null
+swiftc -O -module-cache-path "$work/module-cache" -o "$work/render" "$root/scripts/render-entry-image.swift"
+mkdir -p "$(dirname "$out")"
+"$work/render" "$work/site/changelog/$slug/index.html" "$work/site" "${WIDTH:-390}" "$out" "article.entry"

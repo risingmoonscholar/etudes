@@ -43,6 +43,25 @@ def check_tags(expected, listing):
     require(not missing, "unpublished tags: " + ", ".join(missing))
 
 
+def check_annotated(expected, listing):
+    """The tags being released were made with git tag -a.
+
+    LISTING is `git ls-remote --tags` without --refs: an annotated tag also
+    lists its peeled line, refs/tags/<tag>^{}; a lightweight tag does not.
+    The site's release date is the tagger date, which only an annotated tag
+    has. Only the pinned (current) tags are checked, so older lightweight tags
+    do not fail this.
+    """
+    refs = {line.split()[1] for line in listing.splitlines() if len(line.split()) == 2}
+    light = [tag for tag in expected.values()
+             if f"refs/tags/{tag}" in refs and f"refs/tags/{tag}^{{}}" not in refs]
+    require(not light,
+            "lightweight release tags: " + ", ".join(light) + ". Recreate each as an annotated tag "
+            "on the same commit: git tag -d TAG && git tag -a TAG <its commit> -m 'TOOL VERSION', "
+            "then git push origin :refs/tags/TAG && git push origin TAG. Same commit, type only "
+            "(see RELEASING.md)")
+
+
 def run(argv, env=None, expected=0):
     result = subprocess.run([str(a) for a in argv], cwd=ROOT, env=env,
                             text=True, capture_output=True)
@@ -106,9 +125,11 @@ def main():
         versions[tool] = manifest["package"]["version"]
         require(expected[tool] == f"{tool}-v{versions[tool]}", f"{tool}: manifest/pin mismatch")
     if args.published:
-        check_tags(expected, run(["git", "ls-remote", "--tags", "--refs", REPO]))
+        listing = run(["git", "ls-remote", "--tags", REPO])
+        check_tags(expected, listing)
+        check_annotated(expected, listing)
         if args.tags_only:
-            print("PASS public tags exist; installation and review not checked")
+            print("PASS public tags exist and are annotated; installation and review not checked")
             return
     revision = run(["git", "rev-parse", "HEAD"]).strip()
     print(f"mode={'candidate' if args.candidate else 'published'} checkout={revision}", flush=True)

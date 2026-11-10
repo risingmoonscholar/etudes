@@ -8,7 +8,11 @@ Everything under site/ is copied as it is (except the data the build reads:
 tools.json, docs.json and changelog/), so the demo page, the release pages,
 the GIFs and transcripts.json keep their URLs and stay byte-identical to what
 check-claims.sh and check-transcripts-reproduce.sh check. Then each public doc
-becomes /docs/<slug>/index.html in the docs layout.
+becomes /docs/<slug>/index.html in the docs layout, and the changelog is built:
+/changelog/ lists the entries in site/changelog/*.json, newest first, and the
+release pages that have none; /changelog/<tool>-<version>/ shows one entry.
+The entries come from scripts/release-runs.py; their raw logs and fixtures
+stay in the repo and are not published.
 
 The home page, /index.html, is built: the tools from site/tools.json, the
 install lines with versions read from each tool's Cargo.toml, What's new from
@@ -37,11 +41,13 @@ Standard library only. Exit 0 built, 1 a doc or link could not be built,
 2 the output folder could not be used.
 """
 import html
+import functools
 import html.entities
 import json
 import posixpath
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -51,9 +57,8 @@ SITE = ROOT / "site"
 REPO_URL = "https://github.com/risingmoonscholar/etudes"
 BLOB_URL = REPO_URL + "/blob/main/"
 TREE_URL = REPO_URL + "/tree/main/"
-# The changelog pages are a later change; until then the top bar points at the
-# changelog file itself.
-CHANGELOG_URL = BLOB_URL + "CHANGELOG.md"
+# The full text of every change, for readers who want more than the entries.
+CHANGELOG_FILE_URL = BLOB_URL + "CHANGELOG.md"
 # Every built docs page carries this, so a rebuild can tell its own output
 # folder from someone else's before it deletes anything.
 GENERATOR = '<meta name="generator" content="scripts/build-site.py">'
@@ -549,28 +554,31 @@ class Converter:
 # --- layout -----------------------------------------------------------------
 
 def topbar(root, current):
-    """The bar every page shares. CURRENT is "home" or "docs"."""
+    """The bar every page shares. CURRENT is "home", "docs" or "changelog"."""
     brand_cur = ' aria-current="page"' if current == "home" else ""
     docs_cur = ' aria-current="true"' if current == "docs" else ""
+    log_cur = ' aria-current="true"' if current == "changelog" else ""
     return (f'<a class="skip" href="#main">Skip to content</a>\n'
             f'<header class="topbar">\n'
             f'<a class="brand" href="{root}"{brand_cur}>Études</a>\n'
             f'<nav class="topnav" aria-label="Site">\n'
             f'<a href="{root}docs/"{docs_cur}>Docs</a>\n'
-            f'<a href="{CHANGELOG_URL}">Changelog</a>\n'
+            f'<a href="{root}changelog/"{log_cur}>Changelog</a>\n'
             f'<a href="{REPO_URL}">GitHub</a>\n'
             f'</nav>\n'
             f'</header>')
 
 
-def sidebar(pages, current_dir):
+def sidebar(pages, current_dir, first=None):
+    """The doc tree. FIRST: (title, [(dir, label)]) groups shown above it."""
     def link(href_dir, label, mono=False):
         href = rel_dir(current_dir, href_dir)
         cur = ' aria-current="page"' if href_dir == current_dir else ""
         text = f"<code>{esc(label)}</code>" if mono else esc(label)
         return f'<li><a href="{esc_attr(href)}"{cur}>{text}</a></li>'
 
-    groups = [("Get started", [link("docs", "Overview")])]
+    groups = [(title, [link(d, label) for d, label in items]) for title, items in first or []]
+    groups.append(("Get started", [link("docs", "Overview")]))
     order = []
     by_group = {}
     for page in pages:
@@ -595,9 +603,11 @@ def toc(headings):
     return f'<aside class="toc" aria-label="On this page"><h2>On this page</h2><ul>{items}</ul></aside>'
 
 
-def layout(*, title, description, page_dir, pages, content, headings):
+def layout(*, title, description, page_dir, pages, content, headings, current="docs",
+           first=None, body_class=None):
     root = rel_dir(page_dir, "")
-    nav = sidebar(pages, page_dir)
+    nav = sidebar(pages, page_dir, first)
+    body = f' class="{body_class}"' if body_class else ""
     right = toc(headings)
     return f"""<!doctype html>
 <html lang="en">
@@ -611,8 +621,8 @@ def layout(*, title, description, page_dir, pages, content, headings):
 <link rel="stylesheet" href="{root}assets/site.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 </head>
-<body>
-{topbar(root, "docs")}
+<body{body}>
+{topbar(root, current)}
 <div class="layout">
 <details class="menu"><summary>Menu</summary><nav aria-label="Docs menu">
 {nav}
@@ -658,23 +668,185 @@ def install_line(tool, package, version):
     return f"cargo install --locked --git {REPO_URL} --tag {tool}-v{version} {package}"
 
 
-def latest_entry():
-    """The newest release entry in site/changelog/, by date then version."""
+# --- release state, from git ---------------------------------------------------
+#
+# An entry does not say whether its release is tagged, or when: that changes
+# after the runs (the tag comes later) and git is the record of it. So the
+# build asks git, every time:
+#   - no <tool>-v<version> tag: a release candidate, no date;
+#   - the tag names the commit the after build ran at: tagged;
+#   - the tag names another commit whose source for that tool is the same:
+#     tagged, and the footer says the run's build had the same source. "Same"
+#     means `git diff` finds no change between the two commits in the tool's
+#     crate, the crates it depends on by path (read from both commits'
+#     Cargo.toml files: [dependencies], [build-dependencies], their
+#     [target.*] forms, and path dependencies inherited from the workspace),
+#     the workspace Cargo.toml and Cargo.lock, and the toolchain and Cargo
+#     settings (rust-toolchain.toml, rust-toolchain, .cargo/config.toml,
+#     .cargo/config). Those are the source and settings
+#     `cargo build --release --locked -p <tool>-cli` reads, so the tag holds
+#     the same source the entry's build was made from. This compares source,
+#     not bytes: the compiler on the machine is not part of it. A change
+#     anywhere else (another tool, docs, the site) does not count;
+#   - a release date comes only from an annotated tag (git tag -a): its tagger
+#     date. A lightweight tag shows "Tagged" with no date. Nothing falls back
+#     to CHANGELOG.md or to a commit date;
+#   - the tag names a commit with different source: the build stops, because
+#     the entry no longer shows that release. Run scripts/release-runs.py on
+#     the tag.
+
+def git_out(*args):
+    done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+# Files outside the crates that change what cargo builds.
+BUILD_SETTINGS = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain",
+                  ".cargo/config.toml", ".cargo/config")
+DEP_TABLES = ("dependencies", "build-dependencies")
+
+
+def crate_graph(read, crate):
+    """The crate folder and every crate it depends on by path.
+
+    READ(path) returns a file's text, or None. Covers [dependencies] and
+    [build-dependencies], the same tables under [target.<cfg>], and
+    `dep = { workspace = true }` entries whose [workspace.dependencies] entry
+    in the root Cargo.toml has a path (relative to the workspace root).
+    """
+    root_text = read("Cargo.toml")
+    workspace = (tomllib.loads(root_text).get("workspace", {}).get("dependencies", {})
+                 if root_text else {})
+    seen = set()
+
+    def walk(folder):
+        if folder in seen:
+            return
+        seen.add(folder)
+        text = read(f"{folder}/Cargo.toml")
+        if text is None:
+            return
+        manifest = tomllib.loads(text)
+        tables = [manifest.get(t, {}) for t in DEP_TABLES]
+        for target in manifest.get("target", {}).values():
+            tables += [target.get(t, {}) for t in DEP_TABLES]
+        for table in tables:
+            for name, dep in table.items():
+                if not isinstance(dep, dict):
+                    continue
+                if "path" in dep:
+                    walk(posixpath.normpath(posixpath.join(folder, dep["path"])))
+                elif dep.get("workspace") is True:
+                    inherited = workspace.get(dep.get("package", name), workspace.get(name))
+                    if isinstance(inherited, dict) and "path" in inherited:
+                        walk(posixpath.normpath(inherited["path"]))
+
+    walk(crate)
+    return seen
+
+
+def crate_paths(rev, crate):
+    """crate_graph() as the files are at commit REV."""
+    return crate_graph(lambda path: git_out("show", f"{rev}:{path}"), crate)
+
+
+def same_tool_source(tool, rev_a, rev_b):
+    paths = sorted(crate_paths(rev_a, f"crates/{tool}-cli") | crate_paths(rev_b, f"crates/{tool}-cli"))
+    done = subprocess.run(["git", "diff", "--quiet", rev_a, rev_b, "--", *paths, *BUILD_SETTINGS],
+                          cwd=ROOT, capture_output=True, text=True)
+    if done.returncode not in (0, 1):
+        raise BuildError(f"cannot compare {rev_a[:7]} with {rev_b[:7]}: {done.stderr.strip()}. "
+                         "Fetch the full history and tags (git fetch --tags --unshallow).")
+    return done.returncode == 0
+
+
+@functools.lru_cache(maxsize=None)
+def _release_state(tool, version, rev):
+    tag = f"{tool}-v{version}"
+    tag_rev = git_out("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
+    if not tag_rev:
+        return {"tagged": False, "tag": tag}
+    annotated = git_out("cat-file", "-t", f"refs/tags/{tag}") == "tag"
+    # The tagger date of an annotated tag, and nothing else.
+    date = git_out("for-each-ref", "--format=%(taggerdate:short)", f"refs/tags/{tag}") if annotated else None
+    if tag_rev != rev and not same_tool_source(tool, rev, tag_rev):
+        raise BuildError(f"the tag {tag} names {tag_rev[:7]}, whose {tool} source differs from "
+                         f"commit {rev[:7]}, where the entry's after build ran. Run "
+                         f"scripts/release-runs.py {tool} {version} --before <previous tag> --after {tag}")
+    return {"tagged": True, "tag": tag, "tag_commit": tag_rev[:7], "annotated": annotated,
+            "date": date or None, "same_rev": tag_rev == rev}
+
+
+def release_state(entry):
+    """{"tagged", "tag", and when tagged "tag_commit", "annotated", "date", "same_rev"}, from git.
+
+    "date" is the tagger date of an annotated tag, or None for a lightweight one.
+    """
+    return dict(_release_state(entry["tool"], entry["version"], entry["builds"]["after"]["rev"]))
+
+
+def footer(entry):
+    state = release_state(entry)
+    before, after = entry["builds"]["before"], entry["builds"]["after"]
+    before_label = (f"tag {before['tag']} (commit {before['commit']})" if before.get("tag")
+                    else f"commit {before['commit']}")
+    if not state["tagged"]:
+        after_label = f"the {entry['version']} release candidate at commit {after['commit']}, not tagged yet"
+    elif state["same_rev"]:
+        after_label = f"tag {state['tag']} (commit {after['commit']})"
+    else:
+        after_label = (f"tag {state['tag']} (commit {state['tag_commit']}), built and run at commit "
+                       f"{after['commit']}, which has the same {entry['tool']} source")
+    return f"Both outputs come from real runs of two builds: {before_label} and {after_label}. {entry['runs_note']}"
+
+
+def release_meta(entry):
+    """The annotated tag's date, "Tagged" for a lightweight tag, or the release-candidate mark."""
+    state = release_state(entry)
+    if state["tagged"] and state["date"]:
+        return f'<time datetime="{esc_attr(state["date"])}">{esc(state["date"])}</time>'
+    if state["tagged"]:
+        return '<span class="pill rc">Tagged</span>'
+    return '<span class="pill rc">Release candidate</span>'
+
+
+def entry_order(entry):
+    """Newest first sorts by this, descending: candidates, then dated tags by date,
+    then tags with no date, each by version."""
+    state = release_state(entry)
+    return (not state["tagged"], state.get("date") or "", tuple(int(n) for n in entry["version"].split(".")))
+
+
+def changelog_entries():
+    """Every release entry in site/changelog/, newest first (by date, then version)."""
     entries = []
     for path in sorted((SITE / "changelog").glob("*.json")):
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise BuildError(f"site/changelog/{path.name} cannot be read: {error}") from error
-        for key in ("tool", "version", "date", "label", "headline", "lead",
-                    "before", "after", "next", "footer"):
+        for key in ("tool", "version", "label", "headline", "lead",
+                    "before", "after", "next", "builds", "runs_note"):
             if key not in entry:
                 raise BuildError(f"site/changelog/{path.name} has no {key}")
-        version = tuple(int(n) for n in entry["version"].split("."))
-        entries.append(((entry["date"], version), entry))
+        # Written by hand after scripts/release-runs.py made the entry.
+        for key in ("label", "headline", "lead"):
+            if not entry[key]:
+                raise BuildError(f"site/changelog/{path.name}: {key} is empty; write it by hand")
+        if not entry["next"].get("note"):
+            raise BuildError(f"site/changelog/{path.name}: next.note is empty; write it by hand")
+        if path.stem != f"{entry['tool']}-{entry['version']}":
+            raise BuildError(f"site/changelog/{path.name} holds {entry['tool']} {entry['version']}; "
+                             f"name it {entry['tool']}-{entry['version']}.json")
+        entries.append(entry)
     if not entries:
         raise BuildError("site/changelog/ holds no release entry for What's new")
-    return max(entries, key=lambda e: e[0])[1]
+    return sorted(entries, key=entry_order, reverse=True)
+
+
+def latest_entry():
+    """The newest release entry: the one What's new shows."""
+    return changelog_entries()[0]
 
 
 def code_text(text):
@@ -697,12 +869,22 @@ def rich(parts):
     return "".join(out)
 
 
+def json_field(field):
+    """One key of a --json run, as a shell comment so it never reads as output."""
+    if not field["present"]:
+        text = f'# --json has no {field["path"]} key'
+    else:
+        text = f'# --json {field["path"]}: {json.dumps(field["value"])}'
+    return f'<span class="jsonfield">{html.escape(text, quote=False)}</span>'
+
+
 def terminal(runs):
     """Commands, their output lines and exit codes, as one block."""
     blocks = []
     for run in runs:
         lines = [f'<span class="prompt">$ </span>{html.escape(run["command"], quote=False)}']
         lines += [html.escape(line, quote=False) for line in run["output"]]
+        lines += [json_field(field) for field in run.get("fields", [])]
         lines.append(f'<span class="exitline">exit {int(run["exit"])}</span>')
         blocks.append("\n".join(lines))
     return '<pre class="term"><code>' + "\n\n".join(blocks) + "</code></pre>"
@@ -711,27 +893,28 @@ def terminal(runs):
 def entry_side(side, data):
     title = "Before" if side == "before" else "After"
     files = "".join(f"<li><code>{esc(name)}</code></li>" for name in data["result"]["files"])
+    files = f"<ul>{files}</ul>" if files else ""
     return (f'<div class="side {side}">'
             f'<div class="side-head"><span class="who"><span class="dot" aria-hidden="true"></span>{title}</span>'
             f'<span class="build">{esc(data["build"])}</span></div>'
             f'{terminal(data["runs"])}'
             f'<div class="result"><p class="result-label">{esc(data["result"]["label"])}</p>'
-            f'<ul>{files}</ul></div>'
+            f'{files}</div>'
             f'<p class="side-exit">exit code <strong>{int(data["exit"])}</strong></p>'
             f'</div>')
 
 
-def render_entry(entry):
+def render_entry(entry, level=3):
     nxt = entry["next"]
     return (f'<article class="entry" aria-labelledby="entry-title">'
             f'<p class="entry-meta"><span class="entry-ver">{esc(entry["tool"])} {esc(entry["version"])}</span>'
-            f'<span class="pill">{esc(entry["label"])}</span></p>'
-            f'<h3 id="entry-title" class="entry-title">{esc(entry["headline"])}</h3>'
+            f'<span class="pill">{esc(entry["label"])}</span>{release_meta(entry)}</p>'
+            f'<h{level} id="entry-title" class="entry-title">{esc(entry["headline"])}</h{level}>'
             f'<p class="entry-lead">{rich(entry["lead"])}</p>'
             f'<div class="compare">{entry_side("before", entry["before"])}{entry_side("after", entry["after"])}</div>'
             f'<p class="entry-note">{rich(nxt["note"])}</p>'
             f'{terminal([nxt])}'
-            f'<p class="entry-foot">{esc(entry["footer"])}</p>'
+            f'<p class="entry-foot">{esc(footer(entry))}</p>'
             f'</article>')
 
 
@@ -888,9 +1071,12 @@ def build_home(pages):
         " ".join(f'<span class="w">{esc(word)}</span>' for word in line.split()) for line in TAGLINE)
     blocks = "".join(tool_block(t, captured, root) for t in tools)
     entry_tag = f'{entry["tool"]}-v{entry["version"]}'
-    release_page = SITE / "releases" / f"{entry_tag}.html"
-    release_link = (f'<p class="entry-more"><a href="releases/{entry_tag}.html">Release notes for '
-                    f'{esc(entry["tool"])} {esc(entry["version"])}</a></p>' if release_page.is_file() else "")
+    more = [f'<a href="changelog/{entry_slug(entry)}/">The {esc(entry["tool"])} {esc(entry["version"])} '
+            f'entry on its own page</a>']
+    if (SITE / "releases" / f"{entry_tag}.html").is_file():
+        more.append(f'<a href="releases/{entry_tag}.html">Release notes for '
+                    f'{esc(entry["tool"])} {esc(entry["version"])}</a>')
+    release_link = f'<p class="entry-more">{" · ".join(more)}</p>'
     names = ", ".join(t["name"] for t in tools[:-1]) + f" and {tools[-1]['name']}"
     description = (f"Études is a set of file tools for macOS: {names}. "
                    "Each tool installs and runs on its own.")
@@ -931,7 +1117,7 @@ def build_home(pages):
 </div>
 <div>
 <h3 id="update">Update</h3>
-<p>Run the same line with the new tag. Replace <code>X.Y.Z</code> with the version from the <a href="{CHANGELOG_URL}">changelog</a>.</p>
+<p>Run the same line with the new tag. Replace <code>X.Y.Z</code> with the version from the <a href="changelog/">changelog</a>.</p>
 <div class="cmd"><pre><code>{html.escape(update, quote=False)}</code></pre></div>
 </div>
 </div>
@@ -958,7 +1144,7 @@ def build_home(pages):
 <a href="docs/">Docs</a>
 <a href="docs/security/">Security</a>
 <a href="demo/">Demos</a>
-<a href="{CHANGELOG_URL}">Changelog</a>
+<a href="changelog/">Changelog</a>
 <a href="{REPO_URL}">GitHub</a>
 </nav>
 </footer>
@@ -1032,6 +1218,103 @@ def build_index(pages):
                   page_dir="docs", pages=pages, content=content, headings=headings)
 
 
+# --- changelog --------------------------------------------------------------
+
+# /changelog/ lists every entry, newest first, then the release pages that have
+# no entry. /changelog/<tool>-<version>/ is one entry in the release format:
+# the film on top when the entry names one, then the entry itself. The entries
+# are written by scripts/release-runs.py from real runs; check-site.py checks
+# them against their raw logs.
+
+def entry_slug(entry):
+    return f"{entry['tool']}-{entry['version']}"
+
+
+RELEASE_PAGE = re.compile(r"^([a-z]+)-v(\d+)\.(\d+)\.(\d+)\.html$")
+
+
+def release_pages():
+    """[(tool, version, file name)] for each page in site/releases/, newest version first."""
+    found = []
+    for path in (SITE / "releases").glob("*.html"):
+        m = RELEASE_PAGE.match(path.name)
+        if m:
+            found.append((m.group(1), f"{m.group(2)}.{m.group(3)}.{m.group(4)}", path.name))
+    return sorted(found, key=lambda r: (tuple(int(n) for n in r[1].split(".")), r[0]), reverse=True)
+
+
+def plain_parts(parts):
+    return "".join(part.get("code", part.get("text", "")) for part in parts)
+
+
+def changelog_nav(entries):
+    return [("Changelog", [("changelog", "All releases")]
+             + [(f"changelog/{entry_slug(e)}", f"{e['tool']} {e['version']}") for e in entries])]
+
+
+def film(entry, root):
+    """The release film, when the entry names one. Nothing at all until then."""
+    media = entry.get("film")
+    if not media:
+        return ""
+    poster = f' poster="{root}{esc_attr(media["still"])}"' if media.get("still") else ""
+    return (f'<figure class="film"><video controls playsinline preload="metadata"{poster} '
+            f'src="{root}{esc_attr(media["mov"])}"></video>'
+            f'<figcaption>{esc(media.get("caption", ""))}</figcaption></figure>')
+
+
+def build_entry_page(entry, pages, entries):
+    slug = entry_slug(entry)
+    page_dir = f"changelog/{slug}"
+    root = rel_dir(page_dir, "")
+    links = [f'<a href="../">All releases</a>']
+    tag = f'{entry["tool"]}-v{entry["version"]}'
+    if (SITE / "releases" / f"{tag}.html").is_file():
+        links.append(f'<a href="{root}releases/{tag}.html">Release notes for '
+                     f'{esc(entry["tool"])} {esc(entry["version"])}</a>')
+    content = (f'{film(entry, root)}\n{render_entry(entry, level=1)}\n'
+               f'<p class="entry-more">{" · ".join(links)}</p>')
+    return layout(title=f'{entry["tool"]} {entry["version"]}', description=summary(plain_parts(entry["lead"])),
+                  page_dir=page_dir, pages=pages, content=content, headings=[], current="changelog",
+                  first=changelog_nav(entries), body_class="changelog")
+
+
+def build_changelog_index(pages, entries):
+    ids = Ids()
+    ids.make("changelog")
+    items, headings = [], []
+    for entry in entries:
+        slug = entry_slug(entry)
+        hid = ids.make(slug)
+        name = f'{entry["tool"]} {entry["version"]}'
+        items.append(
+            f'<section class="cl-item" aria-labelledby="{hid}">'
+            f'<p class="entry-meta"><span class="entry-ver">{esc(name)}</span>'
+            f'<span class="pill">{esc(entry["label"])}</span>{release_meta(entry)}</p>'
+            f'<h2 id="{hid}"><a href="{slug}/">{esc(entry["headline"])}</a></h2>'
+            f'<p class="entry-lead">{rich(entry["lead"])}</p></section>')
+        headings.append((2, hid, esc(name)))
+    with_entry = {entry_slug(e) for e in entries}
+    others = [(tool, version, name) for tool, version, name in release_pages()
+              if f"{tool}-{version}" not in with_entry]
+    rest = ""
+    if others:
+        rid = ids.make("Release notes")
+        rest = (f'<h2 id="{rid}"><a class="anchor" href="#{rid}">Release notes</a></h2>'
+                f'<p>Releases with notes and no entry yet.</p><ul class="pagelist">'
+                + "".join(f'<li><a href="../releases/{esc_attr(name)}">{esc(tool)} {esc(version)}</a></li>'
+                          for tool, version, name in others)
+                + "</ul>")
+        headings.append((2, rid, "Release notes"))
+    content = ('<h1 id="changelog">Changelog</h1>\n'
+               '<p class="lead">What changed in each release, shown with real runs of the build before '
+               f'and the build after. Every change is also in <a href="{CHANGELOG_FILE_URL}">CHANGELOG.md</a>.</p>\n'
+               + "\n".join(items) + "\n" + rest)
+    return layout(title="Changelog", description="What changed in each Études release, with real before and after runs.",
+                  page_dir="changelog", pages=pages, content=content, headings=headings,
+                  current="changelog", first=changelog_nav(entries), body_class="changelog")
+
+
 def prepare_out(out):
     if out.exists():
         if not out.is_dir():
@@ -1051,6 +1334,10 @@ def build(out):
     rendered = {page["dir"]: build_doc(page, pages, linker) for page in pages}
     rendered["docs"] = build_index(pages)
     rendered[""] = build_home(pages)
+    entries = changelog_entries()
+    rendered["changelog"] = build_changelog_index(pages, entries)
+    for entry in entries:
+        rendered[f"changelog/{entry_slug(entry)}"] = build_entry_page(entry, pages, entries)
     prepare_out(out)
     plain_ignore = shutil.ignore_patterns(*BUILD_ONLY)
 
@@ -1085,7 +1372,7 @@ def main(argv):
     except SystemExit as error:
         print(error, file=sys.stderr)
         return 2
-    print(f"ok   built the home page, {len(pages)} docs pages and the docs index into {out}")
+    print(f"ok   built the home page, {len(pages)} docs pages, the docs index and the changelog into {out}")
     return 0
 
 

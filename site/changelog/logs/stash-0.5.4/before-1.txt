@@ -1,0 +1,5 @@
+
+Stashed 4 items.
+notes is clear.
+
+  No deadline. Restore with: stash pop

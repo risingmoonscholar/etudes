@@ -1,0 +1,91 @@
+{
+  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files and builds come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only label, headline, lead, next.note and film are written by hand. Whether the release is tagged, and its date, come from git when the site is built.",
+  "tool": "unpack",
+  "version": "0.5.3",
+  "label": "Breaking change",
+  "headline": "unpack now refuses archives that contain links",
+  "lead": [
+    {
+      "text": "If an archive holds a link, unpack stops before it writes anything and exits with code 2. Version 0.5.1 extracted the link and left it on your disk."
+    }
+  ],
+  "folder": "lone.zip",
+  "before": {
+    "build": "unpack 0.5.1",
+    "runs": [
+      {
+        "command": "unpack lone.zip",
+        "output": [
+          "  Extracted to lone/",
+          "  2 entries"
+        ],
+        "exit": 0
+      }
+    ],
+    "result": {
+      "label": "Left on disk",
+      "files": [
+        "notes.txt",
+        "shortcut -> /etc/passwd"
+      ]
+    },
+    "exit": 0
+  },
+  "after": {
+    "build": "unpack 0.5.3",
+    "runs": [
+      {
+        "command": "unpack lone.zip",
+        "output": [
+          "unpack: REFUSED. This archive contains members this tool will not",
+          "create.",
+          "  symlink: shortcut",
+          "Nothing was extracted. Inspect it with: unpack lone.zip --list"
+        ],
+        "exit": 2
+      }
+    ],
+    "result": {
+      "label": "Nothing was extracted",
+      "files": []
+    },
+    "exit": 2
+  },
+  "next": {
+    "note": [
+      {
+        "text": "To see what an archive holds without writing anything, run "
+      },
+      {
+        "code": "unpack lone.zip --list"
+      },
+      {
+        "text": "."
+      }
+    ],
+    "command": "unpack lone.zip --list",
+    "output": [
+      "2 entries in lone",
+      "  notes.txt",
+      "  shortcut",
+      "  1 unsafe path(s) would be refused:",
+      "    symlink: shortcut"
+    ],
+    "exit": 0
+  },
+  "builds": {
+    "before": {
+      "name": "tag v0.5.1",
+      "tag": "v0.5.1",
+      "commit": "63ffb74",
+      "rev": "63ffb74d097a31925e7c5bdaa85f7fe57ee3b3db",
+      "sha256": "add26308f7b3945c074f70936f5df50e6d1918b146d0040d9b138376346724cb"
+    },
+    "after": {
+      "commit": "427582b",
+      "rev": "427582b850f7f4b461cc5eb1c4b27dbabdc9a14e",
+      "sha256": "6367587ae9dab3683bf046d751b34d122f1ae088f7c115bf3c391c70b8dbc8c9"
+    }
+  },
+  "runs_note": "Each ran the same commands on a fresh copy of one synthetic archive, lone.zip: a zip archive that holds notes.txt and shortcut, a link to /etc/passwd. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."
+}
