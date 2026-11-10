@@ -3,7 +3,7 @@
 #
 # check-claims.sh compares two documented counts against reality and fails on
 # drift. Adding a test moves the count, so every change that adds one has to
-# update docs/testing.md and site/index.html too. Carrying by hand a number
+# update docs/testing.md and site/demo/index.html too. Carrying by hand a number
 # that a script can measure is the wrong shape. It has gone wrong four times
 # in this repo: once by writing 256 when reality was 253, once by DELETING the
 # documented count rather than correcting it, twice by leaving it stale. The
@@ -19,7 +19,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 # README.md states no counts; check-claims.sh fails if one comes back.
-FILES="docs/testing.md site/index.html"
+FILES="docs/testing.md site/demo/index.html"
 
 # Measured exactly as check-claims.sh measures. Test count from the suite's
 # own report; scenario count from what git TRACKS, because a reader gets what

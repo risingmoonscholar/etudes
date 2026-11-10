@@ -208,3 +208,170 @@ th { font-weight: 600; background: var(--code-bg); }
   .content h2 { font-size: 21px; }
   pre { font-size: 12.5px; padding: 14px; }
 }
+
+/* Skip link, on every page */
+.skip { position: absolute; left: 16px; top: -48px; z-index: 20; padding: 8px 12px; background: var(--fg); color: var(--bg); border-radius: 6px; font-size: 14px; text-decoration: none; }
+.skip:focus { top: 8px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Home. Same tokens, fonts and top bar as the docs. Sizes and gaps keep to
+   one scale: 12 14 16 18 20 24 30 36 48 72 for type, 4 to 96 for space. */
+:root {
+  --before: #e5484d;
+  --after: #30a46c;
+  --before-bg: #fdf1f1;
+  --after-bg: #eefaf3;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --before-bg: #1f1414; --after-bg: #121c16; }
+}
+:root[data-theme="dark"] { --before-bg: #1f1414; --after-bg: #121c16; }
+
+.home main { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+.home h2 { font-family: var(--serif); font-weight: 400; font-size: 36px; line-height: 40px; letter-spacing: -0.01em; margin: 0 0 16px; text-wrap: balance; }
+.home h3 { font-size: 18px; line-height: 28px; font-weight: 600; margin: 0 0 8px; }
+.home p { text-wrap: pretty; }
+.band { padding: 80px 0 0; }
+.band .intro { max-width: 680px; margin: 0 0 24px; color: var(--muted); font-size: 18px; line-height: 28px; }
+
+.hero { padding: 96px 0 0; }
+.hero h1 { max-width: 680px; font-family: var(--serif); font-weight: 400; font-size: 48px; line-height: 1; letter-spacing: -0.02em; margin: 0 0 16px; text-wrap: balance; }
+.hero .sub { max-width: 680px; font-size: 20px; line-height: 28px; color: var(--muted); margin: 0 0 40px; text-wrap: balance; }
+.toolrow { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.toolcard {
+  display: flex; flex-direction: column; height: 100%; padding: 24px;
+  border: 1px solid var(--border); border-radius: 12px; color: var(--fg); text-decoration: none;
+  transition: border-color 300ms var(--ease), background-color 300ms var(--ease), transform 500ms var(--ease);
+}
+.toolcard:hover { border-color: var(--border-strong); background: var(--hover-bg); }
+.toolcard:active { transform: translateY(1px); }
+.toolcard:focus-visible, .home button:focus-visible, .home a:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.toolcard .name { font-family: var(--mono); font-size: 20px; line-height: 28px; font-weight: 600; }
+.toolcard .desc { margin: 8px 0 16px; color: var(--muted); font-size: 16px; line-height: 24px; flex: 1; }
+.toolcard .more { font-size: 14px; line-height: 20px; font-weight: 600; }
+.toolcard .more::after { content: " \2192"; }
+
+/* Install block: tabs over one command box. Without JavaScript every panel
+   shows under its own label and the tab row stays hidden. */
+.install { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.tablist { display: flex; gap: 4px; padding: 8px 8px 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tablist[hidden] { display: none; }
+.tablist [role=tab] {
+  font: inherit; font-size: 14px; line-height: 20px; font-weight: 500; color: var(--muted);
+  background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; cursor: pointer; white-space: nowrap;
+  transition: color 300ms var(--ease), border-color 300ms var(--ease);
+}
+.tablist [role=tab]:hover { color: var(--fg); }
+.tablist [role=tab][aria-selected=true] { color: var(--fg); border-bottom-color: var(--fg); }
+.tabpanel { padding: 16px; }
+.tabpanel + .tabpanel { border-top: 1px solid var(--border); }
+.tabbed .tabpanel + .tabpanel { border-top: 0; }
+.tabpanel:focus-visible { outline: 2px solid var(--fg); outline-offset: -2px; }
+.home .panel-label { font-size: 14px; line-height: 20px; color: var(--muted); margin: 0 0 8px; }
+.tabbed .panel-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.cmd { position: relative; }
+.cmd pre { margin: 0; padding: 16px; font-size: 14px; line-height: 24px; }
+.cmd:has(.copy:not([hidden])) pre { padding-right: 96px; }
+.copy {
+  position: absolute; top: 8px; right: 8px;
+  font: inherit; font-size: 14px; line-height: 20px; font-weight: 600;
+  padding: 8px 12px; border-radius: 6px; cursor: pointer;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border-strong);
+  transition: background-color 300ms var(--ease), transform 500ms var(--ease);
+}
+.copy:hover { background: var(--hover-bg); }
+.copy:active { transform: scale(0.98); }
+.needs { margin: 16px 0 0; font-size: 16px; line-height: 24px; }
+.after-install { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px; margin-top: 40px; }
+.after-install > div { min-width: 0; }
+.after-install p { margin: 0 0 12px; color: var(--muted); font-size: 16px; line-height: 24px; }
+
+/* What's new: one release entry */
+.entry { border: 1px solid var(--border); border-radius: 16px; padding: 32px; }
+.entry-meta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 0 0 16px; }
+.entry-ver { font-family: var(--mono); font-weight: 600; font-size: 16px; line-height: 24px; }
+.pill { font-size: 14px; line-height: 20px; font-weight: 500; padding: 2px 12px; border: 1px solid var(--fg); border-radius: 9999px; }
+.home .entry-title { font-family: var(--serif); font-weight: 400; font-size: 30px; line-height: 36px; letter-spacing: -0.01em; margin: 0 0 16px; text-wrap: balance; }
+.entry-lead { font-size: 18px; line-height: 28px; margin: 0 0 32px; max-width: 760px; }
+.compare { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 0 0 24px; }
+.side { border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; min-width: 0; display: flex; flex-direction: column; }
+.side-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 16px; line-height: 24px; }
+.side-head .who { display: flex; align-items: center; gap: 8px; }
+.side-head .build { font-family: var(--mono); font-weight: 400; font-size: 14px; line-height: 20px; color: var(--muted); }
+.dot { width: 12px; height: 12px; border-radius: 9999px; display: inline-block; }
+.before .dot { background: var(--before); }
+.after .dot { background: var(--after); }
+.side .term { border: 0; border-radius: 0; margin: 0; flex: 1; background: none; }
+.term { font-size: 14px; line-height: 24px; }
+.term .prompt, .line .prompt { color: var(--muted); user-select: none; -webkit-user-select: none; }
+.term .exitline { color: var(--muted); }
+.result { padding: 12px 16px; border-top: 1px solid var(--border); }
+.before .result { background: var(--before-bg); box-shadow: inset 4px 0 0 var(--before); }
+.after .result { background: var(--after-bg); box-shadow: inset 4px 0 0 var(--after); }
+.result-label { margin: 0 0 4px; font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.result ul { list-style: none; margin: 0; padding: 0; font-size: 14px; line-height: 24px; }
+.result code { background: none; border: 0; padding: 0; font-size: 14px; }
+.side-exit { margin: 0; padding: 12px 16px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 14px; line-height: 20px; color: var(--muted); }
+.side-exit strong { color: var(--fg); }
+.entry-note { margin: 0 0 12px; font-size: 16px; line-height: 24px; }
+.entry > .term { margin: 0 0 24px; }
+.entry-foot { margin: 0; padding-top: 16px; border-top: 1px solid var(--border); font-size: 14px; line-height: 20px; color: var(--muted); }
+.entry-more { margin: 16px 0 0; font-size: 16px; line-height: 24px; }
+
+/* Tagline: words go from muted to full as they reach the middle of the
+   screen. Only with JavaScript and without reduced motion. */
+.tagline { padding: 96px 0 16px; }
+.tagline p { max-width: 680px; margin: 0; font-family: var(--serif); font-size: 48px; line-height: 1; letter-spacing: -0.02em; text-wrap: balance; }
+.reveal .tagline .w { opacity: 0.3; transition: opacity 600ms var(--ease); }
+.reveal .tagline .w.on { opacity: 1; }
+
+/* The tools in more depth */
+.tool { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: auto auto 1fr; column-gap: 48px; padding: 40px 0; border-top: 1px solid var(--border); }
+.tool > h3, .tool > .tool-desc, .tool > .tool-links { grid-column: 1; }
+.tool > .commands { grid-column: 2; grid-row: 1 / span 3; margin: 0; }
+.tool-links { align-self: start; }
+.tool:first-of-type { border-top: 0; padding-top: 16px; }
+.home .tool h3 { font-size: 24px; line-height: 32px; margin: 0 0 8px; }
+.tool h3 code { background: none; border: 0; padding: 0; font-size: 24px; font-weight: 600; }
+.tool-desc { margin: 0 0 16px; color: var(--muted); font-size: 16px; line-height: 24px; max-width: 680px; }
+.commands { list-style: none; margin: 0 0 24px; padding: 0; display: grid; gap: 24px; }
+.commands li { min-width: 0; }
+.commands .line { margin: 0 0 8px; padding: 12px 16px; font-size: 14px; line-height: 24px; }
+.commands p { margin: 0; font-size: 16px; line-height: 24px; }
+.commands .out { margin: 12px 0 8px; }
+.commands .out-note { font-size: 14px; line-height: 20px; color: var(--muted); }
+.tool-links { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; }
+
+/* Footer */
+.sitefoot { max-width: 1032px; margin: 96px auto 0; padding: 32px 0 64px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; font-size: 14px; line-height: 20px; color: var(--muted); }
+.sitefoot p { margin: 0; }
+.sitefoot a { color: var(--muted); }
+.sitefoot a:hover { color: var(--fg); }
+.sitefoot nav { display: flex; flex-wrap: wrap; gap: 16px; }
+
+@media (max-width: 860px) {
+  .tool { display: block; }
+  .tool-desc { margin-bottom: 24px; }
+  .tool > .commands { margin: 0 0 24px; }
+}
+@media (max-width: 768px) {
+  .home main { padding: 0 16px; }
+  .hero { padding-top: 48px; }
+  .hero h1 { font-size: 36px; line-height: 40px; }
+  .hero .sub { font-size: 18px; margin-bottom: 32px; }
+  .band { padding-top: 64px; }
+  .home h2 { font-size: 30px; line-height: 36px; }
+  .entry { padding: 16px; }
+  .home .entry-title { font-size: 24px; line-height: 32px; }
+  .tagline { padding-top: 64px; }
+  .tagline p { font-size: 36px; line-height: 40px; }
+  .term, .cmd pre, .commands .line { font-size: 12px; line-height: 20px; }
+  .sitefoot { padding: 24px 0 48px; margin: 64px 16px 0; }
+  .cmd { display: flex; flex-direction: column; }
+  .cmd .copy { position: static; order: -1; align-self: flex-end; margin: 0 0 8px; }
+  .cmd:has(.copy:not([hidden])) pre { padding-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toolcard, .copy, .tablist [role=tab], .reveal .tagline .w { transition: none; }
+}

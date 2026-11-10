@@ -11,7 +11,7 @@ README explicit about candidate status until publication is authorized.
 
 Run the normal CI checks, capture fresh demo transcripts with
 `scripts/capture-demos.sh` (it writes `site/transcripts.json` and the copy inside
-`site/index.html`), check the site with `python3 scripts/check-site.py`, then
+`site/demo/index.html`), check the site with `python3 scripts/check-site.py`, then
 install and exercise the candidate without changing a user's installation:
 
 ```sh
