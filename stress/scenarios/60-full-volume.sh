@@ -54,6 +54,7 @@ for f in alpha beta gamma delta epsilon zeta eta theta; do
   : > "$PROJ/widget_$f.txt"
 done
 BEFORE=$(find "$PROJ" -type f | wc -l | tr -d ' ')
+snapshot_tree "$PROJ" "$W/full-before.json"
 
 # Recovery control with the same files before exhausting the image.
 assert_exit 0 "full-volume recovery control applies" -- "$SWEEP" apply "$PROJ" --yes
@@ -89,22 +90,14 @@ assert_eq "$BEFORE" "$AFTER" "full volume: no file vanished from a refused apply
 
 # Whatever state exists, undo must be able to make sense of it: either there
 # is nothing to undo (0 moved), or undo can reverse what did happen.
+MOVED_BEFORE_UNDO=$(find "$PROJ" -mindepth 2 -type f | wc -l | tr -d ' ')
+EXPECTED_UNDO=1
+[ "$MOVED_BEFORE_UNDO" -eq 0 ] || EXPECTED_UNDO=0
 UNDO_OUT=$("$SWEEP" undo 2>&1)
 UNDO_CODE=$?
-if echo "$UNDO_OUT" | grep -qi "no storage space\|disk is full\|read-only\|permission denied"; then
-  # Undo itself may be unable to write to a still-full disk. That is a
-  # separate, honest failure (see 60-undo-progress-loss.sh) -- the property
-  # under test here is narrower: did apply *itself* leave a state undo
-  # can't make sense of. It can: the journal on disk is a true record of
-  # exactly what happened, so a later retry (once space exists) resolves it.
-  pass "full volume: undo's own inability to write to a still-full disk is a distinct, separately-reported failure (see 60-undo-progress-loss.sh)"
-else
-  if [ -n "$(find "$PROJ" -mindepth 2 -type f -print -quit)" ]; then
-    assert_eq 0 "$UNDO_CODE" "full volume: undo reverses whatever the refused apply did"
-  else
-    assert_eq 1 "$UNDO_CODE" "full volume: undo has nothing to restore after the refused apply"
-  fi
-fi
+assert_eq "$EXPECTED_UNDO" "$UNDO_CODE" "full volume: undo exit matches the $MOVED_BEFORE_UNDO files moved before undo"
+snapshot_tree "$PROJ" "$W/full-after-undo.json"
+assert_snapshot_eq "$W/full-before.json" "$W/full-after-undo.json" "full volume: undo restores the original tree"
 assert_intact "$PROJ" "$BEFORE" "full-volume undo preserves every file"
 FINAL=$(find "$PROJ" -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE" "$FINAL" "full volume: file count intact after apply-then-undo on a full disk"

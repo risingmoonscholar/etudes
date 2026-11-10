@@ -345,7 +345,11 @@ for _ in $(seq 1 3000); do
 done
 wait "$PID"; rc=$?
 if [ -n "$RACED" ]; then
-  assert_eq "" "$(ls -A "$A/raced")" "raced destination remains empty"
+  if [ -d "$A/raced" ] && CONTENTS=$(ls -A "$A/raced"); then
+    assert_eq "" "$CONTENTS" "raced destination exists and remains empty"
+  else
+    fail "raced destination was removed or cannot be read"
+  fi
   OUT=$(cat "$W/raced.out")
   clean "a folder appeared" "$OUT"
   assert_eq 2 "$rc" "a folder appeared: exit"
