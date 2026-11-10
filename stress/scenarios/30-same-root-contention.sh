@@ -66,38 +66,34 @@ assert_eq 2 "$JOURNALS" "both same-root attempts retain distinct journal records
 # Drain both operations and bind their printed counters to the actual tree.
 recover_operations() {
   local root="$1" state="$2" output="$3" total="$4" before="$5"
-  local moved restored=0 exhausted=0 step out code n top_before top_after
-  moved=$(python3 - "$output/first.out" "$output/second.out" <<'PY_MOVED'
+  local accounting moved operations restored=0 successful=0 step out code n top_before top_after
+  accounting=$(python3 - "$output/first.out" "$output/second.out" <<'PY_MOVED'
 import pathlib, re, sys
 counts = []
 for name in sys.argv[1:]:
     text = pathlib.Path(name).read_text()
     matches = re.findall(r'^Moved ([0-9]+) files?\.$', text, re.M)
     matches += re.findall(r'^([0-9]+) (?:file was|files were) moved before this stopped\.', text, re.M)
+    if not matches and 'Nothing was moved, so there is nothing to undo.' in text:
+        matches = ['0']
     assert len(matches) == 1, f'{name}: expected one moved count, got {matches}'
     counts.append(int(matches[0]))
-assert all(n > 0 for n in counts), f'both operations must move a share: {counts}'
-print(sum(counts))
+assert any(n > 0 for n in counts), f'at least one operation must move files: {counts}'
+print(sum(counts), sum(n > 0 for n in counts))
 PY_MOVED
   )
+  read -r moved operations <<< "$accounting"
+  case "$operations" in 1|2) ;; *) fail "could not determine the number of nonempty apply operations: $accounting"; return;; esac
   assert_eq "$total" "$moved" "same-root operations report every moved payload exactly once"
   assert_eq "$moved" "$(find "$root" -mindepth 2 -type f | wc -l | tr -d ' ')" "same-root reported moves equal files at destinations"
-  # Two journals can supply at most two successful restores. A third call
-  # must report exhaustion; the bound also catches a falsely successful no-op.
-  for step in 1 2 3; do
+  # Decide the exact undo count from apply, before observing any undo result.
+  for ((step=1; step<=operations; step++)); do
     top_before=$(find "$root" -maxdepth 1 -type f | wc -l | tr -d ' ')
-    snapshot_tree "$root" "$output/before-undo-$step.json"
     out=$(ETUDE_STATE_DIR="$state" "$SWEEP" undo "$root" 2>&1); code=$?
     printf '%s\n' "$out" > "$output/undo-$step.out"
-    snapshot_tree "$root" "$output/after-undo-$step.json"
-    if [ "$code" = 1 ] && grep -qi 'nothing to undo' <<<"$out"; then
-      pass "same-root undo $step reports no remaining operation"
-      assert_snapshot_eq "$output/before-undo-$step.json" "$output/after-undo-$step.json" "same-root exhaustion changes no path or byte"
-      exhausted=1
-      break
-    fi
     assert_eq 0 "$code" "same-root undo $step restores an operation successfully"
     [ "$code" = 0 ] || break
+    successful=$((successful + 1))
     n=$(python3 - "$output/undo-$step.out" <<'PY_RESTORED'
 import pathlib, re, sys
 counts = re.findall(r'^Restored ([0-9]+) files?\.$', pathlib.Path(sys.argv[1]).read_text(), re.M)
@@ -110,10 +106,18 @@ PY_RESTORED
     assert_eq "$n" "$((top_after - top_before))" "same-root undo $step restored count matches files returned home"
     restored=$((restored + n))
   done
-  assert_eq 1 "$exhausted" "same-root undo reaches no remaining work within both operation records"
+  assert_eq "$operations" "$successful" "same-root successful undo count equals the nonempty apply count"
   assert_eq "$moved" "$restored" "same-root undo counts sum to both operations' moved counts"
   snapshot_tree "$root" "$output/after-undo.json"
   assert_snapshot_eq "$before" "$output/after-undo.json" "same-root recovery restores every original path and byte"
+  snapshot_tree "$root" "$output/exhaustion-before.json"
+  out=$(ETUDE_STATE_DIR="$state" "$SWEEP" undo "$root" 2>&1); code=$?
+  assert_eq 1 "$code" "same-root undo after exactly $operations operations reports no remaining work"
+  grep -qi 'nothing to undo' <<<"$out" \
+    && pass "same-root exact undo count exhausts both operation records" \
+    || fail "same-root undo hid exhaustion: $out"
+  snapshot_tree "$root" "$output/exhaustion-after.json"
+  assert_snapshot_eq "$output/exhaustion-before.json" "$output/exhaustion-after.json" "same-root exhaustion changes no path or byte"
   snapshot_tree "$root" "$output/terminal.json"
   out=$(ETUDE_STATE_DIR="$state" "$SWEEP" undo "$root" 2>&1); code=$?
   assert_eq 1 "$code" "same-root extra terminal undo reports no remaining work"

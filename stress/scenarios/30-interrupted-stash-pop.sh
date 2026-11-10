@@ -49,7 +49,8 @@ if moved=$(wait_for_between 0 "$TOTAL" "$PID"); then
   wait "$PID" 2>/dev/null; STATUS=$?
   [ "$STATUS" -ne 0 ] && pass "killed stash exited non-zero ($STATUS)" || fail "killed stash exited zero"
 else
-  wait "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null; STATUS=$?
+  assert_eq 0 "$STATUS" "stash without a stop witness completed successfully"
   unproven "stash interruption" "no confirmed stopped partial stash state"
 fi
 assert_partial_integrity "interrupted stash"
@@ -60,19 +61,21 @@ assert_snapshot_eq "$BEFORE" "$AFTER_STASH_RESUME" "stash recovery restored ever
 # Start from a completed stash, then kill pop after it has restored a strict
 # subset. A second pop must account for the already-restored files and finish.
 assert_exit 0 "setup stash before interrupted pop succeeds" -- "$STASH" "$D"
+RESUME_CODE=1
 "$STASH" pop "$D" >"$W/pop.out" 2>&1 & PID=$!
 if restored=$(wait_for_between 0 "$TOTAL" "$PID"); then
+  RESUME_CODE=0
   pass "pop interruption witnessed $restored of $TOTAL files restored while the process was confirmed stopped"
   kill -9 "$PID" 2>/dev/null && pass "SIGKILL reached the active pop process" || fail "could not deliver SIGKILL to the active pop process"
   wait "$PID" 2>/dev/null; STATUS=$?
   [ "$STATUS" -ne 0 ] && pass "killed pop exited non-zero ($STATUS)" || fail "killed pop exited zero"
 else
-  wait "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null; STATUS=$?
+  assert_eq 0 "$STATUS" "pop without a stop witness completed successfully"
   unproven "pop interruption" "no confirmed stopped partial pop state"
-  exit 0
 fi
 assert_partial_integrity "interrupted pop"
-assert_exit 0 "stash pop resumes the interrupted pop" -- "$STASH" pop "$D"
+assert_exit "$RESUME_CODE" "stash pop resumes interrupted work or reports the completed pop" -- "$STASH" pop "$D"
 AFTER_POP_RESUME="$W/after-pop-resume.json"; snapshot_tree "$D" "$AFTER_POP_RESUME"
 assert_snapshot_eq "$BEFORE" "$AFTER_POP_RESUME" "pop recovery restored every original path and byte"
 TERMINAL="$W/terminal.json"; snapshot_tree "$D" "$TERMINAL"

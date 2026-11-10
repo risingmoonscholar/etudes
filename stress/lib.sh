@@ -233,9 +233,11 @@ assert_snapshot_ne() {
 # does.
 export SWEEP_GRACE_SECS=0
 
-export HOME="$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-home-XXXXXX")"
+# The batch runner owns this parent even when SIGKILL prevents EXIT cleanup.
+# Direct runs retain their independent temporary directories.
+export HOME="$(mktemp -d "${STRESS_CASE_ROOT:-${TMPDIR:-/tmp}}/etudes-stress-home-XXXXXX")"
 
-export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
+export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${STRESS_CASE_ROOT:-${TMPDIR:-/tmp}}/etudes-stress-state-XXXXXX")}"
 # Bind the chosen directory now: scenarios may later change the override.
 # Sourcing this file again (a scenario that reloads it) makes a second state
 # folder. Keep the first one's removal in the list, or it is left behind.

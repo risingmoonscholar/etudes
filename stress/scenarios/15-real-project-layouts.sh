@@ -464,11 +464,15 @@ fi
 PG="$W/PagesDoc"; mkdir -p "$PG/Example.pages"
 : > "$PG/Example.pages/index.xml"
 for n in 1 2 3; do : > "$PG/loose_$n.pdf"; done
-PG_OUT=$("$SWEEP" "$PG" --depth 2 2>&1 || true)
+PG_OUT=$("$SWEEP" "$PG" --depth 2 2>&1); PG_CODE=$?
+assert_eq 0 "$PG_CODE" "scan succeeds beside a generic Pages package"
 if grep -q "project bundle" <<<"$PG_OUT"; then
   fail "a Pages document was called a project bundle: $PG_OUT"
+elif grep -qF '1 folder was left alone because macOS treats it as a single item' <<<"$PG_OUT" && \
+     grep -qE '^  Documents +3 files' <<<"$PG_OUT"; then
+  pass "a generic OS package is disclosed as a single item beside three grouped documents"
 else
-  pass "a generic OS package is not described as a project bundle"
+  fail "Pages package scan omitted the package disclosure or Documents group: $PG_OUT"
 fi
 
 # --- a loose project document does not take the folder hostage ----------------

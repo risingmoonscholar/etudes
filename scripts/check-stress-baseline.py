@@ -16,6 +16,7 @@ def check(baseline, catalog, summary, previous=None, pins=None):
         for name, floor in previous.items():
             if name not in baseline or baseline[name] < floor:
                 errors.append(f"{name}: baseline entry removed or lowered (previous {floor})")
+    platform = {row["id"] for row in catalog if row.get("tier") == "platform"}
     present = {row["id"] for row in catalog}
     present &= {path.stem for path in (ROOT / "stress/scenarios").glob("*.sh")}
     for name in present - baseline.keys():
@@ -29,9 +30,9 @@ def check(baseline, catalog, summary, previous=None, pins=None):
         name = row["id"]
         if name not in baseline:
             errors.append(f"{name}: missing baseline entry")
-        # A host that cannot prove any assertion has no comparable result.
-        # Partial runs still meet both the floor and the exact unproven pin.
-        if row["passed"] == 0 and row["unproven"] > 0:
+        # Only platform scenarios may be wholly unavailable on this host.
+        # Every other run still meets its floor and exact unproven pin.
+        if name in platform and row["passed"] == 0 and row["unproven"] > 0:
             continue
         if name in baseline and row["passed"] < baseline[name]:
             errors.append(f"{name}: {row['passed']} passing assertions below baseline {baseline[name]}")

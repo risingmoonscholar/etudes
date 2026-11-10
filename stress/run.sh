@@ -108,8 +108,8 @@ PY
   # Each case executes in the bounded helper's owned session. Disable nested
   # job control so the direct-run wrapper stays in that session and is reaped
   # with every descendant on timeout or interruption.
-  case_cwd=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-cwd-XXXXXX")
-  if STRESS_RESULT_FD=197 SCENARIO="$name" STRESS_NO_JOB_CONTROL=1 STRESS_FAILURE_ARTIFACTS="$case_artifacts" \
+  case_cwd=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-cwd-XXXXXX") || exit 1
+  if STRESS_CASE_ROOT="$case_cwd" STRESS_RESULT_FD=197 SCENARIO="$name" STRESS_NO_JOB_CONTROL=1 STRESS_FAILURE_ARTIFACTS="$case_artifacts" \
       python3 stress/bounded.py --timeout-ms "$CASE_TIMEOUT_MS" --evidence "$process_evidence" --pass-fd 197 -- bash -c 'cd "$1" && exec bash "$2"' bash "$case_cwd" "$PWD/$s"; then
     bounded_status=0
   else
