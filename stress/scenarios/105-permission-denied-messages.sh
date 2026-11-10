@@ -103,6 +103,7 @@ case "$OUT" in
 esac
 OUT=$("$UNPACK" "$W/locked.zip" 2>&1 </dev/null)
 assert_no_panic "unpack on a denied archive" "$OUT"
+case "$OUT" in *"$W/locked.zip"*) pass "denied archive is named exactly" ;; *) fail "denied archive message omitted its name: $OUT" ;; esac
 case "$OUT" in
   *"not a file"*) fail "unpack called an existing archive not a file: ${OUT%%$'\n'*}" ;;
   *) pass "unpack does not call a denied archive not a file" ;;

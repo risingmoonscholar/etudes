@@ -59,6 +59,11 @@ for layout in siblings same-child external-link unreadable-folder unreadable-mar
   fi
   # Fresh movable files force a real journalled stash and pop, even after sweep.
   for n in 1 2 3; do printf 'invoice' > "$P/fresh_$n.pdf"; done
+  chmod u+rx "$P/scenes" 2>/dev/null || true
+  chmod u+r "$DOCS/a.blend"
+  snapshot_tree "$P" "$W/before-stash-$layout.json"
+  [ "$layout" != unreadable-folder ] || chmod 000 "$P/scenes"
+  [ "$layout" != unreadable-marker ] || chmod 000 "$DOCS/a.blend"
   CODE=0; STASHED=$("$STASH" "$P" --json 2>&1) || CODE=$?
   # An item stash could not read stays in the folder, so the folder is not clear.
   case "$layout" in
@@ -88,6 +93,9 @@ for layout in siblings same-child external-link unreadable-folder unreadable-mar
   fi
   assert_exit 0 "$layout: stash pop succeeds" -- "$STASH" pop "$P"
   [ -f "$P/fresh_1.pdf" ] && pass "$layout: pop restored invoices" || fail "$layout: pop lost invoices"
+  chmod u+r "$DOCS/a.blend"
+  snapshot_tree "$P" "$W/after-pop-$layout.json"
+  assert_snapshot_eq "$W/before-stash-$layout.json" "$W/after-pop-$layout.json" "$layout: pop restores exact paths, modes and bytes"
   chmod -R u+rwx "$P"
 done
 
@@ -108,9 +116,13 @@ assert_exit 0 'parent apply succeeds beside a two-document child project' -- "$S
   && pass 'parent apply held the child project and moved invoices' \
   || fail 'parent apply moved a child document or texture, or did not move invoices'
 printf 'fresh invoice' > "$CP/fresh.pdf"
+snapshot_tree "$CP" "$W/child-before-stash.json"
 assert_exit 0 'parent stash succeeds beside a two-document child project' -- "$STASH" "$CP"
 [ -f "$CP/project/a.blend" ] && [ -f "$CP/project/b.blend" ] && [ -f "$CP/project/textures/wood.png" ] && [ ! -f "$CP/fresh.pdf" ] \
   && pass 'parent stash held the child project and moved invoices' \
   || fail 'parent stash moved a child document or texture, or did not move invoices'
 assert_exit 0 'parent stash pop restores the invoices' -- "$STASH" pop "$CP"
 [ -f "$CP/fresh.pdf" ] && pass 'parent pop restored the fresh invoice' || fail 'parent pop lost the fresh invoice'
+
+snapshot_tree "$CP" "$W/child-after-pop.json"
+assert_snapshot_eq "$W/child-before-stash.json" "$W/child-after-pop.json" "child project: pop restores exact paths and bytes"

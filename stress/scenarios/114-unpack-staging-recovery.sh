@@ -2,6 +2,10 @@
 # Real SIGKILL, stopped live writers, conservative candidates and competing retries.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require pgrep "the surviving extractor must be stopped" || exit 0
+if ! ps -o state= -p $$ >/dev/null 2>&1; then
+  unproven "witnessed process interruption" "host denies process-state inspection"
+  exit 0
+fi
 W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 python3 - "$UNPACK" "$W" >"$W/assertions" 2>"$W/errors" <<'PY'
 import fcntl
@@ -40,6 +44,24 @@ logs = []
 
 def check(condition, message):
     print(("ok" if condition else "FAIL") + "\t" + message, flush=True)
+
+class Unproven(Exception):
+    pass
+
+def stop_confirmed(pid):
+    try:
+        os.kill(pid, signal.SIGSTOP)
+    except ProcessLookupError:
+        return False
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "state=", "-p", str(pid)], capture_output=True, text=True)
+        if state.returncode == 0 and "T" in state.stdout:
+            return True
+        if state.returncode != 0:
+            return False
+        time.sleep(0.005)
+    return False
 
 def start(source, label):
     log = (root / (label + ".log")).open("wb")
@@ -98,19 +120,22 @@ try:
         if stages:
             files = list(stages[0].glob("member-*.txt"))
             if 0 < len(files) < total:
-                os.kill(victim.pid, signal.SIGSTOP)
-                kids = [int(p) for p in subprocess.check_output(
-                    ["pgrep", "-P", str(victim.pid)], text=True).split()]
+                if not stop_confirmed(victim.pid):
+                    raise Unproven("supervisor stop could not be confirmed before live retry")
+                children = subprocess.run(["pgrep", "-P", str(victim.pid)], capture_output=True, text=True)
+                kids = [int(p) for p in children.stdout.split()]
+                if children.returncode != 0 or not kids:
+                    raise Unproven("no live extractor found for the stopped-writer case")
                 for kid in kids:
-                    os.kill(kid, signal.SIGSTOP)
+                    if not stop_confirmed(kid):
+                        raise Unproven(f"extractor {kid} stop could not be confirmed before live retry")
                 stage = stages[0]
                 break
         time.sleep(0.005)
     witnessed = stage is not None and not dest.exists() and 0 < len(list(stage.glob("member-*.txt"))) < total
-    check(witnessed, "witnessed a live extraction with only part of the archive in staging")
     if not witnessed:
-        print((root / "victim.log").read_text(), file=sys.stderr)
-        raise RuntimeError("could not witness mid-extraction; remaining claims untested")
+        raise Unproven("no confirmed stopped extraction with a partial staging tree")
+    check(True, "witnessed a live extraction with supervisor and extractors confirmed stopped")
 
     legacy = candidate(1); legacy.mkdir(); (legacy / "keep").write_bytes(b"legacy")
     outside = root / "outside"; outside.mkdir(); (outside / "keep").write_bytes(b"outside")
@@ -142,6 +167,8 @@ try:
           "retained candidates and symlink target keep their exact bytes")
     check(other.is_dir() and str(other) not in text, "another destination's staging is untouched")
 
+    if not all(stop_confirmed(pid) for pid in [victim.pid, *kids]):
+        raise Unproven("stopped supervisor and extractors could not be reconfirmed before SIGKILL")
     os.kill(victim.pid, signal.SIGKILL)
     check(victim.wait(timeout=10) == -signal.SIGKILL, "real SIGKILL ended unpack")
     check(stage.is_dir() and not dest.exists(), "SIGKILL leaves staging until a later run")
@@ -149,6 +176,8 @@ try:
     check(stage.is_dir() and f"left {stage} in place" in text and not removed(stage),
           "a surviving stopped extractor retains its inherited lock and staging")
     for kid in kids:
+        if not stop_confirmed(kid):
+            raise Unproven(f"extractor {kid} stop could not be confirmed before orphan SIGKILL")
         os.kill(kid, signal.SIGKILL)
     # Wait for the actual descriptor release, rather than assume kill did it.
     lock_files = list(stage.glob(".unpack-*.lock"))
@@ -227,6 +256,8 @@ try:
     check(not dead.exists(), "competing recovery runs remove abandoned staging")
     check({p.name: p.read_bytes() for p in dest.iterdir()} == {"one.txt": b"one\n", "two.txt": b"two\n"},
           "competing retries preserve the complete published extraction")
+except Unproven as e:
+    print("unproven\t" + str(e), flush=True)
 finally:
     for p in processes:
         try:
@@ -245,7 +276,7 @@ finally:
 PY
 code=$?
 while IFS=$'\t' read -r outcome message; do
-  case "$outcome" in ok) pass "$message" ;; FAIL) fail "$message" ;; esac
+  case "$outcome" in ok) pass "$message" ;; FAIL) fail "$message" ;; unproven) unproven "stopped-writer recovery" "$message" ;; esac
 done <"$W/assertions"
 if [ "$code" -ne 0 ]; then
   cat "$W/errors"

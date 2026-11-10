@@ -43,17 +43,18 @@ journal_file() {
 }
 
 # --- Build one fully-applied tree and snapshot its intact journal ----------
-D=$(workdir) || exit 1; D=$D/D
+W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
+D="$W/D"
 N=60
 make_tree "$D" "$N"
 BEFORE_SET=$(find "$D" -maxdepth 1 -type f -exec basename {} \; | sort)
 BEFORE_N=$(echo "$BEFORE_SET" | grep -c .)
 
 journal_wipe
-"$SWEEP" apply "$D" --yes >/dev/null 2>&1
+assert_exit 0 "truncation setup apply succeeds" -- "$SWEEP" apply "$D" --yes
 JF=$(journal_file)
 if [ -z "$JF" ] || [ ! -f "$JF" ]; then
-  unproven "journal truncation matrix" "no journal file found after apply. Cannot attack what was not written"
+  fail "no journal file found after successful apply"
   exit 0
 fi
 FULL_SIZE=$(stat -f%z "$JF" 2>/dev/null || stat -c%s "$JF")
@@ -75,14 +76,16 @@ for off in 0 1 4 8 50; do
   assert_intact "$D" "$BEFORE_N" "shallow cut at $off bytes preserves every file"
   # A shallow cut must be REFUSED outright: nonzero exit, and it must not
   # have silently "succeeded" its way into moving anything.
-  if [ "$code" = "0" ]; then
+  assert_eq 3 "$code" "shallow cut at $off bytes reports a damaged journal"
+  assert_no_panic "shallow cut at $off" "$out"
+  if [ "$code" != "3" ]; then
     SHALLOW_BAD=$((SHALLOW_BAD + 1))
     [ -z "$SHALLOW_FIRST" ] && SHALLOW_FIRST="offset=$off/$FULL_SIZE: exit 0 instead of a refusal. Output: $out"
   fi
 done
 
 if [ "$SHALLOW_BAD" -eq 0 ]; then
-  pass "journal truncated within its sealed base frame is refused outright (nonzero exit), never acted on"
+  pass "journal truncated within its sealed base frame is refused outright (exit 3), never acted on"
 else
   fail "journal truncated within its sealed base frame was NOT refused in $SHALLOW_BAD case(s). First: $SHALLOW_FIRST"
 fi
@@ -100,8 +103,9 @@ for pct in base 60 75 85 95 99; do
   # picked up as "the newest" by mistake.
   rm -rf "$D"; make_tree "$D" "$N"
   journal_wipe
-  "$SWEEP" apply "$D" --yes >/dev/null 2>&1
+  assert_exit 0 "truncation setup apply succeeds" -- "$SWEEP" apply "$D" --yes
   JF=$(journal_file)
+  [ -n "$JF" ] && [ -f "$JF" ] || { fail "no journal after deep-cut setup apply"; exit 0; }
   cp "$JF" "$BACKUP"
   full=$(stat -f%z "$BACKUP" 2>/dev/null || stat -c%s "$BACKUP")
   # `base` means "cut exactly at the end of the base frame": every progress

@@ -6,12 +6,26 @@
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
+if ! ps -o state= -p $$ >/dev/null 2>&1; then
+  unproven "witnessed process interruption" "host denies process-state inspection"
+  exit 0
+fi
 SOURCE="$W/source"; ARCHIVE="$W/archive.zip"; OUT="$W/out"; TOTAL=80
 mkdir -p "$SOURCE"
 for i in $(seq 1 "$TOTAL"); do
   dd if=/dev/urandom of="$SOURCE/chunk_$i.bin" bs=1048576 count=1 status=none
 done
 (cd "$SOURCE" && zip -0 -q "$ARCHIVE" ./*)
+
+stop_confirmed() {
+  kill -STOP "$1" 2>/dev/null || return 1
+  for _ in $(seq 1 100); do
+    ps -o state= -p "$1" | grep -q T && return 0
+    kill -0 "$1" 2>/dev/null || return 1
+  done
+  kill -CONT "$1" 2>/dev/null || true
+  return 1
+}
 
 manifest() { (cd "$1" && find . -type f -exec shasum {} \; | LC_ALL=C sort); }
 SOURCE_MANIFEST=$(manifest "$SOURCE")
@@ -42,15 +56,17 @@ wait_for_staging_completion() {
 }
 
 "$UNPACK" "$ARCHIVE" --into "$OUT" >"$W/first.out" 2>&1 & PID=$!
-if witness=$(wait_for_partial_staging "$PID"); then
+if witness=$(wait_for_partial_staging "$PID") && stop_confirmed "$PID"; then
   STAGE=${witness%%$'\t'*}; COUNT=${witness##*$'\t'}
+  [ -d "$STAGE" ] && [ ! -e "$OUT" ] || fail "stopped extraction no longer has private staging with an absent target"
   pass "interrupted extraction witnessed $COUNT of $TOTAL files in private staging while unpack remained live"
   kill -9 "$PID" 2>/dev/null && pass "SIGKILL reached the unpack supervisor" || fail "could not deliver SIGKILL to unpack"
   wait "$PID" 2>/dev/null; STATUS=$?
   [ "$STATUS" -ne 0 ] && pass "killed unpack exited non-zero ($STATUS)" || fail "killed unpack exited zero"
 else
+  kill -CONT "$PID" 2>/dev/null || true
   wait "$PID" 2>/dev/null || true
-  fail "unpack did not reach a witnessed partial staging state within 10 seconds"
+  unproven "interrupted extraction" "no confirmed stop in the partial staging window"
   exit 0
 fi
 

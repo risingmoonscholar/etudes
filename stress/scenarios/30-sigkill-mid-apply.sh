@@ -12,6 +12,12 @@
 # which is exact regardless of host speed, then delivering the signal
 # immediately. This is more reliable than a wall-clock sleep would be.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+if ! ps -o state= -p $$ >/dev/null 2>&1; then
+  unproven "stopped-process witness" "ps is unavailable in this sandbox"
+  exit 0
+fi
+W=$(workdir) || exit 1
+trap 'rm -rf "$W"' EXIT
 
 # One screenshot-shaped tree of N files, named so every filename is unique.
 make_tree() {
@@ -26,33 +32,44 @@ make_tree() {
 # process exits first, meaning the whole apply beat the target, too fast to
 # use for this trial). Echoes: "killed" or "finished-early".
 run_and_kill() {
-  local d="$1" target="$2"
-  "$SWEEP" apply "$d" --yes >/dev/null 2>&1 &
-  local pid=$!
-  local deadline=$((SECONDS + 10))
-  while true; do
-    local moved
+  local d="$1" target="$2" sig="KILL"
+  # Reset SIGINT before exec: asynchronous bash jobs otherwise inherit it ignored.
+  python3 - "$SWEEP" "$d" <<'PY_EXEC' >"$(dirname "$d")/apply.out" 2>&1 &
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execv(sys.argv[1], [sys.argv[1], 'apply', sys.argv[2], '--yes'])
+PY_EXEC
+  local pid=$! moved state
+  local deadline=$((SECONDS + 30))
+  while kill -0 "$pid" 2>/dev/null; do
     moved=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "$moved" -ge "$target" ] && break
-    if ! kill -0 "$pid" 2>/dev/null; then
-      echo "finished-early"
-      return
+    if [ "$moved" -ge "$target" ]; then
+      if stop_confirmed "$pid"; then
+        moved=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
+        local remaining; remaining=$(find "$d" -maxdepth 1 -type f | wc -l | tr -d ' ')
+        if [ "$moved" -ge "$target" ] && [ "$remaining" -gt 0 ]; then
+          # State is frozen and a strict subset has moved before injection.
+          kill -"$sig" "$pid" 2>/dev/null || { kill -CONT "$pid"; wait "$pid"; echo missed-window; return; }
+          [ "$sig" = KILL ] || kill -CONT "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null
+          echo killed
+          return
+        fi
+      fi
+      kill -CONT "$pid" 2>/dev/null || true
     fi
+    state=$(ps -o state= -p "$pid" 2>/dev/null)
+    [[ "$state" != *Z* ]] || break
     if [ "$SECONDS" -ge "$deadline" ]; then
       kill -TERM "$pid" 2>/dev/null || true
+      kill -CONT "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null
-      echo "timed-out"
+      echo timed-out
       return
     fi
-    sleep 0.001
   done
-  if ! kill -9 "$pid" 2>/dev/null; then
-    wait "$pid" 2>/dev/null
-    echo "missed-window"
-    return
-  fi
   wait "$pid" 2>/dev/null
-  echo "killed"
+  echo finished-early
 }
 
 # Keep the evidence from a failing trial, because this failure destroys its
@@ -136,7 +153,7 @@ keep_evidence() {
   find "$d" -type f -exec ls -ld {} \; > "$dest/tree.txt" 2>/dev/null
 
   # What undo actually said, verbatim, alongside the journal it said it about.
-  cp "/tmp/sigkill_trial_undo_out.$$" "$dest/undo-output.txt" 2>/dev/null
+  cp "${d%/D}/undo.out" "$dest/undo-output.txt" 2>/dev/null
 
   {
     echo "scenario: $SCENARIO"
@@ -156,8 +173,9 @@ keep_evidence() {
 # SET. Returns 0 if every property held, 1 and prints why otherwise.
 trial() {
   local target="$1" n="$2"
-  local d; d=$(workdir) || exit 1; d=$d/D
+  local d; d=$(mktemp -d "$W/trial-XXXXXX") || exit 1; d=$d/D
   make_tree "$d" "$n"
+  snapshot_tree "$d" "${d%/D}/before.json"
   local before_set; before_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
   local before_n; before_n=$(echo "$before_set" | grep -c .)
 
@@ -175,7 +193,7 @@ trial() {
     killed|finished-early|missed-window|timed-out) ;;
     *)
       echo "FAIL target=$target the kill step produced no outcome (got [$outcome]). run_and_kill died, so this trial never applied anything and proves nothing"
-      rm -f "/tmp/sigkill_trial_undo_out.$$"
+      rm -f "${d%/D}/undo.out"
       rm -rf "$(dirname "$d")"
       return 1
       ;;
@@ -203,13 +221,15 @@ trial() {
     [ -n "$newest" ] && cp "$newest" "$pre_undo/" 2>/dev/null
   fi
 
-  "$SWEEP" undo >/tmp/sigkill_trial_undo_out.$$ 2>&1
+  "$SWEEP" undo >"${d%/D}/undo.out" 2>&1
+  local undo_status=$?
+  snapshot_tree "$d" "${d%/D}/after.json"
   local after_set; after_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
   local after_n; after_n=$(find "$d" -type f | wc -l | tr -d ' ')
 
-  if [ "$after_set" != "$before_set" ] || [ "$after_n" != "$before_n" ]; then
+  if ! cmp -s "${d%/D}/before.json" "${d%/D}/after.json" || [ "$undo_status" -ne 0 ] || [ "$after_set" != "$before_set" ] || [ "$after_n" != "$before_n" ]; then
     echo "FAIL target=$target outcome=$outcome$pre_undo_note"
-    echo "  baseline count=$before_n, post-undo total count=$after_n"
+    echo "  undo exit=$undo_status (wanted 0); baseline count=$before_n, post-undo total count=$after_n"
     local dupes; dupes=$(comm -12 <(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort) <(find "$d" -mindepth 2 -type f -exec basename {} \; | sort))
     if [ -n "$dupes" ]; then
       echo "  duplicated (same file present at BOTH origin and its sorted destination, forever, because sweep undo left it there):"
@@ -221,13 +241,13 @@ trial() {
       echo "$missing" | sed 's/^/    /'
     fi
     echo "  sweep undo said:"
-    sed 's/^/    /' "/tmp/sigkill_trial_undo_out.$$"
+    sed 's/^/    /' "${d%/D}/undo.out"
     keep_evidence "$d" "$target" "$pre_undo"
-    rm -f "/tmp/sigkill_trial_undo_out.$$"
+    rm -f "${d%/D}/undo.out"
     rm -rf "$(dirname "$d")" "$pre_undo"
     return 1
   fi
-  rm -f "/tmp/sigkill_trial_undo_out.$$"
+  rm -f "${d%/D}/undo.out"
   rm -rf "$(dirname "$d")" "$pre_undo"
   # A positive token, not silence, and it carries the outcome: a run that
   # never managed to kill anything proves nothing about crash safety, and

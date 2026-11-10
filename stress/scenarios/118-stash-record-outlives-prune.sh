@@ -43,7 +43,7 @@ touch -t "$OLD" "$ETUDE_STATE_DIR/$stash_record" "$ETUDE_STATE_DIR/$sweep_record
 assert_eq 1 "$?" "a sweep scan of an empty folder runs (nothing to organise) with both records past 30 days"
 if [ -f "$ETUDE_STATE_DIR/$stash_record" ] && [ -f "$ETUDE_STATE_DIR/$sweep_record" ]; then pass "a scan drops no record"; else fail "a scan, which holds no key, deleted a record"; fi
 # With no key supplied, a scan must not reach for the keychain at all.
-if keychain_fence_works; then
+if sandbox-exec -p "$KEYCHAIN_FENCE" /usr/bin/true >/dev/null 2>&1; then
   keychain_fenced "$SWEEP" "$W/scan" --json >"$W/fenced.json" 2>"$W/fenced.err"
   assert_eq 1 "$?" "a scan with no key supplied runs inside the keychain fence"
   if python3 -c 'import json,sys; c=[x["category"] for x in json.load(open(sys.argv[1]))["observations"]["categories"]]; sys.exit("key_material" in c)' "$W/fenced.json" && [ -f "$ETUDE_STATE_DIR/$sweep_record" ]; then pass "a scan with an old record reads no key and keeps the record"; else fail "a keyless scan read key material or dropped a record: $(cat "$W/fenced.err")"; fi

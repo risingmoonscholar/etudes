@@ -166,6 +166,8 @@ assert_exit 0 "cross-device copy: undo succeeds, proving the mtime fingerprint s
 RESTORED=0
 for n in 1 2 3; do
   [ -f "$INNER/IMG_104$n.jpg" ] && RESTORED=$((RESTORED + 1))
+  assert_eq "photo $n" "$(cat "$INNER/IMG_104$n.jpg" 2>/dev/null)" "undo restores original bytes for image $n"
+  assert_eq "$MTIME_BEFORE" "$(stat -f %m "$INNER/IMG_104$n.jpg" 2>/dev/null)" "undo restores original mtime for image $n"
 done
 assert_eq 3 "$RESTORED" "cross-device copy: undo restored every file to the exFAT volume"
 

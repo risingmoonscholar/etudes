@@ -59,10 +59,24 @@ assert_eq 12 "$SCANNED" "plan scanned exactly the 12 files created (none silentl
 BEFORE_LIST="$W/before_names.txt"
 find "$D" -maxdepth 1 -type f -print0 | xargs -0 -n1 basename -- > "$BEFORE_LIST" 2>/dev/null
 
+snapshot_tree "$D" "$W/original.json"
 APPLY_OUT=$("$SWEEP" apply "$D" --yes 2>&1)
 APPLY_EC=$?
 assert_eq 0 "$APPLY_EC" "apply succeeds over the pathological-name tree"
 
+assert_eq 0 "$(nul_count "$D")" "every pathological file left its origin"
+python3 - "$W/original.json" "$W/expected-applied.json" <<'PY_EXPECTED'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+for item in manifest['entries']:
+    if item['path'] != '.': item['path'] = 'Documents/' + item['path']
+manifest['entries'].append({'path': 'Documents', 'kind': 'directory', 'mode': 0o755})
+manifest['entries'].sort(key=lambda item: item['path'].encode('utf-8', 'surrogateescape'))
+json.dump(manifest, open(sys.argv[2], 'w'), ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+with open(sys.argv[2], 'a') as out: out.write('\n')
+PY_EXPECTED
+snapshot_tree "$D" "$W/applied.json"
+assert_snapshot_eq "$W/expected-applied.json" "$W/applied.json" "every unusual name and its bytes reached Documents exactly"
 AFTER_LIST="$W/after_names.txt"
 find "$D" -type f -print0 | xargs -0 -n1 basename -- > "$AFTER_LIST" 2>/dev/null
 
@@ -110,3 +124,6 @@ else
 fi
 
 assert_intact "$D" "$BEFORE" "the shared integrity helper counts newline-containing names exactly"
+
+snapshot_tree "$D" "$W/restored.json"
+assert_snapshot_eq "$W/original.json" "$W/restored.json" "undo restores exact names, paths and bytes"

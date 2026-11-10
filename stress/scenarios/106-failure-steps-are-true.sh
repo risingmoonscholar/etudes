@@ -241,7 +241,8 @@ if [ -f "$LOCKED/sweep-a.journal" ]; then
   has "forget says the journals stayed" "$OUT" "Journals were not removed"
   hasnt "forget does not report removing none" "$OUT" "Removed 0"
 else
-  unproven "forget on an unreadable folder" "startup repaired the state folder's mode and removed the journal"
+  assert_eq 0 "$CODE" "forget succeeds after repairing the state folder mode"
+  has "forget reports the removed journal" "$OUT" "Removed 1 journal from $LOCKED."
 fi
 
 # --- one bad key, one answer ---------------------------------------------

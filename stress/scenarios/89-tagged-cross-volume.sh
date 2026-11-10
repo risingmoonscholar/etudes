@@ -60,7 +60,7 @@ grep -q '1 Finder-tagged item left in place: moving to another volume would drop
 [ ! -f "$INNER/note_d.txt" ] && [ -n "$(find "$OUTER" -mindepth 2 -maxdepth 2 -name note_d.txt -not -path "$INNER/*" | head -1)" ] \
   && pass "an untagged file on the other volume still crossed" \
   || fail "the untagged file on the other volume did not cross"
-"$SWEEP" undo "$OUTER" >/dev/null 2>&1 || true
+assert_exit 0 "cross-volume undo succeeds" -- "$SWEEP" undo "$OUTER"
 [ -f "$INNER/note_d.txt" ] && [ -f "$INNER/note_tagged.txt" ] && [ -f "$OUTER/note_a.txt" ] \
   && pass "undo put every file back" || fail "undo left files behind"
 
@@ -80,4 +80,18 @@ grep -q 'Not every selected item was stashed' <<<"$OUT" \
   && pass "and said so instead of calling the selection done" || fail "stash select did not say a selected object was left: $OUT"
 [ -f "$S2" ] && [ "$(xattr -p "$TAGATTR" "$S2" 2>/dev/null)" = opaque-second ] \
   && pass "the tagged object is still in place with its tag" || fail "the tagged object moved or lost its tag"
+HELD_FIRST=$(find "$INNER" -type f -path '*/.stash-*/*' -name first.txt -print -quit)
+HELD_THIRD=$(find "$INNER" -type f -path '*/.stash-*/*' -name third_plain.txt -print -quit)
+[ "$(cat "$HELD_FIRST" 2>/dev/null)" = first ] && [ "$(cat "$HELD_THIRD" 2>/dev/null)" = third ] \
+  && pass "both stashed objects survive in holding with their bytes" || fail "a stashed object is missing or changed"
 [ ! -e "$S3" ] && pass "the untagged object on the same volume was stashed" || fail "the untagged object was not stashed"
+
+# Also witness a completed cross-volume selection; incomplete and complete
+# selections must both retain every item they say they held.
+printf 'control inner' > "$INNER/control-inner.txt"
+printf 'control outer' > "$OUTER/control-outer.txt"
+assert_exit 0 "untagged cross-volume selection completes" -- "$STASH" select "$INNER/control-inner.txt" "$OUTER/control-outer.txt"
+for pair in 'control-inner.txt:control inner' 'control-outer.txt:control outer'; do
+  HELD=$(find "$INNER" -type f -path '*/.stash-*/*' -name "${pair%%:*}" -print -quit)
+  assert_eq "${pair#*:}" "$(cat "$HELD" 2>/dev/null)" "completed selection retains ${pair%%:*} with its bytes"
+done
