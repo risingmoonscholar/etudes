@@ -1,0 +1,82 @@
+{
+  "tool": "unpack",
+  "version": "0.5.3",
+  "fixture": "unpack-0.5.3.fixture",
+  "runs_sha256": "afeb51580759af7053ea7bbd9b8e83e33bb510035a13d8535bfdca742593e878",
+  "env": [
+    "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+    "HOME=<scratch>/home",
+    "ETUDE_STATE_DIR=<scratch>/state",
+    "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
+    "TMPDIR=<scratch>/tmp/",
+    "LANG=en_US.UTF-8",
+    "stdin closed"
+  ],
+  "builds": {
+    "before": {
+      "ref": "v0.5.1",
+      "rev": "63ffb74d097a31925e7c5bdaa85f7fe57ee3b3db",
+      "commit": "63ffb74",
+      "tag": "v0.5.1",
+      "build": "cargo build --release --locked -p unpack-cli",
+      "version_output": "unpack 0.5.1",
+      "sha256": "add26308f7b3945c074f70936f5df50e6d1918b146d0040d9b138376346724cb"
+    },
+    "after": {
+      "ref": "unpack-v0.5.3",
+      "rev": "427582b850f7f4b461cc5eb1c4b27dbabdc9a14e",
+      "commit": "427582b",
+      "tag": "unpack-v0.5.3",
+      "build": "cargo build --release --locked -p unpack-cli",
+      "version_output": "unpack 0.5.3",
+      "sha256": "6367587ae9dab3683bf046d751b34d122f1ae088f7c115bf3c391c70b8dbc8c9"
+    }
+  },
+  "sides": {
+    "before": {
+      "listing_before": [
+        "lone.zip"
+      ],
+      "runs": [
+        {
+          "command": "unpack lone.zip",
+          "exit": 0,
+          "log": "before-1.txt",
+          "sha256": "c3838ea058beecb6c16b6f59600233c3112c1503ca2246949053bd2a78acda66"
+        }
+      ],
+      "result_files": [
+        "shortcut -> /etc/passwd"
+      ],
+      "listing_after": [
+        "lone/",
+        "lone.zip",
+        "lone/notes.txt",
+        "lone/shortcut -> /etc/passwd"
+      ]
+    },
+    "after": {
+      "listing_before": [
+        "lone.zip"
+      ],
+      "runs": [
+        {
+          "command": "unpack lone.zip",
+          "exit": 2,
+          "log": "after-1.txt",
+          "sha256": "6bbc695d0ba6f6a437c01cf8bf7af77982f4479a5e7fb979d51609e822c7fc54"
+        }
+      ],
+      "result_files": [],
+      "listing_after": [
+        "lone.zip"
+      ]
+    }
+  },
+  "next": {
+    "command": "unpack lone.zip --list",
+    "exit": 0,
+    "log": "next.txt",
+    "sha256": "810a595c0d90066eb02e51e5e0f5f2a63f1ce4dc2260f16e93d8841ea58f2a80"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "_about": "The test folder and commands for the stash 0.5.4 entry. scripts/release-runs.py runs setup with /bin/sh -eu inside an empty scratch folder, once per build, then each command in that folder in order. show lists, per build, the whole lines of the output the page shows: each regular expression picks the next line it matches. result names the files listed under each side after its commands; new means only files that were not there before the commands ran. next runs on the after build only, after its commands.",
+  "folder": "notes",
+  "describe": "4 small text files, 2 of them carrying the Finder tag Keep",
+  "setup": [
+    "# From the stash 0.5.4 gate 1 runs (real-runs.txt): doc1.txt to doc4.txt, dated",
+    "# 2024-01-01, with the Finder tag Keep on doc2 and doc4 written as the binary",
+    "# plist [\"Keep\"]. The file contents were not recorded; each holds one short line.",
+    "mkdir notes",
+    "for n in 1 2 3 4; do printf 'doc %s\\n' \"$n\" > \"notes/doc$n.txt\"; done",
+    "for n in 2 4; do",
+    "  xattr -wx com.apple.metadata:_kMDItemUserTags 62706c6973743030a101544b656570080a000000000000010100000000000000020000000000000000000000000000000f \"notes/doc$n.txt\"",
+    "done",
+    "touch -t 202401010000 notes/*.txt"
+  ],
+  "runs": [
+    {
+      "command": "stash notes",
+      "show": {
+        "before": [
+          "^Stashed ",
+          "is clear\\.$",
+          "^  No deadline"
+        ],
+        "after": [
+          "^Stashed ",
+          "is clear\\.$",
+          "^  No deadline"
+        ]
+      }
+    }
+  ],
+  "result": {
+    "before": {
+      "label": "In the holding folder",
+      "glob": "notes/.stash-*/*"
+    },
+    "after": {
+      "label": "In the holding folder",
+      "glob": "notes/.stash-*/*"
+    }
+  },
+  "next": {
+    "command": "stash pop notes",
+    "show": [
+      "^Restored "
+    ]
+  }
+}

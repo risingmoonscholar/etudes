@@ -1,0 +1,9 @@
+
+unpack: REFUSED. This archive contains members this tool will not
+create.
+
+  symlink: shortcut
+       a dispatched extractor cannot be stopped from writing through a link, and the link itself points wherever the archive says. This build unpacks regular files and directories.
+       `unpack ARCHIVE --list` shows every member without writing
+
+Nothing was extracted. Inspect it with: unpack lone.zip --list

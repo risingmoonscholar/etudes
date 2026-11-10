@@ -1,0 +1,108 @@
+{
+  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files, builds and footer come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only date, label, headline, lead, next.note and film are written by hand.",
+  "tool": "stash",
+  "version": "0.5.4",
+  "date": "2026-11-04",
+  "label": "Report change",
+  "headline": "stash now says whether the folder is clear",
+  "lead": [
+    {
+      "text": "stash 0.5.4 reports a folder as clear only when nothing was left behind, and "
+    },
+    {
+      "code": "stash --json"
+    },
+    {
+      "text": " now carries a "
+    },
+    {
+      "code": "clear"
+    },
+    {
+      "text": " key. The move is unchanged: version 0.5.3 stashed the same 4 files, tagged ones included, and also exited with code 0."
+    }
+  ],
+  "folder": "notes",
+  "before": {
+    "build": "stash 0.5.3",
+    "runs": [
+      {
+        "command": "stash notes",
+        "output": [
+          "Stashed 4 items.",
+          "notes is clear.",
+          "  No deadline. Restore with: stash pop"
+        ],
+        "exit": 0
+      }
+    ],
+    "result": {
+      "label": "In the holding folder",
+      "files": [
+        "doc1.txt",
+        "doc2.txt",
+        "doc3.txt",
+        "doc4.txt"
+      ]
+    },
+    "exit": 0
+  },
+  "after": {
+    "build": "stash 0.5.4",
+    "runs": [
+      {
+        "command": "stash notes",
+        "output": [
+          "Stashed 4 items.",
+          "The selected folder is clear.",
+          "  No deadline."
+        ],
+        "exit": 0
+      }
+    ],
+    "result": {
+      "label": "In the holding folder",
+      "files": [
+        "doc1.txt",
+        "doc2.txt",
+        "doc3.txt",
+        "doc4.txt"
+      ]
+    },
+    "exit": 0
+  },
+  "next": {
+    "note": [
+      {
+        "text": "No override flag. To put the 4 files back, run "
+      },
+      {
+        "code": "stash pop notes"
+      },
+      {
+        "text": "."
+      }
+    ],
+    "command": "stash pop notes",
+    "output": [
+      "Restored 4 items."
+    ],
+    "exit": 0
+  },
+  "builds": {
+    "before": {
+      "name": "tag stash-v0.5.3",
+      "commit": "427582b",
+      "rev": "427582b850f7f4b461cc5eb1c4b27dbabdc9a14e",
+      "sha256": "1effefac0d5f8aff16c2b13af3d05ce7819dc190ec13e166f5803ef51acd2a48"
+    },
+    "after": {
+      "name": "tag stash-v0.5.4",
+      "commit": "de8f307",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "sha256": "38e32e44de969c3f12428923268452c46f067a950d31fdaa0194fe6716c7ff2b",
+      "tagged": true
+    }
+  },
+  "footer": "Both outputs come from real runs of two builds: tag stash-v0.5.3 (commit 427582b) and tag stash-v0.5.4 (commit de8f307). Each ran the same commands on a fresh copy of one synthetic folder, notes: 4 small text files, 2 of them carrying the Finder tag Keep. Output is shortened to fit by cutting whole lines. Nothing outside the scratch folder was touched."
+}

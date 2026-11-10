@@ -1,0 +1,6 @@
+
+Stashed 4 items.
+The selected folder is clear.
+
+  Operation id: 1794282852513042000-75244-0-4031db9fee83f363. Restore with: stash pop --id 1794282852513042000-75244-0-4031db9fee83f363
+  No deadline.

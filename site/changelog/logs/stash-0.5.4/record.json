@@ -1,0 +1,104 @@
+{
+  "tool": "stash",
+  "version": "0.5.4",
+  "fixture": "stash-0.5.4.fixture",
+  "runs_sha256": "886a68461b6826ff3b83f9f90c3d39092dfe21eb63140ec4831315059ff57038",
+  "env": [
+    "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+    "HOME=<scratch>/home",
+    "ETUDE_STATE_DIR=<scratch>/state",
+    "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
+    "TMPDIR=<scratch>/tmp/",
+    "LANG=en_US.UTF-8",
+    "stdin closed"
+  ],
+  "builds": {
+    "before": {
+      "ref": "stash-v0.5.3",
+      "rev": "427582b850f7f4b461cc5eb1c4b27dbabdc9a14e",
+      "commit": "427582b",
+      "tag": "stash-v0.5.3",
+      "build": "cargo build --release --locked -p stash-cli",
+      "version_output": "stash 0.5.3",
+      "sha256": "1effefac0d5f8aff16c2b13af3d05ce7819dc190ec13e166f5803ef51acd2a48"
+    },
+    "after": {
+      "ref": "stash-v0.5.4",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "commit": "de8f307",
+      "tag": "stash-v0.5.4",
+      "build": "cargo build --release --locked -p stash-cli",
+      "version_output": "stash 0.5.4",
+      "sha256": "38e32e44de969c3f12428923268452c46f067a950d31fdaa0194fe6716c7ff2b"
+    }
+  },
+  "sides": {
+    "before": {
+      "listing_before": [
+        "notes/",
+        "notes/doc1.txt",
+        "notes/doc2.txt",
+        "notes/doc3.txt",
+        "notes/doc4.txt"
+      ],
+      "runs": [
+        {
+          "command": "stash notes",
+          "exit": 0,
+          "log": "before-1.txt",
+          "sha256": "ca11f3e7156541ff3d628f558ef61b27c9e3d4d8d1bb5957628564c88a10185c"
+        }
+      ],
+      "result_files": [
+        "doc1.txt",
+        "doc2.txt",
+        "doc3.txt",
+        "doc4.txt"
+      ],
+      "listing_after": [
+        "notes/",
+        "notes/.stash-0/",
+        "notes/.stash-0/doc1.txt",
+        "notes/.stash-0/doc2.txt",
+        "notes/.stash-0/doc3.txt",
+        "notes/.stash-0/doc4.txt"
+      ]
+    },
+    "after": {
+      "listing_before": [
+        "notes/",
+        "notes/doc1.txt",
+        "notes/doc2.txt",
+        "notes/doc3.txt",
+        "notes/doc4.txt"
+      ],
+      "runs": [
+        {
+          "command": "stash notes",
+          "exit": 0,
+          "log": "after-1.txt",
+          "sha256": "67598f35eadaa06087fb83cd600ebb7a1c38266a01624c584d9a84e132941e8f"
+        }
+      ],
+      "result_files": [
+        "doc1.txt",
+        "doc2.txt",
+        "doc3.txt",
+        "doc4.txt"
+      ],
+      "listing_after": [
+        "notes/",
+        "notes/doc1.txt",
+        "notes/doc2.txt",
+        "notes/doc3.txt",
+        "notes/doc4.txt"
+      ]
+    }
+  },
+  "next": {
+    "command": "stash pop notes",
+    "exit": 0,
+    "log": "next.txt",
+    "sha256": "5fd5028ac9e9f831405539c4d4e1aa6b3e00f0d2576c431f48f5ac7bb2333332"
+  }
+}
