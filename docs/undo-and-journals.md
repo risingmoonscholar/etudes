@@ -67,8 +67,10 @@ back stays where it is and says the place is taken. A folder the newer apply may
 still need is kept; run the older step again later to remove it.
 
 Each apply is undone separately. One `sweep undo FOLDER` reverses one apply of
-that folder: the one it reaches first, newest first, that still has something
-to undo. After an undo, sweep looks at what the next `sweep undo FOLDER` will
+that folder: of the applies that still have something to undo, the one whose
+undo record was written last. Every undo writes its record again, so after an
+undo that stops part way, by folder or by `--id`, `sweep undo FOLDER` goes back
+to that same apply. After an undo, sweep looks at what the next `sweep undo FOLDER` will
 reach, and says so after the "Restored" line:
 
 ```console
@@ -82,15 +84,17 @@ Another apply of this folder can still be undone. To undo it, run: sweep undo '/
   folder, and gives the same step.
 - When the next one's record is missing more than one entry, it says that the
   step refuses it and moves nothing.
-- When this undo could not put every file back, the folder step comes back to
+- When this undo could not put every file back, the folder step goes back to
   this apply. Another apply of the folder is then named only by its own step,
   `sweep undo --id ID`, to undo it before this one is finished.
-- When an undo record does not open with the current key, sweep cannot tell
-  whether another apply of the folder remains, and says so. If the next
+- When an undo record does not open, sweep cannot tell whether another apply
+  of the folder remains, and says so. A record does not open when it was
+  written with another key, or when it was damaged or changed. If the next
   `sweep undo FOLDER` would stop at that record, the line says it stops there
-  and moves nothing, and gives the `sweep undo --id ID` step of the newest
-  apply of the folder that opens. `sweep status FOLDER` also stops at such a
-  record. Bring back the key that wrote it, or undo by id.
+  and moves nothing, and names another apply of the folder that does open by
+  its `sweep undo --id ID` step, with what that step does. `sweep status
+  FOLDER` also stops at such a record. Bring back the key that wrote it, or
+  undo by id.
 
 `sweep undo` with no folder says the same about the folder it undid. When an
 undo restored every file and says nothing about another apply, no apply of that

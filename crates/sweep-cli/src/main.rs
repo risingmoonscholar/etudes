@@ -4506,9 +4506,10 @@ fn next_kind(j: &etude_core::Journal) -> NextKind {
     }
 }
 
-/// The words for the next record. `which` names it among several ("next" or
-/// "newest"), `when` is added to the step for a record undone out of order.
-fn next_words(kind: NextKind, n: usize, which: &str, when: &str, step: &str) -> String {
+/// The words for one record the printed step reaches. `one` names it among
+/// several ("the next one", or "one of them" when the step is by id), and
+/// `when` is added to the step for a record undone out of order.
+fn next_words(kind: NextKind, n: usize, one: &str, when: &str, step: &str) -> String {
     let head = if n == 1 {
         match kind {
             NextKind::Moves => "Another apply of this folder can still be undone.".to_owned(),
@@ -4518,20 +4519,25 @@ fn next_words(kind: NextKind, n: usize, which: &str, when: &str, step: &str) -> 
             NextKind::Refused => "Another apply of this folder has files left to put back, but its undo record is missing more than one entry.".to_owned(),
         }
     } else {
+        let mut first = one.chars();
+        let one_upper = first
+            .next()
+            .map(|c| c.to_uppercase().collect::<String>() + first.as_str())
+            .unwrap_or_default();
         let next = match kind {
             NextKind::Moves => String::new(),
             NextKind::EmptyFolder => {
-                format!(" The {which} one only left an empty folder that undo removes.")
+                format!(" {one_upper} only left an empty folder that undo removes.")
             }
             NextKind::Refused => {
-                format!(" The undo record of the {which} one is missing more than one entry.")
+                format!(" The undo record of {one} is missing more than one entry.")
             }
         };
         format!("{n} more applies of this folder have something left to undo.{next}")
     };
     let tail = match kind {
         NextKind::Moves if n == 1 => format!("To undo it{when}, run: {step}"),
-        NextKind::Moves => format!("To undo the {which} one{when}, run: {step}"),
+        NextKind::Moves => format!("To undo {one}{when}, run: {step}"),
         NextKind::EmptyFolder => format!("To remove that folder{when}, run: {step}"),
         NextKind::Refused => format!(
             "{step} refuses it and moves nothing. It names the folders that hold those files."
@@ -4572,8 +4578,8 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
             };
         }
     };
-    // Every record once: which other applies of this folder have work, newest
-    // first, and how many records do not open.
+    // Every record once: which other applies of this folder have work, in the
+    // order their records were last written, and how many records do not open.
     let mut others = Vec::new();
     let mut not_opened = 0;
     for candidate in candidates {
@@ -4610,16 +4616,22 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
             };
         }
         Err(_) => {
-            // The next folder undo stops at a record it cannot open.
+            // The next folder undo stops at a record it cannot open. An apply
+            // of this folder that does open is reachable only by its id.
             lines.push(format!(
-                "{}, so sweep cannot tell whether another apply of this folder remains. If you run {folder_step} again, it stops at {} and moves nothing.",
+                "{}, so sweep cannot tell whether {} of this folder {}. If you run {folder_step}, it stops at {} and moves nothing.",
                 not_opened_words(not_opened.max(1)),
+                if n == 0 { "another apply" } else { "more applies" },
+                if n == 0 { "remains" } else { "remain" },
                 if not_opened > 1 { "one of them" } else { "that record" },
             ));
-            if let Some(next) = others.first() {
-                lines.push(format!(
-                    "To undo the newest apply of this folder that opens, run: {}",
-                    undo_id_step(&next.id)
+            if let Some(other) = others.first() {
+                lines.push(next_words(
+                    next_kind(other),
+                    n,
+                    "one of them",
+                    "",
+                    &undo_id_step(&other.id),
                 ));
             }
             return AfterUndo {
@@ -4635,7 +4647,7 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
                 lines.push(next_words(
                     next_kind(other),
                     n,
-                    "newest",
+                    "one of them",
                     " before this one is finished",
                     &undo_id_step(&other.id),
                 ));
@@ -4645,7 +4657,7 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
             lines.push(next_words(
                 next_kind(&next),
                 n.max(1),
-                "next",
+                "the next one",
                 "",
                 &folder_step,
             ));
@@ -5826,23 +5838,23 @@ mod tests {
         let step = undo_step(root);
         assert_eq!(step, "sweep undo '/no/such/it'\\''s here'");
         assert_eq!(
-            next_words(NextKind::Moves, 1, "next", "", &step),
+            next_words(NextKind::Moves, 1, "the next one", "", &step),
             format!("Another apply of this folder can still be undone. To undo it, run: {step}")
         );
         assert_eq!(
-            next_words(NextKind::Moves, 2, "next", "", &step),
+            next_words(NextKind::Moves, 2, "the next one", "", &step),
             format!(
                 "2 more applies of this folder have something left to undo. To undo the next one, run: {step}"
             )
         );
         assert_eq!(
-            next_words(NextKind::EmptyFolder, 1, "next", "", &step),
+            next_words(NextKind::EmptyFolder, 1, "the next one", "", &step),
             format!(
                 "Another apply of this folder left an empty folder that undo removes. To remove that folder, run: {step}"
             )
         );
         assert_eq!(
-            next_words(NextKind::Refused, 1, "next", "", &step),
+            next_words(NextKind::Refused, 1, "the next one", "", &step),
             format!(
                 "Another apply of this folder has files left to put back, but its undo record is missing more than one entry. {step} refuses it and moves nothing. It names the folders that hold those files."
             )
@@ -5852,12 +5864,24 @@ mod tests {
             next_words(
                 NextKind::Moves,
                 1,
-                "newest",
+                "one of them",
                 " before this one is finished",
                 &by_id
             ),
             format!(
                 "Another apply of this folder can still be undone. To undo it before this one is finished, run: {by_id}"
+            )
+        );
+        assert_eq!(
+            next_words(NextKind::EmptyFolder, 2, "one of them", "", &by_id),
+            format!(
+                "2 more applies of this folder have something left to undo. One of them only left an empty folder that undo removes. To remove that folder, run: {by_id}"
+            )
+        );
+        assert_eq!(
+            next_words(NextKind::Refused, 2, "the next one", "", &step),
+            format!(
+                "2 more applies of this folder have something left to undo. The undo record of the next one is missing more than one entry. {step} refuses it and moves nothing. It names the folders that hold those files."
             )
         );
         assert_eq!(not_opened_words(1), "1 undo record could not be opened");

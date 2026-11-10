@@ -37,7 +37,8 @@ impl Case {
         Case {
             state: temp(&format!("{tag}-state")),
             home: temp(&format!("{tag}-home")),
-            root: temp(&format!("{tag}-root")),
+            // A space and a single quote, so every folder step is quoted.
+            root: temp(&format!("{tag}-root it's")),
         }
     }
 
@@ -57,6 +58,12 @@ impl Case {
 
     fn root(&self) -> &str {
         self.root.0.to_str().unwrap()
+    }
+
+    /// The folder step as sweep prints it: the path in single quotes, with
+    /// each single quote written as '\''.
+    fn folder_step(&self) -> String {
+        format!("sweep undo '{}'", self.root().replace('\'', "'\\''"))
     }
 
     /// Write three old files of one kind, so a plain apply groups them.
@@ -115,15 +122,19 @@ impl Case {
         )
     }
 
-    /// Run a printed `sweep undo ...` step. Text is stdout then stderr.
+    /// Run a printed `sweep ...` step through /bin/sh exactly as printed, so
+    /// its quoting is read the way a shell reads it. Text is stdout then stderr.
     fn step(&self, step: &str) -> (Option<i32>, String) {
-        let rest = step.strip_prefix("sweep ").unwrap();
-        let mut args: Vec<String> = Vec::new();
-        for word in rest.split(' ').filter(|w| !w.is_empty()) {
-            args.push(word.trim_matches('\'').to_owned());
-        }
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.run(&refs);
+        let bin = Path::new(env!("CARGO_BIN_EXE_sweep")).parent().unwrap();
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(step)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("ETUDE_STATE_DIR", &self.state.0)
+            .env("ETUDE_JOURNAL_KEY", KEY)
+            .env("HOME", &self.home.0)
+            .output()
+            .unwrap();
         (
             out.status.code(),
             format!(
@@ -228,10 +239,7 @@ fn two_applies_of_one_folder_say_the_second_remains() {
     let restored = out.find("Restored 3 files.").expect(&out);
     let line = out.find(ONE).unwrap_or_else(|| panic!("{out}"));
     assert!(line > restored, "the line follows the count: {out}");
-    assert!(
-        out.contains(&format!("sweep undo '{}'", case.root())),
-        "{out}"
-    );
+    assert!(out.contains(&case.folder_step()), "{out}");
     assert_eq!(before_second, tree(&case.root.0));
 
     let (code, out) = case.undo(false);
@@ -286,10 +294,7 @@ fn undo_with_no_folder_says_what_remains_for_the_folder_it_undid() {
     let (code, out) = case.undo_newest();
     assert_eq!(code, Some(0), "{out}");
     assert!(out.contains(ONE), "{out}");
-    assert!(
-        out.contains(&format!("sweep undo '{}'", case.root())),
-        "{out}"
-    );
+    assert!(out.contains(&case.folder_step()), "{out}");
     let (code, out) = case.undo_newest();
     assert_eq!(code, Some(0), "{out}");
     assert!(!out.contains("can still be undone"), "{out}");
@@ -353,8 +358,8 @@ fn an_unreadable_record_makes_the_count_unknown_and_says_what_undo_does_next() {
     let (code, out) = case.undo(false);
     assert_eq!(code, Some(0), "{out}");
     let line = format!(
-        "1 undo record could not be opened, so sweep cannot tell whether another apply of this folder remains. If you run sweep undo '{}' again, it stops at that record and moves nothing.",
-        case.root()
+        "1 undo record could not be opened, so sweep cannot tell whether another apply of this folder remains. If you run {}, it stops at that record and moves nothing.",
+        case.folder_step()
     );
     assert!(out.contains(&line), "{out}");
     assert!(!out.contains(ONE), "{out}");
@@ -364,7 +369,7 @@ fn an_unreadable_record_makes_the_count_unknown_and_says_what_undo_does_next() {
     );
     assert_eq!(files(before.clone()), files(tree(&case.root.0)));
     // What the line says the next undo does is what it does.
-    let (code, text) = case.step(&format!("sweep undo '{}'", case.root()));
+    let (code, text) = case.step(&case.folder_step());
     assert_ne!(code, Some(0), "{text}");
     assert!(text.contains("Nothing was moved"), "{text}");
     assert_eq!(files(before), files(tree(&case.root.0)));
@@ -405,7 +410,7 @@ fn an_unreadable_record_between_two_applies_gives_the_id_step() {
         !out.contains(ONE),
         "the folder step stops at that record: {out}"
     );
-    let step = step_after(&out, "To undo the newest apply of this folder that opens");
+    let step = step_after(&out, "Another apply of this folder can still be undone.");
     assert_eq!(step, format!("sweep undo --id {first}"));
     let (code, text) = case.step(&step);
     assert_eq!(code, Some(0), "{text}");
@@ -431,8 +436,8 @@ fn an_apply_with_only_an_empty_folder_left_says_so() {
     let (code, out) = case.undo(false);
     assert_eq!(code, Some(0), "{out}");
     let line = format!(
-        "Another apply of this folder left an empty folder that undo removes. To remove that folder, run: sweep undo '{}'",
-        case.root()
+        "Another apply of this folder left an empty folder that undo removes. To remove that folder, run: {}",
+        case.folder_step()
     );
     assert!(out.contains(&line), "{out}");
     assert!(!out.contains(ONE), "{out}");
@@ -442,4 +447,99 @@ fn an_apply_with_only_an_empty_folder_left_says_so() {
     let mut now = tree(&case.root.0);
     now.retain(|(name, _)| !name.starts_with("report_"));
     assert_eq!(before, now, "the empty folder is gone");
+}
+
+/// Cut one apply's record back to its first frame, so it has lost every move
+/// record while its files sit in the folders it made.
+fn cut_record(state: &Path, id: &str) {
+    let path = std::fs::read_dir(state)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension().is_some_and(|x| x == "journal")
+                && path.file_name().unwrap().to_string_lossy().contains(id)
+        })
+        .unwrap_or_else(|| panic!("no record for {id}"));
+    let raw = std::fs::read(&path).unwrap();
+    let base = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
+    std::fs::write(&path, &raw[..4 + base]).unwrap();
+}
+
+#[test]
+fn a_record_the_next_undo_refuses_is_named_as_refused() {
+    let case = Case::new("refused");
+    case.add("document", "pdf");
+    let first = case.apply();
+    cut_record(&case.state.0, &first);
+    case.add("photo", "jpg");
+    case.apply();
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    let line = format!(
+        "Another apply of this folder has files left to put back, but its undo record is missing more than one entry. {} refuses it and moves nothing. It names the folders that hold those files.",
+        case.folder_step()
+    );
+    assert!(out.contains(&line), "{out}");
+    assert!(!out.contains(ONE), "{out}");
+    let before = tree(&case.root.0);
+    // What the line says is what the step does.
+    let (code, text) = case.step(&case.folder_step());
+    assert_eq!(code, Some(3), "{text}");
+    assert!(text.contains("missing more than one entry"), "{text}");
+    assert!(text.contains("Documents"), "{text}");
+    assert_eq!(before, tree(&case.root.0), "the refused step moved nothing");
+}
+
+#[test]
+fn an_unopenable_record_older_than_a_live_apply_leaves_the_count_unknown() {
+    let case = Case::new("older");
+    let elsewhere = Case::new("older-b");
+    elsewhere.add("document", "pdf");
+    case.apply_at(OTHER_KEY, elsewhere.root());
+    case.add("document", "pdf");
+    case.apply();
+    case.add("photo", "jpg");
+    case.apply();
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    // The next folder undo reaches the first apply before the old record.
+    assert!(out.contains(ONE), "{out}");
+    assert!(out.contains(&case.folder_step()), "{out}");
+    assert!(
+        out.contains(
+            "1 undo record could not be opened, so more applies of this folder may remain."
+        ),
+        "{out}"
+    );
+    let (code, json) = case.undo(true);
+    assert_eq!(code, Some(0), "{json}");
+    assert_eq!(field_in(&json, "remaining_reversible"), "null", "{json}");
+    assert_eq!(field_in(&json, "records_not_opened"), "1", "{json}");
+}
+
+#[test]
+fn more_than_one_unopenable_record_is_counted() {
+    let case = Case::new("several");
+    let one = Case::new("several-b");
+    let two = Case::new("several-c");
+    one.add("document", "pdf");
+    two.add("document", "pdf");
+    case.apply_at(OTHER_KEY, one.root());
+    case.apply_at(OTHER_KEY, two.root());
+    case.add("document", "pdf");
+    case.apply();
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    let line = format!(
+        "2 undo records could not be opened, so sweep cannot tell whether another apply of this folder remains. If you run {}, it stops at one of them and moves nothing.",
+        case.folder_step()
+    );
+    assert!(out.contains(&line), "{out}");
+    let (code, json) = case.undo(true);
+    assert_ne!(
+        code,
+        Some(0),
+        "the folder undo stops at those records: {json}"
+    );
 }
