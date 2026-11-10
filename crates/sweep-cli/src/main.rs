@@ -4461,6 +4461,44 @@ fn routes_kept_line(j: &etude_core::Journal) -> Option<String> {
     ))
 }
 
+/// How many other applies of this journal's folder still have something to
+/// undo. Each apply has its own record and its own undo, so after one undo the
+/// folder can still hold files another apply moved. A record that will not open
+/// is not counted: naming the folder then gives its own answer about it.
+fn other_reversible_applies(
+    j: &etude_core::Journal,
+    sl: &dyn etude_core::journal::Sealer,
+) -> usize {
+    let same_root = |root: &Path| root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = same_root(&j.root);
+    let Ok(candidates) = etude_core::journal::candidates_by_recency("sweep") else {
+        return 0;
+    };
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.id != j.id)
+        .filter_map(|candidate| candidate.load("sweep", sl).ok())
+        .filter(|other| same_root(&other.root) == root && !journal_is_fully_undone(other, sl))
+        .count()
+}
+
+/// The line that says another apply of this folder can still be undone, or
+/// nothing when none can. Without it, one undo of a folder that two applies
+/// touched reads as if the folder were back as it was.
+fn remaining_line(remaining: usize, root: &Path) -> Option<String> {
+    match remaining {
+        0 => None,
+        1 => Some(format!(
+            "Another apply of this folder can still be undone. To undo it, run: {}",
+            undo_step(root)
+        )),
+        n => Some(format!(
+            "{n} more applies of this folder can still be undone. Run this once for each: {}",
+            undo_step(root)
+        )),
+    }
+}
+
 /// The profile routes that match a file this journal's undo put back.
 fn kept_routes(j: &etude_core::Journal, routes: &[(String, String)]) -> Vec<(String, String)> {
     routes
@@ -4575,8 +4613,10 @@ fn run_undo(
             );
         }
     }
+    // Counted after this undo ran, so the line below is true when it prints.
+    let remaining = other_reversible_applies(j, sl);
     if tag_journal {
-        tag_output::undo_detail(&r);
+        tag_output::undo_detail(&r, remaining);
     } else {
         etude_cli_support::envelope::detail(etude_core::json::obj(&[
             ("restored", etude_core::json::num(r.restored)),
@@ -4596,6 +4636,7 @@ fn run_undo(
                 "skipped_missing",
                 etude_core::json::num(r.skipped_missing.len()),
             ),
+            ("remaining_reversible", etude_core::json::num(remaining)),
         ]));
     }
     // Any item not restored leaves the request unfinished, whatever the cause.
@@ -4797,6 +4838,9 @@ fn run_undo(
             "  {} left over from an interrupted run: one file was reachable by two\n  names and the extra name has been removed.",
             r.healed.len()
         );
+    }
+    if let Some(line) = remaining_line(remaining, &root) {
+        println!("{line}");
     }
     // Persist regardless of outcome: on error just as much as on success, so
     // the on-disk journal matches what was actually restored rather than
@@ -5609,6 +5653,28 @@ mod tests {
         fn open(&self, bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
             Ok(bytes.to_vec())
         }
+    }
+
+    #[test]
+    fn remaining_line_is_silent_when_nothing_remains() {
+        assert_eq!(remaining_line(0, Path::new("/tmp")), None);
+    }
+
+    #[test]
+    fn remaining_line_names_the_folder_step() {
+        let root = Path::new("/no/such/it's here");
+        let step = undo_step(root);
+        assert_eq!(step, "sweep undo '/no/such/it'\\''s here'");
+        assert_eq!(
+            remaining_line(1, root).unwrap(),
+            format!("Another apply of this folder can still be undone. To undo it, run: {step}")
+        );
+        assert_eq!(
+            remaining_line(2, root).unwrap(),
+            format!(
+                "2 more applies of this folder can still be undone. Run this once for each: {step}"
+            )
+        );
     }
 
     #[test]

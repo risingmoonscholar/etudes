@@ -91,6 +91,10 @@ could not remove at the destination adds `details.copy_left`: that path, or
 not know about that copy. The field is absent otherwise, and its presence does
 not change the status, reason or exit code.
 
+A `sweep undo` result adds `details.remaining_reversible`: how many other
+applies of the same folder can still be undone after this one, not counting a
+record that does not open. It does not change the status, reason or exit code.
+
 Stash also returns `download_in_flight` for a folder still downloading and
 `unknown_item` for an item id its stash does not hold. `stash pop` exits 3 with
 `operation_incomplete` when any item is left behind, and its details add

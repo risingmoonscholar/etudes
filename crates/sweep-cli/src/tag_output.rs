@@ -244,7 +244,7 @@ pub fn finish_apply(r: &ApplyReport, binding: &str, undo: &str, root: &Path) -> 
     ExitCode::SUCCESS
 }
 
-pub fn undo_detail(r: &UndoReport) {
+pub fn undo_detail(r: &UndoReport, remaining_reversible: usize) {
     etude_cli_support::envelope::detail(j::obj(&[
         ("restored", j::num(0)),
         ("tags_restored", j::num(r.tags_restored)),
@@ -272,6 +272,7 @@ pub fn undo_detail(r: &UndoReport) {
             ),
         ),
         ("skipped_missing", j::num(r.skipped_missing.len())),
+        ("remaining_reversible", j::num(remaining_reversible)),
     ]));
 }
 

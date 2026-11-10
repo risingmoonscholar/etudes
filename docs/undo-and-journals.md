@@ -66,6 +66,22 @@ apply with its own step. If both applies want the same place, the second to come
 back stays where it is and says the place is taken. A folder the newer apply may
 still need is kept; run the older step again later to remove it.
 
+Each apply is undone separately. One `sweep undo FOLDER` reverses one apply of
+that folder, the newest one that still has files to put back. When another
+apply of the same folder can still be undone, undo says so after the
+"Restored" line and prints the step, for example:
+
+```console
+Restored 3 files.
+Another apply of this folder can still be undone. To undo it, run: sweep undo '/Users/you/Desktop'
+```
+
+When more than one remains, it gives the count. `sweep undo` with no folder
+says the same about the folder it undid. When undo says nothing more, no apply
+of that folder is left to undo. `--json` gives the count in
+`details.remaining_reversible`. A record that does not open with the current
+key is not counted; `sweep status FOLDER` lists it.
+
 If `sweep undo` is killed after it has put the last file back, the folder that
 `sweep apply` created can be left behind, empty. Run `sweep undo` again: it
 removes that folder and finishes. It removes only a folder the journal says
