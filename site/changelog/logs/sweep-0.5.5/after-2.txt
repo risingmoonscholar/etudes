@@ -1,7 +1,7 @@
 
 Moved 2 files.
-Undo with: sweep undo '/private/var/folders/1z/r3hvhpx17vx5kvs_jh7tg8700000gn/T/etudes-release-runs-dtc1sjco/run-after/work/inbox'
-Undo record id: 1794283284182996000-84870-0-ca0fb52639b0d59c
-Encrypted journal: /var/folders/1z/r3hvhpx17vx5kvs_jh7tg8700000gn/T/etudes-release-runs-dtc1sjco/run-after/state/sweep-1794283284182996000-84870-0-ca0fb52639b0d59c.journal
+Undo with: sweep undo '<scratch>/work/inbox'
+Undo record id: 1794284835265257000-23763-0-977f4e650a9b1b7f
+Encrypted journal: <scratch>/state/sweep-1794284835265257000-23763-0-977f4e650a9b1b7f.journal
 
 Nothing left this machine.

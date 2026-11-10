@@ -3,7 +3,7 @@
   "folder": "inbox",
   "describe": "a Documents folder with 3 PDFs, and 2 new PDFs loose next to it",
   "setup": [
-    "# Ported from the 0.5.5 gate 1 runs (run-fixture-9533530.sh): the same files, contents and times.",
+    "# inbox: a Documents folder with 3 PDFs, and 2 PDFs loose next to it.",
     "mkpdf() { # minimal valid one-page PDF with a title line",
     "  printf '%%PDF-1.4\\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\\n%% %s\\ntrailer<</Root 1 0 R>>\\n%%%%EOF\\n' \"$2\" > \"$1\"",
     "}",

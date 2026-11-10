@@ -2,16 +2,18 @@
   "tool": "unpack",
   "version": "0.5.3",
   "fixture": "unpack-0.5.3.fixture",
-  "runs_sha256": "2338ba4a86fc0c6eb99ef3a41dd99bfaafecd910073fc97e0b694f6dab629d2c",
+  "runs_sha256": "e342f3d5edccdb46cf5cd6cab02b3876855e087421e5cea80b820f6fbb47b86e",
   "env": [
-    "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+    "PATH=<scratch>/bin:/usr/bin:/bin:/usr/sbin:/sbin (bin holds a security that only refuses)",
     "HOME=<scratch>/home",
     "ETUDE_STATE_DIR=<scratch>/state",
     "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
     "TMPDIR=<scratch>/tmp/",
     "LANG=en_US.UTF-8",
-    "stdin closed"
+    "stdin closed",
+    "sandbox-exec: no file writes outside the scratch folder, no exec of /usr/bin/security"
   ],
+  "logs": "each log is the command's output with the scratch folder's path written as <scratch>",
   "builds": {
     "before": {
       "ref": "v0.5.1",
@@ -46,11 +48,12 @@
         }
       ],
       "result_files": [
+        "notes.txt",
         "shortcut -> /etc/passwd"
       ],
       "listing_after": [
-        "lone/",
         "lone.zip",
+        "lone/",
         "lone/notes.txt",
         "lone/shortcut -> /etc/passwd"
       ]

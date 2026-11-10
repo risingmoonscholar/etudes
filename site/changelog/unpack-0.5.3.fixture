@@ -4,9 +4,8 @@
   "kind": "synthetic archive",
   "describe": "a zip archive that holds notes.txt and shortcut, a link to /etc/passwd",
   "setup": [
-    "# From the unpack 0.5.3 gate 1 runs: lone.zip holds notes.txt and shortcut, a",
-    "# symbolic link to /etc/passwd, stored as a link by macOS zip -y. Only the",
-    "# archive is left in the folder.",
+    "# lone.zip holds notes.txt and shortcut, a symbolic link to /etc/passwd,",
+    "# stored as a link by macOS zip -y. Only the archive is left in the folder.",
     "mkdir src",
     "printf 'notes\\n' > src/notes.txt",
     "ln -s /etc/passwd src/shortcut",
@@ -33,7 +32,7 @@
   "result": {
     "before": {
       "label": "Left on disk",
-      "glob": "lone/shortcut"
+      "glob": "lone/*"
     },
     "after": {
       "label": "Nothing was extracted",

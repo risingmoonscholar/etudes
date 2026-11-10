@@ -1,25 +1,30 @@
 {
-  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files, builds and footer come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only date, label, headline, lead, next.note and film are written by hand.",
+  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files and builds come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only label, headline, lead, next.note and film are written by hand. Whether the release is tagged, and its date, come from git when the site is built.",
   "tool": "stash",
   "version": "0.5.4",
-  "date": "2026-11-04",
   "label": "Report change",
-  "headline": "stash now says whether the folder is clear",
+  "headline": "stash no longer calls a folder clear when an item stayed behind",
   "lead": [
     {
-      "text": "stash 0.5.4 reports a folder as clear only when nothing was left behind, and "
+      "text": "When an item in the folder cannot be read, stash 0.5.4 moves the rest, says the folder is NOT clear and exits with code 3. Version 0.5.3 moved the same 4 files, left the same unreadable folder behind, still said the folder was clear and exited with code 0. In "
     },
     {
-      "code": "stash --json"
+      "code": "stash notes --json"
     },
     {
-      "text": " now carries a "
+      "text": ", 0.5.4 reports "
     },
     {
-      "code": "clear"
+      "code": "\"clear\": false"
     },
     {
-      "text": " key. The move is unchanged: version 0.5.3 stashed the same 4 files, tagged ones included, and also exited with code 0."
+      "text": " nested under "
+    },
+    {
+      "code": "details"
+    },
+    {
+      "text": ", not at the top level; the 0.5.3 JSON has no clear key at all."
     }
   ],
   "folder": "notes",
@@ -34,6 +39,23 @@
           "  No deadline. Restore with: stash pop"
         ],
         "exit": 0
+      },
+      {
+        "command": "stash notes --json",
+        "output": [],
+        "exit": 0,
+        "fields": [
+          {
+            "path": "clear",
+            "present": false,
+            "value": null
+          },
+          {
+            "path": "details.clear",
+            "present": false,
+            "value": null
+          }
+        ]
       }
     ],
     "result": {
@@ -54,10 +76,27 @@
         "command": "stash notes",
         "output": [
           "Stashed 4 items.",
-          "The selected folder is clear.",
+          "1 item could not be read and stays in place. The selected folder is NOT clear.",
           "  No deadline."
         ],
-        "exit": 0
+        "exit": 3
+      },
+      {
+        "command": "stash notes --json",
+        "output": [],
+        "exit": 3,
+        "fields": [
+          {
+            "path": "clear",
+            "present": false,
+            "value": null
+          },
+          {
+            "path": "details.clear",
+            "present": true,
+            "value": false
+          }
+        ]
       }
     ],
     "result": {
@@ -69,7 +108,7 @@
         "doc4.txt"
       ]
     },
-    "exit": 0
+    "exit": 3
   },
   "next": {
     "note": [
@@ -92,17 +131,16 @@
   "builds": {
     "before": {
       "name": "tag stash-v0.5.3",
+      "tag": "stash-v0.5.3",
       "commit": "427582b",
       "rev": "427582b850f7f4b461cc5eb1c4b27dbabdc9a14e",
       "sha256": "1effefac0d5f8aff16c2b13af3d05ce7819dc190ec13e166f5803ef51acd2a48"
     },
     "after": {
-      "name": "tag stash-v0.5.4",
       "commit": "de8f307",
       "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
-      "sha256": "38e32e44de969c3f12428923268452c46f067a950d31fdaa0194fe6716c7ff2b",
-      "tagged": true
+      "sha256": "38e32e44de969c3f12428923268452c46f067a950d31fdaa0194fe6716c7ff2b"
     }
   },
-  "footer": "Both outputs come from real runs of two builds: tag stash-v0.5.3 (commit 427582b) and tag stash-v0.5.4 (commit de8f307). Each ran the same commands on a fresh copy of one synthetic folder, notes: 4 small text files, 2 of them carrying the Finder tag Keep. Output is shortened to fit by cutting whole lines. Nothing outside the scratch folder was touched."
+  "runs_note": "Each ran the same commands on a fresh copy of one synthetic folder, notes: 4 small text files, 2 of them carrying the Finder tag Keep, and a subfolder, private, that cannot be read. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."
 }

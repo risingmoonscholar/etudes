@@ -1,6 +1,6 @@
 
 Stashed 4 items.
-The selected folder is clear.
+1 item could not be read and stays in place. The selected folder is NOT clear.
 
-  Operation id: 1794283288328674000-84958-0-a96180471523b6c6. Restore with: stash pop --id 1794283288328674000-84958-0-a96180471523b6c6
+  Operation id: 1794284803960798000-23609-0-67591195ec3862cc. Restore with: stash pop --id 1794284803960798000-23609-0-67591195ec3862cc
   No deadline.

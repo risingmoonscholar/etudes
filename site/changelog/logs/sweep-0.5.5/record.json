@@ -2,16 +2,18 @@
   "tool": "sweep",
   "version": "0.5.5",
   "fixture": "sweep-0.5.5.fixture",
-  "runs_sha256": "b003dab3c5377f35b6b5aa56115c89142a00e63389633a61cc1435b2cf6ac8d1",
+  "runs_sha256": "0af49fee5c97901788e99086a4bcdee62c5d8ab6001198683870c90fd3d69113",
   "env": [
-    "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+    "PATH=<scratch>/bin:/usr/bin:/bin:/usr/sbin:/sbin (bin holds a security that only refuses)",
     "HOME=<scratch>/home",
     "ETUDE_STATE_DIR=<scratch>/state",
     "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
     "TMPDIR=<scratch>/tmp/",
     "LANG=en_US.UTF-8",
-    "stdin closed"
+    "stdin closed",
+    "sandbox-exec: no file writes outside the scratch folder, no exec of /usr/bin/security"
   ],
+  "logs": "each log is the command's output with the scratch folder's path written as <scratch>",
   "builds": {
     "before": {
       "ref": "sweep-v0.5.4",
@@ -92,7 +94,7 @@
           "command": "sweep apply inbox --yes",
           "exit": 0,
           "log": "after-2.txt",
-          "sha256": "a2ec9b490668574f615077cbeae2eef285054a35002fe705295845679c3802f9"
+          "sha256": "83772db2a658b692d1568f2ff5e43081f16ddcf06f9e8cda3f364ce09c5c0ed5"
         }
       ],
       "result_files": [

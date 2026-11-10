@@ -1,0 +1,1 @@
+{"action":"stash","root":"<scratch>/work/notes","moved":4,"holding":".stash-0","due":null,"skipped_hidden":0,"skipped_unreadable":1}
