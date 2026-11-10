@@ -385,29 +385,41 @@ impl ArchiveAnchor {
         Ok(())
     }
 
-    /// True if a system tool said it could not open this copy's `/dev/fd/N`.
+    /// True if unzip said it could not open this copy's `/dev/fd/N`.
     ///
     /// This process holds the descriptor, so that answer is about the path
-    /// lookup, never about the archive bytes. unzip and zipinfo word it as
-    /// "cannot find or open /dev/fd/N, /dev/fd/N.zip or /dev/fd/N.ZIP."
-    /// `unzip -Z` prints it on stdout, the others on stderr. A member name can
-    /// hold these words too; then the tool is started again and the run still
-    /// ends in a refusal, so nothing is extracted on its say-so.
-    fn could_not_open(&self, said: &[u8]) -> bool {
-        self.unopened_words()
-            .is_some_and(|words| said.windows(words.len()).any(|window| window == words))
+    /// lookup, never about the archive bytes. Both parts must hold: unzip's
+    /// exit status 9, and one whole line that is unzip's own message for this
+    /// path, from `unopened_line`. Exit 9 alone also means a file with no ZIP
+    /// directory, and member names can carry the words, so neither is enough
+    /// alone. Measured on macOS 27.0.1: a copy that cannot be opened exits 9
+    /// for `unzip -Z1`, `unzip -Z` and extraction; a damaged member exits 2.
+    fn could_not_open(&self, status: Option<i32>, said: &[u8], program: &str) -> bool {
+        status == Some(UNZIP_CANNOT_OPEN)
+            && self.unopened_line(program).is_some_and(|whole| {
+                said.split(|byte| *byte == b'\n')
+                    .any(|line| line.strip_suffix(b"\r").unwrap_or(line) == whole.as_slice())
+            })
     }
 
-    /// The words a tool prints when it cannot open `/dev/fd/N`. None for a
-    /// kept name, where the same words could mean the file was removed.
-    fn unopened_words(&self) -> Option<Vec<u8>> {
+    /// The whole line unzip prints when it cannot open `/dev/fd/N`, measured:
+    /// `zipinfo:  cannot find or open /dev/fd/N, /dev/fd/N.zip or /dev/fd/N.ZIP.`
+    /// `program` is `zipinfo` for the listings and `unzip` for extraction.
+    /// None for a kept name, where the same words could mean the file was
+    /// removed.
+    fn unopened_line(&self, program: &str) -> Option<Vec<u8>> {
         if self.kept.is_some() {
             return None;
         }
-        let mut words = b"cannot find or open ".to_vec();
-        words.extend_from_slice(self.path.as_os_str().as_encoded_bytes());
-        words.push(b',');
-        Some(words)
+        let path = self.path.as_os_str().as_encoded_bytes();
+        let mut line = format!("{program}:  cannot find or open ").into_bytes();
+        line.extend_from_slice(path);
+        line.extend_from_slice(b", ");
+        line.extend_from_slice(path);
+        line.extend_from_slice(b".zip or ");
+        line.extend_from_slice(path);
+        line.extend_from_slice(b".ZIP.");
+        Some(line)
     }
 }
 
@@ -438,8 +450,21 @@ fn own_descriptor_number(file: std::fs::File) -> std::fs::File {
     }
 }
 
-/// How many times in total one system tool is started on the private copy.
+/// How many times in total unzip is started on the private copy.
 const COPY_OPEN_ATTEMPTS: usize = 3;
+
+/// unzip's exit status when it cannot find or open the zipfile (unzip(1)).
+const UNZIP_CANNOT_OPEN: i32 = 9;
+
+/// How many attempts a format gets. Only unzip has shown the failure; tar and
+/// gunzip run once, as before.
+fn copy_open_attempts(fmt: Format) -> usize {
+    if fmt == Format::Zip {
+        COPY_OPEN_ATTEMPTS
+    } else {
+        1
+    }
+}
 
 /// Start one system tool on the private copy, and start it again only if it
 /// could not open the copy.
@@ -450,24 +475,27 @@ const COPY_OPEN_ATTEMPTS: usize = 3;
 /// refused as damaged. The failure is brief, so the same command usually
 /// works when started again. Any other failure is returned at once.
 fn on_private_copy<T, E>(
+    attempts: usize,
     mut attempt: impl FnMut() -> Result<T, E>,
     could_not_open: impl Fn(&E) -> bool,
 ) -> Result<T, E> {
     let mut started = 1;
     loop {
         match attempt() {
-            Err(error) if could_not_open(&error) && started < COPY_OPEN_ATTEMPTS => started += 1,
+            Err(error) if started < attempts && could_not_open(&error) => started += 1,
             result => return result,
         }
     }
 }
 
 /// The system tool could not open unpack's copy on any attempt. The archive
-/// was never read, so nothing here may say it is damaged.
-fn copy_unopened_message(archive: &Path, step: &str, outcome: &str) -> String {
+/// was never read, so nothing here may say it is damaged. `outcome` says what
+/// was left, if the step could have written anything.
+fn copy_unopened_message(archive: &Path, step: &str, outcome: Option<&str>) -> String {
+    let outcome = outcome.map(|text| format!("{text} ")).unwrap_or_default();
     format!(
         "unpack: could not {step} {}: the system unzip could not open unpack's private copy \
-         of it. The archive was not found to be damaged. {outcome} Run the same command again.",
+         of it. The archive was not found to be damaged. {outcome}Run the same command again.",
         shown(archive)
     )
 }
@@ -1136,7 +1164,11 @@ fn unpack_checked(
         Err(ListError::CopyUnopened) => {
             eprintln!(
                 "{}",
-                copy_unopened_message(archive, "check", "Nothing was extracted.")
+                copy_unopened_message(
+                    archive,
+                    "check",
+                    (!listing_only).then_some("Nothing was extracted.")
+                )
             );
             return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
@@ -1178,7 +1210,11 @@ fn unpack_checked(
         Err(ListError::CopyUnopened) => {
             eprintln!(
                 "{}",
-                copy_unopened_message(archive, "check", "Nothing was extracted.")
+                copy_unopened_message(
+                    archive,
+                    "check",
+                    (!listing_only).then_some("Nothing was extracted.")
+                )
             );
             return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
@@ -1479,7 +1515,7 @@ fn unpack_checked(
             let cleanup = cleanup_destination(staging);
             eprintln!(
                 "{}",
-                copy_unopened_message(archive, "extract", &cleanup.message())
+                copy_unopened_message(archive, "extract", Some(&cleanup.message()))
             );
             return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
@@ -1780,8 +1816,7 @@ fn listing_command(fmt: Format, archive: &Path, typed: bool) -> Result<Command, 
         (Format::Dmg, _) => return Err("dmg unsupported".into()),
     };
     let mut command = Command::new(bin);
-    // Read only to tell a copy the tool could not open from a damaged archive.
-    // Measured: `unzip -Z1` says so on stderr, `unzip -Z` on stdout.
+    // Read only to tell a copy unzip could not open from a damaged archive.
     command.args(args).arg(archive).stderr(Stdio::piped());
     Ok(command)
 }
@@ -1889,6 +1924,7 @@ fn listing_output(
     typed: bool,
 ) -> Result<std::process::Output, ListError> {
     on_private_copy(
+        copy_open_attempts(fmt),
         || {
             let mut command =
                 listing_command(fmt, anchor.path(), typed).map_err(ListError::Tool)?;
@@ -1898,7 +1934,15 @@ fn listing_output(
                 .map_err(|e| ListError::Tool(e.to_string()))?;
             if out.status.success() {
                 Ok(out)
-            } else if anchor.could_not_open(&out.stderr) || anchor.could_not_open(&out.stdout) {
+            } else if fmt == Format::Zip
+                // Measured: `unzip -Z` prints the message on stdout, `-Z1` on
+                // stderr, where its member names never go.
+                && anchor.could_not_open(
+                    out.status.code(),
+                    if typed { &out.stdout } else { &out.stderr },
+                    "zipinfo",
+                )
+            {
                 Err(ListError::CopyUnopened)
             } else {
                 Err(ListError::Unreadable)
@@ -2312,8 +2356,10 @@ struct ToolOutput {
     lines: Vec<String>,
     hidden: usize,
     disk_full: bool,
-    /// The tool said it could not open unpack's private copy.
+    /// A whole stderr line was unzip's message for a copy it could not open.
     copy_unopened: bool,
+    /// The tool's exit status, when it exited with one.
+    exit: Option<i32>,
 }
 
 impl ToolOutput {
@@ -2374,11 +2420,13 @@ fn collect_output(
     output: Arc<Mutex<ToolOutput>>,
     anchor: &ArchiveAnchor,
     private_folder: &Path,
+    errors: bool,
 ) -> std::thread::JoinHandle<()> {
     let path = anchor.path().as_os_str().as_encoded_bytes().to_vec();
     let name = anchor.name().as_os_str().as_encoded_bytes().to_vec();
-    // Decided on the raw line, before the private path is replaced.
-    let unopened_words = anchor.unopened_words();
+    // Decided on the raw line, before the private path is replaced, and only
+    // on stderr, where unzip prints it.
+    let unopened_line = errors.then(|| anchor.unopened_line("unzip")).flatten();
     // unzip prints the resolved path of a folder it was given, so remove both
     // spellings, the longer one first.
     let resolved = private_folder.canonicalize().ok();
@@ -2395,9 +2443,8 @@ fn collect_output(
                 Ok(0) | Err(_) => return,
                 Ok(_) => {
                     // Keep draining: the extractor must not block on a full pipe.
-                    let unopened = unopened_words.as_ref().is_some_and(|words| {
-                        line.windows(words.len()).any(|window| window == words)
-                    });
+                    let whole = line.strip_suffix(b"\n").unwrap_or(&line);
+                    let unopened = unopened_line.as_deref() == Some(whole);
                     let named = replace_bytes(&line, &path, &name);
                     let clean = folders.iter().fold(named, |text, folder| {
                         let mut inside = folder.clone();
@@ -2447,6 +2494,7 @@ fn run_bounded(
             output.clone(),
             anchor,
             dest,
+            false,
         ));
     }
     if let Some(stderr) = child.stderr.take() {
@@ -2455,6 +2503,7 @@ fn run_bounded(
             output.clone(),
             anchor,
             dest,
+            true,
         ));
     }
     let result = (|| -> Result<Result<(), Breach>, ExtractError> {
@@ -2493,7 +2542,10 @@ fn run_bounded(
                 return if status.success() {
                     Ok(Ok(()))
                 } else {
-                    Err(ExtractError::ToolFailed(ToolOutput::default()))
+                    Err(ExtractError::ToolFailed(ToolOutput {
+                        exit: status.code(),
+                        ..ToolOutput::default()
+                    }))
                 };
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2516,7 +2568,10 @@ fn run_bounded(
         .map(|mut output| std::mem::take(&mut *output))
         .unwrap_or_default();
     match result {
-        Err(ExtractError::ToolFailed(_)) => Err(ExtractError::ToolFailed(said)),
+        Err(ExtractError::ToolFailed(failed)) => Err(ExtractError::ToolFailed(ToolOutput {
+            exit: failed.exit,
+            ..said
+        })),
         Ok(Ok(())) => {
             // A warning on a run that worked is still worth seeing.
             said.print("Note from the system tool");
@@ -2535,9 +2590,19 @@ fn extract(
     planned: &PlannedMembers,
     mut on_poll: impl FnMut(usize),
 ) -> Result<Result<(), Breach>, ExtractError> {
-    // A tool that could not open the copy wrote nothing, so starting it again
-    // into the same private folder is safe.
+    // unzip is started again only when it said it could not open the copy,
+    // exited 9 and left the private folder exactly as it was before the first
+    // attempt. Anything else, including a folder that changed, is returned as
+    // the failure it is.
+    let before = staging_names(dest);
+    let unopened = |error: &ExtractError| {
+        matches!(error, ExtractError::ToolFailed(output)
+            if output.copy_unopened && output.exit == Some(UNZIP_CANNOT_OPEN))
+            && before.is_some()
+            && staging_names(dest) == before
+    };
     let extracted = on_private_copy(
+        copy_open_attempts(fmt),
         || {
             let mut cmd = extractor_command(fmt, anchor.path(), dest);
             anchor.prepare(&mut cmd)?;
@@ -2554,14 +2619,24 @@ fn extract(
             }
             run_bounded(cmd, anchor, dest, budget, planned, &mut on_poll)
         },
-        |error| matches!(error, ExtractError::ToolFailed(output) if output.copy_unopened),
+        unopened,
     );
     match extracted {
-        Err(ExtractError::ToolFailed(output)) if output.copy_unopened => {
-            Err(ExtractError::CopyUnopened)
-        }
+        Err(error) if fmt == Format::Zip && unopened(&error) => Err(ExtractError::CopyUnopened),
         other => other,
     }
+}
+
+/// The sorted names directly inside the private folder, or None if they
+/// cannot be read.
+fn staging_names(dest: &Path) -> Option<Vec<std::ffi::OsString>> {
+    let mut names = std::fs::read_dir(dest)
+        .ok()?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    names.sort();
+    Some(names)
 }
 
 fn publish_staging(staging: &Path, dest: &Path) -> Result<(), String> {
@@ -3895,9 +3970,18 @@ mod tests {
     #[test]
     fn the_unopened_copy_message_blames_the_open_and_says_what_to_do() {
         let archive = Path::new("input.zip");
-        for (step, outcome) in [
-            ("check", "Nothing was extracted."),
-            ("extract", "Nothing was left behind."),
+        for (step, outcome, middle) in [
+            (
+                "check",
+                Some("Nothing was extracted."),
+                "Nothing was extracted. ",
+            ),
+            ("check", None, ""),
+            (
+                "extract",
+                Some("Nothing was left behind."),
+                "Nothing was left behind. ",
+            ),
         ] {
             let message = copy_unopened_message(archive, step, outcome);
             assert_eq!(
@@ -3905,7 +3989,7 @@ mod tests {
                 format!(
                     "unpack: could not {step} input.zip: the system unzip could not open \
                      unpack's private copy of it. The archive was not found to be damaged. \
-                     {outcome} Run the same command again."
+                     {middle}Run the same command again."
                 )
             );
             for false_claim in [
@@ -3913,6 +3997,7 @@ mod tests {
                 "fully extracted",
                 "lists its names",
                 "damaged,",
+                "  ",
             ] {
                 assert!(!message.contains(false_claim), "{message}");
             }
@@ -3921,23 +4006,55 @@ mod tests {
     }
 
     #[test]
-    fn only_this_copys_unopened_path_counts_as_the_open_failing() {
+    fn only_unzips_own_line_and_exit_9_count_as_the_open_failing() {
         let (root, archive, _) = copy_fault_fixture("words");
         let anchor = ArchiveAnchor::create(&archive).expect("copy archive");
         let path = anchor.path().display().to_string();
-        let said = |text: String| anchor.could_not_open(text.as_bytes());
-        assert!(said(format!(
-            "unzip:  cannot find or open {path}, {path}.zip or {path}.ZIP."
-        )));
-        assert!(said(format!(
-            "zipinfo:  cannot find or open {path}, {path}.zip or {path}.ZIP."
-        )));
-        assert!(!said(format!(
-            "unzip:  cannot find or open {path}0, {path}0.zip or {path}0.ZIP."
-        )));
-        assert!(!said(format!(
-            "[{path}]\n  End-of-central-directory signature not found."
-        )));
+        let line = |program: &str| {
+            format!("{program}:  cannot find or open {path}, {path}.zip or {path}.ZIP.")
+        };
+        let said = |status: Option<i32>, text: String, program: &str| {
+            anchor.could_not_open(status, text.as_bytes(), program)
+        };
+        assert!(said(Some(9), line("unzip") + "\n", "unzip"));
+        assert!(said(Some(9), line("zipinfo") + "\n", "zipinfo"));
+        // Exit 9 alone is also a file with no ZIP directory.
+        assert!(!said(
+            Some(9),
+            format!("[{path}]\n  End-of-central-directory signature not found.\n"),
+            "zipinfo"
+        ));
+        // The words without exit 9, as a damaged member's name prints them.
+        assert!(!said(Some(2), line("unzip"), "unzip"));
+        assert!(!said(None, line("unzip"), "unzip"));
+        // The words inside a longer line, or from the other program.
+        assert!(!said(
+            Some(9),
+            format!("  inflating: {}", line("unzip")),
+            "unzip"
+        ));
+        assert!(!said(
+            Some(9),
+            format!("{} bad CRC", line("unzip")),
+            "unzip"
+        ));
+        assert!(!said(Some(9), line("zipinfo"), "unzip"));
+        // Another descriptor's number.
+        assert!(!said(
+            Some(9),
+            format!("unzip:  cannot find or open {path}0, {path}0.zip or {path}0.ZIP."),
+            "unzip"
+        ));
+        assert_eq!(copy_open_attempts(Format::Zip), COPY_OPEN_ATTEMPTS);
+        for other in [
+            Format::Tar,
+            Format::TarGz,
+            Format::TarBz2,
+            Format::TarXz,
+            Format::Gz,
+        ] {
+            assert_eq!(copy_open_attempts(other), 1, "{other:?}");
+        }
         drop(anchor);
 
         DESCRIPTOR_PATH_REFUSED.with(|refused| refused.set(true));
@@ -3946,9 +4063,65 @@ mod tests {
         let kept = kept.expect("copy archive");
         let path = kept.path().display().to_string();
         assert!(!kept.could_not_open(
-            format!("unzip:  cannot find or open {path}, {path}.zip or {path}.ZIP.").as_bytes()
+            Some(9),
+            format!("unzip:  cannot find or open {path}, {path}.zip or {path}.ZIP.").as_bytes(),
+            "unzip"
         ));
         drop(kept);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A hostile zip names its members with unzip's whole "cannot open" line,
+    /// for every descriptor number unpack may hold, and damages each member.
+    /// That is damage: one extraction attempt, archive_unreadable, never
+    /// private_copy_unopened.
+    #[test]
+    fn member_names_with_unzips_words_cannot_make_damage_look_like_a_race() {
+        let (root, _, dest) = copy_fault_fixture("names");
+        let tree = root.join("tree");
+        let mut members = 0;
+        for number in 64..=255 {
+            for program in ["unzip", "zipinfo"] {
+                let fd = format!("/dev/fd/{number}");
+                let name = format!("{program}:  cannot find or open {fd}, {fd}.zip or {fd}.ZIP.");
+                let file = tree.join(&name);
+                std::fs::create_dir_all(file.parent().unwrap()).expect("make member folders");
+                std::fs::write(&file, format!("MEMBER-{members:05}-content"))
+                    .expect("write member");
+                members += 1;
+            }
+        }
+        let archive = root.join("names.zip");
+        let status = Command::new("/usr/bin/zip")
+            .args(["-q", "-r", "-0"])
+            .arg(&archive)
+            .arg(".")
+            .current_dir(&tree)
+            .status()
+            .expect("build zip fixture");
+        assert!(status.success(), "zip fixture creation failed");
+        // Stored members keep their bytes as written, so flipping one byte of
+        // each makes every member fail its CRC check.
+        let mut bytes = std::fs::read(&archive).expect("read fixture");
+        let mut flipped = 0;
+        for at in 0..bytes.len().saturating_sub(7) {
+            if &bytes[at..at + 7] == b"MEMBER-" {
+                bytes[at] = b'X';
+                flipped += 1;
+            }
+        }
+        assert_eq!(flipped, members, "every member is damaged once");
+        std::fs::write(&archive, bytes).expect("write damaged fixture");
+
+        let (code, reason, fired, prepared) = run_with_copy_closed(&archive, &dest, 0, 0);
+        assert_eq!(code, ExitCode::from(3));
+        assert_eq!(reason, Some(ReasonCode::ArchiveUnreadable));
+        assert_eq!(fired, 0);
+        assert_eq!(
+            prepared, 3,
+            "two listings and one extraction, none repeated"
+        );
+        assert!(!dest.exists(), "a damaged archive was published");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
