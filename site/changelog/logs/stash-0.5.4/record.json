@@ -2,7 +2,7 @@
   "tool": "stash",
   "version": "0.5.4",
   "fixture": "stash-0.5.4.fixture",
-  "runs_sha256": "886a68461b6826ff3b83f9f90c3d39092dfe21eb63140ec4831315059ff57038",
+  "runs_sha256": "44b1088dac75c52d99949a5c9312d52600a0a8d6a72a85b55a4a11b568945c43",
   "env": [
     "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
     "HOME=<scratch>/home",
@@ -77,7 +77,7 @@
           "command": "stash notes",
           "exit": 0,
           "log": "after-1.txt",
-          "sha256": "67598f35eadaa06087fb83cd600ebb7a1c38266a01624c584d9a84e132941e8f"
+          "sha256": "cfe635af438ce607107cf8012c1cd351ca0363e37a56e460ddf4f42346f9343d"
         }
       ],
       "result_files": [

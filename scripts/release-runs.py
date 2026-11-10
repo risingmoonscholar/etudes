@@ -96,9 +96,12 @@ def load_fixture(path):
 
 
 def runs_digest(fixture):
-    """sha256 of what decides the runs: the setup and the commands, not the cuts."""
+    """sha256 of what decides the runs: the setup, the commands and which files
+    the result lists. Not the cuts or the labels, which only change the page."""
     basis = {"setup": fixture["setup"], "commands": [r["command"] for r in fixture["runs"]],
-             "next": fixture["next"]["command"]}
+             "next": fixture["next"]["command"],
+             "result": {side: {"glob": fixture["result"][side]["glob"],
+                               "new": bool(fixture["result"][side].get("new"))} for side in SIDES}}
     return hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
 
 
@@ -178,7 +181,8 @@ def entry_from_record(record, fixture, hand, read_log):
     builds = {}
     for side in SIDES:
         b = record["builds"][side]
-        builds[side] = {"name": build_name(side, b, version), "commit": b["commit"], "rev": b["rev"], "sha256": b["sha256"]}
+        builds[side] = {"name": build_name(side, b, version), "commit": b["commit"],
+                        "rev": b["rev"], "sha256": b["sha256"]}
     builds["after"]["tagged"] = bool(record["builds"]["after"].get("tag"))
     entry["builds"] = builds
     labels = [build_label(s, record["builds"][s]) for s in SIDES]
@@ -354,7 +358,7 @@ def cuts_only(tool, version, entry_path, logs):
         fixture = load_fixture(fixture_path(tool, version))
         record = json.loads((logs / "record.json").read_text(encoding="utf-8"))
         if record.get("runs_sha256") != runs_digest(fixture):
-            raise RunError("the fixture's setup or commands changed since the runs; run the builds again "
+            raise RunError("the fixture's setup, commands or result globs changed since the runs; run the builds again "
                            "with --before and --after")
         for run in [r for side in SIDES for r in record["sides"][side]["runs"]] + [record["next"]]:
             if sha256_file(logs / run["log"]) != run["sha256"]:

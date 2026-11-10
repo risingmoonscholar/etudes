@@ -374,7 +374,12 @@ class ChangelogDataTest(unittest.TestCase):
     def test_fixture_commands_changed_after_the_runs_fails(self):
         self.change(self.folder / "sweep-0.5.5.fixture",
                     lambda f: f["runs"][0].__setitem__("command", "sweep inbox --json"))
-        self.assertProblem("changed its setup or commands after the runs")
+        self.assertProblem("changed its setup, commands or result globs after the runs")
+
+    def test_fixture_result_glob_changed_after_the_runs_fails(self):
+        self.change(self.folder / "sweep-0.5.5.fixture",
+                    lambda f: f["result"]["after"].__setitem__("glob", "inbox/*"))
+        self.assertProblem("changed its setup, commands or result globs after the runs")
 
     def test_fixture_cut_that_matches_nothing_fails(self):
         self.change(self.folder / "sweep-0.5.5.fixture",

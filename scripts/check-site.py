@@ -26,7 +26,8 @@ Fails when:
     sha256 its record.json holds, or the entry differs from what
     scripts/release-runs.py derives from the record, the logs and the fixture
     (an output line, exit code, command, result file, build or footer edited
-    by hand); or the fixture's setup or commands changed after the runs;
+    by hand); or the fixture's setup, commands or result globs changed after
+    the runs;
   - an entry's untagged after build is not an ancestor of HEAD, a tagged one
     is not the commit its tag names, or the entry's before tag does not name
     its before commit;
@@ -321,8 +322,8 @@ def check_entries(folder=None):
                             f"site/changelog/logs/{path.stem}/record.json. {rerun}")
             continue
         if record.get("runs_sha256") != runs.runs_digest(fixture):
-            problems.append(f"{name}: site/changelog/{fixture_file.name} changed its setup or commands "
-                            f"after the runs. {rerun}")
+            problems.append(f"{name}: site/changelog/{fixture_file.name} changed its setup, commands or "
+                            f"result globs after the runs. {rerun}")
         try:
             derived = runs.entry_from_record(record, fixture, runs.hand_fields(entry),
                                              lambda n: (logs / n).read_text(encoding="utf-8"))

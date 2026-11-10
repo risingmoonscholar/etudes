@@ -2,7 +2,7 @@
   "tool": "sweep",
   "version": "0.5.5",
   "fixture": "sweep-0.5.5.fixture",
-  "runs_sha256": "516aa893f12e79ededd0a263c15d968a89d0476823f2292ca80c04a618402a25",
+  "runs_sha256": "b003dab3c5377f35b6b5aa56115c89142a00e63389633a61cc1435b2cf6ac8d1",
   "env": [
     "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
     "HOME=<scratch>/home",
@@ -92,7 +92,7 @@
           "command": "sweep apply inbox --yes",
           "exit": 0,
           "log": "after-2.txt",
-          "sha256": "9de5b643af9b3ba989e3c06528c8037085cfed68564be3da31984eaecd02984c"
+          "sha256": "a2ec9b490668574f615077cbeae2eef285054a35002fe705295845679c3802f9"
         }
       ],
       "result_files": [

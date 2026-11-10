@@ -2,7 +2,7 @@
   "tool": "unpack",
   "version": "0.5.3",
   "fixture": "unpack-0.5.3.fixture",
-  "runs_sha256": "afeb51580759af7053ea7bbd9b8e83e33bb510035a13d8535bfdca742593e878",
+  "runs_sha256": "2338ba4a86fc0c6eb99ef3a41dd99bfaafecd910073fc97e0b694f6dab629d2c",
   "env": [
     "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
     "HOME=<scratch>/home",
