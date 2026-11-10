@@ -44,6 +44,7 @@ else
   BEFORE=$(find "$D" -type f | wc -l | tr -d ' ')
   assert_eq 10 "$BEFORE" "fixture has 5 zero-byte files + 1 large file + 4 small siblings = 10 files"
 
+  snapshot_tree "$D" "$W/before-large.json"
   APPLY_OUT=$("$SWEEP" apply "$D" --yes 2>&1)
   APPLY_EC=$?
   assert_eq 0 "$APPLY_EC" "apply succeeds on a tree containing a $SIZE_MB MB file and five 0-byte files"
@@ -72,10 +73,13 @@ else
     assert_eq "$DISK_BLOCKS_BEFORE" "$DISK_BLOCKS_AFTER" "actual disk usage is unchanged by the move (no real data was written. A copy of a sparse file this size would either materialize the holes or at best re-punch them, and would not be free)"
   fi
 
+  assert_eq 0 "$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')" "apply moved every file including all five empty files"
   # --- undo: same inode-preservation check in reverse ---------------------
   "$SWEEP" undo >/dev/null 2>&1
   UNDO_EC=$?
   assert_eq 0 "$UNDO_EC" "undo succeeds"
+  snapshot_tree "$D" "$W/after-large.json"
+  assert_snapshot_eq "$W/before-large.json" "$W/after-large.json" "large-file undo restores the full tree"
   AFTER_UNDO=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
   assert_eq "$BEFORE" "$AFTER_UNDO" "undo restored all 10 files to the top level"
   if [ -f "$BIGFILE" ]; then
@@ -89,13 +93,18 @@ fi
 # --- zero-byte files specifically: no divide-by-zero, no special-case bug -
 D2="$W/zeros"; mkdir -p "$D2"
 for i in 1 2 3 4 5; do : > "$D2/z_${i}_zonlytok.txt"; done
+snapshot_tree "$D2" "$W/before-zeros.json"
 BEFORE_Z=$(find "$D2" -type f | wc -l | tr -d ' ')
 assert_exit 0 "planning an all-zero-byte-file directory succeeds (no crash on size=0 in edge_hash)" -- "$SWEEP" "$D2"
 "$SWEEP" apply "$D2" --yes >/dev/null 2>&1
 APPLY_Z_EC=$?
 assert_eq 0 "$APPLY_Z_EC" "applying an all-zero-byte-file group succeeds"
+assert_eq 0 "$(find "$D2" -maxdepth 1 -type f | wc -l | tr -d ' ')" "all five zero-byte files moved out of their origins"
 AFTER_Z=$(find "$D2" -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE_Z" "$AFTER_Z" "no zero-byte file was lost"
 "$SWEEP" undo >/dev/null 2>&1
+assert_eq 0 "$?" "zero-byte undo succeeds"
+snapshot_tree "$D2" "$W/after-zeros.json"
+assert_snapshot_eq "$W/before-zeros.json" "$W/after-zeros.json" "zero-byte undo restores the full tree"
 RESTORED_Z=$(find "$D2" -maxdepth 1 -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE_Z" "$RESTORED_Z" "undo restores zero-byte files correctly (their edge_hash of an empty head/tail is a valid, stable fingerprint)"

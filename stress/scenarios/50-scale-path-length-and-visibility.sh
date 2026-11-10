@@ -79,6 +79,8 @@ else
     APPLY_EC=$?
     if [ "$APPLY_EC" = "0" ] && find "$D1" -name "$fname" 2>/dev/null | grep -q .; then
       NEWPATH=$(find "$D1" -name "$fname" 2>/dev/null | head -1)
+      [ "$NEWPATH" != "$fullpath" ] && [ ! -e "$fullpath" ] \
+        && pass "near-PATH_MAX file left its original location" || fail "near-PATH_MAX file was left at its origin"
       pass "the near-PATH_MAX file was moved successfully and its name is unchanged at the new location ($NEWPATH)"
     else
       fail "applying the group containing the near-PATH_MAX file failed or the file cannot be found afterward (apply exit=$APPLY_EC)"
@@ -110,6 +112,8 @@ assert_eq 5 "$SCANNED2" "only the 5 visible files were scanned (the 5 behind the
 # emits a "skipped" object (for hidden/symlink counts) even when both are
 # zero, so a naive substring match on "skip" would false-pass here whether
 # or not anything about the permission failure was ever surfaced.
+UNREADABLE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["details"]["skipped"].get("unreadable", 0))' <<<"$PLAN2_JSON")
+assert_eq 1 "$UNREADABLE" "JSON reports exactly the unreadable directory"
 if grep -qi "unreadable\|permission\|could not read\|denied\|eacces\|cannot read\|inaccessible" <<<"$PLAN2_JSON$PLAN2_HUMAN"; then
   pass "sweep disclosed that a directory could not be read"
 else

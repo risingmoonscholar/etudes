@@ -28,6 +28,8 @@ for row in catalog:
     if row["id"] in seen:
         errors.append(f"duplicate scenario id: {row['id']}")
     seen.add(row["id"])
+    if row.get("kind") not in (None, "harness"):
+        errors.append(f"{row['id']}: invalid kind {row['kind']!r}")
     if row["tier"] not in {"fast", "load", "platform"}:
         errors.append(f"{row['id']}: invalid tier {row['tier']!r}")
     if row["disposition"] not in {"keep", "repair", "merge", "split", "retire"}:

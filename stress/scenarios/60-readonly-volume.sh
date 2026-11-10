@@ -57,6 +57,7 @@ fi
 # no exit 0, and nothing moved.
 APPLY_OUT=$("$SWEEP" apply "$MNT" --yes 2>&1)
 APPLY_CODE=$?
+assert_no_panic "read-only apply refusal" "$APPLY_OUT"
 
 if [ "$APPLY_CODE" -ge 128 ]; then
   fail "read-only volume: apply crashed (signal-death exit code $APPLY_CODE): $APPLY_OUT"

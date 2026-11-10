@@ -36,6 +36,10 @@ sys.exit(0 if not any(b in data for b in (b"\xff", b"\xfe", b"\x1b")) else 1)
 PY
   then pass "$label: no raw invalid or control byte in the output"
   else fail "$label: a raw invalid or control byte reached the output"; fi
+  local expected='bad??name'
+  case "$label" in *'control byte'*) expected='esc?[2J?' ;; esac
+  grep -Fq "($expected) has bytes that are not valid text" "$out" \
+    && pass "$label: names the exact rejected argument" || fail "$label: wrong argument name: $(head -c 300 "$out")"
   if grep -q 'argument .* has bytes that are not valid text' "$out"; then
     pass "$label: names the problem"
   else fail "$label: message missing: $(head -c 300 "$out")"; fi

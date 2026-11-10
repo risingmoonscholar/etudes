@@ -88,9 +88,17 @@ plan = work / 'plan'
 result = run(root, '--scheme', 'existing', '--export-plan', plan, '--json')
 check(result.returncode == 0 and plan.is_file() and tree() == before, 'exporting a routed plan moves nothing')
 digest = json.loads(result.stdout)['details']['binding']['plan_digest']
+result = run('apply', '--plan', plan, '--plan-digest', digest, '--yes', '--json')
+check(result.returncode == 0 and all((root / 'Reading' / name).read_bytes() == original[name] for name in ('a.pdf', 'b.pdf', 'c.pdf')),
+      'an unchanged exported plan replays successfully with exact bytes')
+check(run('undo', root).returncode == 0 and tree() == before, 'undo after replay restores the tree')
+result = run(root, '--scheme', 'existing', '--export-plan', work / 'fresh-plan', '--json')
+check(result.returncode == 0, 'export a fresh plan before changing its profile')
+plan = work / 'fresh-plan'
+digest = json.loads(result.stdout)['details']['binding']['plan_digest']
 profile.write_text(profile.read_text() + '\n# changed after export\n')
 result = run('apply', '--plan', plan, '--plan-digest', digest, '--yes', '--json')
-check(result.returncode == 2 and tree() == before, 'a changed profile refuses exported-plan replay without moving files')
+check(result.returncode == 2 and tree() == before and json.loads(result.stdout)['reason']['code'] == 'plan_stale', 'a changed profile refuses exported-plan replay without moving files')
 PY
 while IFS= read -r label; do pass "$label"; done < "$W/checks"
 [ "$CODE" -eq 0 ] || fail "existing-folder contract failed (Python exit $CODE)"

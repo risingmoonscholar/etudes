@@ -8,6 +8,12 @@
 # in-flight move, Ctrl-C and a plain `kill` can do too. This scenario checks
 # that directly, rather than assuming it from reading the source.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+if ! ps -o state= -p $$ >/dev/null 2>&1; then
+  unproven "stopped-process witness" "ps is unavailable in this sandbox"
+  exit 0
+fi
+W=$(workdir) || exit 1
+trap 'rm -rf "$W"' EXIT
 
 make_tree() {
   local d="$1" n="$2"
@@ -20,56 +26,73 @@ make_tree() {
 # Same polling-kill approach as the SIGKILL scenario, parameterised on signal.
 run_and_signal() {
   local d="$1" target="$2" sig="$3"
-  "$SWEEP" apply "$d" --yes >/dev/null 2>&1 &
-  local pid=$!
-  local deadline=$((SECONDS + 10))
-  while true; do
-    local moved
+  # Reset SIGINT before exec: asynchronous bash jobs otherwise inherit it ignored.
+  python3 - "$SWEEP" "$d" <<'PY_EXEC' >"$(dirname "$d")/apply.out" 2>&1 &
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+os.execv(sys.argv[1], [sys.argv[1], 'apply', sys.argv[2], '--yes'])
+PY_EXEC
+  local pid=$! moved state
+  local deadline=$((SECONDS + 30))
+  while kill -0 "$pid" 2>/dev/null; do
     moved=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
-    [ "$moved" -ge "$target" ] && break
-    kill -0 "$pid" 2>/dev/null || { echo "finished-early"; return; }
+    if [ "$moved" -ge "$target" ]; then
+      if stop_confirmed "$pid"; then
+        moved=$(find "$d/Screenshots" -type f 2>/dev/null | wc -l | tr -d ' ')
+        local remaining; remaining=$(find "$d" -maxdepth 1 -type f | wc -l | tr -d ' ')
+        if [ "$moved" -ge "$target" ] && [ "$remaining" -gt 0 ]; then
+          # State is frozen and a strict subset has moved before injection.
+          kill -"$sig" "$pid" 2>/dev/null || { kill -CONT "$pid"; wait "$pid"; echo missed-window; return; }
+          [ "$sig" = KILL ] || kill -CONT "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null
+          echo signalled
+          return
+        fi
+      fi
+      kill -CONT "$pid" 2>/dev/null || true
+    fi
+    state=$(ps -o state= -p "$pid" 2>/dev/null)
+    [[ "$state" != *Z* ]] || break
     if [ "$SECONDS" -ge "$deadline" ]; then
       kill -TERM "$pid" 2>/dev/null || true
+      kill -CONT "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null
-      echo "timed-out"
+      echo timed-out
       return
     fi
-    sleep 0.001
   done
-  if ! kill -"$sig" "$pid" 2>/dev/null; then
-    wait "$pid" 2>/dev/null
-    echo "missed-window"
-    return
-  fi
   wait "$pid" 2>/dev/null
-  echo "signalled"
+  echo finished-early
 }
 
 trial() {
   local sig="$1" target="$2" n="$3"
-  local d; d=$(workdir) || exit 1; d=$d/D
+  local d; d=$(mktemp -d "$W/trial-XXXXXX") || exit 1; d=$d/D
   make_tree "$d" "$n"
+  snapshot_tree "$d" "${d%/D}/before.json"
   local before_set; before_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
   local before_n; before_n=$(echo "$before_set" | grep -c .)
 
   local outcome; outcome=$(run_and_signal "$d" "$target" "$sig")
 
-  "$SWEEP" undo >/tmp/sig_trial_undo_out.$$ 2>&1
+  "$SWEEP" undo >"${d%/D}/undo.out" 2>&1
+  local undo_status=$?
+  snapshot_tree "$d" "${d%/D}/after.json"
   local after_set; after_set=$(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort)
   local after_n; after_n=$(find "$d" -type f | wc -l | tr -d ' ')
 
-  if [ "$after_set" != "$before_set" ] || [ "$after_n" != "$before_n" ]; then
+  if ! cmp -s "${d%/D}/before.json" "${d%/D}/after.json" || [ "$undo_status" -ne 0 ] || [ "$after_set" != "$before_set" ] || [ "$after_n" != "$before_n" ]; then
     echo "FAIL sig=$sig target=$target outcome=$outcome"
-    echo "  baseline count=$before_n, post-undo total count=$after_n"
+    echo "  undo exit=$undo_status (wanted 0); baseline count=$before_n, post-undo total count=$after_n"
     local dupes; dupes=$(comm -12 <(find "$d" -maxdepth 1 -type f -exec basename {} \; | sort) <(find "$d" -mindepth 2 -type f -exec basename {} \; | sort))
     [ -n "$dupes" ] && { echo "  duplicated at both origin and destination, never repaired by undo:"; echo "$dupes" | sed 's/^/    /'; }
     local missing; missing=$(comm -23 <(echo "$before_set") <(echo "$after_set"))
     [ -n "$missing" ] && { echo "  missing from origin after undo:"; echo "$missing" | sed 's/^/    /'; }
-    echo "  sweep undo said:"; sed 's/^/    /' "/tmp/sig_trial_undo_out.$$"
-    rm -f "/tmp/sig_trial_undo_out.$$"; rm -rf "$(dirname "$d")"
+    echo "  sweep undo said:"; sed 's/^/    /' "${d%/D}/undo.out"
+    rm -f "${d%/D}/undo.out"; rm -rf "$(dirname "$d")"
     return 1
   fi
-  rm -f "/tmp/sig_trial_undo_out.$$"; rm -rf "$(dirname "$d")"
+  rm -f "${d%/D}/undo.out"; rm -rf "$(dirname "$d")"
   echo "TRIAL-OK $outcome"
   return 0
 }

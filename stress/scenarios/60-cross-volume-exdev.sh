@@ -96,6 +96,12 @@ else
 fi
 
 assert_exit 0 "cross-volume: undo succeeds" -- "$SWEEP" undo
+for pair in "cargo_bravo.txt:outer-bravo-content" "cargo_charlie.txt:outer-charlie-content"; do
+  assert_eq "${pair#*:}" "$(cat "$OUTER/${pair%%:*}" 2>/dev/null)" "undo restores outer bytes"
+done
+for pair in "cargo_alpha.txt:inner-alpha-content" "cargo_delta.txt:inner-delta-content" "cargo_echo.txt:inner-echo-content"; do
+  assert_eq "${pair#*:}" "$(cat "$INNER/${pair%%:*}" 2>/dev/null)" "undo restores inner bytes"
+done
 UNDO_OK=1
 [ -f "$OUTER/cargo_bravo.txt" ] || UNDO_OK=0
 [ -f "$OUTER/cargo_charlie.txt" ] || UNDO_OK=0
@@ -358,6 +364,8 @@ did not protect the source"
   DEST_HASH_BEFORE_RETRY=$(shasum -a 256 "$DEST_PARTIAL" 2>/dev/null | awk '{print $1}')
   RETRY_OUT=$("$SWEEP" apply "$OUTER" --yes --depth 2 2>&1)
   RETRY_CODE=$?
+  assert_eq 2 "$RETRY_CODE" "retry refuses the occupied destination"
+  assert_no_panic "cross-volume retry" "$RETRY_OUT"
   if [ "$RETRY_CODE" = 0 ]; then
     fail "cross-volume: retrying apply after an interrupted copy reported success (exit 0) without checking for the stray partial destination file: $RETRY_OUT"
   else
@@ -370,6 +378,6 @@ did not protect the source"
   SRC_HASH_FINAL=$(shasum -a 256 "$INTERRUPT" 2>/dev/null | awk '{print $1}')
   assert_eq "$SRC_HASH_BEFORE" "$SRC_HASH_FINAL" "cross-volume: source is still byte-identical after the refused retry"
 fi
-rm -f /tmp/etudes-exdev-kill.log
+
 
 exit 0

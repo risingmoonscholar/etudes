@@ -38,7 +38,7 @@ if ! create_disk_image "$IMG" 64m ExFAT RenameFall; then
   unproven "exFAT disk image" "hdiutil create failed on this machine"
   exit 0
 fi
-if ! hdiutil attach "$IMG" -mountpoint "$MNT" >/dev/null 2>&1; then
+if ! hdiutil attach "$IMG" -mountpoint "$MNT" -nobrowse >/dev/null 2>&1; then
   unproven "exFAT disk image" "hdiutil attach failed on this machine"
   exit 0
 fi

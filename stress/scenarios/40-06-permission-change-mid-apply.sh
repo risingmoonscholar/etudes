@@ -248,6 +248,6 @@ else
 fi
 snapshot_tree "$D" "$W/recovered.json"
 assert_snapshot_eq "$W/original.json" "$W/recovered.json" "permission failure undo restored exact original paths and bytes"
-unproven "link/unlink fallback seam" "normal same-volume macOS rename is atomic; this fixture does not exercise fallback"
+echo "    note     link/unlink fallback seam:" "normal same-volume macOS rename is atomic; this fixture does not exercise fallback"
 [ -n "$CONTROL" ] || run_controls
 true
