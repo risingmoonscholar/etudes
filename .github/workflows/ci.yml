@@ -83,6 +83,15 @@ jobs:
       - run: bash scripts/no-network-test.sh
       - name: Check the claims the docs make
         run: bash scripts/check-claims.sh
+      # On a tag push, actions/checkout fetches the pushed tag as
+      # +<sha>:refs/tags/<tag>, which stores an annotated tag as a lightweight
+      # one locally (actions/checkout#290). check-site.py reads the tag type:
+      # the release date comes only from an annotated tag, and it fails on a
+      # lightweight tag for the version being released. Fetch the tags as they
+      # are on the remote first, so a correct annotated tag is not reported as
+      # lightweight.
+      - name: Restore the tags as they are on the remote
+        run: git fetch --force origin 'refs/tags/*:refs/tags/*'
       - name: The site builds and every internal link and anchor resolves
         run: python3 scripts/check-site.py
       - name: The site check rejects a broken link, a missing page and raw Markdown

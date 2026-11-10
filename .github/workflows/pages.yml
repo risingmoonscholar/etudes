@@ -72,6 +72,17 @@ jobs:
           # tag exists, and this is the job that publishes it.
           fetch-depth: 0
 
+      # The checkout above pins ref to a sha, but to be sure:
+      # on a tag push, actions/checkout can fetch the pushed tag as
+      # +<sha>:refs/tags/<tag>, which stores an annotated tag as a lightweight
+      # one locally (actions/checkout#290). check-site.py reads the tag type:
+      # the release date comes only from an annotated tag, and it fails on a
+      # lightweight tag for the version being released. Fetch the tags as they
+      # are on the remote first, so a correct annotated tag is not reported as
+      # lightweight.
+      - name: Restore the tags as they are on the remote
+        run: git fetch --force origin 'refs/tags/*:refs/tags/*'
+
       - name: Refuse unpublished or stale page versions
         run: python3 scripts/check-pages-release.py
         env:
