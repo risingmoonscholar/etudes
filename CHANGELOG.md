@@ -14,6 +14,10 @@ reviewers were pointed at the tools before anyone else could be.
 
 - The site has docs pages. Each tool and each shared rule gets a page built from the docs in this repository, with the doc tree on the left and an "On this page" list on the right; at phone width the tree folds into a menu. The home page, the release pages and the GIFs keep their addresses. Their sources moved from `demo/` to `site/`, and `scripts/check-site.py` fails when the site does not build or a link or anchor on it goes nowhere.
 
+### Error messages
+
+- **unpack:** a safe ZIP is no longer called damaged when two or more unpack runs work at the same time. unpack gives `unzip` its private copy of the archive as `/dev/fd/N`. On macOS, `unzip` can fail to open that path while another program opens a `/dev/fd` path with the same number. unpack then said the archive "could not be read as a ZIP", "could not be fully extracted", or "lists its names but not what kind of item each one is". In a test of 1,000 extractions of a safe ZIP, four at a time, 3 of 31 runs had one such refusal, in 0.5.4 and in 0.5.5. Now unpack starts `unzip` again, up to 3 times in total, only when `unzip` exits 9 and prints its own whole "cannot find or open" line for that path, and only if nothing was written. A member name that holds the same words does not count. `tar` and `gunzip` still run once. If all 3 attempts fail, unpack exits 3 with the new reason `private_copy_unopened`, retry `later`, subject `input`, and says: "could not check ARCHIVE: the system unzip could not open unpack's private copy of it. The archive was not found to be damaged. Nothing was extracted. Run the same command again." With `--list` the sentence "Nothing was extracted." is left out. During extraction the message starts "could not extract" and says what was left behind. A damaged archive still gets "could not be read as a ZIP" and `archive_unreadable`, after one attempt. Unpack capability declaration version 9 lists the new code for `extract` and `list`.
+
 ## [0.5.5] candidate — sweep, stash and unpack
 
 This version is prepared but not published. No release date or completed

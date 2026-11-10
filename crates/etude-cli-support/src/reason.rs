@@ -50,6 +50,7 @@ pub enum Code {
     ArchiveUnreadable,
     SizeLimitExceeded,
     ExtractionStopped,
+    PrivateCopyUnopened,
     ProfileInvalid,
     ProfileWriteFailed,
 }
@@ -81,6 +82,7 @@ impl Code {
         Self::ArchiveUnreadable,
         Self::SizeLimitExceeded,
         Self::ExtractionStopped,
+        Self::PrivateCopyUnopened,
         Self::ProfileInvalid,
         Self::ProfileWriteFailed,
     ];
@@ -358,6 +360,14 @@ pub const CODES: &[CodeSpec] = &[
         explanation: "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names.",
     },
     CodeSpec {
+        code: Code::PrivateCopyUnopened,
+        name: "private_copy_unopened",
+        retry: RetryClass::Later,
+        subject_kind: Some("input"),
+        operations: &["unpack:extract", "unpack:list"],
+        explanation: "The system extractor could not open unpack's private copy of the archive on any attempt, which can happen while other programs run; the archive was not found to be damaged, and the same request may work when run again.",
+    },
+    CodeSpec {
         code: Code::ProfileInvalid,
         name: "profile_invalid",
         retry: RetryClass::AfterChange,
@@ -524,6 +534,7 @@ impl Reason {
             Code::ArchiveUnreadable => "archive_unreadable",
             Code::SizeLimitExceeded => "size_limit_exceeded",
             Code::ExtractionStopped => "extraction_stopped",
+            Code::PrivateCopyUnopened => "private_copy_unopened",
             Code::ProfileInvalid => "profile_invalid",
             Code::ProfileWriteFailed => "profile_write_failed",
         }
@@ -699,6 +710,32 @@ mod tests {
             r#"{"code":"internal_error","retry":"never"}"#
         );
         assert!(codes_json("unpack").contains("\"code\":\"insufficient_space\""));
+    }
+
+    /// A copy the extractor could not open says nothing about the archive, so
+    /// the code asks for the same request again, later, and only unpack lists it.
+    #[test]
+    fn an_unopened_private_copy_is_retried_later_and_only_unpack_lists_it() {
+        let unopened = Reason::refusal(
+            Code::PrivateCopyUnopened,
+            Some(Subject::wait("input", None)),
+        );
+        assert_eq!(
+            unopened.json(),
+            r#"{"code":"private_copy_unopened","retry":"later","subject":{"kind":"input"}}"#
+        );
+        let unpack = codes_json("unpack");
+        let row = unpack
+            .split("{\"code\":")
+            .find(|row| row.starts_with("\"private_copy_unopened\""))
+            .expect("unpack lists private_copy_unopened");
+        assert!(row.contains(r#""operations":["extract","list"]"#), "{row}");
+        for tool in ["sweep", "stash"] {
+            assert!(
+                !codes_json(tool).contains("private_copy_unopened"),
+                "{tool}"
+            );
+        }
     }
 
     /// Every refusal code can be built without a panic, and waiting never heals

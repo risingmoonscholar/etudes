@@ -79,6 +79,6 @@ Sources: Apple's [getxattr(2)](https://developer.apple.com/library/archive/docum
 and [fsetxattr(2)](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsetxattr.2.html)
 document descriptor access, absent attributes, and unsupported storage. Extractor
 propagation and exFAT storage are measured behavior, rather than promises inferred
-from these manuals. The unpack capability declaration is version 8 and the result
-envelope is version 4. `docs/contracts/v8/unpack.json` is the canonical pin and
+from these manuals. The unpack capability declaration is version 9 and the result
+envelope is version 4. `docs/contracts/v9/unpack.json` is the canonical pin and
 `v1/unpack.json` mirrors it; earlier pins stay immutable.
