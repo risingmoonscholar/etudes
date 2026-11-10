@@ -57,20 +57,28 @@ fi
 tests_actual=$(printf '%s\n' "$tests_output" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
 [ -z "$tests_actual" ] && { echo "FAIL could not count tests; the suite did not report"; exit 1; }
 
-for f in README.md docs/testing.md site/index.html; do
+# README.md states no counts; docs/testing.md and the site carry them. A
+# count that comes back into README.md must be checked too, so its return is a
+# failure here until this list includes README.md again.
+for f in docs/testing.md site/index.html; do
   claim "$f" '[0-9]+ tests' '[0-9]+' "tests" "$tests_actual"
 done
+if grep -qE '[0-9]+ (tests|scenarios)\b' README.md; then
+  bad "README.md states a test or scenario count, which this script does not check there. Add README.md to the count lists here and in sync-claims.sh, or remove the count."
+else
+  ok "README.md states no test or scenario count; docs/testing.md and the site carry them"
+fi
 
 # Scenario count, from what git TRACKS rather than what happens to be sitting
 # in the working tree. A reader gets what a clone contains, so an untracked
-# scenario is not one the readme can claim. Counting the filesystem here was
+# scenario is not one the docs can claim. Counting the filesystem here was
 # a bug in the first version of this fix: it read 36 with one file untracked,
-# so the readme was corrected to a number no clone would ever see.
+# so the docs were corrected to a number no clone would ever see.
 scenarios_actual=$(git ls-files 'stress/scenarios/*.sh' | wc -l | tr -d ' ')
-# Every file that states the number, not just the readme. site/index.html is
+# Every file that states the number, not just docs/testing.md. site/index.html is
 # the published site: it can be wrong in front of everyone while CI is green,
 # which is the exact failure this script exists to catch, one file over.
-for f in README.md docs/testing.md site/index.html; do
+for f in docs/testing.md site/index.html; do
   claim "$f" '[0-9]+ scenarios' '[0-9]+' "scenarios" "$scenarios_actual"
 done
 
@@ -141,12 +149,13 @@ else
 fi
 
 # etude-core's zero dependencies, the claim the no-network argument rests on.
-# Checked against the manifest, not against the sentence in the readme.
+# Checked against the manifest, not against the sentence in docs/testing.md
+# and SECURITY.md.
 core_deps=$(awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f && NF && $0 !~ /^#/' crates/etude-core/Cargo.toml | wc -l | tr -d ' ')
 if [ "$core_deps" = "0" ]; then
   ok "etude-core declares zero dependencies in its manifest"
 else
-  bad "readme says etude-core has zero dependencies; its manifest lists $core_deps"
+  bad "docs/testing.md and SECURITY.md say etude-core has zero dependencies; its manifest lists $core_deps"
 fi
 
 # The page carries the transcripts twice: fetched from site/transcripts.json
