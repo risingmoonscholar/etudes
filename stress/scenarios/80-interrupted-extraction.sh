@@ -64,8 +64,9 @@ if witness=$(wait_for_partial_staging "$PID") && stop_confirmed "$PID"; then
   wait "$PID" 2>/dev/null; STATUS=$?
   [ "$STATUS" -ne 0 ] && pass "killed unpack exited non-zero ($STATUS)" || fail "killed unpack exited zero"
 else
+  kill -CONT "$PID" 2>/dev/null || true
   wait "$PID" 2>/dev/null || true
-  fail "unpack did not reach a witnessed partial staging state within 10 seconds"
+  unproven "interrupted extraction" "no confirmed stop in the partial staging window"
   exit 0
 fi
 

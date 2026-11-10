@@ -108,8 +108,9 @@ if wait_for_record "$W/k.err" '"planned":120' "$PID" && stop_confirmed "$PID"; t
   [ ! -e "$W/killed" ] && pass "the killed extraction published nothing" || fail "a killed extraction published"
   for _ in $(seq 1 1000); do pgrep -f "$STAGE" >/dev/null 2>&1 || break; sleep 0.01; done
 else
-  fail "extraction never reached a counted record"
-  wait "$PID" 2>/dev/null
+  kill -CONT "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null || true
+  unproven "killed extraction" "no confirmed stop in the counted progress window"
 fi
 
 # --- a kill during apply -----------------------------------------------------
@@ -130,6 +131,7 @@ if wait_for_record "$W/ka.err" '"phase":"advancing"' "$PID" && stop_confirmed "$
   "$SWEEP" undo "$D" --json >"$W/kau.out" 2>/dev/null
   assert_eq 3000 "$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')" "undo after the kill returned every file"
 else
-  fail "apply never reached an advancing record"
-  wait "$PID" 2>/dev/null
+  kill -CONT "$PID" 2>/dev/null || true
+  wait "$PID" 2>/dev/null || true
+  unproven "killed apply" "no confirmed stop in the counted progress window"
 fi

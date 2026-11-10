@@ -102,14 +102,35 @@ if require hdiutil "failed cross-volume move needs a disk image"; then
     if hdiutil attach "$W/full.dmg" -nobrowse -mountpoint "$HOST/Filed" >/dev/null 2>&1; then
       register_mount "$HOST/Filed"
       printf 'schema_version = 1\n[[routes]]\nextension = "pdf"\nfolder = "Filed"\n' > "$PROFILE"
-      dd if=/dev/zero of="$HOST/Filed/filler" bs=1048576 count=128 2>/dev/null || true
-      # Free just enough space for metadata and the start of a 16 MiB copy.
-      rm -f "$HOST/Filed/filler"
-      dd if=/dev/zero of="$HOST/Filed/filler" bs=1048576 count=20 2>/dev/null || true
+      # Leave room to start a copy, but less than one complete source file.
+      if ! dd if=/dev/zero of="$HOST/Filed/filler" bs=1048576 count=20 2>"$W/filler.err"; then
+        unproven "failed cross-volume copy" "could not write the intended filler: $(cat "$W/filler.err")"
+        exit 0
+      fi
+      if ! python3 - "$HOST" "$HOST/Filed" <<'SPACE'
+import os, sys
+source, target = sys.argv[1:]
+fs = os.statvfs(target)
+available = fs.f_bavail * fs.f_frsize
+size = os.stat(os.path.join(source, 'report-1.pdf')).st_size
+print(f'copy premise: available={available} source_size={size}')
+assert os.stat(source).st_dev != os.stat(target).st_dev
+assert 0 < available < size
+assert os.stat(os.path.join(target, 'filler')).st_size == 20 * 1024 * 1024
+SPACE
+      then
+        unproven "failed cross-volume copy" "could not establish distinct devices and less free space than one source file"
+        exit 0
+      fi
+      pass "destination is a different device with less free space than one source file"
       SOURCE_HASH=$(shasum -a 256 "$HOST/report-1.pdf" | awk '{print $1}')
       OUT=$("$SWEEP" apply "$HOST" --scheme existing --since 0 --yes 2>&1); RC=$?
       assert_eq 3 "$RC" "cross-volume copy onto a nearly full image fails"
       assert_no_panic "failed cross-volume copy" "$OUT"
+      case "$OUT" in
+        *"could not move"*"the disk is full"*) pass "apply attempted the cross-volume move and reported lack of space" ;;
+        *) fail "apply did not witness a move failing for lack of space: $OUT" ;;
+      esac
       for i in 1 2 3; do
         assert_eq "$SOURCE_HASH" "$(shasum -a 256 "$HOST/report-$i.pdf" 2>/dev/null | awk '{print $1}')" "failed copy preserves original bytes $i"
         [ -f "$HOST/report-$i.pdf" ] && [ "$(stat -f %z "$HOST/report-$i.pdf")" = 16777216 ] \
