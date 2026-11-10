@@ -51,7 +51,8 @@ The entry does not say whether the release is tagged, or give a date.
   shows "Release candidate" and no date, and the footer says "not tagged yet".
 - The tag names the commit the after build ran at, or a commit with the same
   source for that tool (its crate, the crates it uses by path, the workspace
-  `Cargo.toml` and `Cargo.lock`): the entry is tagged. The changelog shows the
+  `Cargo.toml` and `Cargo.lock`, and any `rust-toolchain` or `.cargo/config`
+  file): the entry is tagged. This compares source, not the built bytes. The changelog shows the
   tag's date, and the footer names the tag.
 - The tag names a commit whose source for that tool differs: the site does not
   build until the entry is run again on the tag.

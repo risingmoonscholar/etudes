@@ -679,10 +679,15 @@ def install_line(tool, package, version):
 #     tagged, and the footer says the run's build had the same source. "Same"
 #     means `git diff` finds no change between the two commits in the tool's
 #     crate, the crates it depends on by path (read from both commits'
-#     Cargo.toml files), the workspace Cargo.toml and Cargo.lock. Those are
-#     exactly the inputs of `cargo build --release --locked -p <tool>-cli`, so
-#     the binary the entry ran is the binary the tag builds. A change anywhere
-#     else (another tool, docs, the site) does not touch it;
+#     Cargo.toml files: [dependencies], [build-dependencies], their
+#     [target.*] forms, and path dependencies inherited from the workspace),
+#     the workspace Cargo.toml and Cargo.lock, and the toolchain and Cargo
+#     settings (rust-toolchain.toml, rust-toolchain, .cargo/config.toml,
+#     .cargo/config). Those are the source and settings
+#     `cargo build --release --locked -p <tool>-cli` reads, so the tag holds
+#     the same source the entry's build was made from. This compares source,
+#     not bytes: the compiler on the machine is not part of it. A change
+#     anywhere else (another tool, docs, the site) does not count;
 #   - the tag names a commit with different source: the build stops, because
 #     the entry no longer shows that release. Run scripts/release-runs.py on
 #     the tag.
@@ -692,26 +697,59 @@ def git_out(*args):
     return done.stdout.strip() if done.returncode == 0 else None
 
 
-def crate_paths(rev, crate, seen=None):
-    """The crate folder and every crate it depends on by path, at REV."""
-    seen = set() if seen is None else seen
-    if crate in seen:
-        return seen
-    seen.add(crate)
-    text = git_out("show", f"{rev}:{crate}/Cargo.toml")
-    if text is None:
-        return seen
-    manifest = tomllib.loads(text)
-    for table in ("dependencies", "build-dependencies"):
-        for dep in manifest.get(table, {}).values():
-            if isinstance(dep, dict) and "path" in dep:
-                crate_paths(rev, posixpath.normpath(posixpath.join(crate, dep["path"])), seen)
+# Files outside the crates that change what cargo builds.
+BUILD_SETTINGS = ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain",
+                  ".cargo/config.toml", ".cargo/config")
+DEP_TABLES = ("dependencies", "build-dependencies")
+
+
+def crate_graph(read, crate):
+    """The crate folder and every crate it depends on by path.
+
+    READ(path) returns a file's text, or None. Covers [dependencies] and
+    [build-dependencies], the same tables under [target.<cfg>], and
+    `dep = { workspace = true }` entries whose [workspace.dependencies] entry
+    in the root Cargo.toml has a path (relative to the workspace root).
+    """
+    root_text = read("Cargo.toml")
+    workspace = (tomllib.loads(root_text).get("workspace", {}).get("dependencies", {})
+                 if root_text else {})
+    seen = set()
+
+    def walk(folder):
+        if folder in seen:
+            return
+        seen.add(folder)
+        text = read(f"{folder}/Cargo.toml")
+        if text is None:
+            return
+        manifest = tomllib.loads(text)
+        tables = [manifest.get(t, {}) for t in DEP_TABLES]
+        for target in manifest.get("target", {}).values():
+            tables += [target.get(t, {}) for t in DEP_TABLES]
+        for table in tables:
+            for name, dep in table.items():
+                if not isinstance(dep, dict):
+                    continue
+                if "path" in dep:
+                    walk(posixpath.normpath(posixpath.join(folder, dep["path"])))
+                elif dep.get("workspace") is True:
+                    inherited = workspace.get(dep.get("package", name), workspace.get(name))
+                    if isinstance(inherited, dict) and "path" in inherited:
+                        walk(posixpath.normpath(inherited["path"]))
+
+    walk(crate)
     return seen
+
+
+def crate_paths(rev, crate):
+    """crate_graph() as the files are at commit REV."""
+    return crate_graph(lambda path: git_out("show", f"{rev}:{path}"), crate)
 
 
 def same_tool_source(tool, rev_a, rev_b):
     paths = sorted(crate_paths(rev_a, f"crates/{tool}-cli") | crate_paths(rev_b, f"crates/{tool}-cli"))
-    done = subprocess.run(["git", "diff", "--quiet", rev_a, rev_b, "--", *paths, "Cargo.toml", "Cargo.lock"],
+    done = subprocess.run(["git", "diff", "--quiet", rev_a, rev_b, "--", *paths, *BUILD_SETTINGS],
                           cwd=ROOT, capture_output=True, text=True)
     if done.returncode not in (0, 1):
         raise BuildError(f"cannot compare {rev_a[:7]} with {rev_b[:7]}: {done.stderr.strip()}. "

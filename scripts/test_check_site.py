@@ -448,9 +448,11 @@ class ReleaseStateTest(unittest.TestCase):
         """A commit on BASE that changes PATH; HEAD goes back where it was."""
         head = self.git("rev-parse", "HEAD")
         self.git("checkout", "--quiet", "--detach", base)
+        (self.clone / path).parent.mkdir(parents=True, exist_ok=True)
         with open(self.clone / path, "a") as f:
             f.write(text)
-        self.git("commit", "--quiet", "-am", "change")
+        self.git("add", "--", path)
+        self.git("commit", "--quiet", "-m", "change")
         rev = self.git("rev-parse", "HEAD")
         self.git("checkout", "--quiet", "--detach", head)
         return rev
@@ -482,7 +484,8 @@ class ReleaseStateTest(unittest.TestCase):
                       build.footer(self.entry))
 
     def test_tag_on_a_commit_with_other_sweep_source_stops_the_build(self):
-        for path in ("crates/sweep-cli/src/main.rs", "crates/etude-core/src/lib.rs", "Cargo.lock"):
+        for path in ("crates/sweep-cli/src/main.rs", "crates/etude-core/src/lib.rs", "Cargo.lock",
+                     "rust-toolchain.toml", ".cargo/config.toml"):
             with self.subTest(path=path):
                 tagged = self.commit_on(self.rev, path, "\n")
                 self.git("tag", "-f", self.TAG, tagged)
@@ -504,6 +507,34 @@ class ReleaseStateTest(unittest.TestCase):
         page = (built / "changelog/sweep-0.5.5/index.html").read_text()
         self.assertIn(f"tag {self.TAG} (commit {self.rev[:7]})", page)
         self.assertNotIn("Release candidate", page)
+
+
+class CrateGraphTest(unittest.TestCase):
+    """Which crates count as a tool's source when a tag is compared."""
+
+    def test_target_and_workspace_path_deps_are_followed(self):
+        files = {
+            "Cargo.toml": '[workspace]\nmembers = ["crates/*"]\n'
+                          '[workspace.dependencies]\nshared = { path = "crates/shared" }\n'
+                          'remote = "1.0"\n',
+            "crates/t-cli/Cargo.toml": '[package]\nname = "t-cli"\n'
+                                       '[dependencies]\ncore = { path = "../core" }\nshared = { workspace = true }\n'
+                                       'remote = { workspace = true }\n'
+                                       '[target.\'cfg(target_os = "macos")\'.dependencies]\nmac = { path = "../mac" }\n',
+            "crates/core/Cargo.toml": '[package]\nname = "core"\n[build-dependencies]\ngen = { path = "../gen" }\n',
+            "crates/shared/Cargo.toml": '[package]\nname = "shared"\n',
+            "crates/mac/Cargo.toml": '[package]\nname = "mac"\n',
+            "crates/gen/Cargo.toml": '[package]\nname = "gen"\n',
+            "crates/other/Cargo.toml": '[package]\nname = "other"\n',
+        }
+        graph = load_build().crate_graph(files.get, "crates/t-cli")
+        self.assertEqual(graph, {"crates/t-cli", "crates/core", "crates/shared", "crates/mac", "crates/gen"})
+
+    def test_build_settings_are_compared(self):
+        settings = load_build().BUILD_SETTINGS
+        for name in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain",
+                     ".cargo/config.toml", ".cargo/config"):
+            self.assertIn(name, settings)
 
 
 class KeychainGuardTest(unittest.TestCase):
@@ -542,19 +573,37 @@ class KeychainGuardTest(unittest.TestCase):
         self.assertNotIn("building", done.stderr)
 
     @unittest.skipUnless(Path("/usr/bin/sandbox-exec").exists(), "macOS sandbox-exec only")
-    def test_runs_cannot_exec_security_or_write_outside(self):
+    def test_the_run_profile_denies_security(self):
+        # Read, never run: the real profile names /usr/bin/security in its
+        # exec deny rule and limits writes to the scratch folder.
+        profile = self.runs.sandbox_profile("/private/tmp/x")
+        self.assertIn('(deny process-exec* (literal "/usr/bin/security"))', profile)
+        self.assertIn('(subpath "/private/tmp/x")', profile)
+        self.assertEqual(self.runs.sandboxed(["a"], "/private/tmp/x")[2], profile)
+
+    def test_the_shim_is_first_on_path_and_refuses(self):
+        with tempfile.TemporaryDirectory(prefix="etudes-shim-test-") as tmp:
+            scratch = self.runs.Scratch(Path(tmp), "t", "0" * 64)
+            first = scratch.env["PATH"].split(":")[0]
+            shim = Path(first) / "security"
+            self.assertTrue(shim.is_file())
+            # The shim itself, by its own path; the name is never looked up.
+            done = subprocess.run([str(shim), "help"], capture_output=True, text=True)
+            self.assertEqual(done.returncode, 77)
+            self.assertIn("security: refused", done.stderr)
+
+    @unittest.skipUnless(Path("/usr/bin/sandbox-exec").exists(), "macOS sandbox-exec only")
+    def test_sandbox_denies_the_named_exec_and_writes_outside(self):
+        # The exec rule, proved on a harmless binary in security's place.
         with tempfile.TemporaryDirectory(prefix="etudes-sandbox-test-") as tmp:
             base = Path(tmp) / "scratch"
             base.mkdir()
             scratch = self.runs.Scratch(base, "t", "0" * 64)
-            # By absolute path: the sandbox refuses the exec.
-            done = scratch.exec([self.runs.SECURITY, "help"])
+            done = scratch.exec(["/usr/bin/true"], deny_exec="/usr/bin/true")
             self.assertNotEqual(done.returncode, 0)
             self.assertIn(b"Operation not permitted", done.stdout)
-            # By name: the shim on the front of PATH refuses first.
-            done = scratch.exec(["/bin/sh", "-c", "security help"])
-            self.assertEqual(done.returncode, 77)
-            self.assertIn(b"security: refused", done.stdout)
+            done = scratch.exec(["/usr/bin/true"])
+            self.assertEqual(done.returncode, 0, done.stdout)
             # A write outside the scratch folder is refused; inside works.
             outside = Path(tmp) / "outside.txt"
             done = scratch.exec(["/usr/bin/touch", str(outside)])

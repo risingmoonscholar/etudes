@@ -319,15 +319,20 @@ def build(tool, ref, rev, tmp, target, side):
 
 # --- the sandbox --------------------------------------------------------------
 
-def sandbox_profile(root):
-    """Writes only under ROOT (and /dev/null, /dev/tty); /usr/bin/security never runs."""
+def sandbox_profile(root, deny_exec=SECURITY):
+    """Writes only under ROOT (and /dev/null, /dev/tty); DENY_EXEC never runs.
+
+    Every run uses the default, /usr/bin/security. The parameter is there so a
+    test can prove the exec rule on a harmless binary without ever running
+    security itself.
+    """
     real = os.path.realpath(root)
     return f"""(version 1)
 (allow default)
 (deny file-write*
   (require-not (require-any (subpath "{real}") (literal "/dev/null") (literal "/dev/tty")
                             (literal "/dev/dtracehelper"))))
-(deny process-exec* (literal "{SECURITY}"))
+(deny process-exec* (literal "{deny_exec}"))
 """
 
 
@@ -341,8 +346,8 @@ def security_shim(folder):
     return folder
 
 
-def sandboxed(argv, root):
-    return ["/usr/bin/sandbox-exec", "-p", sandbox_profile(root), *argv]
+def sandboxed(argv, root, deny_exec=SECURITY):
+    return ["/usr/bin/sandbox-exec", "-p", sandbox_profile(root, deny_exec), *argv]
 
 
 def force_rmtree(path):
@@ -410,9 +415,9 @@ class Scratch:
             text = text.replace(path, SCRATCH)
         return text.encode("utf-8")
 
-    def exec(self, argv, timeout=300):
+    def exec(self, argv, timeout=300, deny_exec=SECURITY):
         try:
-            return subprocess.run(sandboxed(argv, self.root), cwd=self.work, env=self.env,
+            return subprocess.run(sandboxed(argv, self.root, deny_exec), cwd=self.work, env=self.env,
                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, timeout=timeout)
         except subprocess.TimeoutExpired as error:
