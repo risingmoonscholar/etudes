@@ -3,13 +3,11 @@
 #
 # check-claims.sh compares two documented counts against reality and fails on
 # drift. Adding a test moves the count, so every change that adds one has to
-# update README.md and site/demo/index.html too. Asking a person -- or a model --
-# to carry a number they can measure is the wrong shape, and it has been the
-# single most expensive mistake in this repo's factory loop: four of eight
-# cycles on one unit were spent on it, once by writing 256 when reality was
-# 253, once by DELETING the documented count rather than correcting it, twice
-# by leaving it stale. Every substantive change in those same cycles was
-# correct. The trap is bookkeeping, not judgement.
+# update docs/testing.md and site/demo/index.html too. Carrying by hand a number
+# that a script can measure is the wrong shape. It has gone wrong four times
+# in this repo: once by writing 256 when reality was 253, once by DELETING the
+# documented count rather than correcting it, twice by leaving it stale. The
+# trap is bookkeeping, not judgement.
 #
 # So this is the mirror of the checker, and the two are held together by
 # running the checker afterwards rather than by trusting them to agree. If
@@ -20,11 +18,12 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-FILES="README.md docs/testing.md site/demo/index.html"
+# README.md states no counts; check-claims.sh fails if one comes back.
+FILES="docs/testing.md site/demo/index.html"
 
 # Measured exactly as check-claims.sh measures. Test count from the suite's
 # own report; scenario count from what git TRACKS, because a reader gets what
-# a clone contains and an untracked scenario is not one the readme can claim.
+# a clone contains and an untracked scenario is not one the docs can claim.
 if ! tests_output=$(cargo test --all 2>&1); then
   echo "FAIL cargo test --all failed; refusing to sync claims from an incomplete suite"
   printf '%s\n' "$tests_output" | tail -60

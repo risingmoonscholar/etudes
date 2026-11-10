@@ -2,6 +2,9 @@
 
 Unpack opens an archive without the surprises. Back to the [README](../README.md).
 
+`unpack` has no undo. It writes no journal, so no command reverses an
+extraction.
+
 ## An audited transaction
 
 **Unpack publishes an audited transaction.** Extraction happens in a private
