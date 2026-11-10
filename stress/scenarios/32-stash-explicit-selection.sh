@@ -15,7 +15,7 @@ a=root/'alpha'/'PRIVATE_record.pdf';b=root/'beta'/'PRIVATE_record.pdf';tree=root
 for parent in (a.parent,b.parent,tree):parent.mkdir()
 a.write_bytes(b'synthetic alpha');b.write_bytes(b'synthetic beta');(tree/'payload').write_bytes(b'synthetic tree')
 sibling=a.parent/'unselected_PRIVATE';sibling.write_bytes(b'synthetic untouched')
-env=dict(os.environ,ETUDE_STATE_DIR=str(root/'state'),ETUDE_JOURNAL_KEY='56'*32)
+env=dict(os.environ,ETUDE_STATE_DIR=str(root/'state'))
 def run(*args):return subprocess.run([str(binary),*map(str,args)],env=env,capture_output=True,text=True)
 for selected in [(tree,tree/'payload'),(a,a)]:
  result=run('select',*selected,'--into',holding,'--json');assert result.returncode==2

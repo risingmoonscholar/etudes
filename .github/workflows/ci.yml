@@ -239,6 +239,12 @@ jobs:
       - name: Stress CI scope still distinguishes code from documentation
         run: bash scripts/stress-ci-scope.sh --self-test
 
+      - name: Stress scenarios follow source rules
+        run: python3 scripts/check-stress-taste.py
+
+      - name: Stress suite rules reject weak tests
+        run: python3 scripts/test_stress_rules.py
+
       - name: The stress baseline rejects assertion and scenario loss
         run: python3 -m unittest discover -s scripts -p 'test_check_stress_baseline.py' -v
 

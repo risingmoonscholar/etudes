@@ -53,7 +53,7 @@ build_blender() {
   mkdir -p "$d/textures"
   : > "$d/Scene.blend"; : > "$d/Scene.blend1"
   for c in Color Normal Roughness Displacement; do : > "$d/textures/Ground_$c.png"; done
-  : > "$d/render_final.png"; : > "$d/notes.txt"
+  for c in 1 2 3; do : > "$d/render_$c.png"; done; : > "$d/notes.txt"
 }
 
 build_flp() {
@@ -64,7 +64,7 @@ build_flp() {
   mkdir -p "$d/Backup" "$d/Audio"
   : > "$d/anthem.flp"
   for c in "16h00" "15h42" "14h30"; do : > "$d/Backup/anthem (autosaved at $c).flp"; done
-  : > "$d/Audio/render.wav"; : > "$d/reference.mp3"
+  : > "$d/Audio/render.wav"; for c in 1 2 3; do : > "$d/reference_$c.wav"; done
 }
 
 build_song() {
@@ -75,6 +75,7 @@ build_song() {
   local d="$1" c
   mkdir -p "$d/Media" "$d/Cache" "$d/History" "$d/Bounces" "$d/Stems"
   : > "$d/closer.song"
+  for c in 1 2 3; do : > "$d/reference_$c.wav"; done
   : > "$d/Media/vocal.wav"; : > "$d/Media/guitar.wav"
   for c in 1 2 3; do : > "$d/History/closer-$c.song"; done
   : > "$d/Bounces/mixdown.wav"; : > "$d/Stems/drums.wav"
@@ -90,6 +91,7 @@ build_ptx() {
   : > "$d/Song 2.ptx"; : > "$d/._Song 2.ptx"
   : > "$d/Audio Files/kick.wav"; : > "$d/Audio Files/._kick.wav"
   : > "$d/WaveCache.wfm"
+  for c in 1 2 3; do : > "$d/reference_$c.wav"; done
 }
 
 declare -a NAMES=(godot blender flp song ptx)
@@ -477,7 +479,7 @@ fi
 LD="$W/LooseDoc"; mkdir -p "$LD"
 : > "$LD/anthem.flp"
 for n in 1 2 3; do : > "$LD/invoice_$n.pdf"; done
-for n in 1 2; do : > "$LD/sample_$n.wav"; done
+for n in 1 2 3; do : > "$LD/sample_$n.wav"; done
 LD_OUT=$("$SWEEP" "$LD" 2>&1); LD_CODE=$?
 assert_eq 0 "$LD_CODE" "a stray .flp no longer refuses the whole folder"
 if grep -qE '^  Documents' <<<"$LD_OUT"; then
@@ -485,7 +487,7 @@ if grep -qE '^  Documents' <<<"$LD_OUT"; then
 else
   fail "nothing grouped beside the stray document: $LD_OUT"
 fi
-if grep -q "project document and was not touched" <<<"$LD_OUT"; then
+if [ "$LD_CODE" = 0 ] && grep -qE '^  Documents' <<<"$LD_OUT" && grep -q "project document and was not touched" <<<"$LD_OUT"; then
   pass "the document itself is disclosed as held"
 else
   fail "the .flp was held silently or moved: $LD_OUT"

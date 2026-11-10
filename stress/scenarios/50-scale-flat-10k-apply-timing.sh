@@ -63,11 +63,11 @@ assert_eq "$N" "$BEFORE_COUNT" "fixture tree has exactly $N files before anythin
 
 # --- plan --------------------------------------------------------------
 t0=$(date +%s.%N)
-PLAN_JSON=$("$SWEEP" "$D" --json 2>/tmp/plan_err_$$.txt)
+PLAN_JSON=$("$SWEEP" "$D" --json 2>"$W/plan.err")
 PLAN_EC=$?
 t1=$(date +%s.%N)
 PLAN_S=$(echo "$t1 - $t0" | bc)
-rm -f /tmp/plan_err_$$.txt
+rm -f "$W/plan.err"
 
 assert_eq 0 "$PLAN_EC" "plan exits 0 on the $N-file flat directory"
 snapshot_tree "$D" "$AFTER_PLAN_MANIFEST"
@@ -182,4 +182,10 @@ printf '    measured:      N=%-6s build=%ss  plan=%ss  apply=%ss  undo=%ss  veri
 # Throughput is recorded above, but it is not a correctness exemption. A
 # hardware-specific threshold belongs in the historical result table, where it
 # cannot allowlist unrelated assertions in this file.
-pass "apply timing recorded for this runner (${APPLY_S}s for $N files); integrity assertions remain independently gating"
+if python3 - "$APPLY_S" "$GROUP_COUNT" <<'PY_TIMING'
+import math, sys
+elapsed, moved = float(sys.argv[1]), int(sys.argv[2])
+assert math.isfinite(elapsed) and elapsed > 0 and moved > 0
+PY_TIMING
+then pass "apply timing is a positive finite measurement for a nonempty group (${APPLY_S}s for $GROUP_COUNT files)"
+else fail "apply timing or moved group was invalid: elapsed=$APPLY_S grouped=$GROUP_COUNT"; fi

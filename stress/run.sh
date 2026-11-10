@@ -42,9 +42,12 @@ STRESS_LOCK_OWNED=1
 printf '%s\n' "$$" > "$LOCK_DIR/pid"
 trap cleanup_run_lock EXIT
 
-echo "building release binaries"
-cargo build --release --quiet || { echo "build failed"; exit 1; }
-export BIN="$PWD/target/release"
+if [ -z "${BIN:-}" ]; then
+  echo "building release binaries"
+  cargo build --release --quiet || { echo "build failed"; exit 1; }
+  BIN="$PWD/target/release"
+fi
+export BIN="$(cd "$BIN" && pwd)"
 
 # The scenario wrapper and this runner use one record format and one verdict
 # function.  Sourcing with SCENARIO=run defines helpers without wrapping this
@@ -105,12 +108,14 @@ PY
   # Each case executes in the bounded helper's owned session. Disable nested
   # job control so the direct-run wrapper stays in that session and is reaped
   # with every descendant on timeout or interruption.
+  case_cwd=$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-cwd-XXXXXX")
   if STRESS_RESULT_FD=197 SCENARIO="$name" STRESS_NO_JOB_CONTROL=1 STRESS_FAILURE_ARTIFACTS="$case_artifacts" \
-      python3 stress/bounded.py --timeout-ms "$CASE_TIMEOUT_MS" --evidence "$process_evidence" --pass-fd 197 -- bash "$s"; then
+      python3 stress/bounded.py --timeout-ms "$CASE_TIMEOUT_MS" --evidence "$process_evidence" --pass-fd 197 -- bash -c 'cd "$1" && exec bash "$2"' bash "$case_cwd" "$PWD/$s"; then
     bounded_status=0
   else
     bounded_status=$?
   fi
+  rm -rf "$case_cwd"
   python3 - "$process_evidence" "$transcript" <<'PY'
 import json
 import pathlib
