@@ -6,8 +6,7 @@
 #
 # The second apply is made by adding new files after the first one finished,
 # and `sweep status` confirms both are on record and reversible before any undo
-# runs. The only wait is a short one between applies, so that the two records
-# have different times; nothing depends on stopping a run part way.
+# runs. Nothing waits and nothing depends on stopping a run part way.
 #
 # The folder names hold a space, a single quote and a tab, so the printed step
 # is quoted both ways sweep quotes a path, and each step is run exactly as
@@ -57,7 +56,6 @@ hold_back() { mv "$1"/archive_* "$1.later/"; }
 bring_back() { mv "$1.later"/archive_* "$1/"; }
 apply() {  # apply DIR LABEL
   local out rc
-  sleep 0.05  # records are ordered by modification time
   out=$("$SWEEP" apply "$1" --since 0 --yes 2>&1 </dev/null); rc=$?
   assert_eq 0 "$rc" "$2: apply exit"
 }
