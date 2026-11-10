@@ -43,7 +43,7 @@ class BaselineTests(unittest.TestCase):
             scenarios = root / "stress/scenarios"
             scenarios.mkdir(parents=True)
             (scenarios / "case.sh").touch()
-            catalog = [{"id": "case"}]
+            catalog = [{"id": "case", "tier": "platform"}]
             with patch.object(baseline, "ROOT", root), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual([], baseline.check({"case": 10}, catalog,
                     {"cases": [{"id": "case", "passed": 0, "unproven": 1}], "not_run": []}))

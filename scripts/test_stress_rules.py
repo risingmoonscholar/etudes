@@ -3,11 +3,12 @@
 These tests are written before the fixes. They fail until the suite meets them.
 
 1. The floor of passed assertions is checked on every run that proves at least
-   one assertion, also when the scenario reports unproven results. A run that
-   proves nothing on this host (a host limit) is not held to it. No floor is 0.
+   one assertion, also when the scenario reports unproven results. Only a
+   scenario of tier "platform" that proves nothing on this host (a host
+   limit) is not held to it. No floor is 0.
 2. Each scenario's unproven count is pinned in stress/unproven.json. A run
-   with more or fewer unproven results than the pin fails, except a run that
-   proves nothing on this host.
+   with more or fewer unproven results than the pin fails, with the same
+   host-limit exception.
 3. A scenario that stops early says so.
 4. Every scenario follows the source rules in scripts/check-stress-taste.py.
 5. Every planted bug in stress/mustfire is valid, and every scenario that the
@@ -111,10 +112,21 @@ class FloorAndPinTests(unittest.TestCase):
     def test_pinned_count_and_floor_met_passes(self):
         self.assertEqual([], baseline.check({"case": 3}, self.catalog, summary(3, 1), pins={"case": 1}))
 
-    def test_a_scenario_that_proved_nothing_on_this_host_is_not_held_to_floor_or_pin(self):
+    def test_a_platform_scenario_that_proved_nothing_on_this_host_is_not_held_to_floor_or_pin(self):
         # A host without disk images or sandbox-exec proves nothing and says so.
-        # That is a host limit, reported as unproven, not a lost assertion.
-        self.assertEqual([], baseline.check({"case": 10}, self.catalog, summary(0, 1), pins={}))
+        # For a scenario catalogued as tier "platform", that is a host limit,
+        # reported as unproven, not a lost assertion.
+        self.assertEqual([], baseline.check({"case": 10}, [{"id": "case", "tier": "platform"}],
+                                            summary(0, 1), pins={}))
+
+    def test_any_other_scenario_that_proved_nothing_is_held_to_floor_and_pin(self):
+        # A fast or load scenario needs nothing special from the host. If it
+        # proves nothing, the scenario is broken, not the host.
+        for tier in ("fast", "load", None):
+            catalog = [{"id": "case", "tier": tier}] if tier else self.catalog
+            errors = baseline.check({"case": 10}, catalog, summary(0, 1), pins={})
+            self.assertTrue(any("below baseline" in e for e in errors), (tier, errors))
+            self.assertTrue(any("unproven" in e for e in errors), (tier, errors))
 
     def test_a_partial_run_is_held_to_floor_and_pin(self):
         # One proven assertion means the scenario ran here; then a skipped
