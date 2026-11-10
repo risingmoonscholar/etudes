@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>unpack v0.5.5 candidate — leftover cleanup and progress · études</title>
-  <meta name="description" content="Unpack 0.5.5 removes a folder left by a killed extraction only when it can prove it, and reports progress.">
+  <meta name="description" content="Unpack 0.5.5 removes a folder left by a killed extraction only when it can prove it, reports progress, and no longer calls a safe ZIP damaged when several runs work at once.">
   <meta property="og:title" content="unpack v0.5.5 candidate — leftover cleanup and progress">
   <meta property="og:description" content="A proven leftover from a killed extraction is removed and named; anything unproved stays in place.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/unpack-safety.gif">
@@ -28,8 +28,10 @@
           <li><code>--progress-json</code> now covers extraction and <code>--list</code>. Progress comes from the judged listing and the private staging folder, not from extractor output. Redirected runs of 100 or more members print milestones on stderr.</li>
           <li><code>SECURITY.md</code> now states that code running as you can forge the staging marker that this cleanup checks.</li>
           <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
+          <li>A safe ZIP is no longer called damaged when several unpack runs work at the same time. On macOS the system <code>unzip</code> can fail to open unpack's private copy of the archive, which unpack gives it as a <code>/dev/fd</code> path, while another program opens a path with the same number. unpack now starts <code>unzip</code> again, up to 3 times in all, only when <code>unzip</code> exits 9 with its own "cannot find or open" line for that path and nothing was written. <code>tar</code> and <code>gunzip</code> still run once.</li>
+          <li>If all 3 attempts fail, unpack exits 3 with the new reason <code>private_copy_unopened</code>, retry <code>later</code>, and says the archive was not found to be damaged and to run the same command again. A damaged archive still gets <code>archive_unreadable</code> after one attempt.</li>
         </ul>
-        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The unpack capability declaration is version 8.</p>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The unpack capability declaration is version 9; it lists <code>private_copy_unopened</code> for extraction and <code>--list</code>.</p>
       </div>
     </article>
 
