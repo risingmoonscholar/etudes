@@ -235,6 +235,18 @@ no filesystem-level mark saying which library owns that media. That
 relationship lives in the library's own database. Sweep protects managed
 layouts; it cannot protect an arrangement only the application knows about.
 
+## Undo
+
+`sweep undo FOLDER` undoes one apply of that folder: of the applies that still
+have something to undo, the one whose undo record was written last. Every undo
+writes its record again, so an undo that stops part way, by folder or by id, is
+the one `sweep undo FOLDER` goes back to. Each apply is its own operation, so
+each needs its own undo. When you apply to a folder twice, run undo twice. After an undo, sweep
+says what the next undo of that folder will reach, and gives a step that does
+it. When an undo restored every file and says nothing about another apply, no
+apply of that folder is left to undo. When an undo record does not open, sweep
+says it cannot tell. See [undo, status and journals](undo-and-journals.md).
+
 ## Rules the tools share
 
 **Never coin a label the filesystem did not already contain.** A folder named
