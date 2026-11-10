@@ -674,7 +674,7 @@ def install_line(tool, package, version):
 # after the runs (the tag comes later) and git is the record of it. So the
 # build asks git, every time:
 #   - no <tool>-v<version> tag: a release candidate, no date;
-#   - the tag names the commit the after build ran at: tagged, the tag's date;
+#   - the tag names the commit the after build ran at: tagged;
 #   - the tag names another commit whose source for that tool is the same:
 #     tagged, and the footer says the run's build had the same source. "Same"
 #     means `git diff` finds no change between the two commits in the tool's
@@ -688,6 +688,9 @@ def install_line(tool, package, version):
 #     the same source the entry's build was made from. This compares source,
 #     not bytes: the compiler on the machine is not part of it. A change
 #     anywhere else (another tool, docs, the site) does not count;
+#   - a release date comes only from an annotated tag (git tag -a): its tagger
+#     date. A lightweight tag shows "Tagged" with no date. Nothing falls back
+#     to CHANGELOG.md or to a commit date;
 #   - the tag names a commit with different source: the build stops, because
 #     the entry no longer shows that release. Run scripts/release-runs.py on
 #     the tag.
@@ -763,16 +766,22 @@ def _release_state(tool, version, rev):
     tag_rev = git_out("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
     if not tag_rev:
         return {"tagged": False, "tag": tag}
-    date = git_out("for-each-ref", "--format=%(creatordate:short)", f"refs/tags/{tag}")
+    annotated = git_out("cat-file", "-t", f"refs/tags/{tag}") == "tag"
+    # The tagger date of an annotated tag, and nothing else.
+    date = git_out("for-each-ref", "--format=%(taggerdate:short)", f"refs/tags/{tag}") if annotated else None
     if tag_rev != rev and not same_tool_source(tool, rev, tag_rev):
         raise BuildError(f"the tag {tag} names {tag_rev[:7]}, whose {tool} source differs from "
                          f"commit {rev[:7]}, where the entry's after build ran. Run "
                          f"scripts/release-runs.py {tool} {version} --before <previous tag> --after {tag}")
-    return {"tagged": True, "tag": tag, "tag_commit": tag_rev[:7], "date": date, "same_rev": tag_rev == rev}
+    return {"tagged": True, "tag": tag, "tag_commit": tag_rev[:7], "annotated": annotated,
+            "date": date or None, "same_rev": tag_rev == rev}
 
 
 def release_state(entry):
-    """{"tagged", "tag", and when tagged "tag_commit", "date", "same_rev"}, from git."""
+    """{"tagged", "tag", and when tagged "tag_commit", "annotated", "date", "same_rev"}, from git.
+
+    "date" is the tagger date of an annotated tag, or None for a lightweight one.
+    """
     return dict(_release_state(entry["tool"], entry["version"], entry["builds"]["after"]["rev"]))
 
 
@@ -792,17 +801,20 @@ def footer(entry):
 
 
 def release_meta(entry):
-    """The date of a tagged release, or the release-candidate mark."""
+    """The annotated tag's date, "Tagged" for a lightweight tag, or the release-candidate mark."""
     state = release_state(entry)
-    if state["tagged"]:
+    if state["tagged"] and state["date"]:
         return f'<time datetime="{esc_attr(state["date"])}">{esc(state["date"])}</time>'
+    if state["tagged"]:
+        return '<span class="pill rc">Tagged</span>'
     return '<span class="pill rc">Release candidate</span>'
 
 
 def entry_order(entry):
-    """Newest first sorts by this, descending: candidates, then tag date, then version."""
+    """Newest first sorts by this, descending: candidates, then dated tags by date,
+    then tags with no date, each by version."""
     state = release_state(entry)
-    return (not state["tagged"], state.get("date", ""), tuple(int(n) for n in entry["version"].split(".")))
+    return (not state["tagged"], state.get("date") or "", tuple(int(n) for n in entry["version"].split(".")))
 
 
 def changelog_entries():

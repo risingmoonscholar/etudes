@@ -457,6 +457,24 @@ class ReleaseStateTest(unittest.TestCase):
         self.git("checkout", "--quiet", "--detach", head)
         return rev
 
+    def test_lightweight_tag_shows_tagged_without_a_date(self):
+        self.git("tag", self.TAG, self.rev)
+        build = self.build()
+        state = build.release_state(self.entry)
+        self.assertTrue(state["tagged"])
+        self.assertIsNone(state["date"])
+        meta = build.release_meta(self.entry)
+        self.assertIn("Tagged", meta)
+        self.assertNotIn("<time", meta)
+        self.assertNotIn("Release candidate", meta)
+
+    def test_lightweight_tag_on_the_version_being_released_fails_the_site_check(self):
+        self.git("tag", self.TAG, self.rev)
+        done = subprocess.run([sys.executable, str(self.clone / "scripts/check-site.py")],
+                              cwd=self.clone, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn(f"{self.TAG} is a lightweight tag", done.stdout)
+
     def test_untagged_is_a_release_candidate_without_a_date(self):
         build = self.build()
         state = build.release_state(self.entry)
@@ -465,13 +483,21 @@ class ReleaseStateTest(unittest.TestCase):
         self.assertIn("Release candidate", build.release_meta(self.entry))
         self.assertNotIn("<time", build.release_meta(self.entry))
 
-    def test_tag_on_the_run_commit_is_tagged_with_its_date(self):
-        self.git("tag", "-a", "-m", "release", self.TAG, self.rev)
+    def annotated_tag(self, rev, date="2030-01-02T12:00:00+00:00"):
+        # A tagger date no commit has, so the date shown can only come from the tag.
+        env = dict(os.environ, GIT_COMMITTER_DATE=date)
+        subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                        "-c", "tag.gpgsign=false", "tag", "-a", "-m", "release", self.TAG, rev],
+                       cwd=self.clone, env=env, check=True, capture_output=True)
+
+    def test_annotated_tag_gives_its_tagger_date(self):
+        self.annotated_tag(self.rev)
         build = self.build()
         state = build.release_state(self.entry)
         self.assertTrue(state["tagged"])
-        date = self.git("for-each-ref", "--format=%(creatordate:short)", f"refs/tags/{self.TAG}")
-        self.assertIn(f'<time datetime="{date}">', build.release_meta(self.entry))
+        self.assertEqual(state["date"], "2030-01-02")
+        self.assertIn('<time datetime="2030-01-02">2030-01-02</time>', build.release_meta(self.entry))
+        self.assertNotIn("Tagged", build.release_meta(self.entry))
         self.assertIn(f"tag {self.TAG} (commit {self.rev[:7]})", build.footer(self.entry))
         self.assertNotIn("not tagged", build.footer(self.entry))
 
@@ -497,7 +523,7 @@ class ReleaseStateTest(unittest.TestCase):
     def test_tagged_site_passes_the_site_check(self):
         # At tag time pages.yml builds and checks the tagged tree. The entry
         # made before the tag must not stop it.
-        self.git("tag", "-a", "-m", "release", self.TAG, self.rev)
+        self.annotated_tag(self.rev)
         done = subprocess.run([sys.executable, str(self.clone / "scripts/check-site.py")],
                               cwd=self.clone, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -507,6 +533,7 @@ class ReleaseStateTest(unittest.TestCase):
         page = (built / "changelog/sweep-0.5.5/index.html").read_text()
         self.assertIn(f"tag {self.TAG} (commit {self.rev[:7]})", page)
         self.assertNotIn("Release candidate", page)
+        self.assertIn('<time datetime="2030-01-02">', page)
 
 
 class CrateGraphTest(unittest.TestCase):

@@ -30,6 +30,8 @@ Fails when:
     (an output line, exit code, command, result file, build or runs note edited
     by hand); or the fixture's setup, commands or result globs changed after
     the runs;
+  - the tag of the version being released (the tool's Cargo.toml version)
+    is lightweight, not made with git tag -a;
   - with no <tool>-v<version> tag, an entry's after build is not an ancestor
     of HEAD; with the tag, the tag names a commit whose tool source differs
     from the after build's; or the entry's before tag does not name its
@@ -207,7 +209,7 @@ def check_home(out):
 
         def order(e):
             state = build.release_state(e)
-            return (0 if state["tagged"] else 1, state.get("date", ""),
+            return (0 if state["tagged"] else 1, state.get("date") or "",
                     tuple(int(n) for n in e["version"].split(".")))
         newest = max(entries, key=order)
         article = build.render_entry(newest)
@@ -261,6 +263,15 @@ def check_builds(entry):
     except Exception as error:  # the build's own error says what to run
         problems.append(f"{name}: {error}")
         return problems
+    # The release being made now (the version in the tool's Cargo.toml) must be
+    # tagged with `git tag -a`: its date on the site is the tagger date. Older
+    # lightweight tags stay as they are and show "Tagged" with no date.
+    if state["tagged"] and not state.get("annotated"):
+        manifest = ROOT / "crates" / f"{entry['tool']}-cli" / "Cargo.toml"
+        current = tomllib.loads(manifest.read_text())["package"]["version"] if manifest.is_file() else None
+        if entry["version"] == current:
+            problems.append(f"{name}: {state['tag']} is a lightweight tag; tag the release with "
+                            f"git tag -a, so its date comes from the tag")
     if not state["tagged"]:
         known = git("cat-file", "-e", f"{after.get('rev')}^{{commit}}").returncode == 0
         if not known:
