@@ -270,8 +270,13 @@ def check_builds(entry):
         manifest = ROOT / "crates" / f"{entry['tool']}-cli" / "Cargo.toml"
         current = tomllib.loads(manifest.read_text())["package"]["version"] if manifest.is_file() else None
         if entry["version"] == current:
-            problems.append(f"{name}: {state['tag']} is a lightweight tag; tag the release with "
-                            f"git tag -a, so its date comes from the tag")
+            tag, commit = state["tag"], state["tag_commit"]
+            problems.append(
+                f"{name}: {tag} is a lightweight tag; the release needs an annotated tag "
+                f"(git tag -a), so its date comes from the tag. Recreate it on the same commit: "
+                f"git tag -d {tag} && git tag -a {tag} {commit} -m '{entry['tool']} {entry['version']}'. "
+                f"If it was pushed, also run git push origin :refs/tags/{tag} before "
+                f"git push origin {tag}. Same commit, type only (see RELEASING.md)")
     if not state["tagged"]:
         known = git("cat-file", "-e", f"{after.get('rev')}^{{commit}}").returncode == 0
         if not known:

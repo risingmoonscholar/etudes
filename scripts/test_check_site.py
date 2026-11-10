@@ -248,6 +248,18 @@ def load_check():
 class EntryTest(unittest.TestCase):
     """The pages job has the tags the release state is read from."""
 
+    def test_jobs_restore_annotated_tags_before_the_site_check(self):
+        # actions/checkout can store an annotated tag as lightweight on a tag
+        # push; both jobs fetch the tags as they are on the remote before the
+        # site check reads the tag type.
+        restore = "git fetch --force origin 'refs/tags/*:refs/tags/*'"
+        for workflow, check in (("ci.yml", "python3 scripts/check-site.py\n"),
+                                ("pages.yml", "python3 scripts/check-site.py --dir _site")):
+            with self.subTest(workflow=workflow):
+                text = (ROOT / ".github/workflows" / workflow).read_text()
+                self.assertIn(restore, text)
+                self.assertLess(text.index(restore), text.index(check))
+
     def test_pages_job_fetches_tags_before_it_checks_the_site(self):
         # build-site.py reads the release's tag state from local tags. The job
         # that publishes must have them, or a "not tagged yet" footer would go
@@ -400,15 +412,14 @@ class ChangelogDataTest(unittest.TestCase):
 
 class ReleaseStateTest(unittest.TestCase):
     """Tag state and date come from git at build time. Tried in a scratch clone
-    with throwaway tags; nothing is tagged or committed in this repository."""
+    with throwaway tags; nothing is tagged or committed in this repository.
+    The clone drops any real tag for the entry first, so these tests run the
+    same before and after the release is tagged."""
 
     TAG = "sweep-v0.5.5"
 
     @classmethod
     def setUpClass(cls):
-        if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{cls.TAG}"],
-                          cwd=ROOT, capture_output=True).returncode == 0:
-            raise unittest.SkipTest(f"{cls.TAG} exists here already")
         cls.tmp = tempfile.TemporaryDirectory(prefix="etudes-release-state-")
         cls.clone = Path(cls.tmp.name) / "clone"
         head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
@@ -424,6 +435,12 @@ class ReleaseStateTest(unittest.TestCase):
         cls.git("commit", "--quiet", "--allow-empty", "-m", "the checkout as it is")
         cls.entry = json.loads((cls.clone / "site/changelog/sweep-0.5.5.json").read_text())
         cls.rev = cls.entry["builds"]["after"]["rev"]
+        subprocess.run(["git", "tag", "-d", cls.TAG], cwd=cls.clone, capture_output=True)
+        # The version being released is the one in Cargo.toml. Keep it the
+        # entry's version in the clone, whatever this checkout is at.
+        manifest = cls.clone / "crates/sweep-cli/Cargo.toml"
+        text = manifest.read_text()
+        manifest.write_text(re.sub(r'(?m)^version = "[^"]+"', f'version = "{cls.entry["version"]}"', text, count=1))
 
     @classmethod
     def tearDownClass(cls):
@@ -474,6 +491,28 @@ class ReleaseStateTest(unittest.TestCase):
                               cwd=self.clone, capture_output=True, text=True)
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn(f"{self.TAG} is a lightweight tag", done.stdout)
+        self.assertIn(f"git tag -d {self.TAG} && git tag -a {self.TAG} {self.rev[:7]}", done.stdout)
+        self.assertIn("Same commit, type only", done.stdout)
+
+    def test_older_lightweight_tag_does_not_fail_the_site_check(self):
+        # unpack 0.5.3 is not the version in unpack's Cargo.toml, so a
+        # lightweight tag for it shows "Tagged" and passes.
+        older = "unpack-v0.5.3"
+        entry = json.loads((self.clone / "site/changelog/unpack-0.5.3.json").read_text())
+        current = tomllib.loads((self.clone / "crates/unpack-cli/Cargo.toml").read_text())["package"]["version"]
+        self.assertNotEqual(current, entry["version"])
+        subprocess.run(["git", "tag", "-d", older], cwd=self.clone, capture_output=True)
+        try:
+            self.git("tag", older, entry["builds"]["after"]["rev"])
+            self.assertEqual(self.git("cat-file", "-t", f"refs/tags/{older}"), "commit")
+            self.annotated_tag(self.rev)
+            done = subprocess.run([sys.executable, str(self.clone / "scripts/check-site.py")],
+                                  cwd=self.clone, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("Tagged", self.build().release_meta(entry))
+        finally:
+            subprocess.run(["git", "tag", "-d", older], cwd=self.clone, capture_output=True)
+            self.git("tag", older, entry["builds"]["after"]["rev"])
 
     def test_untagged_is_a_release_candidate_without_a_date(self):
         build = self.build()

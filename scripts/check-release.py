@@ -55,7 +55,11 @@ def check_annotated(expected, listing):
     refs = {line.split()[1] for line in listing.splitlines() if len(line.split()) == 2}
     light = [tag for tag in expected.values()
              if f"refs/tags/{tag}" in refs and f"refs/tags/{tag}^{{}}" not in refs]
-    require(not light, "lightweight release tags (make them with git tag -a): " + ", ".join(light))
+    require(not light,
+            "lightweight release tags: " + ", ".join(light) + ". Recreate each as an annotated tag "
+            "on the same commit: git tag -d TAG && git tag -a TAG <its commit> -m 'TOOL VERSION', "
+            "then git push origin :refs/tags/TAG && git push origin TAG. Same commit, type only "
+            "(see RELEASING.md)")
 
 
 def run(argv, env=None, expected=0):

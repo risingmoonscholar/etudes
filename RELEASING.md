@@ -128,6 +128,21 @@ finalize the release date and candidate wording through the PR. Recheck the
 resolved release tree before tagging. Tag with `git tag -a`. Publish new tags
 and release notes; never move an existing release tag to different code.
 
+One case allows recreating a pushed tag: a release tag pushed as a lightweight
+tag. Recreate it as an annotated tag on the same commit, so the commit stays the
+same and only the tag's type changes:
+
+```sh
+git rev-parse 'sweep-v0.5.5^{commit}'    # note the commit
+git tag -d sweep-v0.5.5
+git tag -a sweep-v0.5.5 <that commit> -m "sweep 0.5.5"
+git push origin :refs/tags/sweep-v0.5.5
+git push origin sweep-v0.5.5
+```
+
+`scripts/check-site.py` and `scripts/check-release.py --published` both fail on
+a lightweight tag for the version being released, and print these steps.
+
 Verify the exact advertised pins from the public remote:
 
 ```sh
