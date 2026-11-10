@@ -1,10 +1,10 @@
 {
-  "_about": "The tools Études ships. The home page, the docs sidebar and the docs index read this list; a new tool is one new entry. description is the short line for the docs; what is the home page's \"<tool> is ...\" sentence. crate is the folder whose Cargo.toml gives the install version. Each command's usage must be a line of that tool's captured help in site/transcripts.json; transcript names a captured run whose output the home page shows.",
+  "_about": "The tools Études ships. The home page, the docs sidebar and the docs index read this list; a new tool is one new entry. description is the short line for the docs; what is the home page's \"<tool> is ...\" sentence. crate is the folder whose Cargo.toml gives the install version. Each command's usage must be a line of that tool's captured help in site/transcripts.json; transcript names a captured run whose output the home page shows. Text in description, what and says may use `backticks` for code.",
   "tools": [
     {
       "name": "sweep",
-      "description": "Sorts a messy folder into groups, and moves nothing until you have seen the plan.",
-      "what": "sweep is a command that sorts a messy folder into groups. It moves nothing until you have seen the plan, and it can put the moves back.",
+      "description": "Sorts a messy folder into groups. It shows a plan first. Nothing moves until you run `sweep apply`.",
+      "what": "sweep is a command that sorts a messy folder into groups. It shows a plan first. Nothing moves until you run `sweep apply`, and `sweep undo` puts the moves back.",
       "docs": "docs/sweep.md",
       "crate": "crates/sweep-cli",
       "demo": "demo/#sweep",
@@ -29,8 +29,8 @@
     },
     {
       "name": "stash",
-      "description": "Moves files out of the way without deleting them, and brings them back.",
-      "what": "stash is a command that moves files out of the way without deleting them. It brings them back when you ask.",
+      "description": "Moves files into a hidden holding folder in the same folder, without deleting them. Nothing happens on its own; `stash pop` moves them back.",
+      "what": "stash is a command that moves files out of the way, into a hidden holding folder in the same folder. It deletes nothing, and nothing happens on its own. The files come back when you run `stash pop`.",
       "docs": "docs/stash.md",
       "crate": "crates/stash-cli",
       "demo": "demo/#stash",
@@ -38,7 +38,7 @@
         {
           "command": "stash ~/Desktop --for 3d",
           "usage": "stash [PATH] [--for DURATION]",
-          "says": "Moves the folder's visible items into a hidden holding folder, due back in 3 days.",
+          "says": "Moves the folder's visible items into a hidden holding folder, due back in 3 days. Nothing happens on its own when they are due.",
           "transcript": "stash-put"
         },
         {
@@ -49,7 +49,7 @@
         {
           "command": "stash pop ~/Desktop",
           "usage": "stash pop [PATH]",
-          "says": "Restores the batch for that folder."
+          "says": "Moves the batch for that folder back where it was."
         }
       ]
     },
