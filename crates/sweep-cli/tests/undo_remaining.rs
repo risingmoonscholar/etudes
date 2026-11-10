@@ -42,9 +42,13 @@ impl Case {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        self.run_with(KEY, args)
+    }
+
+    fn run_with(&self, key: &str, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_sweep"))
             .env("ETUDE_STATE_DIR", &self.state.0)
-            .env("ETUDE_JOURNAL_KEY", KEY)
+            .env("ETUDE_JOURNAL_KEY", key)
             .env("HOME", &self.home.0)
             .args(args)
             .output()
@@ -69,16 +73,26 @@ impl Case {
         }
     }
 
-    fn apply(&self) {
+    fn apply(&self) -> String {
+        self.apply_at(KEY, self.root())
+    }
+
+    /// Apply a folder with a key and return the undo record id it prints.
+    fn apply_at(&self, key: &str, root: &str) -> String {
         // Records are ordered by modification time; keep two applies apart.
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let out = self.run(&["apply", self.root(), "--yes", "--since", "0"]);
-        assert!(
-            out.status.success(),
+        let out = self.run_with(key, &["apply", root, "--yes", "--since", "0"]);
+        let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+        assert!(out.status.success(), "{text}");
+        text.lines()
+            .find_map(|line| line.strip_prefix("Undo record id: "))
+            .unwrap_or_else(|| panic!("no id in {text}"))
+            .trim()
+            .to_owned()
     }
 
     fn undo(&self, json: bool) -> (Option<i32>, String) {
@@ -100,6 +114,45 @@ impl Case {
             String::from_utf8_lossy(&out.stdout).into_owned(),
         )
     }
+
+    /// Run a printed `sweep undo ...` step. Text is stdout then stderr.
+    fn step(&self, step: &str) -> (Option<i32>, String) {
+        let rest = step.strip_prefix("sweep ").unwrap();
+        let mut args: Vec<String> = Vec::new();
+        for word in rest.split(' ').filter(|w| !w.is_empty()) {
+            args.push(word.trim_matches('\'').to_owned());
+        }
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.run(&refs);
+        (
+            out.status.code(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    }
+}
+
+/// The step at the end of the line that starts with `lead`.
+fn step_after(out: &str, lead: &str) -> String {
+    out.lines()
+        .find(|line| line.starts_with(lead))
+        .and_then(|line| line.rsplit(", run: ").next())
+        .unwrap_or_else(|| panic!("no line starting {lead:?} in {out}"))
+        .to_owned()
+}
+
+/// A file somewhere under `root` but not directly in it.
+fn moved_file(root: &Path, name: &str) -> PathBuf {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let dir = entry.unwrap().path();
+        if dir.is_dir() && dir.join(name).is_file() {
+            return dir.join(name);
+        }
+    }
+    panic!("{name} was not moved into a folder");
 }
 
 fn tree(root: &Path) -> Vec<(String, Option<Vec<u8>>)> {
@@ -121,21 +174,32 @@ fn tree(root: &Path) -> Vec<(String, Option<Vec<u8>>)> {
     items
 }
 
-fn remaining_in(json: &str) -> usize {
+/// The raw value of one details field: a number or null.
+fn field_in(json: &str, key: &str) -> String {
     let tail = json
-        .split("\"remaining_reversible\":")
+        .split(&format!("\"{key}\":"))
         .nth(1)
-        .unwrap_or_else(|| panic!("no remaining_reversible in {json}"));
+        .unwrap_or_else(|| panic!("no {key} in {json}"));
     tail.chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .unwrap()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+/// Only the files: undo keeps an empty folder it made while unreadable
+/// history might still need it.
+fn files(items: Vec<(String, Option<Vec<u8>>)>) -> Vec<(String, Option<Vec<u8>>)> {
+    items
+        .into_iter()
+        .filter(|(_, bytes)| bytes.is_some())
+        .collect()
+}
+
+fn remaining_in(json: &str) -> usize {
+    field_in(json, "remaining_reversible").parse().unwrap()
 }
 
 const ONE: &str = "Another apply of this folder can still be undone. To undo it, run: sweep undo '";
-const MORE: &str =
-    "more applies of this folder can still be undone. Run this once for each: sweep undo '";
+const MORE: &str = "more applies of this folder have something left to undo. To undo the next one, run: sweep undo '";
 
 #[test]
 fn one_apply_says_nothing_remains() {
@@ -245,4 +309,137 @@ fn an_apply_of_another_folder_is_not_counted() {
     let (code, json) = case.undo(true);
     assert_eq!(code, Some(0), "{json}");
     assert_eq!(remaining_in(&json), 0, "{json}");
+}
+
+#[test]
+fn a_partial_undo_does_not_send_the_folder_step_elsewhere() {
+    let case = Case::new("partial");
+    case.add("document", "pdf");
+    let first = case.apply();
+    case.add("photo", "jpg");
+    case.apply();
+    std::fs::remove_file(moved_file(&case.root.0, "photo_1.jpg")).unwrap();
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(3), "{out}");
+    assert!(out.contains("Restored 2 of 3 files."), "{out}");
+    // The folder step comes back to this record, so the line names the other
+    // apply only by its id.
+    let line = format!(
+        "Another apply of this folder can still be undone. To undo it before this one is finished, run: sweep undo --id {first}"
+    );
+    assert!(out.contains(&line), "{out}");
+    assert!(!out.contains(ONE), "{out}");
+    let (code, json) = case.undo(true);
+    assert_eq!(code, Some(3), "{json}");
+    assert_eq!(remaining_in(&json), 1, "{json}");
+    // The id step works as printed.
+    let (code, text) = case.step(&format!("sweep undo --id {first}"));
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("Restored 3 files."), "{text}");
+}
+
+const OTHER_KEY: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+#[test]
+fn an_unreadable_record_makes_the_count_unknown_and_says_what_undo_does_next() {
+    let case = Case::new("unreadable");
+    let elsewhere = Case::new("unreadable-b");
+    elsewhere.add("document", "pdf");
+    // An older record that the current key does not open.
+    case.apply_at(OTHER_KEY, elsewhere.root());
+    case.add("document", "pdf");
+    let before = tree(&case.root.0);
+    case.apply();
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    let line = format!(
+        "1 undo record could not be opened, so sweep cannot tell whether another apply of this folder remains. If you run sweep undo '{}' again, it stops at that record and moves nothing.",
+        case.root()
+    );
+    assert!(out.contains(&line), "{out}");
+    assert!(!out.contains(ONE), "{out}");
+    assert!(
+        !out.contains("--id"),
+        "no apply of this folder opens: {out}"
+    );
+    assert_eq!(files(before.clone()), files(tree(&case.root.0)));
+    // What the line says the next undo does is what it does.
+    let (code, text) = case.step(&format!("sweep undo '{}'", case.root()));
+    assert_ne!(code, Some(0), "{text}");
+    assert!(text.contains("Nothing was moved"), "{text}");
+    assert_eq!(files(before), files(tree(&case.root.0)));
+}
+
+#[test]
+fn an_unreadable_record_reports_null_in_json() {
+    let case = Case::new("unreadable-json");
+    let elsewhere = Case::new("unreadable-json-b");
+    elsewhere.add("document", "pdf");
+    case.apply_at(OTHER_KEY, elsewhere.root());
+    case.add("document", "pdf");
+    case.apply();
+    let (code, json) = case.undo(true);
+    assert_eq!(code, Some(0), "{json}");
+    assert_eq!(field_in(&json, "remaining_reversible"), "null", "{json}");
+    assert_eq!(field_in(&json, "records_not_opened"), "1", "{json}");
+}
+
+#[test]
+fn an_unreadable_record_between_two_applies_gives_the_id_step() {
+    let case = Case::new("between");
+    let elsewhere = Case::new("between-b");
+    case.add("document", "pdf");
+    let before = tree(&case.root.0);
+    let first = case.apply();
+    elsewhere.add("document", "pdf");
+    case.apply_at(OTHER_KEY, elsewhere.root());
+    case.add("photo", "jpg");
+    case.apply();
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(
+        out.contains("1 undo record could not be opened, so sweep cannot tell"),
+        "{out}"
+    );
+    assert!(
+        !out.contains(ONE),
+        "the folder step stops at that record: {out}"
+    );
+    let step = step_after(&out, "To undo the newest apply of this folder that opens");
+    assert_eq!(step, format!("sweep undo --id {first}"));
+    let (code, text) = case.step(&step);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("Restored 3 files."), "{text}");
+    let mut now = files(tree(&case.root.0));
+    now.retain(|(name, _)| !name.starts_with("photo_"));
+    assert_eq!(files(before), now, "the first apply is undone");
+}
+
+#[test]
+fn an_apply_with_only_an_empty_folder_left_says_so() {
+    let case = Case::new("empty");
+    case.add("document", "pdf");
+    let before = tree(&case.root.0);
+    let first = case.apply();
+    case.add("report", "pdf");
+    case.apply();
+    // Undo the older apply first. Its folder still holds the newer apply's
+    // files, so undo keeps it.
+    let (code, out) = case.step(&format!("sweep undo --id {first}"));
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains(ONE), "the newer apply comes next: {out}");
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    let line = format!(
+        "Another apply of this folder left an empty folder that undo removes. To remove that folder, run: sweep undo '{}'",
+        case.root()
+    );
+    assert!(out.contains(&line), "{out}");
+    assert!(!out.contains(ONE), "{out}");
+    let (code, out) = case.undo(false);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(!out.contains("Another apply"), "{out}");
+    let mut now = tree(&case.root.0);
+    now.retain(|(name, _)| !name.starts_with("report_"));
+    assert_eq!(before, now, "the empty folder is gone");
 }

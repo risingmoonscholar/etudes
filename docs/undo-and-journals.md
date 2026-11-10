@@ -67,20 +67,36 @@ back stays where it is and says the place is taken. A folder the newer apply may
 still need is kept; run the older step again later to remove it.
 
 Each apply is undone separately. One `sweep undo FOLDER` reverses one apply of
-that folder, the newest one that still has files to put back. When another
-apply of the same folder can still be undone, undo says so after the
-"Restored" line and prints the step, for example:
+that folder: the one it reaches first, newest first, that still has something
+to undo. After an undo, sweep looks at what the next `sweep undo FOLDER` will
+reach, and says so after the "Restored" line:
 
 ```console
 Restored 3 files.
 Another apply of this folder can still be undone. To undo it, run: sweep undo '/Users/you/Desktop'
 ```
 
-When more than one remains, it gives the count. `sweep undo` with no folder
-says the same about the folder it undid. When undo says nothing more, no apply
-of that folder is left to undo. `--json` gives the count in
-`details.remaining_reversible`. A record that does not open with the current
-key is not counted; `sweep status FOLDER` lists it.
+- When more than one remains, it gives the count: `2 more applies of this
+  folder have something left to undo. To undo the next one, run: ...`
+- When the next one only left an empty folder, it says that undo removes the
+  folder, and gives the same step.
+- When the next one's record is missing more than one entry, it says that the
+  step refuses it and moves nothing.
+- When this undo could not put every file back, the folder step comes back to
+  this apply. Another apply of the folder is then named only by its own step,
+  `sweep undo --id ID`, to undo it before this one is finished.
+- When an undo record does not open with the current key, sweep cannot tell
+  whether another apply of the folder remains, and says so. If the next
+  `sweep undo FOLDER` would stop at that record, the line says it stops there
+  and moves nothing, and gives the `sweep undo --id ID` step of the newest
+  apply of the folder that opens. `sweep status FOLDER` also stops at such a
+  record. Bring back the key that wrote it, or undo by id.
+
+`sweep undo` with no folder says the same about the folder it undid. When an
+undo restored every file and says nothing about another apply, no apply of that
+folder is left to undo. `--json` gives the count in
+`details.remaining_reversible`, `null` when a record did not open, and the
+number of records that did not open in `details.records_not_opened`.
 
 If `sweep undo` is killed after it has put the last file back, the folder that
 `sweep apply` created can be left behind, empty. Run `sweep undo` again: it

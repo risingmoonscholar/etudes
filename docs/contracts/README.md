@@ -91,9 +91,16 @@ could not remove at the destination adds `details.copy_left`: that path, or
 not know about that copy. The field is absent otherwise, and its presence does
 not change the status, reason or exit code.
 
-A `sweep undo` result adds `details.remaining_reversible`: how many other
-applies of the same folder can still be undone after this one, not counting a
-record that does not open. It does not change the status, reason or exit code.
+Every `sweep undo` result that carries `details.restored` (an undo that ran,
+whole or in part, status `done` or `incomplete`) adds two fields.
+`details.remaining_reversible` is how many other applies of the same folder
+still have something to undo; it is `null` when an undo record did not open,
+the record folder could not be listed or the folder no longer resolves.
+`details.records_not_opened` is how many undo records of any folder did not open
+with the current key, `null` when the record folder could not be listed or the
+folder no longer resolves. A refusal before anything moved, a nothing-to-undo
+result and an unreadable-record refusal carry neither. The fields do not change
+the status, reason or exit code.
 
 Stash also returns `download_in_flight` for a folder still downloading and
 `unknown_item` for an item id its stash does not hold. `stash pop` exits 3 with
