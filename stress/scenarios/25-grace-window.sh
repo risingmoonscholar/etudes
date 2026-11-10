@@ -48,6 +48,15 @@ fi
 # reading would re-protect it -- which is how a Spotlight reindex would freeze
 # a whole folder forever.
 set_mtime_relative 7200 "$D"/paper_*.pdf
+touch -a "$D"/paper_*.pdf
+python3 - "$D" <<'PY_ATIME'
+import os, pathlib, sys, time
+for path in pathlib.Path(sys.argv[1]).glob('paper_*.pdf'):
+    st = path.stat()
+    assert time.time() - st.st_mtime > 3600
+    assert time.time() - st.st_atime < 60
+PY_ATIME
+[ "$?" = 0 ] && pass "fixture has old mtimes and explicitly recent atimes" || fail "could not control access times"
 cat "$D/paper_1.pdf" > /dev/null
 
 OUT2=$(SWEEP_GRACE_SECS=3600 "$SWEEP" "$D" 2>&1)

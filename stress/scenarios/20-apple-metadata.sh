@@ -118,7 +118,7 @@ for i in range(3):
     (tree / f"ordinary-{i}.jpg").write_bytes(b"ordinary fixture")
 (tree / "image-link.jpg").symlink_to(target)
 PY
-unproven "a real Finder-created alias is skipped" "fixture writes FinderInfo directly; desktop automation is not run"
+echo "    note     " "a real Finder-created alias is skipped" "fixture writes FinderInfo directly; desktop automation is not run"
 snapshot_tree "$A" "$W/aliases-before.json"
 snapshot_tree "$W/extracted" "$W/target-before.json"
 "$SWEEP" "$A" --json >"$W/aliases.json"

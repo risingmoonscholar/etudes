@@ -59,12 +59,13 @@ fi
 
 KEYCHAIN_FENCE='(version 1)(allow default)(deny process-exec (literal "/usr/bin/security"))'
 
-# True only if the fence is proven here: a command runs inside it, and
-# /usr/bin/security does not. `security -h` only prints help if the proof fails.
+# True only if sandbox-exec runs a harmless control and enforces an added
+# process-exec denial. No security process is launched, even as a control.
 keychain_fence_works() {
   command -v sandbox-exec >/dev/null 2>&1 || return 1
   sandbox-exec -p "$KEYCHAIN_FENCE" /usr/bin/true >/dev/null 2>&1 || return 1
-  ! sandbox-exec -p "$KEYCHAIN_FENCE" /usr/bin/security -h >/dev/null 2>&1
+  # Prove process-exec denial with a harmless command, never security itself.
+  ! sandbox-exec -p "$KEYCHAIN_FENCE"'(deny process-exec (literal "/usr/bin/true"))' /usr/bin/true >/dev/null 2>&1
 }
 
 # keychain_fenced COMMAND...: run a command with no journal key, in a sandbox
@@ -129,6 +130,21 @@ PY
   else fail "$3: expected $2 files, found $n. FILES WERE LOST"; fi
 }
 
+# stop_confirmed PID: a successful SIGSTOP delivery is only a request. Wait
+# for ps(1)'s documented T state before the caller inspects and injects.
+# On failure the child is resumed; it must never be left stopped by a miss.
+stop_confirmed() {
+  local pid="$1" state deadline=$((SECONDS + 3))
+  kill -STOP "$pid" 2>/dev/null || return 1
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    state=$(ps -o state= -p "$pid" 2>/dev/null) || break
+    [[ "$state" != *T* ]] || return 0
+    [[ "$state" != *Z* ]] || break
+  done
+  kill -CONT "$pid" 2>/dev/null || true
+  return 1
+}
+
 # snapshot_tree DIR OUT: capture names, kinds, bytes and link targets without
 # following links.  This is the default oracle for movement and refusal cases;
 # a file count alone cannot distinguish a missing file from a duplicate.
@@ -191,8 +207,9 @@ assert_snapshot_ne() {
 
 # Journals go to a scratch state directory, never the real one.
 #
-# ETUDE_STATE_DIR redirects where journals are written while leaving HOME
-# alone, so the keychain still works. Without this, a scenario would write
+# ETUDE_STATE_DIR redirects journals and HOME isolates configuration. Both
+# directories are disposable; keychain access is separately fenced. Without
+# this, a scenario would write
 # into the user's own journal directory. `undo` picks the newest journal
 # globally. Two scenarios could undo each other's work. A stress run would
 # leave real state behind.
@@ -216,14 +233,18 @@ assert_snapshot_ne() {
 # does.
 export SWEEP_GRACE_SECS=0
 
+export HOME="$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-home-XXXXXX")"
+
 export ETUDE_STATE_DIR="${ETUDE_STATE_DIR_OVERRIDE:-$(mktemp -d "${TMPDIR:-/tmp}/etudes-stress-state-XXXXXX")}"
 # Bind the chosen directory now: scenarios may later change the override.
 # Sourcing this file again (a scenario that reloads it) makes a second state
 # folder. Keep the first one's removal in the list, or it is left behind.
 _stress_earlier_state_cleanup=${_stress_state_cleanup:-}
-printf -v _stress_state_cleanup 'rm -rf -- %q' "$ETUDE_STATE_DIR"
+printf -v _stress_state_cleanup 'rm -rf -- %q %q' "$ETUDE_STATE_DIR" "$HOME"
 [ -z "$_stress_earlier_state_cleanup" ] || _stress_state_cleanup="$_stress_earlier_state_cleanup; $_stress_state_cleanup"
-builtin trap "$_stress_state_cleanup" EXIT
+_stress_exit_notice='code=$?; if [ "$code" != 0 ] && [ "$BASH_SUBSHELL" = 0 ]; then echo "    FAIL     scenario exited $code before finishing. It did not run to completion"; fi'
+builtin trap "$_stress_exit_notice
+$_stress_state_cleanup" EXIT
 
 # Almost every scenario sets its own EXIT trap to remove its work folder, and
 # that replaces the line above. 46 of 77 scenarios then left their state folder
@@ -246,7 +267,8 @@ trap() {
     && { [ "$1" = - ] || [ "${1#-}" = "$1" ]; }; then
     local _stress_user_trap=$1
     [ "$_stress_user_trap" != - ] || _stress_user_trap=
-    builtin trap "$_stress_user_trap
+    builtin trap "$_stress_exit_notice
+$_stress_user_trap
 [ \"\$BASH_SUBSHELL\" != 0 ] || { $_stress_state_cleanup; }" EXIT
     return 0
   fi
@@ -482,5 +504,8 @@ elif [ "${SCENARIO:-}" != run ]; then
   kill -TERM -- "-$_stress_child" 2>/dev/null || true
   kill -KILL -- "-$_stress_child" 2>/dev/null || true
   stress_outcome /dev/fd/198 "$_stress_child_status"
-  exit $?
+  _stress_final_status=$?
+  # This is the wrapper's completed verdict, not an early scenario abort.
+  builtin trap "$_stress_state_cleanup" EXIT
+  exit "$_stress_final_status"
 fi

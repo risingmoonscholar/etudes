@@ -73,7 +73,7 @@ BEFORE2=$(find "$D2" -type f | wc -l | tr -d ' ')
 STATE_BEFORE=$(find "$D2/L1/L2/L3" -type f | wc -l | tr -d ' ')
 assert_eq 1 "$STATE_BEFORE" "level-3 file exists before apply (sanity check on the fixture)"
 
-"$SWEEP" apply "$D2" --depth 3 --yes >/tmp/deepapply_$$.txt 2>&1
+"$SWEEP" apply "$D2" --depth 3 --yes >"$W/deepapply.txt" 2>&1
 APPLY_EC=$?
 assert_eq 0 "$APPLY_EC" "apply --depth 3 succeeds"
 
@@ -92,4 +92,4 @@ else
   fail "expected level-0..2 group 'Documents' to exist at the root with the level-2 member inside it"
 fi
 
-rm -f /tmp/deepapply_$$.txt
+rm -f "$W/deepapply.txt"

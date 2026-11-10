@@ -9,8 +9,9 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def check(baseline, catalog, summary, previous=None):
+def check(baseline, catalog, summary, previous=None, pins=None):
     errors = []
+    pins = {} if pins is None else pins
     if previous is not None:
         for name, floor in previous.items():
             if name not in baseline or baseline[name] < floor:
@@ -20,18 +21,28 @@ def check(baseline, catalog, summary, previous=None):
     for name in present - baseline.keys():
         errors.append(f"{name}: missing baseline entry")
     for name in baseline:
-        if type(baseline[name]) is not int or baseline[name] < 0:
-            errors.append(f"{name}: assertion floor must be a nonnegative integer")
+        if type(baseline[name]) is not int or baseline[name] < 1:
+            errors.append(f"{name}: assertion floor must be a positive integer")
         if name not in present:
             errors.append(f"{name}: baseline scenario disappeared")
     for row in summary["cases"]:
         name = row["id"]
         if name not in baseline:
             errors.append(f"{name}: missing baseline entry")
-        elif row["unproven"]:
-            print(f"unproven baseline count: {name} ({row['unproven']} unproven)")
-        elif row["passed"] < baseline[name]:
+        # A host that cannot prove any assertion has no comparable result.
+        # Partial runs still meet both the floor and the exact unproven pin.
+        if row["passed"] == 0 and row["unproven"] > 0:
+            continue
+        if name in baseline and row["passed"] < baseline[name]:
             errors.append(f"{name}: {row['passed']} passing assertions below baseline {baseline[name]}")
+        expected = pins.get(name, 0)
+        if row["unproven"] != expected:
+            errors.append(f"{name}: {row['unproven']} unproven results differs from pin {expected}")
+    for name, count in pins.items():
+        if name not in present:
+            errors.append(f"{name}: unproven pin names an absent scenario")
+        if type(count) is not int or count < 1:
+            errors.append(f"{name}: unproven pin must be a positive integer")
     covered = {row["id"] for row in summary["cases"] + summary["not_run"]}
     for name in present - covered:
         errors.append(f"{name}: missing from both results and not_run")
@@ -62,7 +73,8 @@ def main():
             if name not in baseline or baseline[name] < floor:
                 errors.append(f"{name}: baseline entry removed or lowered relative to {ref}")
     errors += check(baseline, json.loads((ROOT / "stress/catalog.json").read_text()),
-                    json.loads(args.summary.read_text()))
+                    json.loads(args.summary.read_text()),
+                    pins=json.loads((ROOT / "stress/unproven.json").read_text()))
     for error in errors:
         print("FAIL baseline: " + error)
     if errors:
