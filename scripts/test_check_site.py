@@ -5,6 +5,7 @@ fail. ConverterTest feeds the Markdown converter each construct it claims to
 render or to refuse, and holds it to that claim.
 """
 import importlib.util
+import json
 import re
 import shutil
 import subprocess
@@ -163,7 +164,39 @@ class CheckSiteTest(unittest.TestCase):
         self.assertFails(self.check(out), "the home page's 'stash-put' output differs from site/transcripts.json")
 
     def test_changelog_data_is_not_published(self):
-        self.assertFalse((self.clean / "changelog").exists())
+        # The changelog folder holds built pages only: no entry data, fixture or log.
+        self.assertTrue((self.clean / "changelog/index.html").is_file())
+        published = [p.relative_to(self.clean).as_posix() for p in (self.clean / "changelog").rglob("*")
+                     if p.is_file()]
+        self.assertTrue(published)
+        for rel in published:
+            self.assertRegex(rel, r"^changelog/([a-z]+-\d+\.\d+\.\d+/)?index\.html$")
+
+    def test_published_changelog_data_fails(self):
+        out = self.copy("changelog-data")
+        shutil.copy(ROOT / "site/changelog/sweep-0.5.5.json", out / "changelog/sweep-0.5.5.json")
+        self.assertFails(self.check(out), "changelog/sweep-0.5.5.json is published")
+
+    def test_edited_changelog_page_fails(self):
+        out = self.copy("changelog-page")
+        self.edit(out / "changelog/sweep-0.5.5/index.html", "Moved 2 files.", "Moved 3 files.")
+        self.assertFails(self.check(out), "the published changelog/sweep-0.5.5/index.html is not what")
+
+    def test_whats_new_showing_an_older_entry_fails(self):
+        out = self.copy("whats-new")
+        build = load_build()
+        entries = build.changelog_entries()
+        self.assertGreater(len(entries), 1, "needs two entries to swap")
+        page = out / "index.html"
+        page.write_text(page.read_text().replace(build.render_entry(entries[0]),
+                                                 build.render_entry(entries[-1])))
+        self.assertFails(self.check(out), "What's new does not show the newest entry")
+
+    def test_topbar_changelog_link_is_the_changelog_page(self):
+        for page in ("index.html", "docs/index.html", "changelog/index.html"):
+            text = (self.clean / page).read_text()
+            self.assertRegex(text, r'<a href="(\.\./)*changelog/"[^>]*>Changelog</a>')
+            self.assertNotIn('blob/main/CHANGELOG.md">Changelog</a>', text)
 
     def test_install_works_without_javascript(self):
         # Every install line sits in the page as text; the tab row and the
@@ -257,6 +290,181 @@ class EntryTest(unittest.TestCase):
                 for line in run["output"]:
                     self.assertIn(build.html.escape(line, quote=False), page)
                 self.assertIn(f"exit {run['exit']}", page)
+
+
+def load_runs():
+    spec = importlib.util.spec_from_file_location("release_runs", ROOT / "scripts/release-runs.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class ChangelogDataTest(unittest.TestCase):
+    """A changelog entry is what scripts/release-runs.py derives from its raw logs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="etudes-changelog-test-")
+        self.folder = Path(self.tmp.name) / "changelog"
+        shutil.copytree(ROOT / "site/changelog", self.folder)
+        self.entry_path = self.folder / "sweep-0.5.5.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def problems(self):
+        return load_check().check_entries(self.folder)[0]
+
+    def change(self, path, fn):
+        data = json.loads(path.read_text())
+        fn(data)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+    def assertProblem(self, needle):
+        problems = self.problems()
+        self.assertTrue(any(needle in p for p in problems), problems)
+
+    def test_committed_entries_pass(self):
+        self.assertEqual(self.problems(), [])
+
+    def test_hand_edited_output_line_fails(self):
+        self.change(self.entry_path, lambda e: e["after"]["runs"][1]["output"].__setitem__(0, "Moved 3 files."))
+        self.assertProblem("sweep-0.5.5.json differs from its raw logs in after")
+
+    def test_hand_edited_exit_code_fails(self):
+        self.change(self.entry_path, lambda e: e["before"]["runs"][0].__setitem__("exit", 0))
+        self.assertProblem("differs from its raw logs in before")
+
+    def test_hand_edited_next_output_fails(self):
+        self.change(self.entry_path, lambda e: e["next"]["output"].append("All good."))
+        self.assertProblem("differs from its raw logs in next")
+
+    def test_hand_edited_result_file_fails(self):
+        self.change(self.entry_path, lambda e: e["after"]["result"]["files"].append("extra.pdf"))
+        self.assertProblem("differs from its raw logs in after")
+
+    def test_hand_edited_footer_fails(self):
+        self.change(self.entry_path, lambda e: e.__setitem__("footer", e["footer"].replace("2 new PDFs", "3 new PDFs")))
+        self.assertProblem("differs from its raw logs in footer")
+
+    def test_hand_written_fields_may_change(self):
+        def edit(e):
+            e["headline"] = "A different headline"
+            e["lead"] = [{"text": "Another lead."}]
+            e["next"]["note"] = [{"text": "Another note."}]
+        self.change(self.entry_path, edit)
+        self.assertEqual(self.problems(), [])
+
+    def test_edited_raw_log_fails(self):
+        log = self.folder / "logs/sweep-0.5.5/after-2.txt"
+        log.write_text(log.read_text().replace("Moved 2 files.", "Moved 3 files."))
+        self.assertProblem("after-2.txt differ from the sha256")
+
+    def test_entry_without_fixture_fails(self):
+        (self.folder / "sweep-0.5.5.fixture").unlink()
+        self.assertProblem("sweep-0.5.5.json has no fixture")
+
+    def test_entry_without_logs_fails(self):
+        shutil.rmtree(self.folder / "logs/sweep-0.5.5")
+        self.assertProblem("sweep-0.5.5.json has no raw logs")
+
+    def test_fixture_without_entry_fails(self):
+        shutil.copy(self.folder / "sweep-0.5.5.fixture", self.folder / "sweep-9.9.9.fixture")
+        self.assertProblem("sweep-9.9.9.fixture has no entry")
+
+    def test_fixture_commands_changed_after_the_runs_fails(self):
+        self.change(self.folder / "sweep-0.5.5.fixture",
+                    lambda f: f["runs"][0].__setitem__("command", "sweep inbox --json"))
+        self.assertProblem("changed its setup or commands after the runs")
+
+    def test_fixture_cut_that_matches_nothing_fails(self):
+        self.change(self.folder / "sweep-0.5.5.fixture",
+                    lambda f: f["runs"][1]["show"].__setitem__("after", ["^Moved 9 files"]))
+        self.assertProblem("matches no line")
+
+    def test_untagged_after_build_not_on_head_fails(self):
+        # sweep-v0.5.4's commit sits on a release branch, not on main.
+        rev = subprocess.run(["git", "rev-parse", "sweep-v0.5.4^{commit}"], cwd=ROOT,
+                             capture_output=True, text=True).stdout.strip()
+        anc = subprocess.run(["git", "merge-base", "--is-ancestor", rev, "HEAD"], cwd=ROOT)
+        if not rev or anc.returncode != 1:
+            self.skipTest("needs the sweep-v0.5.4 tag off HEAD's history")
+        problems = load_check().check_builds(
+            {"tool": "sweep", "version": "0.5.5",
+             "builds": {"before": {}, "after": {"commit": rev[:7], "rev": rev, "tagged": False}}})
+        self.assertTrue(any("is not an ancestor of HEAD" in p for p in problems), problems)
+
+    def test_tagged_flag_on_the_wrong_commit_fails(self):
+        entry = json.loads((ROOT / "site/changelog/stash-0.5.4.json").read_text())
+        entry["builds"]["after"]["rev"] = "0" * 40
+        problems = load_check().check_builds(entry)
+        self.assertTrue(any("the tag stash-v0.5.4 names" in p for p in problems), problems)
+
+    def test_before_tag_on_the_wrong_commit_fails(self):
+        entry = json.loads((ROOT / "site/changelog/sweep-0.5.5.json").read_text())
+        entry["builds"]["before"]["rev"] = "0" * 40
+        problems = load_check().check_builds(entry)
+        self.assertTrue(any("the before build is sweep-v0.5.4, which names" in p for p in problems), problems)
+
+    def test_tagged_flag_without_the_tag_fails(self):
+        entry = json.loads((ROOT / "site/changelog/sweep-0.5.5.json").read_text())
+        entry["version"] = "9.9.9"
+        entry["builds"]["after"]["tagged"] = True
+        problems = load_check().check_builds(entry)
+        self.assertTrue(any("the tag sweep-v9.9.9 does not exist" in p for p in problems), problems)
+
+
+class ReleaseRunsTest(unittest.TestCase):
+    """The cuts and the footer scripts/release-runs.py writes."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runs = load_runs()
+
+    def test_cut_keeps_whole_lines_in_order(self):
+        lines = ["", "a one", "b two", "a three"]
+        self.assertEqual(self.runs.cut(lines, ["^a", "^a"], "x"), ["a one", "a three"])
+        self.assertEqual(self.runs.cut(lines, ["two"], "x"), ["b two"])
+
+    def test_cut_that_matches_nothing_refuses(self):
+        with self.assertRaises(self.runs.RunError) as caught:
+            self.runs.cut(["a", "b"], ["^b", "^a"], "after run 1")
+        self.assertIn("after run 1", str(caught.exception))
+
+    def test_cuts_do_not_change_the_runs_digest(self):
+        fixture = json.loads((ROOT / "site/changelog/sweep-0.5.5.fixture").read_text())
+        digest = self.runs.runs_digest(fixture)
+        fixture["runs"][0]["show"]["after"] = ["."]
+        self.assertEqual(self.runs.runs_digest(fixture), digest)
+        fixture["setup"].append("touch extra")
+        self.assertNotEqual(self.runs.runs_digest(fixture), digest)
+
+    def test_footer_names_the_builds_and_the_tag_state(self):
+        record = json.loads((ROOT / "site/changelog/logs/sweep-0.5.5/record.json").read_text())
+        fixture = json.loads((ROOT / "site/changelog/sweep-0.5.5.fixture").read_text())
+        logs = ROOT / "site/changelog/logs/sweep-0.5.5"
+        read = lambda n: (logs / n).read_text()
+        entry = self.runs.entry_from_record(record, fixture, {}, read)
+        self.assertIn("not tagged yet", entry["footer"])
+        self.assertFalse(entry["builds"]["after"]["tagged"])
+        record["builds"]["after"]["tag"] = "sweep-v0.5.5"
+        entry = self.runs.entry_from_record(record, fixture, {}, read)
+        self.assertIn(f"tag sweep-v0.5.5 (commit {record['builds']['after']['commit']})", entry["footer"])
+        self.assertNotIn("not tagged", entry["footer"])
+        self.assertTrue(entry["builds"]["after"]["tagged"])
+
+    def test_footer_says_shortened_only_when_a_line_was_cut(self):
+        record = json.loads((ROOT / "site/changelog/logs/sweep-0.5.5/record.json").read_text())
+        fixture = json.loads((ROOT / "site/changelog/sweep-0.5.5.fixture").read_text())
+        logs = ROOT / "site/changelog/logs/sweep-0.5.5"
+
+        def every_line(name):
+            return ["^" + re.escape(line) + "$" for line in self.runs.log_lines((logs / name).read_text())]
+        for n, run in enumerate(fixture["runs"]):
+            for side in ("before", "after"):
+                run["show"][side] = every_line(record["sides"][side]["runs"][n]["log"])
+        fixture["next"]["show"] = every_line("next.txt")
+        entry = self.runs.entry_from_record(record, fixture, {}, lambda n: (logs / n).read_text())
+        self.assertNotIn("shortened", entry["footer"])
 
 
 class ConverterTest(unittest.TestCase):

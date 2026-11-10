@@ -8,7 +8,11 @@ Everything under site/ is copied as it is (except the data the build reads:
 tools.json, docs.json and changelog/), so the demo page, the release pages,
 the GIFs and transcripts.json keep their URLs and stay byte-identical to what
 check-claims.sh and check-transcripts-reproduce.sh check. Then each public doc
-becomes /docs/<slug>/index.html in the docs layout.
+becomes /docs/<slug>/index.html in the docs layout, and the changelog is built:
+/changelog/ lists the entries in site/changelog/*.json, newest first, and the
+release pages that have none; /changelog/<tool>-<version>/ shows one entry.
+The entries come from scripts/release-runs.py; their raw logs and fixtures
+stay in the repo and are not published.
 
 The home page, /index.html, is built: the tools from site/tools.json, the
 install lines with versions read from each tool's Cargo.toml, What's new from
@@ -51,9 +55,8 @@ SITE = ROOT / "site"
 REPO_URL = "https://github.com/risingmoonscholar/etudes"
 BLOB_URL = REPO_URL + "/blob/main/"
 TREE_URL = REPO_URL + "/tree/main/"
-# The changelog pages are a later change; until then the top bar points at the
-# changelog file itself.
-CHANGELOG_URL = BLOB_URL + "CHANGELOG.md"
+# The full text of every change, for readers who want more than the entries.
+CHANGELOG_FILE_URL = BLOB_URL + "CHANGELOG.md"
 # Every built docs page carries this, so a rebuild can tell its own output
 # folder from someone else's before it deletes anything.
 GENERATOR = '<meta name="generator" content="scripts/build-site.py">'
@@ -549,28 +552,31 @@ class Converter:
 # --- layout -----------------------------------------------------------------
 
 def topbar(root, current):
-    """The bar every page shares. CURRENT is "home" or "docs"."""
+    """The bar every page shares. CURRENT is "home", "docs" or "changelog"."""
     brand_cur = ' aria-current="page"' if current == "home" else ""
     docs_cur = ' aria-current="true"' if current == "docs" else ""
+    log_cur = ' aria-current="true"' if current == "changelog" else ""
     return (f'<a class="skip" href="#main">Skip to content</a>\n'
             f'<header class="topbar">\n'
             f'<a class="brand" href="{root}"{brand_cur}>Études</a>\n'
             f'<nav class="topnav" aria-label="Site">\n'
             f'<a href="{root}docs/"{docs_cur}>Docs</a>\n'
-            f'<a href="{CHANGELOG_URL}">Changelog</a>\n'
+            f'<a href="{root}changelog/"{log_cur}>Changelog</a>\n'
             f'<a href="{REPO_URL}">GitHub</a>\n'
             f'</nav>\n'
             f'</header>')
 
 
-def sidebar(pages, current_dir):
+def sidebar(pages, current_dir, first=None):
+    """The doc tree. FIRST: (title, [(dir, label)]) groups shown above it."""
     def link(href_dir, label, mono=False):
         href = rel_dir(current_dir, href_dir)
         cur = ' aria-current="page"' if href_dir == current_dir else ""
         text = f"<code>{esc(label)}</code>" if mono else esc(label)
         return f'<li><a href="{esc_attr(href)}"{cur}>{text}</a></li>'
 
-    groups = [("Get started", [link("docs", "Overview")])]
+    groups = [(title, [link(d, label) for d, label in items]) for title, items in first or []]
+    groups.append(("Get started", [link("docs", "Overview")]))
     order = []
     by_group = {}
     for page in pages:
@@ -595,9 +601,11 @@ def toc(headings):
     return f'<aside class="toc" aria-label="On this page"><h2>On this page</h2><ul>{items}</ul></aside>'
 
 
-def layout(*, title, description, page_dir, pages, content, headings):
+def layout(*, title, description, page_dir, pages, content, headings, current="docs",
+           first=None, body_class=None):
     root = rel_dir(page_dir, "")
-    nav = sidebar(pages, page_dir)
+    nav = sidebar(pages, page_dir, first)
+    body = f' class="{body_class}"' if body_class else ""
     right = toc(headings)
     return f"""<!doctype html>
 <html lang="en">
@@ -611,8 +619,8 @@ def layout(*, title, description, page_dir, pages, content, headings):
 <link rel="stylesheet" href="{root}assets/site.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
 </head>
-<body>
-{topbar(root, "docs")}
+<body{body}>
+{topbar(root, current)}
 <div class="layout">
 <details class="menu"><summary>Menu</summary><nav aria-label="Docs menu">
 {nav}
@@ -658,8 +666,13 @@ def install_line(tool, package, version):
     return f"cargo install --locked --git {REPO_URL} --tag {tool}-v{version} {package}"
 
 
-def latest_entry():
-    """The newest release entry in site/changelog/, by date then version."""
+def entry_order(entry):
+    """Newest first sorts by this, descending: the date, then the version."""
+    return entry["date"], tuple(int(n) for n in entry["version"].split("."))
+
+
+def changelog_entries():
+    """Every release entry in site/changelog/, newest first (by date, then version)."""
     entries = []
     for path in sorted((SITE / "changelog").glob("*.json")):
         try:
@@ -670,11 +683,24 @@ def latest_entry():
                     "before", "after", "next", "footer"):
             if key not in entry:
                 raise BuildError(f"site/changelog/{path.name} has no {key}")
-        version = tuple(int(n) for n in entry["version"].split("."))
-        entries.append(((entry["date"], version), entry))
+        # Written by hand after scripts/release-runs.py made the entry.
+        for key in ("date", "label", "headline", "lead"):
+            if not entry[key]:
+                raise BuildError(f"site/changelog/{path.name}: {key} is empty; write it by hand")
+        if not entry["next"].get("note"):
+            raise BuildError(f"site/changelog/{path.name}: next.note is empty; write it by hand")
+        if path.stem != f"{entry['tool']}-{entry['version']}":
+            raise BuildError(f"site/changelog/{path.name} holds {entry['tool']} {entry['version']}; "
+                             f"name it {entry['tool']}-{entry['version']}.json")
+        entries.append(entry)
     if not entries:
         raise BuildError("site/changelog/ holds no release entry for What's new")
-    return max(entries, key=lambda e: e[0])[1]
+    return sorted(entries, key=entry_order, reverse=True)
+
+
+def latest_entry():
+    """The newest release entry: the one What's new shows."""
+    return changelog_entries()[0]
 
 
 def code_text(text):
@@ -711,22 +737,23 @@ def terminal(runs):
 def entry_side(side, data):
     title = "Before" if side == "before" else "After"
     files = "".join(f"<li><code>{esc(name)}</code></li>" for name in data["result"]["files"])
+    files = f"<ul>{files}</ul>" if files else ""
     return (f'<div class="side {side}">'
             f'<div class="side-head"><span class="who"><span class="dot" aria-hidden="true"></span>{title}</span>'
             f'<span class="build">{esc(data["build"])}</span></div>'
             f'{terminal(data["runs"])}'
             f'<div class="result"><p class="result-label">{esc(data["result"]["label"])}</p>'
-            f'<ul>{files}</ul></div>'
+            f'{files}</div>'
             f'<p class="side-exit">exit code <strong>{int(data["exit"])}</strong></p>'
             f'</div>')
 
 
-def render_entry(entry):
+def render_entry(entry, level=3):
     nxt = entry["next"]
     return (f'<article class="entry" aria-labelledby="entry-title">'
             f'<p class="entry-meta"><span class="entry-ver">{esc(entry["tool"])} {esc(entry["version"])}</span>'
             f'<span class="pill">{esc(entry["label"])}</span></p>'
-            f'<h3 id="entry-title" class="entry-title">{esc(entry["headline"])}</h3>'
+            f'<h{level} id="entry-title" class="entry-title">{esc(entry["headline"])}</h{level}>'
             f'<p class="entry-lead">{rich(entry["lead"])}</p>'
             f'<div class="compare">{entry_side("before", entry["before"])}{entry_side("after", entry["after"])}</div>'
             f'<p class="entry-note">{rich(nxt["note"])}</p>'
@@ -888,9 +915,12 @@ def build_home(pages):
         " ".join(f'<span class="w">{esc(word)}</span>' for word in line.split()) for line in TAGLINE)
     blocks = "".join(tool_block(t, captured, root) for t in tools)
     entry_tag = f'{entry["tool"]}-v{entry["version"]}'
-    release_page = SITE / "releases" / f"{entry_tag}.html"
-    release_link = (f'<p class="entry-more"><a href="releases/{entry_tag}.html">Release notes for '
-                    f'{esc(entry["tool"])} {esc(entry["version"])}</a></p>' if release_page.is_file() else "")
+    more = [f'<a href="changelog/{entry_slug(entry)}/">The {esc(entry["tool"])} {esc(entry["version"])} '
+            f'entry on its own page</a>']
+    if (SITE / "releases" / f"{entry_tag}.html").is_file():
+        more.append(f'<a href="releases/{entry_tag}.html">Release notes for '
+                    f'{esc(entry["tool"])} {esc(entry["version"])}</a>')
+    release_link = f'<p class="entry-more">{" · ".join(more)}</p>'
     names = ", ".join(t["name"] for t in tools[:-1]) + f" and {tools[-1]['name']}"
     description = (f"Études is a set of file tools for macOS: {names}. "
                    "Each tool installs and runs on its own.")
@@ -931,7 +961,7 @@ def build_home(pages):
 </div>
 <div>
 <h3 id="update">Update</h3>
-<p>Run the same line with the new tag. Replace <code>X.Y.Z</code> with the version from the <a href="{CHANGELOG_URL}">changelog</a>.</p>
+<p>Run the same line with the new tag. Replace <code>X.Y.Z</code> with the version from the <a href="changelog/">changelog</a>.</p>
 <div class="cmd"><pre><code>{html.escape(update, quote=False)}</code></pre></div>
 </div>
 </div>
@@ -958,7 +988,7 @@ def build_home(pages):
 <a href="docs/">Docs</a>
 <a href="docs/security/">Security</a>
 <a href="demo/">Demos</a>
-<a href="{CHANGELOG_URL}">Changelog</a>
+<a href="changelog/">Changelog</a>
 <a href="{REPO_URL}">GitHub</a>
 </nav>
 </footer>
@@ -1032,6 +1062,103 @@ def build_index(pages):
                   page_dir="docs", pages=pages, content=content, headings=headings)
 
 
+# --- changelog --------------------------------------------------------------
+
+# /changelog/ lists every entry, newest first, then the release pages that have
+# no entry. /changelog/<tool>-<version>/ is one entry in the release format:
+# the film on top when the entry names one, then the entry itself. The entries
+# are written by scripts/release-runs.py from real runs; check-site.py checks
+# them against their raw logs.
+
+def entry_slug(entry):
+    return f"{entry['tool']}-{entry['version']}"
+
+
+RELEASE_PAGE = re.compile(r"^([a-z]+)-v(\d+)\.(\d+)\.(\d+)\.html$")
+
+
+def release_pages():
+    """[(tool, version, file name)] for each page in site/releases/, newest version first."""
+    found = []
+    for path in (SITE / "releases").glob("*.html"):
+        m = RELEASE_PAGE.match(path.name)
+        if m:
+            found.append((m.group(1), f"{m.group(2)}.{m.group(3)}.{m.group(4)}", path.name))
+    return sorted(found, key=lambda r: (tuple(int(n) for n in r[1].split(".")), r[0]), reverse=True)
+
+
+def plain_parts(parts):
+    return "".join(part.get("code", part.get("text", "")) for part in parts)
+
+
+def changelog_nav(entries):
+    return [("Changelog", [("changelog", "All releases")]
+             + [(f"changelog/{entry_slug(e)}", f"{e['tool']} {e['version']}") for e in entries])]
+
+
+def film(entry, root):
+    """The release film, when the entry names one. Nothing at all until then."""
+    media = entry.get("film")
+    if not media:
+        return ""
+    poster = f' poster="{root}{esc_attr(media["still"])}"' if media.get("still") else ""
+    return (f'<figure class="film"><video controls playsinline preload="metadata"{poster} '
+            f'src="{root}{esc_attr(media["mov"])}"></video>'
+            f'<figcaption>{esc(media.get("caption", ""))}</figcaption></figure>')
+
+
+def build_entry_page(entry, pages, entries):
+    slug = entry_slug(entry)
+    page_dir = f"changelog/{slug}"
+    root = rel_dir(page_dir, "")
+    links = [f'<a href="../">All releases</a>']
+    tag = f'{entry["tool"]}-v{entry["version"]}'
+    if (SITE / "releases" / f"{tag}.html").is_file():
+        links.append(f'<a href="{root}releases/{tag}.html">Release notes for '
+                     f'{esc(entry["tool"])} {esc(entry["version"])}</a>')
+    content = (f'{film(entry, root)}\n{render_entry(entry, level=1)}\n'
+               f'<p class="entry-more">{" · ".join(links)}</p>')
+    return layout(title=f'{entry["tool"]} {entry["version"]}', description=summary(plain_parts(entry["lead"])),
+                  page_dir=page_dir, pages=pages, content=content, headings=[], current="changelog",
+                  first=changelog_nav(entries), body_class="changelog")
+
+
+def build_changelog_index(pages, entries):
+    ids = Ids()
+    ids.make("changelog")
+    items, headings = [], []
+    for entry in entries:
+        slug = entry_slug(entry)
+        hid = ids.make(slug)
+        name = f'{entry["tool"]} {entry["version"]}'
+        items.append(
+            f'<section class="cl-item" aria-labelledby="{hid}">'
+            f'<p class="entry-meta"><time datetime="{esc_attr(entry["date"])}">{esc(entry["date"])}</time>'
+            f'<span class="entry-ver">{esc(name)}</span><span class="pill">{esc(entry["label"])}</span></p>'
+            f'<h2 id="{hid}"><a href="{slug}/">{esc(entry["headline"])}</a></h2>'
+            f'<p class="entry-lead">{rich(entry["lead"])}</p></section>')
+        headings.append((2, hid, esc(name)))
+    with_entry = {entry_slug(e) for e in entries}
+    others = [(tool, version, name) for tool, version, name in release_pages()
+              if f"{tool}-{version}" not in with_entry]
+    rest = ""
+    if others:
+        rid = ids.make("Release notes")
+        rest = (f'<h2 id="{rid}"><a class="anchor" href="#{rid}">Release notes</a></h2>'
+                f'<p>Releases with notes and no entry yet.</p><ul class="pagelist">'
+                + "".join(f'<li><a href="../releases/{esc_attr(name)}">{esc(tool)} {esc(version)}</a></li>'
+                          for tool, version, name in others)
+                + "</ul>")
+        headings.append((2, rid, "Release notes"))
+    content = ('<h1 id="changelog">Changelog</h1>\n'
+               '<p class="lead">What changed in each release, shown with real runs of the build before '
+               f'and the build after. Every change is also in <a href="{CHANGELOG_FILE_URL}">CHANGELOG.md</a>.</p>\n'
+               + "\n".join(items) + "\n" + rest)
+    return layout(title="Changelog", description="What changed in each Études release, with real before and after runs.",
+                  page_dir="changelog", pages=pages, content=content, headings=headings,
+                  current="changelog", first=changelog_nav(entries), body_class="changelog")
+
+
 def prepare_out(out):
     if out.exists():
         if not out.is_dir():
@@ -1051,6 +1178,10 @@ def build(out):
     rendered = {page["dir"]: build_doc(page, pages, linker) for page in pages}
     rendered["docs"] = build_index(pages)
     rendered[""] = build_home(pages)
+    entries = changelog_entries()
+    rendered["changelog"] = build_changelog_index(pages, entries)
+    for entry in entries:
+        rendered[f"changelog/{entry_slug(entry)}"] = build_entry_page(entry, pages, entries)
     prepare_out(out)
     plain_ignore = shutil.ignore_patterns(*BUILD_ONLY)
 
@@ -1085,7 +1216,7 @@ def main(argv):
     except SystemExit as error:
         print(error, file=sys.stderr)
         return 2
-    print(f"ok   built the home page, {len(pages)} docs pages and the docs index into {out}")
+    print(f"ok   built the home page, {len(pages)} docs pages, the docs index and the changelog into {out}")
     return 0
 
 
