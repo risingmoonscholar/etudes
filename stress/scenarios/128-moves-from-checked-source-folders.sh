@@ -84,7 +84,7 @@ print(members[int(len(members) * 0.75)])
   rm -rf "$OUTSIDE"; mkdir -p "$OUTSIDE"
   for f in "$D/Inbox"/batch_*.csv; do printf '%s' "$SENTINEL" > "$OUTSIDE/$(basename "$f")"; done
 
-  "$SWEEP" apply "$D" --depth 2 --since 0 --yes >"$W/apply.out" 2>"$W/apply.err" &
+  "$SWEEP" apply "$D" --depth 2 --since 0 --yes --json >"$W/apply.out" 2>"$W/apply.err" &
   PID=$!
   if ! WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$D" "$VICTIM" "$PID" 2>"$W/watch.err"); then
     kill -CONT "$PID" 2>/dev/null || true
@@ -123,6 +123,7 @@ fi
 
 ERR=$(cat "$W/apply.err")
 assert_no_panic "sweep apply after the source folder swap" "$ERR"
+assert_eq plan_stale "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"]["code"])' "$W/apply.out")" "source swap reason code"
 assert_eq 2 "$CODE" "apply refuses once the source folder is swapped (exit $CODE)"
 case "$ERR" in
   *"Inbox was moved or replaced while sweep was working, so nothing more was moved out of it."*) pass "the refusal names the source folder and says nothing more left it" ;;

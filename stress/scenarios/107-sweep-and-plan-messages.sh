@@ -466,6 +466,6 @@ case "$OUT" in
     clean "unsaved record: next undo" "$OUT"
     hasnt "unsaved record: next undo does not call them gone" "$OUT" "not where apply left"
     ;;
-  *) unproven "unsaved record" "the record was still saved under a read-only folder" ;;
+  *) fail "locked state folder: undo omitted the could not be updated message: $OUT" ;;
 esac
 assert_intact "$D" 3 "unsaved record: every file is back"

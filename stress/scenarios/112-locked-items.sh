@@ -20,6 +20,7 @@ json_get() {
 }
 
 W=$(workdir) || exit 1
+W=$(cd "$W" && pwd -P) || exit 1
 cleanup() {
   chflags -R nouchg "$W" 2>/dev/null || true
   rm -rf "$W"
@@ -50,6 +51,8 @@ else
   fail "human summary omitted the locked count"
 fi
 assert_exit 0 "apply organises the unlocked files beside the locked one" -- "$SWEEP" apply "$D" --since 0 --yes
+[ -z "$(xattr -p com.apple.metadata:_kMDItemUserTags "$D/locked-report.pdf" 2>/dev/null)" ] \
+  && pass "apply leaves the locked file's tags untouched" || fail "apply changed the locked file's tags"
 [ -e "$D/locked-report.pdf" ] && pass "the locked file stayed in place" || fail "the locked file moved"
 assert_exit 0 "undo restores the moved files" -- "$SWEEP" undo "$D"
 snapshot_tree "$D" "$W/sweep-after.json"
@@ -111,11 +114,13 @@ if grep -q 'NOT clear' "$W/only.txt" && ! grep -q 'already clear' "$W/only.txt";
 else
   fail "stash called a folder with a locked item clear"
 fi
+"$STASH" "$O" >"$W/only.txt" 2>&1
 "$STASH" "$O" --json >"$W/only.json"
 assert_eq refused "$(json_get "$W/only.json" 'd["status"]')" "nothing moved, so the result is refused"
 assert_eq 1 "$(json_get "$W/only.json" 'd["details"]["locked_skipped"]')" "the locked item is counted"
 # The printed step finds the item, and clearing the flag lets stash finish.
-assert_eq "$O/only.txt" "$(find "$O" -flags +uchg)" "the printed find step names the locked item"
+STEP=$(sed -n 's/.*See which with: //p' "$W/only.txt" | head -1)
+[ -n "$STEP" ] && assert_eq "$O/only.txt" "$(eval "$STEP")" "the printed find step names the locked item" || fail "locked refusal omitted the find step"
 chflags nouchg "$O/only.txt"
 assert_exit 0 "stash finishes once the flag is cleared" -- "$STASH" "$O"
 assert_exit 0 "stash pop restores it" -- "$STASH" pop "$O"
@@ -207,3 +212,62 @@ assert_exit 0 "unpack extracts next to a locked file" -- "$UNPACK" "$W/notes.zip
 [ "$(cat "$U/out/note.txt")" = "note" ] && pass "extracted bytes are exact" || fail "extracted bytes differ"
 [ "$(cat "$U/locked.txt")" = "keep" ] && pass "the locked neighbour is untouched" || fail "the locked neighbour changed"
 
+# A tags apply must hold locked items as well as a move apply.
+T="$W/tag-locked"; mkdir -p "$T"
+for i in 1 2 3 4; do printf 'tag document %s' "$i" > "$T/report-$i.pdf"; done
+printf 'locked tag document' > "$T/locked.pdf"; chflags uchg "$T/locked.pdf"
+"$SWEEP" "$T" --scheme tags --map pdf=Filed --since 0 --export-plan "$W/tags2.plan" --json > "$W/tag-export.json"
+assert_eq 0 "$?" "export a tags plan"
+TAG_DIGEST=$(json_get "$W/tag-export.json" 'd["details"]["binding"]["plan_digest"]')
+locked_tags() {
+  python3 - "$W" <<'PYTAG'
+import json, os, pathlib, stat, sys
+rows = {}
+for p in pathlib.Path(sys.argv[1]).rglob('*'):
+    if p.is_file() and p.stat().st_flags & stat.UF_IMMUTABLE:
+        try: value = os.getxattr(p, 'com.apple.metadata:_kMDItemUserTags').hex()
+        except OSError: value = None
+        rows[str(p)] = value
+print(json.dumps(rows, sort_keys=True))
+PYTAG
+}
+LOCKED_TAGS_BEFORE=$(locked_tags)
+assert_exit 0 "tag apply processes unlocked files" -- "$SWEEP" apply --plan "$W/tags2.plan" --plan-digest "$TAG_DIGEST" --yes
+assert_eq "$LOCKED_TAGS_BEFORE" "$(locked_tags)" "tag apply preserves the tags of every locked fixture file"
+[ -z "$(xattr -p com.apple.metadata:_kMDItemUserTags "$T/locked.pdf" 2>/dev/null)" ] \
+  && pass "tag apply leaves the locked file untagged" || fail "tag apply tagged a locked file"
+
+# Lock a pending item after planning, while the apply is held by its watcher.
+DUMP="$BIN/journal-dump"
+if [ -x "$DUMP" ]; then
+  L="$W/late-lock"; mkdir -p "$L"
+  for i in $(seq 1 300); do printf 'late payload %s' "$i" > "$L/report-$i.pdf"; done
+  VICTIM="$L/report-90.pdf"
+  "$SWEEP" apply "$L" --since 0 --yes >"$W/late-lock.out" 2>&1 & PID=$!
+  if "$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$L" "$VICTIM" "$PID" >"$W/lock-watch" 2>"$W/lock-watch.err"; then
+    if ps -o state= -p "$PID" | grep -q T && [ -f "$VICTIM" ]; then
+      chflags uchg "$VICTIM"
+      pass "pending item locked while apply was confirmed stopped"
+      kill -CONT "$PID"; wait "$PID"; RC=$?
+      assert_eq 0 "$RC" "late lock is held while the other moves finish"
+      assert_eq 'late payload 90' "$(cat "$VICTIM" 2>/dev/null)" "late-locked item stays with its bytes"
+      chflags nouchg "$VICTIM"
+      STEP=$(sed -n 's/^Undo with: sweep //p' "$W/late-lock.out" | head -1)
+      if [ -n "$STEP" ]; then
+        eval "\"\$SWEEP\" $STEP" >"$W/late-recovery.out" 2>&1
+        assert_eq 0 "$?" "printed late-lock recovery step succeeds"
+      else
+        fail "partial apply omitted its printed recovery step: $(cat "$W/late-lock.out")"
+      fi
+      assert_eq 300 "$(find "$L" -maxdepth 1 -type f | wc -l | tr -d ' ')" "late-lock recovery returns every file"
+    else
+      kill -CONT "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null
+      unproven "late lock during apply" "watcher did not leave a stopped pending item"
+    fi
+  else
+    kill -CONT "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null
+    unproven "late lock during apply" "watcher could not hold the pending item: $(cat "$W/lock-watch.err")"
+  fi
+else
+  unproven "late lock during apply" "journal watcher unavailable"
+fi

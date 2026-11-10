@@ -55,6 +55,7 @@ PLAN_LOG=$(mktemp "${TMPDIR:-/tmp}/etudes-rlimit-plan-XXXXXX")
 bash -c "ulimit -n $LOWEST_WORKABLE 2>/dev/null; exec \"$SWEEP\" \"$D\" > \"$PLAN_LOG\" 2>&1" 2>/dev/null
 PLAN_CODE=$?
 PLAN_OUT=$(cat "$PLAN_LOG"); rm -f "$PLAN_LOG"
+assert_no_panic "low-limit plan" "$PLAN_OUT"
 
 if [ "$PLAN_CODE" -ge 128 ]; then
   fail "rlimit: plan crashed under ulimit -n $LOWEST_WORKABLE (signal-death exit $PLAN_CODE): $PLAN_OUT"
@@ -69,6 +70,7 @@ APPLY_NJ_LOG=$(mktemp "${TMPDIR:-/tmp}/etudes-rlimit-applynj-XXXXXX")
 bash -c "ulimit -n $LOWEST_WORKABLE 2>/dev/null; exec \"$SWEEP\" apply \"$D\" --yes --no-journal > \"$APPLY_NJ_LOG\" 2>&1" 2>/dev/null
 APPLY_NJ_CODE=$?
 APPLY_NJ_OUT=$(cat "$APPLY_NJ_LOG"); rm -f "$APPLY_NJ_LOG"
+assert_no_panic "low-limit apply without journal" "$APPLY_NJ_OUT"
 
 if [ "$APPLY_NJ_CODE" -ge 128 ]; then
   fail "rlimit: apply --no-journal crashed under ulimit -n $LOWEST_WORKABLE (signal-death exit $APPLY_NJ_CODE): $APPLY_NJ_OUT"
@@ -109,6 +111,7 @@ for lim in $(seq "$LOWEST_WORKABLE" -1 4); do
   code=$?
   out=$(cat "$LOG"); rm -f "$LOG"
 
+  assert_no_panic "low-limit journal apply" "$out"
   if [ "$code" -ge 128 ]; then
     fail "rlimit: apply (with journal) crashed under ulimit -n $lim (signal-death exit $code): $out"
     break
@@ -118,7 +121,9 @@ for lim in $(seq "$LOWEST_WORKABLE" -1 4); do
   if [ "$moved" -gt 0 ]; then
     JOURNAL_OK_LIM=$lim
     # Undo to reset for the next iteration.
-    "$SWEEP" undo >/dev/null 2>&1
+    [ -n "$(find "$ETUDE_STATE_DIR" -name 'sweep-*.journal' -print -quit)" ] && pass "low-limit apply wrote a journal" || fail "low-limit apply moved files without a journal"
+    assert_exit 0 "undo after low-limit apply succeeds" -- "$SWEEP" undo "$D"
+    assert_eq "$N" "$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')" "undo returns all files before any manual reset"
     find "$D" -mindepth 2 -type f -exec mv {} "$D/" \; 2>/dev/null
     find "$D" -mindepth 1 -type d -empty -delete 2>/dev/null
   elif [ "$code" = 0 ]; then
@@ -138,14 +143,21 @@ RESET_COUNT2=$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')
 assert_eq "$N" "$RESET_COUNT2" "rlimit: fixture intact after the journal-limit search"
 [ -n "$JOURNAL_OK_LIM" ] && pass "rlimit: apply (with journal) still worked at ulimit -n $JOURNAL_OK_LIM"
 
+# A normal-limit control ensures the recovery oracle runs even when descriptor
+# pressure prevents every journal trial from moving a file.
+assert_exit 0 "journal recovery control applies" -- "$SWEEP" apply "$D" --yes
+assert_exit 0 "journal recovery control undo succeeds" -- "$SWEEP" undo "$D"
+assert_eq "$N" "$(find "$D" -maxdepth 1 -type f | wc -l | tr -d ' ')" "journal recovery control returns every file"
+
 # --- apply with the keychain out of reach, under the lowest limit -----------------
 # The fence makes every limit fail, so this proves the refusal is honest. It does
 # not find the limit where the real keychain starts to fail.
-if keychain_fence_works; then
+if sandbox-exec -p "$KEYCHAIN_FENCE" /usr/bin/true >/dev/null 2>&1; then
   LOG=$(mktemp "${TMPDIR:-/tmp}/etudes-rlimit-kc-XXXXXX")
   ( ulimit -n "$LOWEST_WORKABLE" 2>/dev/null; keychain_fenced "$SWEEP" apply "$D" --yes > "$LOG" 2>&1 ) 2>/dev/null
   code=$?
   out=$(cat "$LOG"); rm -f "$LOG"
+  assert_no_panic "low-limit fenced key refusal" "$out"
   if [ "$code" = 71 ]; then
     unproven "rlimit: apply refuses honestly when the keychain cannot be reached under a low limit" \
       "the sandbox itself could not start under ulimit -n $LOWEST_WORKABLE"
@@ -165,7 +177,6 @@ else
     "sandbox-exec could not block /usr/bin/security here, and this suite never reaches the real keychain"
 fi
 
-unproven "rlimit: the real login keychain fails honestly under descriptor pressure" \
-  "this suite never reaches the login keychain, because a run could add a key to it"
+echo "note: real login keychain pressure is outside this scenario; the suite never reaches it"
 
 exit 0

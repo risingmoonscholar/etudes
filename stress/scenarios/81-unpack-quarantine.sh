@@ -8,7 +8,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require python3 "quarantine matrix requires Python" || exit 0
 if [ "$(uname -s)" != Darwin ]; then unproven "quarantine matrix" "macOS xattr APIs required"; exit 0; fi
 SCRIPT="$(dirname "${BASH_SOURCE[0]}")/../../crates/unpack-cli/tests/quarantine_matrix.py"
-if python3 "$SCRIPT" raw; then pass "every raw extractor and alias propagation was measured"; else fail "raw quarantine measurement failed"; fi
+if python3 "$SCRIPT" raw; then echo "note: every raw extractor and alias propagation was measured"; else fail "raw quarantine measurement failed"; fi
 if python3 "$SCRIPT" unpack "$UNPACK"; then pass "APFS marked/unmarked extraction and failed preservation witnesses pass"; else fail "APFS quarantine witness failed"; fi
 require hdiutil "exFAT quarantine needs a disk image" || exit 0
 W=$(workdir) || exit 1

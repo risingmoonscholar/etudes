@@ -17,7 +17,7 @@ cat > "$W/one.sh" <<'WORKER'
 target="$3/$4"
 if ! "$1" "$2" --into "$target" >/dev/null 2>"$target.err"; then
   head -1 "$target.err" >> "$3/refused"
-elif [ "$(cat "$target/plain.txt")" != plain ]; then
+elif [ "$(cat "$target/plain.txt")" != plain ] || [ "$(cat "$target/nested/ spaced  name.txt")" != nested ]; then
   echo "wrong bytes" >> "$3/refused"
 fi
 rm -rf "$target" "$target.err"

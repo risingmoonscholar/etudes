@@ -55,6 +55,11 @@ for f in alpha beta gamma delta epsilon zeta eta theta; do
 done
 BEFORE=$(find "$PROJ" -type f | wc -l | tr -d ' ')
 
+# Recovery control with the same files before exhausting the image.
+assert_exit 0 "full-volume recovery control applies" -- "$SWEEP" apply "$PROJ" --yes
+assert_exit 0 "full-volume recovery control undo succeeds" -- "$SWEEP" undo "$PROJ"
+assert_intact "$PROJ" "$BEFORE" "recovery control loses no file"
+
 # Loop-until-fail: the only way to know a volume is really, truly full is to
 # keep writing until the OS refuses. df's "available" figure includes space
 # the filesystem reserves and will not actually hand out.
@@ -94,9 +99,13 @@ if echo "$UNDO_OUT" | grep -qi "no storage space\|disk is full\|read-only\|permi
   # exactly what happened, so a later retry (once space exists) resolves it.
   pass "full volume: undo's own inability to write to a still-full disk is a distinct, separately-reported failure (see 60-undo-progress-loss.sh)"
 else
-  assert_exit 0 "full volume: undo reverses whatever the refused apply did" -- true
-  [ "$UNDO_CODE" = 0 ] || [ "$UNDO_CODE" = 1 ] || fail "full volume: undo returned an unexpected exit code $UNDO_CODE: $UNDO_OUT"
+  if [ -n "$(find "$PROJ" -mindepth 2 -type f -print -quit)" ]; then
+    assert_eq 0 "$UNDO_CODE" "full volume: undo reverses whatever the refused apply did"
+  else
+    assert_eq 1 "$UNDO_CODE" "full volume: undo has nothing to restore after the refused apply"
+  fi
 fi
+assert_intact "$PROJ" "$BEFORE" "full-volume undo preserves every file"
 FINAL=$(find "$PROJ" -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE" "$FINAL" "full volume: file count intact after apply-then-undo on a full disk"
 

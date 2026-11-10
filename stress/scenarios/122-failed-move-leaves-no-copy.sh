@@ -5,11 +5,9 @@
 # longer say "Nothing was moved". Every apply and tag apply that wrote
 # journal records now flushes them once on its error returns too.
 #
-# Honest scope: those failures cannot be produced from the command line
-# without a fault hook, so they are proven in etude-core's own tests
-# (tests/failed_move_leaves_no_copy.rs and the apply and journal unit tests).
-# This scenario is the end-to-end check that ordinary runs of all three tools
-# still round-trip with exact bytes after the change: sweep apply and undo,
+# A nearly full disk image forces a failed cross-volume copy and checks that
+# sources keep their bytes and no destination copy survives. Ordinary runs
+# also round-trip exact bytes: sweep apply and undo,
 # stash and pop, and unpack. Everything is synthetic, in a temp dir, and
 # removed on exit.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
@@ -17,13 +15,8 @@ exec </dev/null
 require python3 "builds the fixture tree" || exit 0
 
 W=$(workdir) || exit 1
-pid=""
 cleanup() {
-  if [ -n "$pid" ]; then
-    kill -CONT "$pid" 2>/dev/null || true
-    kill -KILL "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  fi
+  detach_registered_mounts
   rm -rf "$W"
   eval "$_stress_state_cleanup"
 }
@@ -90,3 +83,43 @@ assert_eq 0 "$CODE" "unpack extracts the synthetic archive (exit $CODE)"
   && [ "$(cat "$W/out/sub/nested.txt" 2>/dev/null)" = 'synthetic nested member' ] \
   && pass "unpack wrote both members with their exact bytes" \
   || fail "unpack did not write the exact bytes"
+
+# Force a real cross-volume copy to fail with ENOSPC. The image holds the
+# destination; the nested host directory holds three large source files.
+if require hdiutil "failed cross-volume move needs a disk image"; then
+  M="$W/full-destination"; mkdir -p "$M"
+  if create_disk_image "$W/full.dmg" 32m HFS+ FailedCopy && hdiutil attach "$W/full.dmg" -nobrowse -mountpoint "$M" >/dev/null 2>&1; then
+    register_mount "$M"
+    HOST="$W/cross-source"; mkdir -p "$HOST"
+    for i in 1 2 3; do dd if=/dev/zero of="$HOST/report-$i.pdf" bs=1048576 count=16 2>/dev/null; done
+    # A directory symlink is not traversed by scan. Mount the image beneath
+    # the source root as the existing-scheme route instead.
+    PROFILE="$ETUDE_STATE_DIR/sweep-existing-profile.toml"
+    mkdir -p "$ETUDE_STATE_DIR"
+    # Remount at a real directory in the host root, keeping sources outside it.
+    hdiutil detach "$M" >/dev/null 2>&1
+    mkdir -p "$HOST/Filed"
+    if hdiutil attach "$W/full.dmg" -nobrowse -mountpoint "$HOST/Filed" >/dev/null 2>&1; then
+      register_mount "$HOST/Filed"
+      printf 'schema_version = 1\n[[routes]]\nextension = "pdf"\nfolder = "Filed"\n' > "$PROFILE"
+      dd if=/dev/zero of="$HOST/Filed/filler" bs=1048576 count=128 2>/dev/null || true
+      # Free just enough space for metadata and the start of a 16 MiB copy.
+      rm -f "$HOST/Filed/filler"
+      dd if=/dev/zero of="$HOST/Filed/filler" bs=1048576 count=20 2>/dev/null || true
+      SOURCE_HASH=$(shasum -a 256 "$HOST/report-1.pdf" | awk '{print $1}')
+      OUT=$("$SWEEP" apply "$HOST" --scheme existing --since 0 --yes 2>&1); RC=$?
+      assert_eq 3 "$RC" "cross-volume copy onto a nearly full image fails"
+      assert_no_panic "failed cross-volume copy" "$OUT"
+      for i in 1 2 3; do
+        assert_eq "$SOURCE_HASH" "$(shasum -a 256 "$HOST/report-$i.pdf" 2>/dev/null | awk '{print $1}')" "failed copy preserves original bytes $i"
+        [ -f "$HOST/report-$i.pdf" ] && [ "$(stat -f %z "$HOST/report-$i.pdf")" = 16777216 ] \
+          && pass "failed copy preserves source $i" || fail "failed copy lost or truncated source $i"
+        [ ! -e "$HOST/Filed/report-$i.pdf" ] && pass "failed move leaves no destination copy $i" || fail "failed move left a destination copy $i"
+      done
+    else
+      unproven "failed cross-volume copy" "destination image would not remount"
+    fi
+  else
+    unproven "failed cross-volume copy" "destination image unavailable"
+  fi
+fi

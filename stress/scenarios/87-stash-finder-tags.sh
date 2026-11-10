@@ -37,8 +37,9 @@ grep -q '"status":"nothing_to_do"' <<<"$JSON" \
   && pass "a second stash of the cleared folder has nothing to do" \
   || fail "second stash was not nothing_to_do: $(head -c 200 <<<"$JSON")"
 
-"$STASH" pop "$F" >/dev/null 2>&1 || true
+assert_exit 0 "pop succeeds" -- "$STASH" pop "$F"
 [ "$(xattr -p "$TAGATTR" "$F/tagged.pdf" 2>/dev/null)" = 'opaque-red' ] \
+  && [ "$(xattr -p "$TAGATTR" "$F/tagged-folder" 2>/dev/null)" = opaque-blue ] \
   && [ -f "$F/tagged-folder/inside.txt" ] && [ -f "$F/plain.txt" ] \
   && pass "pop restored everything with the tags intact" \
   || fail "pop did not restore the tagged items intact"

@@ -2,6 +2,10 @@
 # Real SIGKILL, stopped live writers, conservative candidates and competing retries.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require pgrep "the surviving extractor must be stopped" || exit 0
+if ! ps -o state= -p $$ >/dev/null 2>&1; then
+  unproven "witnessed process interruption" "host denies process-state inspection"
+  exit 0
+fi
 W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
 python3 - "$UNPACK" "$W" >"$W/assertions" 2>"$W/errors" <<'PY'
 import fcntl
