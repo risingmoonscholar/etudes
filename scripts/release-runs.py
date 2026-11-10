@@ -5,46 +5,58 @@
                             [--logs DIR] [--target-dir DIR]
     scripts/release-runs.py TOOL VERSION --cuts-only
 
---cuts-only builds and runs nothing: it writes the entry again from the raw
-logs already in site/changelog/logs/, after a change to the fixture's show
-lines or result labels. It refuses when the fixture's setup or commands
-changed since the runs.
-
 Example, at tag time:
 
     scripts/release-runs.py sweep 0.5.5 --before sweep-v0.5.4 --after sweep-v0.5.5
 
 What it does:
-  1. Builds TOOL from each ref out of tree: a detached git worktree in a temp
+  1. Refuses, before it builds anything, a ref whose sweep or stash source
+     does not read ETUDE_JOURNAL_KEY. Those builds fall back to the login
+     keychain through /usr/bin/security, and no run here may reach it.
+  2. Builds TOOL from each ref out of tree: a detached git worktree in a temp
      folder, `cargo build --release --locked -p TOOL-cli`, the binary copied
-     out, the worktree removed.
-  2. For each build, makes a fresh scratch folder, runs the fixture's setup
-     there, then runs the fixture's commands in it, one after the other. Every
-     command runs with a fake HOME, a throwaway ETUDE_STATE_DIR, a random
-     64-hex ETUDE_JOURNAL_KEY and stdin closed. stdout and stderr go to one
-     pipe, so the log holds them in the order the tool printed them.
-  3. After the "after" commands, runs the fixture's next command on the after
-     build in the same folder.
-  4. Writes the raw output of every command, byte for byte, and record.json
-     (commands, exit codes, sha256 of each log and each binary, commits, the
-     folder listing) to --logs, by default site/changelog/logs/TOOL-VERSION/.
-  5. Writes site/changelog/TOOL-VERSION.json from the record and the fixture.
+     out, that worktree removed.
+  3. For each build, makes a fresh scratch folder, runs the fixture's setup
+     there, then the fixture's commands, one after the other (a run marked
+     "fresh" gets a new copy of the folder). Every command runs:
+       - inside sandbox-exec, with a profile that denies any file write
+         outside the scratch folder and any exec of /usr/bin/security;
+       - with a `security` on the front of PATH that only refuses;
+       - with a fake HOME, a throwaway ETUDE_STATE_DIR, a random 64-hex
+         ETUDE_JOURNAL_KEY and stdin closed.
+     stdout and stderr go to one pipe, so a log holds them in the order the
+     tool printed them.
+  4. After the "after" commands, runs the fixture's next command on the after
+     build, in the same folder.
+  5. Writes each command's output to --logs (default
+     site/changelog/logs/TOOL-VERSION/) with one change: the scratch folder's
+     path, which differs on every run and machine, is written as <scratch>.
+     Nothing else in a log is changed. record.json holds the commands, exit
+     codes, sha256 of each log and binary, commits and folder listings.
+  6. Writes site/changelog/TOOL-VERSION.json from the record and the fixture.
 
-The fixture is site/changelog/TOOL-VERSION.fixture (JSON). It holds the shell
-lines that make the test folder, the commands, which whole lines of each
-output the page shows (regular expressions, matched in order, one line each),
-and how to list the result. See site/changelog/sweep-0.5.5.fixture.
+--cuts-only builds and runs nothing: it writes the entry again from the logs
+already in site/changelog/logs/, after a change to the fixture's show lines or
+labels. It refuses when the fixture's setup, commands or result globs changed
+since the runs.
 
-The hand-written fields of an existing entry are kept as they are: date,
-label, headline, lead, next.note and film. Everything else in the entry is
-derived from the record, by entry_from_record() below, which check-site.py
-runs again to catch an edited output line, exit code or commit.
+The fixture is site/changelog/TOOL-VERSION.fixture (JSON): the shell lines that
+make the test folder, the commands, which whole lines of each output the page
+shows (regular expressions, matched in order, one line each), which JSON keys
+of a --json run it reports, and how to list the result. See
+site/changelog/sweep-0.5.5.fixture.
 
-Standard library only. Exit 0 written, 1 a build or run failed, 2 bad usage.
-Nothing is written to site/ unless both builds and every run finished.
+Hand-written fields of an existing entry are kept: label, headline, lead,
+next.note and film. Everything else is derived from the record by
+entry_from_record(), which check-site.py runs again to catch an edited output
+line, exit code or commit. Whether the release is tagged, and its date, are
+not stored: scripts/build-site.py reads them from git when it builds.
+
+Standard library only. Exit 0 written, 1 refused or a build or run failed,
+2 bad usage. Nothing is written to site/ unless both builds and every run
+finished.
 """
 import argparse
-import datetime
 import hashlib
 import json
 import os
@@ -52,6 +64,8 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -61,13 +75,23 @@ ROOT = Path(__file__).resolve().parents[1]
 CHANGELOG = ROOT / "site" / "changelog"
 LOGS = CHANGELOG / "logs"
 SIDES = ("before", "after")
-HAND = ("date", "label", "headline", "lead")
+HAND = ("label", "headline", "lead")
 ABOUT = ("One release entry in the release format, written by scripts/release-runs.py from "
-         "real runs of two builds. The commands, output lines, exit codes, result files, "
-         "builds and footer come from the raw record in site/changelog/logs/; whole lines "
-         "are cut to fit by the fixture, no line is edited. Only date, label, headline, "
-         "lead, next.note and film are written by hand.")
+         "real runs of two builds. The commands, output lines, exit codes, result files and "
+         "builds come from the raw record in site/changelog/logs/; whole lines are cut to fit "
+         "by the fixture, no line is edited. Only label, headline, lead, next.note and film "
+         "are written by hand. Whether the release is tagged, and its date, come from git "
+         "when the site is built.")
 PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+# The tools that keep an encrypted journal. Without ETUDE_JOURNAL_KEY support
+# their builds call /usr/bin/security for a key in the login keychain.
+KEY_TOOLS = ("sweep", "stash")
+SECURITY = "/usr/bin/security"
+SCRATCH = "<scratch>"
+# A log or record that still holds one of these names a machine's own folder.
+MACHINE_PATH = re.compile(r"/(private/)?var/folders/|/private/tmp/|/Users/|(^|[\s'\"=])/tmp/")
+SANDBOX_NOTE = ("Every command ran in a sandbox that let it write only inside its scratch "
+                "folder and could not run /usr/bin/security.")
 
 
 class RunError(Exception):
@@ -96,9 +120,11 @@ def load_fixture(path):
 
 
 def runs_digest(fixture):
-    """sha256 of what decides the runs: the setup, the commands and which files
-    the result lists. Not the cuts or the labels, which only change the page."""
-    basis = {"setup": fixture["setup"], "commands": [r["command"] for r in fixture["runs"]],
+    """sha256 of what decides the runs: the setup, the commands, which runs get a
+    fresh folder, and which files the result lists. Not the cuts, the JSON keys
+    or the labels, which only change the page."""
+    basis = {"setup": fixture["setup"],
+             "commands": [[r["command"], bool(r.get("fresh"))] for r in fixture["runs"]],
              "next": fixture["next"]["command"],
              "result": {side: {"glob": fixture["result"][side]["glob"],
                                "new": bool(fixture["result"][side].get("new"))} for side in SIDES}}
@@ -127,21 +153,35 @@ def cut(lines, patterns, where):
     return shown
 
 
-def build_label(side, build):
-    """'tag sweep-v0.5.4 (commit de8f307)', or for an untagged after build
-    'the 0.5.5 release candidate at commit a0ea3af, not tagged yet'."""
-    if build.get("tag"):
-        return f"tag {build['tag']} (commit {build['commit']})"
-    if side == "before":
-        return f"commit {build['commit']} ({build['version_output']})"
-    version = build["version_output"].split()[-1]
-    return f"the {version} release candidate at commit {build['commit']}, not tagged yet"
+def json_fields(text, paths, where):
+    """For a --json run: [{"path", "present", "value"}] for each dotted key path."""
+    if not paths:
+        return None
+    docs = []
+    for line in log_lines(text):
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(doc, dict):
+            docs.append(doc)
+    if len(docs) != 1:
+        raise RunError(f"{where}: expected one JSON object line in the output, found {len(docs)}")
+    fields = []
+    for path in paths:
+        node, present = docs[0], True
+        for key in path.split("."):
+            if isinstance(node, dict) and key in node:
+                node = node[key]
+            else:
+                present, node = False, None
+                break
+        fields.append({"path": path, "present": present, "value": node})
+    return fields
 
 
-def build_name(side, build, version):
-    if build.get("tag"):
-        return f"tag {build['tag']}"
-    return f"commit {build['commit']}" if side == "before" else f"the {version} release candidate"
+def build_name(build):
+    return f"tag {build['tag']}" if build.get("tag") else f"commit {build['commit']}"
 
 
 def entry_from_record(record, fixture, hand, read_log):
@@ -153,12 +193,17 @@ def entry_from_record(record, fixture, hand, read_log):
     tool, version = record["tool"], record["version"]
     any_cut = False
 
-    def shown(run, patterns, where):
+    def shown(run, spec_show, spec_json, where):
         nonlocal any_cut
-        lines = log_lines(read_log(run["log"]))
-        picked = cut(lines, patterns, where)
+        text = read_log(run["log"])
+        lines = log_lines(text)
+        picked = cut(lines, spec_show, where)
         any_cut = any_cut or len(picked) < len(lines)
-        return {"command": run["command"], "output": picked, "exit": run["exit"]}
+        out = {"command": run["command"], "output": picked, "exit": run["exit"]}
+        fields = json_fields(text, spec_json, where)
+        if fields is not None:
+            out["fields"] = fields
+        return out
 
     entry = {"_about": ABOUT, "tool": tool, "version": version}
     for key in HAND:
@@ -166,32 +211,32 @@ def entry_from_record(record, fixture, hand, read_log):
     entry["folder"] = fixture["folder"]
     for side in SIDES:
         data = record["sides"][side]
-        runs = [shown(run, spec["show"][side], f"{side} run {n + 1} ({run['command']})")
+        runs = [shown(run, spec["show"][side], spec.get("json"), f"{side} run {n + 1} ({run['command']})")
                 for n, (run, spec) in enumerate(zip(data["runs"], fixture["runs"]))]
         entry[side] = {
             "build": record["builds"][side]["version_output"],
             "runs": runs,
             "result": {"label": fixture["result"][side]["label"], "files": data["result_files"]},
-            "exit": runs[-1]["exit"],
+            "exit": runs[0]["exit"],
         }
-    nxt = shown(record["next"], fixture["next"]["show"], f"next ({record['next']['command']})")
+    nxt = shown(record["next"], fixture["next"]["show"], fixture["next"].get("json"),
+                f"next ({record['next']['command']})")
     entry["next"] = {"note": hand.get("next_note", []), **nxt}
     if hand.get("film"):
         entry["film"] = hand["film"]
-    builds = {}
-    for side in SIDES:
-        b = record["builds"][side]
-        builds[side] = {"name": build_name(side, b, version), "commit": b["commit"],
-                        "rev": b["rev"], "sha256": b["sha256"]}
-    builds["after"]["tagged"] = bool(record["builds"]["after"].get("tag"))
-    entry["builds"] = builds
-    labels = [build_label(s, record["builds"][s]) for s in SIDES]
-    entry["footer"] = (
-        f"Both outputs come from real runs of two builds: {labels[0]} and {labels[1]}. "
+    before, after = record["builds"]["before"], record["builds"]["after"]
+    entry["builds"] = {
+        "before": {"name": build_name(before), "tag": before.get("tag"), "commit": before["commit"],
+                   "rev": before["rev"], "sha256": before["sha256"]},
+        "after": {"commit": after["commit"], "rev": after["rev"], "sha256": after["sha256"]},
+    }
+    # The part of the footer that does not depend on the tag. build-site.py
+    # puts the two builds in front of it.
+    entry["runs_note"] = (
         f"Each ran the same commands on a fresh copy of one {fixture.get('kind', 'synthetic folder')}, "
         f"{fixture['folder']}: {fixture['describe']}. "
         + ("Output is shortened to fit by cutting whole lines. " if any_cut else "")
-        + "Nothing outside the scratch folder was touched.")
+        + SANDBOX_NOTE)
     return entry
 
 
@@ -235,6 +280,20 @@ def tag_at(name, rev):
     return name if tagged == rev else None
 
 
+def key_guard(tool, ref, rev):
+    """Refuse a build that would ask the login keychain for its journal key."""
+    if tool not in KEY_TOOLS:
+        return
+    found = subprocess.run(["git", "grep", "-q", "-F", "ETUDE_JOURNAL_KEY", rev, "--", "crates/"],
+                           cwd=ROOT, capture_output=True)
+    if found.returncode == 1:
+        raise RunError(f"{tool} at {ref} ({rev[:7]}) does not read ETUDE_JOURNAL_KEY, so it would "
+                       f"take its journal key from the login keychain through {SECURITY}. "
+                       "Nothing was built or run. Pick a ref from 0.5.3 on.")
+    if found.returncode != 0:
+        raise RunError(f"cannot search {ref} for ETUDE_JOURNAL_KEY: {found.stderr.decode().strip()}")
+
+
 def build(tool, ref, rev, tmp, target, side):
     src = tmp / f"src-{side}"
     git("worktree", "add", "--detach", "--quiet", str(src), rev)
@@ -254,23 +313,68 @@ def build(tool, ref, rev, tmp, target, side):
         shutil.copy2(target / "release" / tool, binary)
         return binary
     finally:
+        # Only the worktree this run made; never a prune of anyone else's.
         git("worktree", "remove", "--force", str(src), check=False)
-        git("worktree", "prune", check=False)
+
+
+# --- the sandbox --------------------------------------------------------------
+
+def sandbox_profile(root):
+    """Writes only under ROOT (and /dev/null, /dev/tty); /usr/bin/security never runs."""
+    real = os.path.realpath(root)
+    return f"""(version 1)
+(allow default)
+(deny file-write*
+  (require-not (require-any (subpath "{real}") (literal "/dev/null") (literal "/dev/tty")
+                            (literal "/dev/dtracehelper"))))
+(deny process-exec* (literal "{SECURITY}"))
+"""
+
+
+def security_shim(folder):
+    """A `security` that only refuses, for the front of PATH."""
+    folder.mkdir(parents=True, exist_ok=True)
+    shim = folder / "security"
+    shim.write_text("#!/bin/sh\necho 'security: refused. release-runs.py never lets a run "
+                    "reach the keychain.' >&2\nexit 77\n")
+    shim.chmod(0o755)
+    return folder
+
+
+def sandboxed(argv, root):
+    return ["/usr/bin/sandbox-exec", "-p", sandbox_profile(root), *argv]
+
+
+def force_rmtree(path):
+    """Remove PATH even where a fixture made a folder unreadable. Never follows links."""
+    if not os.path.lexists(path):
+        return
+    for top, dirs, _ in os.walk(path, onerror=lambda e: None):
+        for name in dirs:
+            child = os.path.join(top, name)
+            if not os.path.islink(child):
+                try:
+                    os.chmod(child, stat.S_IRWXU)
+                except OSError:
+                    pass
+    shutil.rmtree(path, ignore_errors=True)
 
 
 # --- runs --------------------------------------------------------------------
 
 def listing(folder):
     out = []
-    for path in sorted(folder.rglob("*"), key=lambda p: p.relative_to(folder).as_posix()):
-        rel = path.relative_to(folder).as_posix()
-        if path.is_symlink():
-            out.append(f"{rel} -> {os.readlink(path)}")
-        elif path.is_dir():
-            out.append(rel + "/")
-        else:
-            out.append(rel)
-    return out
+    for top, dirs, files in os.walk(folder, onerror=lambda e: None):
+        for name in dirs + files:
+            path = Path(top) / name
+            rel = path.relative_to(folder).as_posix()
+            if path.is_symlink():
+                out.append(f"{rel} -> {os.readlink(path)}")
+            elif path.is_dir():
+                out.append(rel + "/" + ("" if os.access(path, os.R_OK | os.X_OK) else " (unreadable)"))
+            else:
+                out.append(rel)
+    return sorted(out)
 
 
 def result_files(work, spec, before):
@@ -286,71 +390,91 @@ def result_files(work, spec, before):
 
 
 class Scratch:
-    """One fresh folder per build: work/ for the fixture, home/, state/, tmp/."""
+    """One fresh folder: work/ for the fixture, home/, state/, tmp/, bin/."""
 
-    def __init__(self, base, side):
-        self.root = base / f"run-{side}"
+    def __init__(self, base, name, key):
+        self.root = base / f"run-{name}"
         self.work = self.root / "work"
-        for name in ("work", "home", "state", "tmp"):
-            (self.root / name).mkdir(parents=True)
-        self.env = {"PATH": PATH, "HOME": str(self.root / "home"),
+        for sub in ("work", "home", "state", "tmp"):
+            (self.root / sub).mkdir(parents=True)
+        shim = security_shim(self.root / "bin")
+        self.env = {"PATH": f"{shim}:{PATH}", "HOME": str(self.root / "home"),
                     "ETUDE_STATE_DIR": str(self.root / "state"),
-                    "ETUDE_JOURNAL_KEY": secrets.token_hex(32),
+                    "ETUDE_JOURNAL_KEY": key,
                     "TMPDIR": str(self.root / "tmp") + "/", "LANG": "en_US.UTF-8"}
+
+    def normalize(self, data):
+        """The output with this folder's path written as <scratch>; nothing else changes."""
+        text = data.decode("utf-8")
+        for path in sorted({os.path.realpath(self.root), str(self.root)}, key=len, reverse=True):
+            text = text.replace(path, SCRATCH)
+        return text.encode("utf-8")
+
+    def exec(self, argv, timeout=300):
+        try:
+            return subprocess.run(sandboxed(argv, self.root), cwd=self.work, env=self.env,
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise RunError(f"{' '.join(argv)} did not finish within {timeout} s; it was stopped") from error
 
     def setup(self, fixture):
         script = self.root / "setup.sh"
         script.write_text("\n".join(fixture["setup"]) + "\n", encoding="utf-8")
-        done = subprocess.run(["/bin/sh", "-eu", str(script)], cwd=self.work, env=self.env,
-                              capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        done = self.exec(["/bin/sh", "-eu", str(script)], timeout=60)
         if done.returncode != 0:
             raise RunError(f"the fixture setup failed (exit {done.returncode}): "
-                           f"{(done.stdout + done.stderr).strip()}")
+                           f"{done.stdout.decode(errors='replace').strip()}")
 
     def run(self, tool, binary, command, logs, name):
         argv = shlex.split(command)
         if not argv or argv[0] != tool:
             raise RunError(f"the fixture command {command!r} does not start with {tool}")
-        done = subprocess.run([str(binary), *argv[1:]], cwd=self.work, env=self.env,
-                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, timeout=300)
+        done = self.exec([str(binary), *argv[1:]])
         try:
-            done.stdout.decode("utf-8")
+            data = self.normalize(done.stdout)
         except UnicodeDecodeError as error:
             raise RunError(f"{command!r} printed output that is not UTF-8: {error}") from error
-        (logs / name).write_bytes(done.stdout)
+        if MACHINE_PATH.search(data.decode("utf-8")):
+            raise RunError(f"{command!r} printed a path outside its scratch folder; "
+                           "the log would carry it into the repository")
+        (logs / name).write_bytes(data)
         return {"command": command, "exit": done.returncode, "log": name,
-                "sha256": hashlib.sha256(done.stdout).hexdigest()}
+                "sha256": hashlib.sha256(data).hexdigest()}
 
 
 def run_side(tool, side, binary, fixture, base, logs):
-    scratch = Scratch(base, side)
-    scratch.setup(fixture)
-    before = listing(scratch.work)
-    runs = [scratch.run(tool, binary, spec["command"], logs, f"{side}-{n + 1}.txt")
-            for n, spec in enumerate(fixture["runs"])]
+    key = secrets.token_hex(32)
+    main = Scratch(base, side, key)
+    main.setup(fixture)
+    before = listing(main.work)
+    runs = []
+    for n, spec in enumerate(fixture["runs"]):
+        place = main
+        if spec.get("fresh"):
+            place = Scratch(base, f"{side}-{n + 1}", key)
+            place.setup(fixture)
+        runs.append(place.run(tool, binary, spec["command"], logs, f"{side}-{n + 1}.txt"))
     data = {"listing_before": before, "runs": runs,
-            "result_files": result_files(scratch.work, fixture["result"][side],
-                                         {p.split(" -> ")[0].rstrip("/") for p in before})}
+            "result_files": result_files(main.work, fixture["result"][side],
+                                         {p.split(" -> ")[0].split("/ ")[0].rstrip("/") for p in before})}
     nxt = None
     if side == "after":
-        nxt = scratch.run(tool, binary, fixture["next"]["command"], logs, "next.txt")
-    data["listing_after"] = listing(scratch.work)
+        nxt = main.run(tool, binary, fixture["next"]["command"], logs, "next.txt")
+    data["listing_after"] = listing(main.work)
     return data, nxt
 
 
-def version_of(binary, base):
-    home = base / "version-home"
-    home.mkdir(exist_ok=True)
-    done = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
-                          env={"PATH": PATH, "HOME": str(home)}, stdin=subprocess.DEVNULL)
+def version_of(binary, base, side):
+    scratch = Scratch(base, f"version-{side}", secrets.token_hex(32))
+    done = scratch.exec([str(binary), "--version"], timeout=60)
     if done.returncode != 0:
         raise RunError(f"{binary.name} --version exited {done.returncode}")
-    return done.stdout.strip()
+    return done.stdout.decode().strip()
 
 
-def commit_date(rev):
-    return git("show", "-s", "--format=%cs", rev)
+def write_entry(entry_path, entry):
+    entry_path.write_text(json.dumps(entry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def cuts_only(tool, version, entry_path, logs):
@@ -358,8 +482,8 @@ def cuts_only(tool, version, entry_path, logs):
         fixture = load_fixture(fixture_path(tool, version))
         record = json.loads((logs / "record.json").read_text(encoding="utf-8"))
         if record.get("runs_sha256") != runs_digest(fixture):
-            raise RunError("the fixture's setup, commands or result globs changed since the runs; run the builds again "
-                           "with --before and --after")
+            raise RunError("the fixture's setup, commands or result globs changed since the runs; "
+                           "run the builds again with --before and --after")
         for run in [r for side in SIDES for r in record["sides"][side]["runs"]] + [record["next"]]:
             if sha256_file(logs / run["log"]) != run["sha256"]:
                 raise RunError(f"{logs / run['log']} differs from its sha256 in record.json")
@@ -369,9 +493,15 @@ def cuts_only(tool, version, entry_path, logs):
     except (RunError, OSError, json.JSONDecodeError) as error:
         print(f"FAIL {error}", file=sys.stderr)
         return 1
-    entry_path.write_text(json.dumps(entry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_entry(entry_path, entry)
     print(f"ok   wrote {entry_path.relative_to(ROOT)} from the raw logs in {logs}")
     return 0
+
+
+def stop_on_term(signum, frame):
+    # Turn SIGTERM into an exit, so the finally blocks remove the temp folder
+    # and the worktrees. SIGINT already raises KeyboardInterrupt.
+    raise SystemExit(128 + signum)
 
 
 def main(argv):
@@ -397,13 +527,18 @@ def main(argv):
         return cuts_only(args.tool, args.version, entry_path, logs)
     if not args.before or not args.after:
         parser.error("--before and --after are required (or --cuts-only)")
+    signal.signal(signal.SIGTERM, stop_on_term)
 
     try:
+        # The keychain guard comes first, before anything else is read or made.
+        refs = {"before": args.before, "after": args.after}
+        revs = {side: resolve(refs[side]) for side in SIDES}
+        for side in SIDES:
+            key_guard(args.tool, refs[side], revs[side])
         fixture = load_fixture(fixture_path(args.tool, args.version))
-        old = {}
-        if entry_path.is_file():
-            old = json.loads(entry_path.read_text(encoding="utf-8"))
-        revs = {"before": resolve(args.before), "after": resolve(args.after)}
+        old = json.loads(entry_path.read_text(encoding="utf-8")) if entry_path.is_file() else {}
+        if not os.access("/usr/bin/sandbox-exec", os.X_OK):
+            raise RunError("/usr/bin/sandbox-exec is missing; the runs need it. Nothing was built or run.")
         tmp = Path(tempfile.mkdtemp(prefix="etudes-release-runs-"))
         try:
             target = Path(args.target_dir).resolve() if args.target_dir else tmp / "target"
@@ -412,14 +547,18 @@ def main(argv):
             record = {"tool": args.tool, "version": args.version,
                       "fixture": fixture_path(args.tool, args.version).name,
                       "runs_sha256": runs_digest(fixture),
-                      "env": ["PATH=" + PATH, "HOME=<scratch>/home", "ETUDE_STATE_DIR=<scratch>/state",
+                      "env": [f"PATH={SCRATCH}/bin:{PATH} (bin holds a security that only refuses)",
+                              f"HOME={SCRATCH}/home", f"ETUDE_STATE_DIR={SCRATCH}/state",
                               "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
-                              "TMPDIR=<scratch>/tmp/", "LANG=en_US.UTF-8", "stdin closed"],
+                              f"TMPDIR={SCRATCH}/tmp/", "LANG=en_US.UTF-8", "stdin closed",
+                              "sandbox-exec: no file writes outside the scratch folder, "
+                              f"no exec of {SECURITY}"],
+                      "logs": f"each log is the command's output with the scratch folder's path "
+                              f"written as {SCRATCH}",
                       "builds": {}, "sides": {}}
-            refs = {"before": args.before, "after": args.after}
             for side in SIDES:
                 binary = build(args.tool, refs[side], revs[side], tmp, target, side)
-                version_line = version_of(binary, tmp)
+                version_line = version_of(binary, tmp, side)
                 tag = (tag_at(args.before, revs[side]) if side == "before"
                        else tag_at(f"{args.tool}-v{args.version}", revs[side]))
                 record["builds"][side] = {
@@ -433,9 +572,7 @@ def main(argv):
                 record["sides"][side], nxt = run_side(args.tool, side, binary, fixture, tmp, staged)
                 if nxt:
                     record["next"] = nxt
-            hand = hand_fields(old)
-            hand.setdefault("date", commit_date(revs["after"]))
-            entry = entry_from_record(record, fixture, hand,
+            entry = entry_from_record(record, fixture, hand_fields(old),
                                       lambda n: (staged / n).read_text(encoding="utf-8"))
             (staged / "record.json").write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n",
                                                 encoding="utf-8")
@@ -449,14 +586,13 @@ def main(argv):
                 shutil.rmtree(logs)
             logs.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(staged, logs)
-            entry_path.write_text(json.dumps(entry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            write_entry(entry_path, entry)
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-            git("worktree", "prune", check=False)
+            force_rmtree(tmp)
     except RunError as error:
         print(f"FAIL {error}", file=sys.stderr)
         return 1
-    missing = [k for k in ("headline", "label", "lead") if not entry.get(k)]
+    missing = [k for k in HAND if not entry.get(k)]
     if not entry["next"]["note"]:
         missing.append("next.note")
     print(f"ok   wrote {entry_path.relative_to(ROOT)} and the raw logs in {logs}")

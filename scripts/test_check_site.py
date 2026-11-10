@@ -6,6 +6,7 @@ render or to refuse, and holds it to that claim.
 """
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -245,34 +246,12 @@ def load_check():
 
 
 class EntryTest(unittest.TestCase):
-    """The What's new footer says "not tagged yet" only while that is true."""
-
-    def entry(self, **after):
-        builds = {"before": {"commit": "de8f307"}, "after": {"commit": "40fc3d3", "tagged": False}}
-        builds["after"].update(after)
-        return {"tool": "sweep", "version": "0.5.5", "builds": builds,
-                "footer": "Builds: de8f307, and the release candidate at 40fc3d3, not tagged yet."}
-
-    def test_untagged_entry_passes_before_the_tag(self):
-        self.assertEqual(load_check().check_entry(self.entry(), tag_exists=False), [])
-
-    def test_untagged_entry_fails_once_the_tag_exists(self):
-        problems = load_check().check_entry(self.entry(), tag_exists=True)
-        self.assertTrue(any("the tag sweep-v0.5.5 exists" in p for p in problems), problems)
-
-    def test_footer_missing_a_commit_fails(self):
-        entry = self.entry()
-        entry["footer"] = entry["footer"].replace("40fc3d3", "abcdef0")
-        problems = load_check().check_entry(entry, tag_exists=False)
-        self.assertTrue(any("after build's commit '40fc3d3'" in p for p in problems), problems)
-
-    def test_tagged_entry_that_says_untagged_fails(self):
-        problems = load_check().check_entry(self.entry(tagged=True), tag_exists=True)
-        self.assertTrue(any("records a tagged build" in p for p in problems), problems)
+    """The pages job has the tags the release state is read from."""
 
     def test_pages_job_fetches_tags_before_it_checks_the_site(self):
-        # The guard above reads local tags. The job that publishes must have
-        # them, or a "not tagged yet" footer would go out on the release.
+        # build-site.py reads the release's tag state from local tags. The job
+        # that publishes must have them, or a "not tagged yet" footer would go
+        # out on the release.
         text = (ROOT / ".github/workflows/pages.yml").read_text()
         checkout = text.index("uses: actions/checkout@v4")
         check = text.index("python3 scripts/check-site.py --dir _site")
@@ -342,9 +321,15 @@ class ChangelogDataTest(unittest.TestCase):
         self.change(self.entry_path, lambda e: e["after"]["result"]["files"].append("extra.pdf"))
         self.assertProblem("differs from its raw logs in after")
 
-    def test_hand_edited_footer_fails(self):
-        self.change(self.entry_path, lambda e: e.__setitem__("footer", e["footer"].replace("2 new PDFs", "3 new PDFs")))
-        self.assertProblem("differs from its raw logs in footer")
+    def test_hand_edited_runs_note_fails(self):
+        self.change(self.entry_path,
+                    lambda e: e.__setitem__("runs_note", e["runs_note"].replace("2 new PDFs", "3 new PDFs")))
+        self.assertProblem("differs from its raw logs in runs_note")
+
+    def test_log_with_a_machine_path_fails(self):
+        log = self.folder / "logs/sweep-0.5.5/after-2.txt"
+        log.write_text(log.read_text().replace("<scratch>", "/private/var/folders/xy/T/run"))
+        self.assertProblem("holds a machine's own folder path")
 
     def test_hand_written_fields_may_change(self):
         def edit(e):
@@ -387,22 +372,17 @@ class ChangelogDataTest(unittest.TestCase):
         self.assertProblem("matches no line")
 
     def test_untagged_after_build_not_on_head_fails(self):
-        # sweep-v0.5.4's commit sits on a release branch, not on main.
+        # sweep-v0.5.4's commit sits on a release branch, not on main. With no
+        # sweep-v9.9.9 tag, an entry that ran there is a candidate off HEAD.
         rev = subprocess.run(["git", "rev-parse", "sweep-v0.5.4^{commit}"], cwd=ROOT,
                              capture_output=True, text=True).stdout.strip()
         anc = subprocess.run(["git", "merge-base", "--is-ancestor", rev, "HEAD"], cwd=ROOT)
         if not rev or anc.returncode != 1:
             self.skipTest("needs the sweep-v0.5.4 tag off HEAD's history")
         problems = load_check().check_builds(
-            {"tool": "sweep", "version": "0.5.5",
-             "builds": {"before": {}, "after": {"commit": rev[:7], "rev": rev, "tagged": False}}})
+            {"tool": "sweep", "version": "9.9.9",
+             "builds": {"before": {}, "after": {"commit": rev[:7], "rev": rev}}})
         self.assertTrue(any("is not an ancestor of HEAD" in p for p in problems), problems)
-
-    def test_tagged_flag_on_the_wrong_commit_fails(self):
-        entry = json.loads((ROOT / "site/changelog/stash-0.5.4.json").read_text())
-        entry["builds"]["after"]["rev"] = "0" * 40
-        problems = load_check().check_builds(entry)
-        self.assertTrue(any("the tag stash-v0.5.4 names" in p for p in problems), problems)
 
     def test_before_tag_on_the_wrong_commit_fails(self):
         entry = json.loads((ROOT / "site/changelog/sweep-0.5.5.json").read_text())
@@ -410,16 +390,197 @@ class ChangelogDataTest(unittest.TestCase):
         problems = load_check().check_builds(entry)
         self.assertTrue(any("the before build is sweep-v0.5.4, which names" in p for p in problems), problems)
 
-    def test_tagged_flag_without_the_tag_fails(self):
-        entry = json.loads((ROOT / "site/changelog/sweep-0.5.5.json").read_text())
-        entry["version"] = "9.9.9"
-        entry["builds"]["after"]["tagged"] = True
-        problems = load_check().check_builds(entry)
-        self.assertTrue(any("the tag sweep-v9.9.9 does not exist" in p for p in problems), problems)
+    def test_entries_store_no_tag_state_or_date(self):
+        for path in (ROOT / "site/changelog").glob("*.json"):
+            entry = json.loads(path.read_text())
+            self.assertNotIn("date", entry, path.name)
+            self.assertNotIn("footer", entry, path.name)
+            self.assertNotIn("tagged", entry["builds"]["after"], path.name)
+
+
+class ReleaseStateTest(unittest.TestCase):
+    """Tag state and date come from git at build time. Tried in a scratch clone
+    with throwaway tags; nothing is tagged or committed in this repository."""
+
+    TAG = "sweep-v0.5.5"
+
+    @classmethod
+    def setUpClass(cls):
+        if subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{cls.TAG}"],
+                          cwd=ROOT, capture_output=True).returncode == 0:
+            raise unittest.SkipTest(f"{cls.TAG} exists here already")
+        cls.tmp = tempfile.TemporaryDirectory(prefix="etudes-release-state-")
+        cls.clone = Path(cls.tmp.name) / "clone"
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                              text=True, check=True).stdout.strip()
+        subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", str(ROOT), str(cls.clone)],
+                       check=True)
+        cls.git("checkout", "--quiet", "--detach", head)
+        # The scripts and data as they are in this checkout, on top of HEAD.
+        for folder in ("scripts", "site"):
+            shutil.rmtree(cls.clone / folder)
+            shutil.copytree(ROOT / folder, cls.clone / folder)
+        cls.git("add", "-A")
+        cls.git("commit", "--quiet", "--allow-empty", "-m", "the checkout as it is")
+        cls.entry = json.loads((cls.clone / "site/changelog/sweep-0.5.5.json").read_text())
+        cls.rev = cls.entry["builds"]["after"]["rev"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    @classmethod
+    def git(cls, *args):
+        return subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                               "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
+                              cwd=cls.clone, capture_output=True, text=True, check=True).stdout.strip()
+
+    def tearDown(self):
+        subprocess.run(["git", "tag", "-d", self.TAG], cwd=self.clone, capture_output=True)
+
+    def build(self):
+        spec = importlib.util.spec_from_file_location("build_site_clone", self.clone / "scripts/build-site.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def commit_on(self, base, path, text):
+        """A commit on BASE that changes PATH; HEAD goes back where it was."""
+        head = self.git("rev-parse", "HEAD")
+        self.git("checkout", "--quiet", "--detach", base)
+        with open(self.clone / path, "a") as f:
+            f.write(text)
+        self.git("commit", "--quiet", "-am", "change")
+        rev = self.git("rev-parse", "HEAD")
+        self.git("checkout", "--quiet", "--detach", head)
+        return rev
+
+    def test_untagged_is_a_release_candidate_without_a_date(self):
+        build = self.build()
+        state = build.release_state(self.entry)
+        self.assertFalse(state["tagged"])
+        self.assertIn("not tagged yet", build.footer(self.entry))
+        self.assertIn("Release candidate", build.release_meta(self.entry))
+        self.assertNotIn("<time", build.release_meta(self.entry))
+
+    def test_tag_on_the_run_commit_is_tagged_with_its_date(self):
+        self.git("tag", "-a", "-m", "release", self.TAG, self.rev)
+        build = self.build()
+        state = build.release_state(self.entry)
+        self.assertTrue(state["tagged"])
+        date = self.git("for-each-ref", "--format=%(creatordate:short)", f"refs/tags/{self.TAG}")
+        self.assertIn(f'<time datetime="{date}">', build.release_meta(self.entry))
+        self.assertIn(f"tag {self.TAG} (commit {self.rev[:7]})", build.footer(self.entry))
+        self.assertNotIn("not tagged", build.footer(self.entry))
+
+    def test_tag_on_a_commit_with_the_same_sweep_source_is_tagged(self):
+        tagged = self.commit_on(self.rev, "README.md", "\nA docs change only.\n")
+        self.git("tag", self.TAG, tagged)
+        build = self.build()
+        self.assertTrue(build.release_state(self.entry)["tagged"])
+        self.assertIn(f"built and run at commit {self.rev[:7]}, which has the same sweep source",
+                      build.footer(self.entry))
+
+    def test_tag_on_a_commit_with_other_sweep_source_stops_the_build(self):
+        for path in ("crates/sweep-cli/src/main.rs", "crates/etude-core/src/lib.rs", "Cargo.lock"):
+            with self.subTest(path=path):
+                tagged = self.commit_on(self.rev, path, "\n")
+                self.git("tag", "-f", self.TAG, tagged)
+                build = self.build()
+                with self.assertRaises(build.BuildError) as caught:
+                    build.release_state(self.entry)
+                self.assertIn("whose sweep source differs", str(caught.exception))
+
+    def test_tagged_site_passes_the_site_check(self):
+        # At tag time pages.yml builds and checks the tagged tree. The entry
+        # made before the tag must not stop it.
+        self.git("tag", "-a", "-m", "release", self.TAG, self.rev)
+        done = subprocess.run([sys.executable, str(self.clone / "scripts/check-site.py")],
+                              cwd=self.clone, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        built = Path(self.tmp.name) / "site"
+        subprocess.run([sys.executable, str(self.clone / "scripts/build-site.py"), "--out", str(built)],
+                       check=True, capture_output=True)
+        page = (built / "changelog/sweep-0.5.5/index.html").read_text()
+        self.assertIn(f"tag {self.TAG} (commit {self.rev[:7]})", page)
+        self.assertNotIn("Release candidate", page)
+
+
+class KeychainGuardTest(unittest.TestCase):
+    """No run of release-runs.py can reach the login keychain."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runs = load_runs()
+
+    def rev(self, ref):
+        done = subprocess.run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=ROOT,
+                              capture_output=True, text=True)
+        if done.returncode != 0:
+            self.skipTest(f"this clone has no {ref}")
+        return done.stdout.strip()
+
+    def test_a_ref_without_key_support_is_refused(self):
+        for tool, ref in (("sweep", "v0.4.0"), ("stash", "v0.5.1"), ("sweep", "sweep-v0.5.2"),
+                          ("stash", "stash-v0.5.2")):
+            with self.subTest(tool=tool, ref=ref), self.assertRaises(self.runs.RunError) as caught:
+                self.runs.key_guard(tool, ref, self.rev(ref))
+            self.assertIn("does not read ETUDE_JOURNAL_KEY", str(caught.exception))
+
+    def test_refs_with_key_support_and_unpack_pass(self):
+        self.runs.key_guard("sweep", "sweep-v0.5.4", self.rev("sweep-v0.5.4"))
+        self.runs.key_guard("stash", "stash-v0.5.3", self.rev("stash-v0.5.3"))
+        self.runs.key_guard("unpack", "v0.5.1", self.rev("v0.5.1"))
+
+    def test_the_script_refuses_before_it_builds(self):
+        self.rev("v0.4.0")
+        done = subprocess.run([sys.executable, str(ROOT / "scripts/release-runs.py"), "sweep", "0.5.5",
+                               "--before", "v0.4.0", "--after", "HEAD"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("does not read ETUDE_JOURNAL_KEY", done.stderr)
+        self.assertIn("Nothing was built or run", done.stderr)
+        self.assertNotIn("building", done.stderr)
+
+    @unittest.skipUnless(Path("/usr/bin/sandbox-exec").exists(), "macOS sandbox-exec only")
+    def test_runs_cannot_exec_security_or_write_outside(self):
+        with tempfile.TemporaryDirectory(prefix="etudes-sandbox-test-") as tmp:
+            base = Path(tmp) / "scratch"
+            base.mkdir()
+            scratch = self.runs.Scratch(base, "t", "0" * 64)
+            # By absolute path: the sandbox refuses the exec.
+            done = scratch.exec([self.runs.SECURITY, "help"])
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn(b"Operation not permitted", done.stdout)
+            # By name: the shim on the front of PATH refuses first.
+            done = scratch.exec(["/bin/sh", "-c", "security help"])
+            self.assertEqual(done.returncode, 77)
+            self.assertIn(b"security: refused", done.stdout)
+            # A write outside the scratch folder is refused; inside works.
+            outside = Path(tmp) / "outside.txt"
+            done = scratch.exec(["/usr/bin/touch", str(outside)])
+            self.assertNotEqual(done.returncode, 0)
+            self.assertFalse(outside.exists())
+            done = scratch.exec(["/usr/bin/touch", str(scratch.work / "inside.txt")])
+            self.assertEqual(done.returncode, 0, done.stdout)
+
+    def test_logs_write_the_scratch_folder_as_a_placeholder(self):
+        with tempfile.TemporaryDirectory(prefix="etudes-normalize-test-") as tmp:
+            scratch = self.runs.Scratch(Path(tmp), "t", "0" * 64)
+            raw = f"Undo with: sweep undo '{os.path.realpath(scratch.root)}/work/inbox'\n".encode()
+            self.assertEqual(scratch.normalize(raw), b"Undo with: sweep undo '<scratch>/work/inbox'\n")
+
+    def test_scratch_with_an_unreadable_folder_is_removed(self):
+        tmp = tempfile.mkdtemp(prefix="etudes-rmtree-test-")
+        locked = Path(tmp) / "a" / "locked"
+        locked.mkdir(parents=True)
+        (locked / "f.txt").write_text("x")
+        locked.chmod(0)
+        self.runs.force_rmtree(tmp)
+        self.assertFalse(Path(tmp).exists())
 
 
 class ReleaseRunsTest(unittest.TestCase):
-    """The cuts and the footer scripts/release-runs.py writes."""
+    """The cuts, JSON keys and runs note scripts/release-runs.py writes."""
 
     @classmethod
     def setUpClass(cls):
@@ -443,21 +604,13 @@ class ReleaseRunsTest(unittest.TestCase):
         fixture["setup"].append("touch extra")
         self.assertNotEqual(self.runs.runs_digest(fixture), digest)
 
-    def test_footer_names_the_builds_and_the_tag_state(self):
-        record = json.loads((ROOT / "site/changelog/logs/sweep-0.5.5/record.json").read_text())
-        fixture = json.loads((ROOT / "site/changelog/sweep-0.5.5.fixture").read_text())
-        logs = ROOT / "site/changelog/logs/sweep-0.5.5"
-        read = lambda n: (logs / n).read_text()
-        entry = self.runs.entry_from_record(record, fixture, {}, read)
-        self.assertIn("not tagged yet", entry["footer"])
-        self.assertFalse(entry["builds"]["after"]["tagged"])
-        record["builds"]["after"]["tag"] = "sweep-v0.5.5"
-        entry = self.runs.entry_from_record(record, fixture, {}, read)
-        self.assertIn(f"tag sweep-v0.5.5 (commit {record['builds']['after']['commit']})", entry["footer"])
-        self.assertNotIn("not tagged", entry["footer"])
-        self.assertTrue(entry["builds"]["after"]["tagged"])
+    def test_json_fields_read_nested_keys(self):
+        text = '{"details": {"clear": false}, "moved": 4}\n'
+        fields = self.runs.json_fields(text, ["clear", "details.clear"], "x")
+        self.assertEqual(fields, [{"path": "clear", "present": False, "value": None},
+                                  {"path": "details.clear", "present": True, "value": False}])
 
-    def test_footer_says_shortened_only_when_a_line_was_cut(self):
+    def test_runs_note_says_shortened_only_when_a_line_was_cut(self):
         record = json.loads((ROOT / "site/changelog/logs/sweep-0.5.5/record.json").read_text())
         fixture = json.loads((ROOT / "site/changelog/sweep-0.5.5.fixture").read_text())
         logs = ROOT / "site/changelog/logs/sweep-0.5.5"
@@ -469,7 +622,7 @@ class ReleaseRunsTest(unittest.TestCase):
                 run["show"][side] = every_line(record["sides"][side]["runs"][n]["log"])
         fixture["next"]["show"] = every_line("next.txt")
         entry = self.runs.entry_from_record(record, fixture, {}, lambda n: (logs / n).read_text())
-        self.assertNotIn("shortened", entry["footer"])
+        self.assertNotIn("shortened", entry["runs_note"])
 
 
 class ConverterTest(unittest.TestCase):
