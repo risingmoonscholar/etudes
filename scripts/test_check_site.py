@@ -237,6 +237,16 @@ class EntryTest(unittest.TestCase):
         problems = load_check().check_entry(self.entry(tagged=True), tag_exists=True)
         self.assertTrue(any("records a tagged build" in p for p in problems), problems)
 
+    def test_pages_job_fetches_tags_before_it_checks_the_site(self):
+        # The guard above reads local tags. The job that publishes must have
+        # them, or a "not tagged yet" footer would go out on the release.
+        text = (ROOT / ".github/workflows/pages.yml").read_text()
+        checkout = text.index("uses: actions/checkout@v4")
+        check = text.index("python3 scripts/check-site.py --dir _site")
+        self.assertLess(checkout, check)
+        step = text[checkout:text.index("- name:", checkout)]
+        self.assertRegex(step, r"\n\s+fetch-depth: 0\n")
+
     def test_published_entry_matches_its_data(self):
         build = load_build()
         entry = build.latest_entry()

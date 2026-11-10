@@ -192,6 +192,11 @@ def check_home(out):
         tag = f"{entry['tool']}-v{entry['version']}"
         tags = subprocess.run(["git", "tag", "--list", tag], cwd=ROOT, capture_output=True, text=True)
         problems += check_entry(entry, tags.returncode == 0 and tags.stdout.strip() == tag)
+        shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT,
+                                 capture_output=True, text=True)
+        if tags.returncode != 0 or shallow.stdout.strip() == "true":
+            notes.append(f"this clone may not hold the tag {tag}, so the not-tagged-yet check "
+                         "could not see it here (pages.yml fetches every tag before it publishes)")
     notes.append("the What's new footer names its builds, and says not tagged only while it is not")
 
     # The page is exactly what the build renders from the data today, so a
