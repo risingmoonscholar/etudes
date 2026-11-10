@@ -1105,6 +1105,7 @@ NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
     "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash) and 109 (unpack) fill a disk image to prove it",
+    "private_copy_unopened": "needs macOS to refuse /dev/fd/N on every attempt, a race between processes this witness cannot stage; unpack's unit tests close the descriptor to prove it",
 }
 
 

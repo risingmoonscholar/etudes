@@ -73,7 +73,9 @@ cannot be opened, and `journal_write_failed` means one cannot be saved.
 `profile_missing` means no saved profile exists, and `profile_invalid` means one
 exists and cannot be used. In unpack, `archive_unreadable` is a damaged or
 mislabelled archive, `size_limit_exceeded` is a limit reached while extracting,
-`extraction_stopped` is a stop signal, and `insufficient_space` is only ever about
+`extraction_stopped` is a stop signal, `private_copy_unopened` means the system
+`unzip` could not open unpack's private copy of the archive (the archive was
+not read, so run the same command again), and `insufficient_space` is only ever about
 the disk.
 
 Exit codes keep their meaning. `reason` adds the part an exit code cannot

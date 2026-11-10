@@ -105,7 +105,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v17/sweep.json`, `v14/stash.json` and `v8/unpack.json` are the
+later declaration: `v17/sweep.json`, `v14/stash.json` and `v9/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -492,3 +492,17 @@ it as an invalid or unsupported plan binding. `plan_binding.artifact_schema_vers
 stays 1, and the result envelope stays at version 4.
 `v17/sweep.json` pins this declaration and `v1/sweep.json` mirrors it;
 `v16/sweep.json` remains retained.
+
+**Declaration version 9 (unpack)** adds the refusal code `private_copy_unopened`,
+retry `later`, subject kind `input`, for `extract` and `list`, with exit 3.
+unpack gives the system `unzip` its private copy of the archive as `/dev/fd/N`.
+On macOS, `unzip` can fail to open that path while another process opens a
+`/dev/fd` path with the same number. unpack then starts `unzip` again, up to 3
+times in total, and returns this code only when every attempt failed. The
+archive was not read, so the code says nothing about it; the same request may
+work when run again. Before this version the same failure was reported as
+`archive_unreadable` or `unsafe_input`. No read or write domain changes, and
+the result envelope stays at version 4. `check-tool-contracts.py` cannot stage
+the race and names the code as unproven; unpack's unit tests close the
+descriptor to reach it. `v9/unpack.json` pins this declaration and
+`v1/unpack.json` mirrors it; `v8/unpack.json` remains retained.

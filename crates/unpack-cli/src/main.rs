@@ -1138,7 +1138,7 @@ fn unpack_checked(
                 "{}",
                 copy_unopened_message(archive, "check", "Nothing was extracted.")
             );
-            return failure(ReasonCode::InternalError, None);
+            return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
         Err(ListError::Tool(e)) => {
             eprintln!(
@@ -1180,7 +1180,7 @@ fn unpack_checked(
                 "{}",
                 copy_unopened_message(archive, "check", "Nothing was extracted.")
             );
-            return failure(ReasonCode::InternalError, None);
+            return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
         Err(_) => {
             // The verbose listing failed where the plain one worked. That is
@@ -1481,7 +1481,7 @@ fn unpack_checked(
                 "{}",
                 copy_unopened_message(archive, "extract", &cleanup.message())
             );
-            return failure(ReasonCode::InternalError, None);
+            return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
         Err(ExtractError::Other(e)) => {
             let cleanup = cleanup_destination(staging);
@@ -3855,7 +3855,16 @@ mod tests {
             assert_eq!(code, ExitCode::from(3), "{step}");
             // archive_unreadable is "could not be read" and "could not be fully
             // extracted"; unsafe_input is "lists its names but not what kind".
-            assert_eq!(reason, Some(ReasonCode::InternalError), "{step}");
+            assert_eq!(reason, Some(ReasonCode::PrivateCopyUnopened), "{step}");
+            // The message says to run the same command again; so does the JSON.
+            let json =
+                Reason::refusal(ReasonCode::PrivateCopyUnopened, input_subject(&archive)).json();
+            assert!(
+                json.starts_with(
+                    r#"{"code":"private_copy_unopened","retry":"later","subject":{"kind":"input""#
+                ),
+                "{step}: {json}"
+            );
             assert_eq!(
                 fired, COPY_OPEN_ATTEMPTS,
                 "{step}: every attempt was closed"

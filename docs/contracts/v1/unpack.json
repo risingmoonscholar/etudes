@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 8,
+    "schema_version": 9,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -191,6 +191,16 @@
           "extract"
         ],
         "why": "A stop signal ended the extraction before anything reached the destination; run it again when ready, after removing any leftover folder the message names."
+      },
+      {
+        "code": "private_copy_unopened",
+        "retry": "later",
+        "subject_kind": "input",
+        "operations": [
+          "extract",
+          "list"
+        ],
+        "why": "The system extractor could not open unpack's private copy of the archive on any attempt, which can happen while other programs run; the archive was not found to be damaged, and the same request may work when run again."
       }
     ],
     "contract_query": {
