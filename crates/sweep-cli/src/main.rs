@@ -5674,16 +5674,24 @@ mod tests {
         args.iter().map(|a| (*a).to_owned()).collect()
     }
 
+    /// Removes the scene's folder when its test ends, pass or fail.
+    struct SceneGuard(PathBuf);
+    impl Drop for SceneGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// A scratch folder that stands for the scanned folder, one for HOME and
     /// one for /tmp beside it, so no test writes the real /tmp.
-    fn scene(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+    fn scene(label: &str) -> (PathBuf, PathBuf, PathBuf, SceneGuard) {
         let base = std::env::temp_dir().join(format!("sweep-next-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (root, home, tmp) = (base.join("inbox"), base.join("home"), base.join("tmp"));
         for folder in [&root, &home, &tmp] {
             std::fs::create_dir_all(folder).unwrap();
         }
-        (root, home, tmp)
+        (root, home, tmp, SceneGuard(base))
     }
 
     fn footer<'a>(root: &'a Path, home: &'a Path, tmp: &'a Path) -> Footer<'a> {
@@ -5702,7 +5710,7 @@ mod tests {
     /// review scan again, and the export step is the one that binds a plan.
     #[test]
     fn next_steps_say_that_apply_and_review_scan_again() {
-        let (root, home, tmp) = scene("plain");
+        let (root, home, tmp, _guard) = scene("plain");
         let next = next_commands(
             &words(&["inbox", "--depth", "2"]),
             &footer(&root, &home, &tmp),
@@ -5724,7 +5732,7 @@ mod tests {
     /// to ~/; a scan that holds the other place as well gets no example name.
     #[test]
     fn the_save_file_is_always_outside_the_scanned_folder() {
-        let (root, home, tmp) = scene("outside");
+        let (root, home, tmp, _guard) = scene("outside");
         let shown_tmp = |name: &str| Some(format!("{}/{name}", tmp.display()));
         assert_eq!(
             plan_file_outside(&root, Some(&home), &tmp).as_deref(),
@@ -5752,7 +5760,7 @@ mod tests {
     /// earlier Save or by anything else, is skipped in both places.
     #[test]
     fn the_save_file_is_a_name_not_taken_yet() {
-        let (root, home, tmp) = scene("taken");
+        let (root, home, tmp, _guard) = scene("taken");
         std::fs::write(home.join("sweep.plan"), "").unwrap();
         assert_eq!(
             plan_file_outside(&root, Some(&home), &tmp).as_deref(),
@@ -5773,7 +5781,7 @@ mod tests {
     /// A mapped scan offers no review, and still says what apply does.
     #[test]
     fn mapped_next_steps_keep_the_map_and_the_warning() {
-        let (root, home, tmp) = scene("mapped");
+        let (root, home, tmp, _guard) = scene("mapped");
         let args = words(&["in box", "--map", "fig=Design"]);
         let next = next_commands(&args, &footer(&root, &home, &tmp));
         assert_eq!(
@@ -5794,7 +5802,7 @@ mod tests {
     /// contents the footer says what that drops, and Save keeps the check.
     #[test]
     fn inspected_next_steps_name_the_checks_apply_skips() {
-        let (root, home, tmp) = scene("inspect");
+        let (root, home, tmp, _guard) = scene("inspect");
         let args = words(&["inbox", "--inspect-content"]);
         let read = Footer {
             read_contents: true,
@@ -5813,7 +5821,7 @@ mod tests {
     /// back by contents and the line would be false.
     #[test]
     fn a_scan_that_read_no_contents_has_no_content_line() {
-        let (root, home, tmp) = scene("unread");
+        let (root, home, tmp, _guard) = scene("unread");
         let args = words(&["inbox", "--inspect-content"]);
         let next = next_commands(&args, &footer(&root, &home, &tmp));
         assert!(!next.iter().any(|line| line == CONTENT_LINE), "{next:?}");
@@ -5825,7 +5833,7 @@ mod tests {
 
     #[test]
     fn quiet_next_steps_name_no_path() {
-        let (root, home, tmp) = scene("quiet");
+        let (root, home, tmp, _guard) = scene("quiet");
         let quiet = Footer {
             quiet: true,
             ..footer(&root, &home, &tmp)
@@ -5840,7 +5848,7 @@ mod tests {
     /// and no step that scans again. A tag plan says it adds tags.
     #[test]
     fn exported_next_step_is_the_bound_apply_with_the_real_digest() {
-        let (root, home, tmp) = scene("exported");
+        let (root, home, tmp, _guard) = scene("exported");
         let exported = ("/tmp/my plan".to_owned(), "ab12".to_owned());
         let bound = Footer {
             exported: Some(&exported),
