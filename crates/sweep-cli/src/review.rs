@@ -90,14 +90,21 @@ pub fn run(plan: &mut Plan) -> io::Result<Outcome> {
     run_with(plan, &mut locked)
 }
 
+/// What review prints before the first prompt. Review scans again, so the
+/// person decides on this plan, and sweep cannot see a file a program holds.
+fn header(groups: usize) -> String {
+    format!(
+        "\nReviewing {}. Nothing moves until the end.\n{}\n",
+        etude_cli_support::counted(groups, "group", "groups"),
+        super::IN_USE_NOTE
+    )
+}
+
 /// The reviewable loop, with input injected so the interactive flow
 /// (including the rename escape hatch) can be tested rather than
 /// demonstrated by hand.
 pub fn run_with(plan: &mut Plan, input: &mut dyn BufRead) -> io::Result<Outcome> {
-    println!(
-        "\nReviewing {}. Nothing moves until the end.\n",
-        etude_cli_support::counted(plan.groups.len(), "group", "groups")
-    );
+    println!("{}", header(plan.groups.len()));
     let mut warned_scrollback = false;
 
     for i in 0..plan.groups.len() {
@@ -229,6 +236,17 @@ mod tests {
     fn drive(p: &mut Plan, script: &str) -> Outcome {
         let mut input = Cursor::new(script.as_bytes().to_vec());
         run_with(p, &mut input).expect("review")
+    }
+
+    #[test]
+    fn the_in_use_line_comes_before_the_first_prompt() {
+        assert_eq!(
+            header(2),
+            format!(
+                "\nReviewing 2 groups. Nothing moves until the end.\n{}\n",
+                super::super::IN_USE_NOTE
+            )
+        );
     }
 
     #[test]
