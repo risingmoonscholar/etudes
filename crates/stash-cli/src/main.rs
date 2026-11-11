@@ -393,6 +393,7 @@ fn journal_reason(error: &etude_core::journal::JournalError) -> etude_cli_suppor
         JournalError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             Code::PermissionDenied
         }
+        JournalError::SameTime(_) => Code::JournalTimesTied,
         _ => Code::JournalUnreadable,
     }
 }
@@ -1678,11 +1679,16 @@ fn refuse_unopened_pop(
             fail(journal_reason(&unreadable[0].error))
         }
         // Every record opens, and still none can be chosen: their times tie.
-        Ok(_) if matches!(error, etude_core::journal::JournalError::Malformed(_)) => {
+        Ok(_) if matches!(error, etude_core::journal::JournalError::SameTime(_)) => {
             eprintln!(
                 "{}",
                 etude_cli_support::problems::record_folder_problem("stash", error)
             );
+            if let etude_core::journal::JournalError::SameTime(ids) = error {
+                etude_cli_support::envelope::detail(
+                    etude_cli_support::problems::same_time_details("stash", ids),
+                );
+            }
             fail(journal_reason(error))
         }
         Ok(_) => {

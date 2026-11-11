@@ -216,6 +216,33 @@ DENIED
       then pass "$tool $fault permission denial established"
       else fail "$tool $fault fixture did not deny reads"; fi
     fi
+    if [ "$fault" = equal-times ]; then
+      # A tie matters only where undo would choose. Plain sweep undo must
+      # choose between the two tied records, so it refuses. Undo of a named
+      # folder chooses among that folder's records only, so a tie with another
+      # folder's record does not block it, and leaves that record untouched.
+      second_tree=$(find "$second" -type f -exec shasum {} \; | sort)
+      second_journal=$(shasum "$newest")
+      if [ "$tool" = sweep ]; then
+        assert_exit 3 "$fault sweep global refuses" -- "$SWEEP" undo
+        assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" "$tool $fault global refusal leaves journal bytes intact"
+        assert_exit 0 "$fault sweep named undoes its own folder" -- "$SWEEP" undo "$first"
+      else
+        assert_exit 0 "$fault stash named pops its own folder" -- "$STASH" pop "$first"
+      fi
+      restored "$first" "$tool $fault named folder restored"
+      assert_eq "$second_tree" "$(find "$second" -type f -exec shasum {} \; | sort)" "$tool $fault other tied folder left as applied"
+      assert_eq "$second_journal" "$(shasum "$newest")" "$tool $fault other tied record bytes unchanged"
+      if [ "$tool" = sweep ]; then
+        assert_exit 1 "$fault sweep named undo twice finds nothing" -- "$SWEEP" undo "$first"
+        assert_exit 0 "$fault sweep undoes the other tied folder" -- "$SWEEP" undo "$second"
+      else
+        assert_exit 1 "$fault stash named pop twice finds nothing" -- "$STASH" pop "$first"
+        assert_exit 0 "$fault stash current-directory pops the other tied folder" -- bash -c 'cd "$1" && "$2" pop' _ "$second" "$STASH"
+      fi
+      restored "$second" "$tool $fault other tied folder restored"
+      continue
+    fi
     if [ "$tool" = sweep ]; then
       assert_exit 3 "$fault sweep global refuses" -- "$SWEEP" undo
       assert_exit 3 "$fault sweep named refuses" -- "$SWEEP" undo "$first"

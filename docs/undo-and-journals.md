@@ -171,3 +171,51 @@ need to be restored manually.
 Undo and pop also refuse when journal discovery or reads fail, when a journal
 entry is not a regular file, or when journals have identical modification times
 and their order cannot be established. They do not guess which operation is newer.
+
+### Records with the same time
+
+Plain `sweep undo` and `sweep undo FOLDER` choose a record by its modification
+time. A tie matters only between records that undo could choose: records that
+still have something to undo, and for `sweep undo FOLDER` only records of that
+folder. A finished record, or a record of another folder, never stops a choice.
+A tie also matters only where undo would choose: between the newest records with
+work left. When a newer record is already chosen, for example one that lost its
+move entries, undo reports that record, and a tie between older records stops
+it only if the search lands on one of them.
+When two or more such records have exactly the same time, sweep cannot tell
+which one is newer, so it moves nothing and exits 3. The message names each of
+those records and gives a step that undoes only that record:
+
+```text
+sweep: 2 undo records that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved.
+To undo one of them, run: sweep undo --id ID1
+Or run: sweep undo --id ID2
+To see the folder of a record, run: sweep status --id ID1
+```
+
+`sweep undo --id ID` searches no other record, so it works while the times are
+the same. With `--json` the reason is `journal_times_tied`, retry
+`after_change`, subject `journal`, and `details.same_time_records` lists every
+tied id with its `command`. The message prints a step for every tied
+record. For `sweep undo FOLDER` the first line says "undo records of this
+folder".
+
+`sweep status FOLDER` and `sweep status --id ID` choose nothing, so they still
+list the records. A tied row says "This record has the same time as ID", and its
+JSON row adds `same_time_as`, the other ids. Tied rows are in id order, and that
+order says nothing about which one is newer. Use status to find the id you
+want, then undo it by that id.
+
+`stash pop --latest` refuses the same way when the newest live stashes were
+made at the same time, or when legacy stash ids, which hold no time, have the
+same modification time. Only live stashes count, and with `stash pop PATH
+--latest` only that folder's. It prints `stash pop --id ID` for each one. `stash pop
+FOLDER` needs exactly one live stash for that folder and uses no order, so a tie
+does not block it.
+
+Ties can happen on a volume with coarse timestamps (HFS+, exFAT, some network
+shares), or after a tool sets file times.
+
+An entry named like a record that is not a regular file, such as a folder or a
+link, gets its own message. It names the entry and gives a step that renames
+it, so the tools no longer read it: `mv -i PATH PATH.set-aside`.

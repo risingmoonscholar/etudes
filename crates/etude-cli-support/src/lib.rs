@@ -92,6 +92,11 @@ pub fn plain_journal_error(error: &etude_core::journal::JournalError) -> String 
         E::Io(error) => plain_io_error(error),
         E::Malformed(what) | E::Seal(what) => (*what).to_owned(),
         E::NotFound => "no undo record was found".to_owned(),
+        E::SameTime(ids) => format!(
+            "{} undo records have the same time, so which one is newer is not known",
+            ids.len()
+        ),
+        E::NotARecordFile(path) => format!("{} is not a regular file", crate::shown(path)),
     }
 }
 

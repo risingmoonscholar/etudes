@@ -539,26 +539,149 @@ pub fn scan_problem(tool: &str, typed: &Path, error: &ScanError) -> String {
 pub fn record_open_reason(error: &JournalError) -> String {
     match error {
         JournalError::Seal(_) => "wrong key, or it was altered".to_owned(),
-        JournalError::Malformed(what) if what.contains("regular file") => {
-            "it is not a regular file".to_owned()
-        }
+        JournalError::NotARecordFile(_) => "it is not a regular file".to_owned(),
+        JournalError::SameTime(_) => "another record has the same time".to_owned(),
         JournalError::Malformed(_) => "it is damaged".to_owned(),
         JournalError::Io(source) => plain_io_error(source),
         JournalError::NotFound => "it is gone".to_owned(),
     }
 }
 
-/// The undo records folder itself cannot be used.
+/// The code for a failure to list or choose a record: a tie has its own.
+pub fn record_listing_code(error: &JournalError) -> Code {
+    match error {
+        JournalError::SameTime(_) => Code::JournalTimesTied,
+        _ => Code::JournalUnreadable,
+    }
+}
+
+/// The command that opens one record by its id, if the id can be typed.
+pub fn record_id_step(tool: &str, id: &str) -> Option<String> {
+    let verb = if tool == "stash" { "pop" } else { "undo" };
+    etude_core::journal::valid_journal_id(id)
+        .then(|| crate::shell_word(id))
+        .flatten()
+        .map(|word| format!("{tool} {verb} --id {word}"))
+}
+
+/// Records whose times are the same: the tool cannot tell which one is newer,
+/// so it chooses none. Each one still opens by its id, and that is the step.
+/// The ids are only records the command could have chosen: with work left,
+/// and of the folder asked about when `of_folder` is set.
+pub fn same_time_problem(tool: &str, ids: &[String], of_folder: bool) -> String {
+    let (records, nothing, see) = if tool == "stash" {
+        (
+            "stashes",
+            "Nothing was restored.",
+            "To see every stash, run: stash status --all".to_owned(),
+        )
+    } else {
+        (
+            if of_folder {
+                "undo records of this folder that can still be undone"
+            } else {
+                "undo records that can still be undone"
+            },
+            "Nothing was moved.",
+            ids.iter()
+                .find_map(|id| {
+                    crate::shell_word(id)
+                        .filter(|_| etude_core::journal::valid_journal_id(id))
+                        .map(|word| {
+                            format!("To see the folder of a record, run: sweep status --id {word}")
+                        })
+                })
+                .unwrap_or_default(),
+        )
+    };
+    let mut lines = vec![format!(
+        "{tool}: {} {records} have the same time, so {tool} cannot tell which one is newer. {nothing}",
+        ids.len()
+    )];
+    lines.extend(same_time_step_lines(tool, ids));
+    if !see.is_empty() {
+        lines.push(see);
+    }
+    lines.join("\n")
+}
+
+/// One step per tied record, every one, each on its own line. A step that
+/// only shows the rest would stop being a listing once the tie is gone.
+pub fn same_time_step_lines(tool: &str, ids: &[String]) -> Vec<String> {
+    let goal = if tool == "stash" {
+        "To restore one of them"
+    } else {
+        "To undo one of them"
+    };
+    ids.iter()
+        .filter_map(|id| record_id_step(tool, id))
+        .enumerate()
+        .map(|(index, step)| {
+            if index == 0 {
+                format!("{goal}, run: {step}")
+            } else {
+                format!("Or run: {step}")
+            }
+        })
+        .collect()
+}
+
+/// `details.same_time_records` for a tie: every id, each with its step.
+pub fn same_time_details(tool: &str, ids: &[String]) -> String {
+    use etude_core::json as j;
+    j::obj(&[(
+        "same_time_records",
+        j::arr(ids.iter().map(|id| {
+            j::obj(&[
+                ("operation_id", j::str(id)),
+                (
+                    "command",
+                    record_id_step(tool, id)
+                        .map(|step| j::str(&step))
+                        .unwrap_or_else(|| "null".into()),
+                ),
+            ])
+        })),
+    )])
+}
+
+/// The undo records folder itself cannot be used, or the records in it cannot
+/// be put in order. Each cause gets its own words and a step that works.
 pub fn record_folder_problem(tool: &str, error: &JournalError) -> String {
-    format!(
-        "{tool}: cannot use the undo records folder {}: {}. Nothing was moved.\n\
-         Set ETUDE_STATE_DIR to another folder, or fix this one.",
-        shown(&etude_core::journal::state_dir()),
-        match error {
-            JournalError::Malformed(_) => "two records carry the same time".to_owned(),
-            other => record_open_reason(other),
+    let folder = etude_core::journal::state_dir();
+    let nothing = "Nothing was moved.";
+    match error {
+        JournalError::SameTime(ids) => same_time_problem(tool, ids, false),
+        JournalError::NotARecordFile(path) => {
+            let mut aside = path.clone().into_os_string();
+            aside.push(".set-aside");
+            format!(
+                "{tool}: cannot use the undo records folder {}: {} in it is not a regular file, so it is not an undo record. {nothing}\n\
+                 To go on, rename it so {tool} no longer reads it: mv -i {} {}",
+                shown(&folder),
+                path.file_name()
+                    .map(|name| shown_text(&name.to_string_lossy()))
+                    .unwrap_or_else(|| shown(path)),
+                quoted_path(path),
+                quoted_path(Path::new(&aside))
+            )
         }
-    )
+        JournalError::Io(source) if source.kind() == std::io::ErrorKind::PermissionDenied => {
+            format!(
+                "{tool}: cannot use the undo records folder {}: {}. {nothing}\n\
+                 Check who may read it with: ls -ld {}",
+                shown(&folder),
+                plain_io_error(source),
+                quoted_path(&folder)
+            )
+        }
+        other => format!(
+            "{tool}: cannot use the undo records folder {}: {}. {nothing}\n\
+             To use another folder, set ETUDE_STATE_DIR to it.",
+            shown(&folder),
+            record_open_reason(other)
+        ),
+    }
 }
 
 /// A saved undo record cannot be opened. Where it lives is a path the tool
@@ -581,6 +704,95 @@ pub fn record_open_problem(tool: &str, id: &str, error: &JournalError) -> String
 
 #[cfg(test)]
 mod tests {
+    /// Records with the same time: the words name each record and give one
+    /// step per sentence, and the code is the tie's own. A step is offered
+    /// only for an id the command accepts and the shell keeps whole.
+    #[test]
+    fn same_time_records_are_named_with_a_step_each() {
+        let ids = vec!["1-2-0-aa".to_owned(), "1-2-0-bb".to_owned()];
+        let text = super::record_folder_problem("sweep", &JournalError::SameTime(ids.clone()));
+        assert_eq!(
+            text,
+            "sweep: 2 undo records that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved.\n\
+             To undo one of them, run: sweep undo --id 1-2-0-aa\n\
+             Or run: sweep undo --id 1-2-0-bb\n\
+             To see the folder of a record, run: sweep status --id 1-2-0-aa"
+        );
+        let stash = super::same_time_problem("stash", &ids, false);
+        assert!(
+            stash.starts_with("stash: 2 stashes have the same time"),
+            "{stash}"
+        );
+        assert!(stash.contains("Nothing was restored."), "{stash}");
+        assert!(
+            stash.contains("To restore one of them, run: stash pop --id 1-2-0-aa"),
+            "{stash}"
+        );
+        assert!(stash.contains("Or run: stash pop --id 1-2-0-bb"), "{stash}");
+        let folder = super::same_time_problem("sweep", &ids, true);
+        assert!(
+            folder.starts_with(
+                "sweep: 2 undo records of this folder that can still be undone have the same time"
+            ),
+            "{folder}"
+        );
+        assert_eq!(
+            super::same_time_details("sweep", &ids),
+            r#"{"same_time_records":[{"operation_id":"1-2-0-aa","command":"sweep undo --id 1-2-0-aa"},{"operation_id":"1-2-0-bb","command":"sweep undo --id 1-2-0-bb"}]}"#
+        );
+        assert_eq!(
+            super::record_listing_code(&JournalError::SameTime(ids)),
+            Code::JournalTimesTied
+        );
+        // Seven tied: a step for every one, and no line that only shows the
+        // rest, because such a step stops listing once the tie is gone.
+        let many: Vec<String> = (0..7).map(|n| format!("1-2-0-{n}")).collect();
+        let text = super::same_time_problem("sweep", &many, false);
+        for id in &many {
+            assert!(text.contains(&format!("sweep undo --id {id}\n")), "{text}");
+        }
+        assert!(!text.contains("more"), "{text}");
+        assert!(!text.contains("--json"), "{text}");
+        assert!(super::same_time_details("sweep", &many).contains("1-2-0-6"));
+        // An id with a separator is never offered as a step.
+        assert!(super::record_id_step("sweep", "a/b").is_none());
+        assert!(
+            super::same_time_details("sweep", &["a/b".to_owned()]).contains(r#""command":null"#)
+        );
+    }
+
+    /// Only the tie is called a tie. An entry that is not a file is named with
+    /// a rename step, and a denied folder with the step that shows its owner.
+    #[test]
+    fn each_listing_failure_says_its_own_cause() {
+        let odd = Path::new("/state/it's-odd/sweep-x.journal");
+        let text =
+            super::record_folder_problem("sweep", &JournalError::NotARecordFile(odd.to_path_buf()));
+        assert!(
+            text.contains("sweep-x.journal in it is not a regular file"),
+            "{text}"
+        );
+        assert!(
+            text.contains("mv -i '/state/it'\\''s-odd/sweep-x.journal' '/state/it'\\''s-odd/sweep-x.journal.set-aside'"),
+            "{text}"
+        );
+        let denied = super::record_folder_problem(
+            "sweep",
+            &JournalError::Io(std::io::Error::from_raw_os_error(13)),
+        );
+        assert!(denied.contains("ls -ld"), "{denied}");
+        let damaged = super::record_folder_problem("stash", &JournalError::Malformed("x"));
+        assert!(damaged.contains("set ETUDE_STATE_DIR to it"), "{damaged}");
+        for text in [&text, &denied, &damaged] {
+            assert!(!text.contains("same time"), "{text}");
+            assert!(!text.contains("fix this one"), "{text}");
+        }
+        assert_eq!(
+            super::record_listing_code(&JournalError::NotARecordFile(odd.to_path_buf())),
+            Code::JournalUnreadable
+        );
+    }
+
     /// A failed move that left a copy must not say nothing was moved, and
     /// must name the copy with a step that works when pasted.
     #[test]

@@ -70,6 +70,10 @@ message text:
 
 Codes worth knowing by name: `journal_unreadable` means a saved undo record
 cannot be opened, and `journal_write_failed` means one cannot be saved.
+`journal_times_tied` (`sweep undo`, `stash pop`) means two or more records have
+the same time, so the tool cannot tell which one is newer and guesses nothing;
+`details.same_time_records` lists each tied id with the `--id` step that opens
+only that record. See [records with the same time](undo-and-journals.md#records-with-the-same-time).
 `profile_missing` means no saved profile exists, and `profile_invalid` means one
 exists and cannot be used. In unpack, `archive_unreadable` is a damaged or
 mislabelled archive, `size_limit_exceeded` is a limit reached while extracting,

@@ -53,6 +53,7 @@ pub enum Code {
     PrivateCopyUnopened,
     ProfileInvalid,
     ProfileWriteFailed,
+    JournalTimesTied,
 }
 
 impl Code {
@@ -85,6 +86,7 @@ impl Code {
         Self::PrivateCopyUnopened,
         Self::ProfileInvalid,
         Self::ProfileWriteFailed,
+        Self::JournalTimesTied,
     ];
 }
 
@@ -383,6 +385,14 @@ pub const CODES: &[CodeSpec] = &[
         operations: &["sweep:apply"],
         explanation: "Routes could not be saved to the profile; the result says whether files moved. Fix the profile or its folder, or add the route by hand.",
     },
+    CodeSpec {
+        code: Code::JournalTimesTied,
+        name: "journal_times_tied",
+        retry: RetryClass::AfterChange,
+        subject_kind: Some("journal"),
+        operations: &["sweep:undo", "stash:pop"],
+        explanation: "Two or more saved journals carry the same time, so the tool cannot tell which one is newer and guesses nothing. Each one still opens by its id; details.same_time_records lists each id with its step.",
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,6 +547,7 @@ impl Reason {
             Code::PrivateCopyUnopened => "private_copy_unopened",
             Code::ProfileInvalid => "profile_invalid",
             Code::ProfileWriteFailed => "profile_write_failed",
+            Code::JournalTimesTied => "journal_times_tied",
         }
     }
 }
@@ -750,11 +761,34 @@ mod tests {
             Code::JournalUnreadable,
             Code::JournalKeyUnavailable,
             Code::JournalWriteFailed,
+            Code::JournalTimesTied,
         ] {
             let json = Reason::of(code).json();
             assert!(json.contains(r#""retry":"after_change""#), "{json}");
             assert!(json.contains(r#""subject":{"kind":"journal"}"#), "{json}");
         }
+    }
+
+    /// A tie is not a damaged journal: it has its own code, waiting does not
+    /// end it, and only the commands that choose by time list it.
+    #[test]
+    fn same_time_journals_have_their_own_code_where_time_chooses() {
+        assert_eq!(
+            Reason::of(Code::JournalTimesTied).json(),
+            r#"{"code":"journal_times_tied","retry":"after_change","subject":{"kind":"journal"}}"#
+        );
+        for (tool, operations) in [("sweep", r#"["undo"]"#), ("stash", r#"["pop"]"#)] {
+            let listed = codes_json(tool);
+            let row = listed
+                .split("{\"code\":")
+                .find(|row| row.starts_with("\"journal_times_tied\""))
+                .unwrap_or_else(|| panic!("{tool} lists journal_times_tied"));
+            assert!(
+                row.contains(&format!(r#""operations":{operations}"#)),
+                "{row}"
+            );
+        }
+        assert!(!codes_json("unpack").contains("journal_times_tied"));
     }
 
     #[test]
