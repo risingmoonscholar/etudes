@@ -196,8 +196,8 @@ To see the folder of a record, run: sweep status --id ID1
 `sweep undo --id ID` searches no other record, so it works while the times are
 the same. With `--json` the reason is `journal_times_tied`, retry
 `after_change`, subject `journal`, and `details.same_time_records` lists every
-tied id with its `command`. The message lists up to five steps; the JSON lists
-all of them. For `sweep undo FOLDER` the first line says "undo records of this
+tied id with its `command`. The message prints a step for every tied
+record. For `sweep undo FOLDER` the first line says "undo records of this
 folder".
 
 `sweep status FOLDER` and `sweep status --id ID` choose nothing, so they still

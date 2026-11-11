@@ -712,11 +712,12 @@ fn unopened_record(case: &Case, id: &str, secs: u64) {
 }
 
 /// Seven tied live records of one folder and one older record that does not
-/// open. After `undo --id` of one, the six left get five steps and a line for
-/// the sixth whose step lists every id and moves nothing, and the record that
-/// does not open is still counted.
+/// open. After `undo --id` of one, the six left each get a step, with no cap,
+/// and the record that does not open is still counted. Each step works when
+/// pasted in turn, and after the last one `sweep undo FOLDER` does what the
+/// last line said: it stops at the record that does not open.
 #[test]
-fn after_an_id_undo_more_than_five_tied_are_reachable_and_unopened_is_counted() {
+fn after_an_id_undo_every_tied_record_gets_a_step_and_unopened_is_counted() {
     let case = Case::new("seven");
     let root = case.first.0.clone();
     let kinds = [
@@ -738,59 +739,68 @@ fn after_an_id_undo_more_than_five_tied_are_reachable_and_unopened_is_counted() 
     unopened_record(&case, "unopened", TIED_SECS - 100);
     ids.sort();
     let first = ids.remove(0);
-    let out = case.run(&["undo", "--id", &first]);
-    let shown = text(&out);
-    assert!(out.status.success(), "{shown}");
     let folder = format!("sweep undo '{}'", root.to_str().unwrap());
-    let mut expected = vec![format!(
-        "6 applies of this folder that can still be undone have the same time, so {folder} stops and moves nothing."
-    )];
-    expected.push(format!(
-        "To undo one of them, run: sweep undo --id {}",
-        ids[0]
-    ));
-    for id in &ids[1..5] {
-        expected.push(format!("Or run: sweep undo --id {id}"));
-    }
-    expected.push(format!(
-        "1 more has the same time. To list every id without moving anything, run: {folder} --json"
-    ));
-    expected.push(
-        "1 undo record could not be opened, so more applies of this folder may remain.".to_owned(),
-    );
-    assert!(shown.contains(&expected.join("\n")), "{shown}");
-
-    // The printed listing step, pasted: it refuses, moves nothing, and its
-    // JSON lists all six.
-    let homes = |case: &Case| -> Vec<usize> {
-        kinds
-            .iter()
-            .map(|(stem, ext)| case.kind_home(&root, stem, ext))
-            .collect()
+    let unopened_line =
+        "1 undo record could not be opened, so more applies of this folder may remain.";
+    let tie_block = |left: &[String]| {
+        let mut lines = vec![format!(
+            "{} applies of this folder that can still be undone have the same time, so {folder} stops and moves nothing.",
+            left.len()
+        )];
+        lines.push(format!(
+            "To undo one of them, run: sweep undo --id {}",
+            left[0]
+        ));
+        for id in &left[1..] {
+            lines.push(format!("Or run: sweep undo --id {id}"));
+        }
+        lines.push(unopened_line.to_owned());
+        lines.join("\n")
     };
-    let before = homes(&case);
-    let step = shown
-        .lines()
-        .find_map(|line| {
-            line.split_once("moving anything, run: ")
-                .map(|(_, step)| step.to_owned())
-        })
-        .unwrap();
-    let out = case.shell(&step);
-    assert_eq!(out.status.code(), Some(3), "{step}: {}", text(&out));
-    let value = json(&out);
-    assert_eq!(value.get("v['reason']['code']"), r#""journal_times_tied""#);
-    assert_eq!(
-        value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
-        format!(
-            "[{}]",
-            ids.iter()
-                .map(|id| format!(r#""{id}""#))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+    let out = case.run(&["undo", "--id", &first]);
+    let mut shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    assert!(shown.contains(&tie_block(&ids)), "{shown}");
+    assert!(
+        !shown.contains("more have") && !shown.contains("more has"),
+        "{shown}"
     );
-    assert_eq!(homes(&case), before);
+    assert!(!shown.contains("--json"), "{shown}");
+
+    // Paste each printed step in turn. Each one undoes its own apply, and
+    // while two or more are left the next output names exactly those.
+    let steps: Vec<String> = shown
+        .lines()
+        .filter_map(|line| {
+            line.split_once("run: sweep undo --id ")
+                .map(|(_, id)| format!("sweep undo --id {id}"))
+        })
+        .collect();
+    assert_eq!(steps.len(), 6, "{shown}");
+    for (done, step) in steps.iter().enumerate() {
+        let out = case.shell(step);
+        shown = text(&out);
+        assert!(out.status.success(), "{step}: {shown}");
+        assert!(shown.contains("Restored 3 files."), "{step}: {shown}");
+        let left = &ids[done + 1..];
+        if left.len() >= 2 {
+            assert!(shown.contains(&tie_block(left)), "{step}: {shown}");
+        }
+    }
+    for (stem, ext) in kinds {
+        assert_eq!(case.kind_home(&root, stem, ext), 3, "{stem}.{ext}");
+    }
+    // The last step's last line says the folder undo stops at the record
+    // that does not open and moves nothing; it does exactly that.
+    let last = format!("If you run {folder}, it stops at that record and moves nothing.");
+    assert!(shown.trim_end().ends_with(&last), "{shown}");
+    let out = case.shell(&folder);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(text(&out).contains("unopened"), "{}", text(&out));
+    assert!(text(&out).contains("cannot be opened"), "{}", text(&out));
+    for (stem, ext) in kinds {
+        assert_eq!(case.kind_home(&root, stem, ext), 3, "{stem}.{ext}");
+    }
 }
 
 /// The hint past a stopped record names another folder's undo. When that

@@ -555,10 +555,6 @@ pub fn record_listing_code(error: &JournalError) -> Code {
     }
 }
 
-/// How many records with the same time each get their own step in the text.
-/// The `--json` result lists every one.
-const SAME_TIME_LISTED: usize = 5;
-
 /// The command that opens one record by its id, if the id can be typed.
 pub fn record_id_step(tool: &str, id: &str) -> Option<String> {
     let verb = if tool == "stash" { "pop" } else { "undo" };
@@ -602,32 +598,23 @@ pub fn same_time_problem(tool: &str, ids: &[String], of_folder: bool) -> String 
         "{tool}: {} {records} have the same time, so {tool} cannot tell which one is newer. {nothing}",
         ids.len()
     )];
-    lines.extend(same_time_step_lines(
-        tool,
-        ids,
-        "Add --json to see every id.",
-    ));
+    lines.extend(same_time_step_lines(tool, ids));
     if !see.is_empty() {
         lines.push(see);
     }
     lines.join("\n")
 }
 
-/// One step per tied record, up to five, each on its own line, then how many
-/// more there are and `more_hint`, the way to see them.
-pub fn same_time_step_lines(tool: &str, ids: &[String], more_hint: &str) -> Vec<String> {
+/// One step per tied record, every one, each on its own line. A step that
+/// only shows the rest would stop being a listing once the tie is gone.
+pub fn same_time_step_lines(tool: &str, ids: &[String]) -> Vec<String> {
     let goal = if tool == "stash" {
         "To restore one of them"
     } else {
         "To undo one of them"
     };
-    let steps: Vec<String> = ids
-        .iter()
+    ids.iter()
         .filter_map(|id| record_id_step(tool, id))
-        .collect();
-    let mut lines: Vec<String> = steps
-        .iter()
-        .take(SAME_TIME_LISTED)
         .enumerate()
         .map(|(index, step)| {
             if index == 0 {
@@ -636,15 +623,7 @@ pub fn same_time_step_lines(tool: &str, ids: &[String], more_hint: &str) -> Vec<
                 format!("Or run: {step}")
             }
         })
-        .collect();
-    if steps.len() > SAME_TIME_LISTED {
-        let more = steps.len() - SAME_TIME_LISTED;
-        lines.push(format!(
-            "{more} more {} the same time. {more_hint}",
-            if more == 1 { "has" } else { "have" }
-        ));
-    }
-    lines
+        .collect()
 }
 
 /// `details.same_time_records` for a tie: every id, each with its step.
@@ -765,14 +744,15 @@ mod tests {
             super::record_listing_code(&JournalError::SameTime(ids)),
             Code::JournalTimesTied
         );
-        // Seven tied: five steps, then how to see the rest.
+        // Seven tied: a step for every one, and no line that only shows the
+        // rest, because such a step stops listing once the tie is gone.
         let many: Vec<String> = (0..7).map(|n| format!("1-2-0-{n}")).collect();
         let text = super::same_time_problem("sweep", &many, false);
-        assert_eq!(text.matches("sweep undo --id").count(), 5, "{text}");
-        assert!(
-            text.contains("2 more have the same time. Add --json to see every id."),
-            "{text}"
-        );
+        for id in &many {
+            assert!(text.contains(&format!("sweep undo --id {id}\n")), "{text}");
+        }
+        assert!(!text.contains("more"), "{text}");
+        assert!(!text.contains("--json"), "{text}");
         assert!(super::same_time_details("sweep", &many).contains("1-2-0-6"));
         // An id with a separator is never offered as a step.
         assert!(super::record_id_step("sweep", "a/b").is_none());

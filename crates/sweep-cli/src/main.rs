@@ -4708,9 +4708,7 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
                 ids.len()
             ));
             lines.extend(etude_cli_support::problems::same_time_step_lines(
-                "sweep",
-                &ids,
-                &format!("To list every id without moving anything, run: {folder_step} --json"),
+                "sweep", &ids,
             ));
             if not_opened > 0 {
                 lines.push(may_be_more());
@@ -5110,14 +5108,7 @@ fn run_undo(
                         ids.len(),
                         undo_step(&older)
                     );
-                    for line in etude_cli_support::problems::same_time_step_lines(
-                        "sweep",
-                        &ids,
-                        &format!(
-                            "To list every id without moving anything, run: {} --json",
-                            undo_step(&older)
-                        ),
-                    ) {
+                    for line in etude_cli_support::problems::same_time_step_lines("sweep", &ids) {
                         println!("  {line}");
                     }
                 }
