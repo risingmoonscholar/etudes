@@ -18,7 +18,7 @@
   "30-concurrent-applies": 9,
   "30-graceful-signal-mid-apply": 2,
   "30-interrupted-stash-pop": 15,
-  "30-journal-supplied-key": 237,
+  "30-journal-supplied-key": 273,
   "30-journal-truncation": 41,
   "30-kill-mid-undo": 38,
   "30-same-root-contention": 307,
@@ -74,7 +74,7 @@
   "109-unpack-messages": 668,
   "110-final-message-consistency": 438,
   "111-sweep-undo-id": 303,
-  "112-locked-items": 48,
+  "112-locked-items": 53,
   "113-shared-progress": 22,
   "114-unpack-staging-recovery": 42,
   "115-non-utf8-arguments": 98,
@@ -87,5 +87,6 @@
   "128-moves-from-checked-source-folders": 24,
   "129-unpack-private-copy-code": 20,
   "130-undo-says-what-remains": 43,
+  "131-same-time-records": 91,
   "132-sweep-footer-lines": 21
 }

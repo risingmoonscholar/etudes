@@ -260,6 +260,13 @@ pub enum JournalError {
     Malformed(&'static str),
     NotFound,
     Seal(&'static str),
+    /// Two or more records carry the same modification time, so the order of
+    /// those records is unknown. Every id that shares its time with another,
+    /// sorted. Nothing decides which of them is newer.
+    SameTime(Vec<String>),
+    /// An entry named like a record is not a regular file: a folder, a link
+    /// or something else. Its path. It cannot establish a place in history.
+    NotARecordFile(PathBuf),
 }
 
 impl std::fmt::Display for JournalError {
@@ -270,6 +277,16 @@ impl std::fmt::Display for JournalError {
             JournalError::Malformed(w) => write!(f, "journal malformed: {w}"),
             JournalError::NotFound => write!(f, "no journal found"),
             JournalError::Seal(m) => write!(f, "journal seal: {m}"),
+            JournalError::SameTime(ids) => {
+                write!(
+                    f,
+                    "journal modification times are the same: {}",
+                    ids.join(", ")
+                )
+            }
+            JournalError::NotARecordFile(path) => {
+                write!(f, "journal is not a regular file: {}", path.display())
+            }
         }
     }
 }
@@ -1455,17 +1472,52 @@ pub fn ids_by_recency(tool: &str) -> Result<Vec<String>, JournalError> {
 }
 
 pub fn candidates_by_recency(tool: &str) -> Result<Vec<JournalCandidate>, JournalError> {
-    let mut journals = candidates_with_times(tool)?;
-    journals.sort_by(|(a, _), (b, _)| b.cmp(a));
-    if journals.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(JournalError::Malformed(
-            "journal modification times are ambiguous",
-        ));
+    let listed = candidates_with_ties(tool)?;
+    let mut tied: Vec<String> = listed
+        .iter()
+        .filter(|(_, same_time_as)| !same_time_as.is_empty())
+        .map(|(candidate, _)| candidate.id.clone())
+        .collect();
+    if !tied.is_empty() {
+        tied.sort();
+        return Err(JournalError::SameTime(tied));
     }
-    Ok(journals
-        .into_iter()
-        .map(|(_, candidate)| candidate)
-        .collect())
+    Ok(listed.into_iter().map(|(candidate, _)| candidate).collect())
+}
+
+/// Every record of `tool`, newest first by modification time, each with the
+/// ids of the other records that carry exactly its time. Records with the same
+/// time are listed in id order, and that order says nothing about which one is
+/// newer. Use it only where the order is shown, never where it chooses.
+pub fn candidates_with_ties(
+    tool: &str,
+) -> Result<Vec<(JournalCandidate, Vec<String>)>, JournalError> {
+    let mut journals = candidates_with_times(tool)?;
+    journals.sort_by(|(a, x), (b, y)| b.cmp(a).then_with(|| x.id.cmp(&y.id)));
+    // Sorted by time, so the records that share a time sit side by side.
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for (index, (time, candidate)) in journals.iter().enumerate() {
+        match groups.last_mut() {
+            Some(group) if index > 0 && journals[index - 1].0 == *time => {
+                group.push(candidate.id.clone())
+            }
+            _ => groups.push(vec![candidate.id.clone()]),
+        }
+    }
+    let mut listed = Vec::with_capacity(journals.len());
+    let mut journals = journals.into_iter();
+    for group in groups {
+        for _ in 0..group.len() {
+            let (_, candidate) = journals.next().expect("one candidate per id");
+            let same_time_as = group
+                .iter()
+                .filter(|id| **id != candidate.id)
+                .cloned()
+                .collect();
+            listed.push((candidate, same_time_as));
+        }
+    }
+    Ok(listed)
 }
 
 /// Inventory exact candidates without imposing mutable timestamp order or ties.
@@ -1535,7 +1587,7 @@ fn candidates_with_times(tool: &str) -> Result<Vec<(SystemTime, JournalCandidate
         let md = crate::scan::observe_read("metadata", fs::symlink_metadata(e.path()))
             .map_err(JournalError::Io)?;
         if !md.is_file() {
-            return Err(JournalError::Malformed("journal is not a regular file"));
+            return Err(JournalError::NotARecordFile(e.path()));
         }
         let t = md.modified().map_err(JournalError::Io)?;
         journals.push((
@@ -2473,6 +2525,92 @@ mod tests {
         let path = journal.path();
         set_mtime_secs_ago(&path, (TTL_DAYS + 5) * 86_400);
         path
+    }
+
+    /// Records that share a modification time are named by id, and only those:
+    /// a record with its own time is not called tied. The listing that shows
+    /// the order marks each tie; the one that chooses refuses.
+    #[test]
+    fn same_time_records_are_named_and_the_choosing_listing_refuses() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("same_time_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+        let at = |id: &str, secs: u64| {
+            let path = dir.join(format!("tied-{id}.journal"));
+            fs::write(&path, b"listing reads names and times only").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(secs)),
+                )
+                .unwrap();
+        };
+        at("newest", 300);
+        at("b", 200);
+        at("a", 200);
+        at("c", 200);
+        at("oldest", 100);
+        match candidates_by_recency("tied") {
+            Err(JournalError::SameTime(ids)) => assert_eq!(ids, ["a", "b", "c"]),
+            other => panic!("expected the tie, got {:?}", other.map(|c| c.len())),
+        }
+        let listed: Vec<(String, Vec<String>)> = candidates_with_ties("tied")
+            .unwrap()
+            .into_iter()
+            .map(|(candidate, same)| (candidate.id, same))
+            .collect();
+        let expected: Vec<(String, Vec<String>)> = [
+            ("newest", vec![]),
+            ("a", vec!["b", "c"]),
+            ("b", vec!["a", "c"]),
+            ("c", vec!["a", "b"]),
+            ("oldest", vec![]),
+        ]
+        .into_iter()
+        .map(|(id, same)| (id.to_owned(), same.into_iter().map(str::to_owned).collect()))
+        .collect();
+        assert_eq!(listed, expected);
+        // One time apart is enough: the order is known again.
+        at("b", 201);
+        at("c", 199);
+        let ids: Vec<String> = candidates_by_recency("tied")
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, ["newest", "b", "a", "c", "oldest"]);
+        let text = JournalError::SameTime(vec!["a".into(), "b".into()]).to_string();
+        assert!(text.contains("a, b"), "{text}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A folder named like a record is its own error, carrying its path, and
+    /// never the tie: they need different steps.
+    #[test]
+    fn an_entry_that_is_not_a_file_is_named_by_path() {
+        let _guard = STATE_DIR_LOCK.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("not_a_record_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("odd-folder.journal")).expect("mkdir");
+        let _env = RestoreEnvVar::set("ETUDE_STATE_DIR", &dir);
+        for listed in [
+            candidates_by_recency("odd").map(|_| ()),
+            candidates_with_ties("odd").map(|_| ()),
+            candidates_unordered("odd").map(|_| ()),
+        ] {
+            match listed {
+                Err(JournalError::NotARecordFile(path)) => {
+                    assert_eq!(path, dir.join("odd-folder.journal"))
+                }
+                other => panic!("expected the folder to be named, got {other:?}"),
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The bug: sweep's age prune deleted a stash record whose files were still

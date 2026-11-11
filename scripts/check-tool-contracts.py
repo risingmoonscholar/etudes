@@ -1033,6 +1033,22 @@ def unpack_extraction_stopped(probe):
     return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
+def sweep_same_time_records(probe):
+    """Two applies whose records carry the same time: undo must not guess."""
+    for name in ("first", "second"):
+        probe.run("apply", screenshots(probe.directory / name), "--yes", "--since", "0", "--json")
+    records = sorted(probe.state.glob("sweep-*.journal"))
+    if len(records) != 2:
+        raise Unreached(f"two applies left {len(records)} records")
+    for record in records:
+        os.utime(record, ns=(1_800_000_000_000_000_000, 1_800_000_000_000_000_000))
+    result = probe.run("undo", "--json", codes=(3,))
+    tied = [row["operation_id"] for row in json.loads(result.stdout)["details"]["same_time_records"]]
+    require(sorted(tied) == [record.name[len("sweep-"):-len(".journal")] for record in records],
+            "a tie must name every tied record")
+    return result
+
+
 # Real invocations for each refusal code, each on its own throwaway fixture. A
 # probe returns the tool's result; the caller compares its reason with the
 # contract. A code with several probes is proven only if none disagrees. Nothing here reads a tool's source or trusts a self-description.
@@ -1053,6 +1069,7 @@ CODE_PROBES = {
         "journal_unreadable": garbage_journal,
         "journal_key_unavailable": bad_key,
         "journal_write_failed": journal_store_is_a_file,
+        "journal_times_tied": sweep_same_time_records,
         "unknown_operation": tuple(
             (lambda p, command=command: p.run(command, "--id", "absent", "--json", codes=(1,)))
             for command in ("status", "undo")),
@@ -1105,6 +1122,7 @@ NO_PROBE = {
     "internal_error": "needs a panic or a failed terminal read; no input reaches it on purpose",
     "destination_outside_root": "needs a plan whose destination leaves its root; argument and digest checks refuse one first",
     "insufficient_space": "needs a full disk; stress scenarios 107 (sweep, stash) and 109 (unpack) fill a disk image to prove it",
+    "journal_times_tied": "{tool} reaches it only through legacy or rewritten record ids, which this witness cannot seal; stash-cli's multi_batch tests write them",
     "private_copy_unopened": "needs macOS to refuse /dev/fd/N on every attempt, a race between processes this witness cannot stage; unpack's unit tests close the descriptor to prove it",
 }
 

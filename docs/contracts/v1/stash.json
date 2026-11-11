@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 14,
+    "schema_version": 15,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -289,6 +289,15 @@
           "pop"
         ],
         "why": "The request names an item that is not in the plan or the stash it addresses; the same request cannot work."
+      },
+      {
+        "code": "journal_times_tied",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "pop"
+        ],
+        "why": "Two or more saved journals carry the same time, so the tool cannot tell which one is newer and guesses nothing. Each one still opens by its id; details.same_time_records lists each id with its step."
       }
     ],
     "contract_query": {
@@ -579,9 +588,9 @@
       "exact_restore": "pop_--id_ID_or_current_creation_ID;_bounded_selector;_missing_or_damaged_id_never_falls_back",
       "partial_restore": "inspect_--id_ID_lists_path_free_opaque_item_ids;_pop_--id_ID_--item_ITEM_durably_restores_one_item",
       "remaining_held": "reported_from_nofollow_destination_metadata_after_partial_restore;_changed_or_missing_items_are_not_claimed_restored",
-      "latest": "latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier",
+      "latest": "latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier_among_live_stashes_in_scope_only;_a_tie_is_journal_times_tied_with_details.same_time_records_listing_every_tied_id_with_its_pop_--id_step",
       "latest_scope": "no_path_means_machine_wide_stash_journals;_path_limits_to_exact_journal_root",
-      "path_restore": "one_live_batch_required;_multiple_matches_refused",
+      "path_restore": "one_live_batch_required;_multiple_matches_refused;_no_order_consulted_so_modification_time_ties_do_not_block_it",
       "status": "one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure",
       "due": "deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop",
       "no_journal": "explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required"

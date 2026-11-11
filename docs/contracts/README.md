@@ -116,7 +116,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v17/sweep.json`, `v14/stash.json` and `v9/unpack.json` are the
+later declaration: `v18/sweep.json`, `v15/stash.json` and `v9/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -517,3 +517,23 @@ the result envelope stays at version 4. `check-tool-contracts.py` cannot stage
 the race and names the code as unproven; unpack's unit tests close the
 descriptor to reach it. `v9/unpack.json` pins this declaration and
 `v1/unpack.json` mirrors it; `v8/unpack.json` remains retained.
+
+**Declaration versions 18 (sweep) and 15 (stash)** add the refusal code
+`journal_times_tied`, retry `after_change`, subject kind `journal`, for sweep
+`undo` and stash `pop`, with exit 3. It means two or more journals the command
+could choose between have the same time, so the tool cannot tell which one is
+newer and chooses none. Only journals with work left count, and for `undo PATH`
+or `pop PATH --latest` only that folder's; a finished journal or another
+folder's never blocks a choice. Before these
+versions the same refusal was `journal_unreadable`. `details.same_time_records`
+lists every tied id with its `command`, `sweep undo --id ID` or `stash pop --id
+ID`, which opens only that journal. `undo_lookup.same_time` says so for sweep.
+`status_lookup.same_time` says `sweep status` still lists tied records and adds
+`same_time_as` to each tied row; the field is absent otherwise. Stash
+`batches.path_restore` says a pop by folder consults no order, so a tie does not
+block it, and `batches.latest` names the new code. No read or write domain
+changes, and the result envelope stays at version 4. `check-tool-contracts.py`
+proves the code for sweep by tying two records' times; for stash it is
+unproven there, because stash reaches it only through legacy or rewritten ids,
+which stash-cli's tests write. `v18/sweep.json` and `v15/stash.json` pin these
+declarations and `v1/` mirrors them; earlier pins remain unchanged.
