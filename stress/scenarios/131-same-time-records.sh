@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Two undo records with the same modification time. sweep cannot tell which
-# one is newer, so plain `sweep undo` and `sweep undo FOLDER` must refuse,
+# one is newer, so when both still have work left (and, for `sweep undo
+# FOLDER`, both are of that folder) undo must refuse,
 # move nothing, name each record and give a step per record. Each printed step
 # must work, run exactly as printed, while the times are still the same.
 # `sweep status` must still list the records, each tie marked, because status
-# is where a person finds the ids. With one second between the times, plain
+# is where a person finds the ids. Finished records, and another folder's
+# record under `sweep undo FOLDER`, never block. With one second between the times, plain
 # undo takes the newer time again, whatever the ids say.
 #
 # An entry named like a record that is not a regular file is not a tie: it
@@ -90,14 +92,11 @@ OUT=$("$SWEEP" undo 2>&1 </dev/null); RC=$?
 assert_no_panic "undo with a tie" "$OUT"
 assert_eq 3 "$RC" "undo with a tie: exit 3"
 has "undo with a tie: says why" "$OUT" \
-  "sweep: 2 undo records have the same time, so sweep cannot tell which one is newer. Nothing was moved."
+  "sweep: 2 undo records that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved."
 has "undo with a tie: a step for the first record" "$OUT" "To undo one of them, run: sweep undo --id $ID1"
 has "undo with a tie: a step for the second record" "$OUT" "Or run: sweep undo --id $ID2"
 has "undo with a tie: how to see a record's folder" "$OUT" "To see the folder of a record, run: sweep status --id $ID1"
 hasnt "undo with a tie: no step-less advice" "$OUT" "fix this one"
-OUT=$("$SWEEP" undo "$A" 2>&1 </dev/null); RC=$?
-assert_eq 3 "$RC" "undo FOLDER with a tie: exit 3"
-has "undo FOLDER with a tie: the same words" "$OUT" "2 undo records have the same time"
 applied after
 assert_snapshot_eq "$W/before-a.json" "$W/after-a.json" "the refusals moved nothing in the first folder"
 assert_snapshot_eq "$W/before-b.json" "$W/after-b.json" "the refusals moved nothing in the second folder"
@@ -143,6 +142,55 @@ done
 snapshot_tree "$A" "$W/a-after.json"; snapshot_tree "$B" "$W/b-after.json"
 assert_snapshot_eq "$W/a-original.json" "$W/a-after.json" "the first folder equals its original"
 assert_snapshot_eq "$W/b-original.json" "$W/b-after.json" "the second folder equals its original"
+
+# --- finished records with the same time block nothing -----------------------
+set_time "$TIED" "$ETUDE_STATE_DIR"/sweep-*.journal
+OUT=$("$SWEEP" undo 2>&1 </dev/null); RC=$?
+assert_eq 1 "$RC" "two finished records tied: nothing to undo, exit 1"
+has "two finished records tied: says nothing to undo" "$OUT" "Nothing to undo"
+hasnt "two finished records tied: not called a tie" "$OUT" "same time"
+
+# --- another folder's record never stops a folder undo -----------------------
+apply "$A" "cross-folder: first"; apply "$B" "cross-folder: second"
+set_time "$TIED" "$ETUDE_STATE_DIR"/sweep-*.journal
+OUT=$("$SWEEP" undo "$A" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "undo FOLDER with another folder's record tied: exit 0"
+hasnt "undo FOLDER with another folder's record tied: not refused" "$OUT" "same time"
+snapshot_tree "$A" "$W/a-cross.json"
+assert_snapshot_eq "$W/a-original.json" "$W/a-cross.json" "cross-folder: the folder asked about equals its original"
+[ -d "$B/Documents" ] && pass "cross-folder: the other folder's apply was left" \
+  || fail "cross-folder: the other folder's apply was undone too"
+
+# --- two live records of one folder with the same time -----------------------
+rm -f "$ETUDE_STATE_DIR"/sweep-*.journal
+E="$W/one folder"
+fixture "$E"
+for i in 1 2 3; do printf 'photo %s\n' "$i" >"$E/photo_$i.jpg"; done
+touch -t 202001010101 "$E"/photo_*
+snapshot_tree "$E" "$W/e-original.json"
+mkdir "$W/e-later"; mv "$E"/photo_* "$W/e-later/"
+apply "$E" "same folder: first"
+mv "$W/e-later"/photo_* "$E/"
+apply "$E" "same folder: second"
+read -r E1 E2 <<<"$(record_ids sweep)"
+set_time "$TIED" "$ETUDE_STATE_DIR"/sweep-*.journal
+OUT=$("$SWEEP" undo "$E" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "same folder tie: undo FOLDER exit 3"
+has "same folder tie: says why, for this folder" "$OUT" \
+  "sweep: 2 undo records of this folder that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved."
+has "same folder tie: a step for the first record" "$OUT" "To undo one of them, run: sweep undo --id $E1"
+has "same folder tie: a step for the second record" "$OUT" "Or run: sweep undo --id $E2"
+STEPS=$(printf '%s\n' "$OUT" | sed -n 's/.*run: \(sweep undo .*\)/\1/p')
+assert_eq 2 "$(printf '%s\n' "$STEPS" | wc -l | tr -d ' ')" "same folder tie: two undo steps"
+for N in 1 2; do
+  set_time "$TIED" "$ETUDE_STATE_DIR"/sweep-*.journal
+  STEP=$(printf '%s\n' "$STEPS" | sed -n "${N}p")
+  OUT=$(eval "$STEP" 2>&1 </dev/null); RC=$?
+  assert_eq 0 "$RC" "same folder tie: printed step $N: exit 0"
+  has "same folder tie: printed step $N: restored" "$OUT" "Restored 3 files."
+done
+snapshot_tree "$E" "$W/e-after.json"
+assert_snapshot_eq "$W/e-original.json" "$W/e-after.json" "same folder tie: the folder equals its original"
 
 # --- no tie: plain undo takes the newer time, not the larger id -------------
 rm -f "$ETUDE_STATE_DIR"/sweep-*.journal

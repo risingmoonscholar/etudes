@@ -525,6 +525,49 @@ fn creation_tie_names_both_stashes_and_each_pop_step_works() {
     assert_eq!(fs::read(one).unwrap(), b"one");
     assert_eq!(fs::read(two).unwrap(), b"two");
 }
+/// Legacy --latest compares only live stashes in scope: a popped stash, or
+/// another folder's stash under PATH --latest, never ties.
+#[test]
+fn legacy_latest_ignores_popped_and_other_folder_ties() {
+    let f = Fixture::new();
+    let one = f.file("one.txt", b"one");
+    let a = f.stash(None);
+    rebind(&f, &a, "legacy-a", true);
+    success(&f.pop("legacy-a"));
+    f.file("two.txt", b"two");
+    let b = f.stash(None);
+    rebind(&f, &b, "legacy-b", true);
+    let other = f.0.join("other");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("elsewhere.txt"), b"elsewhere").unwrap();
+    let c = id(&f.command().arg(&other).arg("--json").output().unwrap());
+    rebind(&f, &c, "legacy-c", true);
+    equal_mtimes(&f);
+    // In this folder: legacy-a is popped and legacy-c is elsewhere.
+    let out = f
+        .command()
+        .arg("pop")
+        .arg(f.0.join("tree"))
+        .args(["--latest", "--json"])
+        .output()
+        .unwrap();
+    success(&out);
+    assert_eq!(
+        json_query(&out, "value['recovery']['operation']"),
+        "legacy-b"
+    );
+    assert_eq!(fs::read(&one).unwrap(), b"one");
+    assert!(!other.join("elsewhere.txt").exists());
+    // Machine-wide, only legacy-c is live now: no tie with the popped ones.
+    equal_mtimes(&f);
+    success(
+        &f.command()
+            .args(["pop", "--latest", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(fs::read(other.join("elsewhere.txt")).unwrap(), b"elsewhere");
+}
 /// A pop by folder needs one live stash and no order, so records with the
 /// same time do not block it.
 #[test]

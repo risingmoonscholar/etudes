@@ -19,14 +19,15 @@ impl Drop for TestDir {
 }
 
 fn temp(tag: &str) -> TestDir {
+    // Tests run in parallel and can share a tag and a clock reading, so a
+    // process-wide counter keeps every folder its own.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "sweep-same-time-{tag}-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     TestDir(dir.canonicalize().unwrap())
 }
@@ -80,9 +81,14 @@ impl Case {
 
     /// Three old files of one kind, applied: one undo record. Its id.
     fn apply(&self, root: &Path) -> String {
+        self.apply_kind(root, "report", "pdf")
+    }
+
+    /// Three old files named STEM_N.EXT, applied: one undo record. Its id.
+    fn apply_kind(&self, root: &Path, stem: &str, ext: &str) -> String {
         for i in 1..=3 {
-            let path = root.join(format!("report_{i}.pdf"));
-            std::fs::write(&path, format!("report {i}")).unwrap();
+            let path = root.join(format!("{stem}_{i}.{ext}"));
+            std::fs::write(&path, format!("{stem} {i}")).unwrap();
             let old =
                 std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 24 * 60 * 60);
             std::fs::File::open(&path)
@@ -117,8 +123,12 @@ impl Case {
     }
 
     fn files_home(&self, root: &Path) -> usize {
+        self.kind_home(root, "report", "pdf")
+    }
+
+    fn kind_home(&self, root: &Path, stem: &str, ext: &str) -> usize {
         (1..=3)
-            .filter(|i| root.join(format!("report_{i}.pdf")).is_file())
+            .filter(|i| root.join(format!("{stem}_{i}.{ext}")).is_file())
             .count()
     }
 
@@ -187,47 +197,163 @@ mod serde_like {
 fn a_tie_names_each_record_moves_nothing_and_has_its_own_code() {
     let (case, ids) = Case::tied();
     let expected = format!(
-        "sweep: 2 undo records have the same time, so sweep cannot tell which one is newer. Nothing was moved.\n\
+        "sweep: 2 undo records that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved.\n\
          To undo one of them, run: sweep undo --id {a}\n\
          Or run: sweep undo --id {b}\n\
          To see the folder of a record, run: sweep status --id {a}\n",
         a = ids[0],
         b = ids[1]
     );
-    for args in [
-        vec!["undo"],
-        vec!["undo", case.first.0.to_str().unwrap()],
-        vec!["undo", case.second.0.to_str().unwrap()],
-    ] {
-        let out = case.run(&args);
-        assert_eq!(out.status.code(), Some(3), "{args:?}: {}", text(&out));
-        assert_eq!(String::from_utf8_lossy(&out.stderr), expected, "{args:?}");
-        assert!(!text(&out).contains("fix this one"), "{args:?}");
-        assert_eq!(case.files_home(&case.first.0), 0);
-        assert_eq!(case.files_home(&case.second.0), 0);
+    let out = case.run(&["undo"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stderr), expected);
+    assert!(!text(&out).contains("fix this one"));
+    assert_eq!(case.files_home(&case.first.0), 0);
+    assert_eq!(case.files_home(&case.second.0), 0);
 
-        let mut with_json = args.clone();
-        with_json.push("--json");
-        let out = case.run(&with_json);
-        assert_eq!(out.status.code(), Some(3), "{}", text(&out));
-        let value = json(&out);
-        assert_eq!(value.get("v['status']"), r#""refused""#);
-        assert_eq!(
-            value.get("v['reason']"),
-            r#"{"code": "journal_times_tied", "retry": "after_change", "subject": {"kind": "journal"}}"#
-        );
-        assert_eq!(
-            value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
-            format!(r#"["{}", "{}"]"#, ids[0], ids[1])
-        );
-        assert_eq!(
-            value.get("[r['command'] for r in v['details']['same_time_records']]"),
-            format!(
-                r#"["sweep undo --id {}", "sweep undo --id {}"]"#,
-                ids[0], ids[1]
-            )
+    let out = case.run(&["undo", "--json"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    let value = json(&out);
+    assert_eq!(value.get("v['status']"), r#""refused""#);
+    assert_eq!(
+        value.get("v['reason']"),
+        r#"{"code": "journal_times_tied", "retry": "after_change", "subject": {"kind": "journal"}}"#
+    );
+    assert_eq!(
+        value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
+        format!(r#"["{}", "{}"]"#, ids[0], ids[1])
+    );
+    assert_eq!(
+        value.get("[r['command'] for r in v['details']['same_time_records']]"),
+        format!(
+            r#"["sweep undo --id {}", "sweep undo --id {}"]"#,
+            ids[0], ids[1]
+        )
+    );
+}
+
+/// `sweep undo FOLDER` chooses only among that folder's records, so a record
+/// of another folder with the same time does not stop it.
+#[test]
+fn a_folder_undo_is_not_stopped_by_another_folders_record() {
+    let (case, _) = Case::tied();
+    let out = case.run(&["undo", case.first.0.to_str().unwrap(), "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(json(&out).get("v['reason']['code']"), r#""done""#);
+    assert_eq!(case.files_home(&case.first.0), 3);
+    assert_eq!(case.files_home(&case.second.0), 0);
+}
+
+/// Two applies of one folder with the same time: the folder undo and the plain
+/// undo both stop, name only that folder's records, and each step works.
+#[test]
+fn a_same_folder_tie_names_that_folders_records_and_each_step_works() {
+    let case = Case::new("same-folder");
+    let root = case.first.0.clone();
+    let mut ids = vec![
+        case.apply_kind(&root, "report", "pdf"),
+        case.apply_kind(&root, "photo", "jpg"),
+    ];
+    let other = case.apply(&case.second.0);
+    case.set_time(&other, TIED_SECS - 10);
+    for id in &ids {
+        case.set_time(id, TIED_SECS);
+    }
+    ids.sort();
+    let out = case.run(&["undo", root.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        stderr,
+        format!(
+            "sweep: 2 undo records of this folder that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved.\n\
+             To undo one of them, run: sweep undo --id {a}\n\
+             Or run: sweep undo --id {b}\n\
+             To see the folder of a record, run: sweep status --id {a}\n",
+            a = ids[0],
+            b = ids[1]
+        )
+    );
+    assert!(!stderr.contains(&other), "{stderr}");
+    let value = json(&case.run(&["undo", root.to_str().unwrap(), "--json"]));
+    assert_eq!(
+        value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
+        format!(r#"["{}", "{}"]"#, ids[0], ids[1])
+    );
+    let steps: Vec<String> = stderr
+        .lines()
+        .filter_map(|line| {
+            line.split_once("run: sweep undo")
+                .map(|(_, rest)| format!("sweep undo{rest}"))
+        })
+        .collect();
+    assert_eq!(steps.len(), 2, "{stderr}");
+    for step in &steps {
+        for id in &ids {
+            case.set_time(id, TIED_SECS);
+        }
+        let out = case.shell(step);
+        assert!(out.status.success(), "{step}: {}", text(&out));
+        assert!(
+            text(&out).contains("Restored 3 files."),
+            "{step}: {}",
+            text(&out)
         );
     }
+    assert_eq!(case.kind_home(&root, "report", "pdf"), 3);
+    assert_eq!(case.kind_home(&root, "photo", "jpg"), 3);
+    assert_eq!(case.files_home(&case.second.0), 0);
+}
+
+/// Finished records never block a choice. Both tied records finished: plain
+/// undo reaches the older live apply. One finished and one live: plain undo
+/// takes the live one. Neither is refused.
+#[test]
+fn finished_records_with_the_same_time_do_not_block_undo() {
+    let case = Case::new("finished");
+    let third = temp("finished-third");
+    let older = case.apply(&third.0);
+    let a = case.apply(&case.first.0);
+    let b = case.apply(&case.second.0);
+    for id in [&a, &b] {
+        let out = case.run(&["undo", "--id", id]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    case.set_time(&older, TIED_SECS - 10);
+    case.set_time(&a, TIED_SECS);
+    case.set_time(&b, TIED_SECS);
+    let out = case.run(&["undo", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let value = json(&out);
+    assert_eq!(value.get("v['reason']['code']"), r#""done""#);
+    assert_eq!(
+        value.get("v['recovery']['operation']"),
+        format!(r#""{older}""#)
+    );
+    assert_eq!(case.files_home(&third.0), 3);
+
+    // Every record finished: nothing to undo, not a tie.
+    case.set_time(&older, TIED_SECS);
+    case.set_time(&a, TIED_SECS);
+    case.set_time(&b, TIED_SECS);
+    let out = case.run(&["undo"]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+    assert!(text(&out).contains("Nothing to undo"), "{}", text(&out));
+    assert!(!text(&out).contains("same time"), "{}", text(&out));
+
+    // One finished, one live, same time: the live one is undone.
+    let live = case.apply(&case.first.0);
+    case.set_time(&live, TIED_SECS + 5);
+    case.set_time(&b, TIED_SECS + 5);
+    let out = case.run(&["undo", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let value = json(&out);
+    assert_eq!(
+        value.get("v['recovery']['operation']"),
+        format!(r#""{live}""#)
+    );
+    assert!(!value.get("v['details']").contains("same_time_records"));
+    assert_eq!(case.files_home(&case.first.0), 3);
 }
 
 /// Every printed step works when pasted, while the times are still the same.
@@ -292,7 +418,7 @@ fn status_lists_tied_records_with_their_ids() {
     let other = ids.iter().find(|id| **id != mine).unwrap();
     assert!(
         shown.contains(&format!(
-            "  This record has the same time as {other}. sweep cannot tell which one is newer, so a plain sweep undo stops. Its --id step still works."
+            "  This record has the same time as {other}. sweep cannot tell which one is newer. Its --id step still works."
         )),
         "{shown}"
     );

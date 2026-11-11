@@ -520,8 +520,11 @@ descriptor to reach it. `v9/unpack.json` pins this declaration and
 
 **Declaration versions 18 (sweep) and 15 (stash)** add the refusal code
 `journal_times_tied`, retry `after_change`, subject kind `journal`, for sweep
-`undo` and stash `pop`, with exit 3. It means two or more journals have the same
-time, so the tool cannot tell which one is newer and chooses none. Before these
+`undo` and stash `pop`, with exit 3. It means two or more journals the command
+could choose between have the same time, so the tool cannot tell which one is
+newer and chooses none. Only journals with work left count, and for `undo PATH`
+or `pop PATH --latest` only that folder's; a finished journal or another
+folder's never blocks a choice. Before these
 versions the same refusal was `journal_unreadable`. `details.same_time_records`
 lists every tied id with its `command`, `sweep undo --id ID` or `stash pop --id
 ID`, which opens only that journal. `undo_lookup.same_time` says so for sweep.

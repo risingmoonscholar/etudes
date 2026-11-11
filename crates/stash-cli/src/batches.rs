@@ -218,13 +218,36 @@ pub fn select(selector: Selector, sealer: &dyn Sealer) -> Result<Option<Journal>
         }
         return Ok(Some(values.remove(0)));
     }
-    // Legacy ids do not encode creation time; preserve their existing modification-time ordering.
-    for candidate in journal::candidates_by_recency("stash")? {
-        if let Some(index) = values.iter().position(|journal| journal.id == candidate.id) {
-            return Ok(Some(values.remove(index)));
+    // Legacy ids do not encode creation time; preserve their existing
+    // modification-time ordering. Only the live stashes in scope (this folder,
+    // when one is named) are compared: a popped stash or another folder's
+    // stash with the same time is never a candidate, so it never ties.
+    let mut previous: Vec<String> = Vec::new();
+    let mut newest: Vec<String> = Vec::new();
+    for (candidate, same_time_as) in journal::candidates_with_ties("stash")? {
+        let in_group = previous.contains(&candidate.id);
+        previous = same_time_as;
+        if !newest.is_empty() && !in_group {
+            break;
+        }
+        if values.iter().any(|journal| journal.id == candidate.id) {
+            newest.push(candidate.id);
         }
     }
-    Err(JournalError::NotFound)
+    match newest.len() {
+        0 => Err(JournalError::NotFound),
+        1 => {
+            let index = values
+                .iter()
+                .position(|journal| journal.id == newest[0])
+                .expect("chosen from the live stashes");
+            Ok(Some(values.remove(index)))
+        }
+        _ => {
+            newest.sort();
+            Err(JournalError::SameTime(newest))
+        }
+    }
 }
 pub fn held(journal: &Journal) -> Result<usize, JournalError> {
     let mut held = 0;

@@ -570,17 +570,27 @@ pub fn record_id_step(tool: &str, id: &str) -> Option<String> {
 
 /// Records whose times are the same: the tool cannot tell which one is newer,
 /// so it chooses none. Each one still opens by its id, and that is the step.
-pub fn same_time_problem(tool: &str, ids: &[String]) -> String {
+/// The ids are only records the command could have chosen: with work left,
+/// and of the folder asked about when `of_folder` is set.
+pub fn same_time_problem(tool: &str, ids: &[String], of_folder: bool) -> String {
     let (records, nothing, goal, see) = if tool == "stash" {
         (
-            "stashes",
+            if of_folder {
+                "stashes of this folder"
+            } else {
+                "stashes"
+            },
             "Nothing was restored.",
             "To restore one of them",
             "To see every stash, run: stash status --all".to_owned(),
         )
     } else {
         (
-            "undo records",
+            if of_folder {
+                "undo records of this folder that can still be undone"
+            } else {
+                "undo records that can still be undone"
+            },
             "Nothing was moved.",
             "To undo one of them",
             ids.iter()
@@ -646,7 +656,7 @@ pub fn record_folder_problem(tool: &str, error: &JournalError) -> String {
     let folder = etude_core::journal::state_dir();
     let nothing = "Nothing was moved.";
     match error {
-        JournalError::SameTime(ids) => same_time_problem(tool, ids),
+        JournalError::SameTime(ids) => same_time_problem(tool, ids, false),
         JournalError::NotARecordFile(path) => {
             let mut aside = path.clone().into_os_string();
             aside.push(".set-aside");
@@ -708,12 +718,12 @@ mod tests {
         let text = super::record_folder_problem("sweep", &JournalError::SameTime(ids.clone()));
         assert_eq!(
             text,
-            "sweep: 2 undo records have the same time, so sweep cannot tell which one is newer. Nothing was moved.\n\
+            "sweep: 2 undo records that can still be undone have the same time, so sweep cannot tell which one is newer. Nothing was moved.\n\
              To undo one of them, run: sweep undo --id 1-2-0-aa\n\
              Or run: sweep undo --id 1-2-0-bb\n\
              To see the folder of a record, run: sweep status --id 1-2-0-aa"
         );
-        let stash = super::same_time_problem("stash", &ids);
+        let stash = super::same_time_problem("stash", &ids, false);
         assert!(
             stash.starts_with("stash: 2 stashes have the same time"),
             "{stash}"
@@ -724,6 +734,13 @@ mod tests {
             "{stash}"
         );
         assert!(stash.contains("Or run: stash pop --id 1-2-0-bb"), "{stash}");
+        let folder = super::same_time_problem("sweep", &ids, true);
+        assert!(
+            folder.starts_with(
+                "sweep: 2 undo records of this folder that can still be undone have the same time"
+            ),
+            "{folder}"
+        );
         assert_eq!(
             super::same_time_details("sweep", &ids),
             r#"{"same_time_records":[{"operation_id":"1-2-0-aa","command":"sweep undo --id 1-2-0-aa"},{"operation_id":"1-2-0-bb","command":"sweep undo --id 1-2-0-bb"}]}"#
@@ -734,7 +751,7 @@ mod tests {
         );
         // Seven tied: five steps, then how to see the rest.
         let many: Vec<String> = (0..7).map(|n| format!("1-2-0-{n}")).collect();
-        let text = super::same_time_problem("sweep", &many);
+        let text = super::same_time_problem("sweep", &many, false);
         assert_eq!(text.matches("sweep undo --id").count(), 5, "{text}");
         assert!(
             text.contains("2 more have the same time. Add --json to see every id."),

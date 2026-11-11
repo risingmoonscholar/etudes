@@ -772,7 +772,7 @@
       "by_id": "opens_only_that_record_and_searches_no_other_to_choose_it;_other_records_are_read_only_to_keep_a_folder_they_may_need",
       "by_id_refusals": "a_path_beside_it,_a_repeat,_an_empty_value_or_an_invalid_id_is_invalid_arguments;_an_id_no_record_holds_is_unknown_operation",
       "unreadable_record": "undo_and_undo_path_stop_at_it;_details.records_that_open_lists_up_to_5_live_records,_newest_first,_each_with_its_step",
-      "same_time": "undo_and_undo_path_refuse_with_journal_times_tied_when_two_records_have_the_same_modification_time;_no_record_is_guessed_newer;_details.same_time_records_lists_every_tied_id_with_its_undo_--id_step;_undo_--id_is_unaffected"
+      "same_time": "undo_and_undo_path_refuse_with_journal_times_tied_when_two_records_they_could_choose_have_the_same_modification_time;_only_records_with_work_left_count,_and_for_undo_path_only_that_folder's;_no_record_is_guessed_newer;_details.same_time_records_lists_every_tied_id_with_its_undo_--id_step;_undo_--id_is_unaffected"
     },
     "tag_scheme": {
       "flag": "--scheme tags",

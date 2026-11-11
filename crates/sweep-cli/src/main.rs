@@ -438,7 +438,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
             }
             if !same_time_as.is_empty() {
                 println!(
-                    "  This record has the same time as {}. sweep cannot tell which one is newer, so a plain sweep undo stops.{}",
+                    "  This record has the same time as {}. sweep cannot tell which one is newer.{}",
                     same_time_as
                         .iter()
                         .map(|id| etude_cli_support::shown_text(id))
@@ -3572,11 +3572,6 @@ fn undo_step(root: &Path) -> String {
     format!("sweep undo {}", etude_cli_support::quoted_path(&root))
 }
 
-/// The status command for one folder: it lists that folder's applies with ids.
-fn status_step(root: &Path) -> String {
-    format!("sweep status {}", etude_cli_support::quoted_path(root))
-}
-
 /// The undo command for one record. It cannot reverse any other apply.
 fn undo_id_step(id: &str) -> String {
     format!("sweep undo --id {id}")
@@ -4083,10 +4078,10 @@ fn newest_undoable(
 /// The newest other folder with an apply left to reverse. A record that will not
 /// open is passed over here: naming the folder then gives its own honest answer.
 fn other_folder_to_undo(sl: &dyn etude_core::journal::Sealer, root: &Path) -> Option<PathBuf> {
-    etude_core::journal::candidates_by_recency("sweep")
+    etude_core::journal::candidates_with_ties("sweep")
         .ok()?
         .into_iter()
-        .filter_map(|id| id.load("sweep", sl).ok())
+        .filter_map(|(id, _)| id.load("sweep", sl).ok())
         .find(|j| j.root != root && j.root.is_dir() && !journal_is_fully_undone(j, sl))
         .map(|j| j.root)
 }
@@ -4126,12 +4121,17 @@ fn refuse_unreadable_record(
             }
         }
         None => {
-            eprintln!(
-                "{}",
-                problems::record_folder_problem("sweep", &record.error)
-            );
             if let etude_core::journal::JournalError::SameTime(ids) = &record.error {
+                eprintln!(
+                    "{}",
+                    problems::same_time_problem("sweep", ids, asked == UndoAsked::Folder)
+                );
                 etude_cli_support::envelope::detail(problems::same_time_details("sweep", ids));
+            } else {
+                eprintln!(
+                    "{}",
+                    problems::record_folder_problem("sweep", &record.error)
+                );
             }
         }
     }
@@ -4248,20 +4248,52 @@ fn sweep_journal_matching(
     sl: &dyn etude_core::journal::Sealer,
     matches: impl Fn(&etude_core::Journal) -> bool,
 ) -> Result<Option<etude_core::Journal>, RecordError> {
-    let ids = match etude_core::journal::candidates_by_recency("sweep") {
-        Ok(ids) => ids,
+    let listed = match etude_core::journal::candidates_with_ties("sweep") {
+        Ok(listed) => listed,
         Err(etude_core::journal::JournalError::NotFound) => return Ok(None),
         Err(error) => return Err(RecordError { id: None, error }),
     };
+    // Records with the same time form one group whose inner order is unknown.
+    // A group is opened whole before anything in it is chosen.
+    let mut groups: Vec<Vec<etude_core::journal::JournalCandidate>> = Vec::new();
+    let mut previous: Vec<String> = Vec::new();
+    for (candidate, same_time_as) in listed {
+        match groups.last_mut() {
+            Some(group) if previous.contains(&candidate.id) => group.push(candidate),
+            _ => groups.push(vec![candidate]),
+        }
+        previous = same_time_as;
+    }
     let mut journals = Vec::new();
-    for id in ids {
-        // An unreadable journal may account for these same destinations.
-        // Never use a different history to bypass a journal we cannot read.
-        let j = id.load("sweep", sl).map_err(|error| RecordError {
-            id: Some(id.id.clone()),
-            error,
-        })?;
-        if matches(&j) {
+    for group in groups {
+        let mut matching = Vec::new();
+        for candidate in group {
+            // An unreadable journal may account for these same destinations.
+            // Never use a different history to bypass a journal we cannot read.
+            let j = candidate.load("sweep", sl).map_err(|error| RecordError {
+                id: Some(candidate.id.clone()),
+                error,
+            })?;
+            if matches(&j) {
+                matching.push(j);
+            }
+        }
+        // The order inside a group matters only between records this undo
+        // could choose: those of the folder asked about with work left. A
+        // finished record, or one of another folder, never blocks a choice.
+        let mut live: Vec<String> = matching
+            .iter()
+            .filter(|j| !journal_is_fully_undone(j, sl))
+            .map(|j| j.id.clone())
+            .collect();
+        if live.len() > 1 {
+            live.sort();
+            return Err(RecordError {
+                id: None,
+                error: etude_core::journal::JournalError::SameTime(live),
+            });
+        }
+        for j in matching {
             if journals.is_empty() && !journal_is_fully_undone(&j, sl) {
                 // Ordinary undo needs no older context. Contention is visible
                 // as planned destinations occupied while their origins are gone.
@@ -4407,7 +4439,9 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     }
     // Everything readable has been reversed, or nothing is on record. Which of
     // the two decides the answer below.
-    let candidates = match etude_core::journal::candidates_by_recency("sweep") {
+    // Nothing readable has work left, so a tie among the newest records
+    // chooses nothing: each of them is already restored.
+    let candidates = match etude_core::journal::candidates_with_ties("sweep") {
         Ok(candidates) => candidates,
         Err(etude_core::journal::JournalError::NotFound) => Vec::new(),
         Err(error) => {
@@ -4418,7 +4452,7 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
             );
         }
     };
-    let Some(newest) = candidates.into_iter().next() else {
+    let Some((newest, _)) = candidates.into_iter().next() else {
         eprintln!("sweep: nothing to undo. No apply is on record.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
@@ -4601,20 +4635,9 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
         return silent(None, None);
     };
     let folder_step = undo_step(&target);
-    let candidates = match etude_core::journal::candidates_by_recency("sweep") {
+    let candidates = match etude_core::journal::candidates_with_ties("sweep") {
         Ok(candidates) => candidates,
         Err(etude_core::journal::JournalError::NotFound) => return silent(Some(0), Some(0)),
-        Err(etude_core::journal::JournalError::SameTime(ids)) => {
-            return AfterUndo {
-                lines: vec![format!(
-                    "{} undo records have the same time, so sweep cannot tell whether another apply of this folder remains. To see the applies of this folder and their ids, run: {}",
-                    ids.len(),
-                    status_step(&target)
-                )],
-                remaining: None,
-                not_opened: None,
-            };
-        }
         Err(_) => {
             return AfterUndo {
                 lines: vec!["sweep could not list its undo records, so it cannot tell whether another apply of this folder remains.".to_owned()],
@@ -4627,7 +4650,7 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
     // order their records were last written, and how many records do not open.
     let mut others = Vec::new();
     let mut not_opened = 0;
-    for candidate in candidates {
+    for (candidate, _) in candidates {
         if candidate.id == j.id {
             continue;
         }
@@ -4652,6 +4675,31 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
     let remaining = (not_opened == 0).then_some(n);
     let mut lines = Vec::new();
     match sweep_journal_for_root(sl, &target) {
+        Err(RecordError {
+            id: None,
+            error: etude_core::journal::JournalError::SameTime(ids),
+        }) => {
+            // Applies of this folder with work left have the same time, so
+            // `sweep undo FOLDER` stops. Each one still undoes by its id.
+            lines.push(format!(
+                "{} applies of this folder have the same time, so sweep undo of this folder stops.",
+                ids.len()
+            ));
+            for (index, id) in ids.iter().take(RECORDS_LISTED).enumerate() {
+                if let Some(step) = etude_cli_support::problems::record_id_step("sweep", id) {
+                    lines.push(if index == 0 {
+                        format!("To undo one of them, run: {step}")
+                    } else {
+                        format!("Or run: {step}")
+                    });
+                }
+            }
+            return AfterUndo {
+                lines,
+                remaining,
+                not_opened: Some(not_opened),
+            };
+        }
         Err(record) if record.id.is_none() => {
             lines.push("sweep could not list its undo records, so it cannot tell whether another apply of this folder remains.".to_owned());
             return AfterUndo {

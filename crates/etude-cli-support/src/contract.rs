@@ -524,7 +524,7 @@ pub fn declaration(
             ("by_id", j::str("opens_only_that_record_and_searches_no_other_to_choose_it;_other_records_are_read_only_to_keep_a_folder_they_may_need")),
             ("by_id_refusals", j::str("a_path_beside_it,_a_repeat,_an_empty_value_or_an_invalid_id_is_invalid_arguments;_an_id_no_record_holds_is_unknown_operation")),
             ("unreadable_record", j::str("undo_and_undo_path_stop_at_it;_details.records_that_open_lists_up_to_5_live_records,_newest_first,_each_with_its_step")),
-            ("same_time", j::str("undo_and_undo_path_refuse_with_journal_times_tied_when_two_records_have_the_same_modification_time;_no_record_is_guessed_newer;_details.same_time_records_lists_every_tied_id_with_its_undo_--id_step;_undo_--id_is_unaffected")),
+            ("same_time", j::str("undo_and_undo_path_refuse_with_journal_times_tied_when_two_records_they_could_choose_have_the_same_modification_time;_only_records_with_work_left_count,_and_for_undo_path_only_that_folder's;_no_record_is_guessed_newer;_details.same_time_records_lists_every_tied_id_with_its_undo_--id_step;_undo_--id_is_unaffected")),
         ])));
         fields.push(("tag_scheme", j::obj(&[
             ("flag", j::str("--scheme tags")),
@@ -565,7 +565,7 @@ pub fn declaration(
             ("exact_restore", j::str("pop_--id_ID_or_current_creation_ID;_bounded_selector;_missing_or_damaged_id_never_falls_back")),
             ("partial_restore", j::str("inspect_--id_ID_lists_path_free_opaque_item_ids;_pop_--id_ID_--item_ITEM_durably_restores_one_item")),
             ("remaining_held", j::str("reported_from_nofollow_destination_metadata_after_partial_restore;_changed_or_missing_items_are_not_claimed_restored")),
-            ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier;_a_tie_is_journal_times_tied_with_details.same_time_records_listing_every_tied_id_with_its_pop_--id_step")),
+            ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier_among_live_stashes_in_scope_only;_a_tie_is_journal_times_tied_with_details.same_time_records_listing_every_tied_id_with_its_pop_--id_step")),
             ("latest_scope", j::str("no_path_means_machine_wide_stash_journals;_path_limits_to_exact_journal_root")),
             ("path_restore", j::str("one_live_batch_required;_multiple_matches_refused;_no_order_consulted_so_modification_time_ties_do_not_block_it")),
             ("status", j::str("one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure")),
