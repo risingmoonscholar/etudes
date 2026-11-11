@@ -192,6 +192,44 @@ done
 snapshot_tree "$E" "$W/e-after.json"
 assert_snapshot_eq "$W/e-original.json" "$W/e-after.json" "same folder tie: the folder equals its original"
 
+# --- after an --id undo, the folder's remaining tie is named -------------------
+rm -f "$ETUDE_STATE_DIR"/sweep-*.journal
+G="$W/three applies"
+mkdir -p "$G" "$W/g-later"
+for kind in report:pdf photo:jpg song:mp3; do
+  for i in 1 2 3; do printf '%s %s\n' "${kind%%:*}" "$i" >"$G/${kind%%:*}_$i.${kind##*:}"; done
+done
+touch -t 202001010101 "$G"/*
+snapshot_tree "$G" "$W/g-original.json"
+mv "$G"/photo_* "$G"/song_* "$W/g-later/"
+apply "$G" "three applies: first"
+mv "$W/g-later"/photo_* "$G/"
+apply "$G" "three applies: second"
+mv "$W/g-later"/song_* "$G/"
+apply "$G" "three applies: third"
+read -r G1 G2 G3 <<<"$(record_ids sweep)"
+set_time "$TIED" "$ETUDE_STATE_DIR"/sweep-*.journal
+OUT=$("$SWEEP" undo --id "$G1" 2>&1 </dev/null); RC=$?
+assert_eq 0 "$RC" "three tied: undo --id of one: exit 0"
+has "three tied: names the tie that remains" "$OUT" \
+  "2 applies of this folder that can still be undone have the same time, so sweep undo '$G' stops and moves nothing."
+has "three tied: a step for the second record" "$OUT" "To undo one of them, run: sweep undo --id $G2"
+has "three tied: a step for the third record" "$OUT" "Or run: sweep undo --id $G3"
+OUT=$("$SWEEP" undo "$G" 2>&1 </dev/null); RC=$?
+assert_eq 3 "$RC" "three tied: the folder undo stops, as it said"
+has "three tied: the folder undo names the same records" "$OUT" \
+  "2 undo records of this folder that can still be undone have the same time"
+has "three tied: the folder undo gives the same first step" "$OUT" "To undo one of them, run: sweep undo --id $G2"
+hasnt "three tied: the undone record is not named" "$OUT" "$G1"
+for N in 2 3; do
+  STEP=$(printf '%s\n' "$OUT" | sed -n 's/.*run: \(sweep undo --id .*\)/\1/p' | sed -n "$((N - 1))p")
+  set_time "$TIED" "$ETUDE_STATE_DIR"/sweep-*.journal
+  STEP_OUT=$(eval "$STEP" 2>&1 </dev/null); RC=$?
+  assert_eq 0 "$RC" "three tied: printed step $((N - 1)): exit 0"
+done
+snapshot_tree "$G" "$W/g-after.json"
+assert_snapshot_eq "$W/g-original.json" "$W/g-after.json" "three tied: the folder equals its original"
+
 # --- no tie: plain undo takes the newer time, not the larger id -------------
 rm -f "$ETUDE_STATE_DIR"/sweep-*.journal
 C="$W/first"; D="$W/second"

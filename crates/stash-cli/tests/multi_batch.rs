@@ -531,8 +531,21 @@ fn creation_tie_names_both_stashes_and_each_pop_step_works() {
     assert_eq!(fs::read(one).unwrap(), b"one");
     assert_eq!(fs::read(two).unwrap(), b"two");
 }
-/// Legacy --latest compares only live stashes in scope: a popped stash, or
-/// another folder's stash under PATH --latest, never ties.
+/// Set one record's modification time, in whole seconds.
+fn set_mtime(f: &Fixture, id: &str, secs: u64) {
+    fs::File::options()
+        .write(true)
+        .open(f.0.join("state").join(format!("stash-{id}.journal")))
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
+        )
+        .unwrap();
+}
+/// Legacy --latest compares only live stashes in scope. Two live stashes are
+/// in this folder, so the choice is real: a popped stash with the newest's
+/// time, and another folder's stash with that time, never tie with it.
 #[test]
 fn legacy_latest_ignores_popped_and_other_folder_ties() {
     let f = Fixture::new();
@@ -540,16 +553,23 @@ fn legacy_latest_ignores_popped_and_other_folder_ties() {
     let a = f.stash(None);
     rebind(&f, &a, "legacy-a", true);
     success(&f.pop("legacy-a"));
-    f.file("two.txt", b"two");
+    let two = f.file("two.txt", b"two");
     let b = f.stash(None);
     rebind(&f, &b, "legacy-b", true);
+    let three = f.file("three.txt", b"three");
+    let e = f.stash(None);
+    rebind(&f, &e, "legacy-e", true);
     let other = f.0.join("other");
     fs::create_dir_all(&other).unwrap();
     fs::write(other.join("elsewhere.txt"), b"elsewhere").unwrap();
     let c = id(&f.command().arg(&other).arg("--json").output().unwrap());
     rebind(&f, &c, "legacy-c", true);
-    equal_mtimes(&f);
-    // In this folder: legacy-a is popped and legacy-c is elsewhere.
+    // legacy-b is the newest live stash here; the popped legacy-a and the
+    // other folder's legacy-c have its time; legacy-e is older.
+    for id in ["legacy-a", "legacy-b", "legacy-c"] {
+        set_mtime(&f, id, 1_800_000_000);
+    }
+    set_mtime(&f, "legacy-e", 1_799_999_999);
     let out = f
         .command()
         .arg("pop")
@@ -562,17 +582,79 @@ fn legacy_latest_ignores_popped_and_other_folder_ties() {
         json_query(&out, "value['recovery']['operation']"),
         "legacy-b"
     );
+    assert_eq!(fs::read(&two).unwrap(), b"two");
     assert_eq!(fs::read(&one).unwrap(), b"one");
+    assert!(!three.exists());
     assert!(!other.join("elsewhere.txt").exists());
-    // Machine-wide, only legacy-c is live now: no tie with the popped ones.
+}
+/// Legacy `stash pop PATH --latest` with two live stashes of that folder at
+/// the same time: refused, both named, nothing restored, each step works.
+#[test]
+fn legacy_path_latest_tie_in_that_folder_names_both() {
+    let f = Fixture::new();
+    f.file("one.txt", b"one");
+    let a = f.stash(None);
+    rebind(&f, &a, "legacy-a", true);
+    f.file("two.txt", b"two");
+    let b = f.stash(None);
+    rebind(&f, &b, "legacy-b", true);
+    let other = f.0.join("other");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("elsewhere.txt"), b"elsewhere").unwrap();
+    let c = id(&f.command().arg(&other).arg("--json").output().unwrap());
+    rebind(&f, &c, "legacy-c", true);
     equal_mtimes(&f);
-    success(
-        &f.command()
-            .args(["pop", "--latest", "--json"])
-            .output()
-            .unwrap(),
+    let before = f.snapshot();
+    let out = f
+        .command()
+        .arg("pop")
+        .arg(f.0.join("tree"))
+        .args(["--latest", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(
+        json_query(&out, "value['reason']['code']"),
+        "journal_times_tied"
     );
-    assert_eq!(fs::read(other.join("elsewhere.txt")).unwrap(), b"elsewhere");
+    assert_eq!(
+        json_query(
+            &out,
+            "' '.join(r['operation_id'] for r in value['details']['same_time_records'])"
+        ),
+        "legacy-a legacy-b"
+    );
+    assert_eq!(before, f.snapshot());
+    let out = f
+        .command()
+        .arg("pop")
+        .arg(f.0.join("tree"))
+        .arg("--latest")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.starts_with("stash: 2 stashes have the same time"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("legacy-c"), "{stderr}");
+    for step in stderr
+        .lines()
+        .filter_map(|line| {
+            line.split_once("run: stash pop")
+                .map(|(_, rest)| format!("stash pop{rest}"))
+        })
+        .collect::<Vec<_>>()
+    {
+        equal_mtimes(&f);
+        let out = shell(&f, &step);
+        assert!(
+            out.status.success(),
+            "{step}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert!(!other.join("elsewhere.txt").exists());
 }
 /// A pop by folder needs one live stash and no order, so records with the
 /// same time do not block it.

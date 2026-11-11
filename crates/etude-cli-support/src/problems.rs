@@ -573,15 +573,10 @@ pub fn record_id_step(tool: &str, id: &str) -> Option<String> {
 /// The ids are only records the command could have chosen: with work left,
 /// and of the folder asked about when `of_folder` is set.
 pub fn same_time_problem(tool: &str, ids: &[String], of_folder: bool) -> String {
-    let (records, nothing, goal, see) = if tool == "stash" {
+    let (records, nothing, see) = if tool == "stash" {
         (
-            if of_folder {
-                "stashes of this folder"
-            } else {
-                "stashes"
-            },
+            "stashes",
             "Nothing was restored.",
-            "To restore one of them",
             "To see every stash, run: stash status --all".to_owned(),
         )
     } else {
@@ -592,7 +587,6 @@ pub fn same_time_problem(tool: &str, ids: &[String], of_folder: bool) -> String 
                 "undo records that can still be undone"
             },
             "Nothing was moved.",
-            "To undo one of them",
             ids.iter()
                 .find_map(|id| {
                     crate::shell_word(id)
@@ -608,27 +602,48 @@ pub fn same_time_problem(tool: &str, ids: &[String], of_folder: bool) -> String 
         "{tool}: {} {records} have the same time, so {tool} cannot tell which one is newer. {nothing}",
         ids.len()
     )];
-    let steps: Vec<String> = ids
-        .iter()
-        .filter_map(|id| record_id_step(tool, id))
-        .collect();
-    for (index, step) in steps.iter().take(SAME_TIME_LISTED).enumerate() {
-        lines.push(if index == 0 {
-            format!("{goal}, run: {step}")
-        } else {
-            format!("Or run: {step}")
-        });
-    }
-    if steps.len() > SAME_TIME_LISTED {
-        lines.push(format!(
-            "{} more have the same time. Add --json to see every id.",
-            steps.len() - SAME_TIME_LISTED
-        ));
-    }
+    lines.extend(same_time_step_lines(
+        tool,
+        ids,
+        "Add --json to see every id.",
+    ));
     if !see.is_empty() {
         lines.push(see);
     }
     lines.join("\n")
+}
+
+/// One step per tied record, up to five, each on its own line, then how many
+/// more there are and `more_hint`, the way to see them.
+pub fn same_time_step_lines(tool: &str, ids: &[String], more_hint: &str) -> Vec<String> {
+    let goal = if tool == "stash" {
+        "To restore one of them"
+    } else {
+        "To undo one of them"
+    };
+    let steps: Vec<String> = ids
+        .iter()
+        .filter_map(|id| record_id_step(tool, id))
+        .collect();
+    let mut lines: Vec<String> = steps
+        .iter()
+        .take(SAME_TIME_LISTED)
+        .enumerate()
+        .map(|(index, step)| {
+            if index == 0 {
+                format!("{goal}, run: {step}")
+            } else {
+                format!("Or run: {step}")
+            }
+        })
+        .collect();
+    if steps.len() > SAME_TIME_LISTED {
+        lines.push(format!(
+            "{} more have the same time. {more_hint}",
+            steps.len() - SAME_TIME_LISTED
+        ));
+    }
+    lines
 }
 
 /// `details.same_time_records` for a tie: every id, each with its step.

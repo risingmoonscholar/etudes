@@ -178,6 +178,10 @@ Plain `sweep undo` and `sweep undo FOLDER` choose a record by its modification
 time. A tie matters only between records that undo could choose: records that
 still have something to undo, and for `sweep undo FOLDER` only records of that
 folder. A finished record, or a record of another folder, never stops a choice.
+A tie also matters only where undo would choose: between the newest records with
+work left. When a newer record is already chosen, for example one that lost its
+move entries, undo reports that record, and a tie between older records stops
+it only if the search lands on one of them.
 When two or more such records have exactly the same time, sweep cannot tell
 which one is newer, so it moves nothing and exits 3. The message names each of
 those records and gives a step that undoes only that record:
@@ -209,8 +213,8 @@ same modification time. Only live stashes count, and with `stash pop PATH
 FOLDER` needs exactly one live stash for that folder and uses no order, so a tie
 does not block it.
 
-Ties are rare on APFS. They can happen on a volume with coarse timestamps
-(HFS+, exFAT, some network shares), or after a tool sets file times.
+Ties can happen on a volume with coarse timestamps (HFS+, exFAT, some network
+shares), or after a tool sets file times.
 
 An entry named like a record that is not a regular file, such as a folder or a
 link, gets its own message. It names the entry and gives a step that renames

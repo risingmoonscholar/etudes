@@ -497,3 +497,210 @@ fn an_entry_that_is_not_a_file_gets_its_own_message_and_step() {
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(case.files_home(&case.first.0), 3);
 }
+
+/// Keep only a record's first frame, so it loses its move entries: its files
+/// are moved, and the record no longer says so.
+fn cut_record(case: &Case, id: &str) {
+    let path = case.record(id);
+    let raw = std::fs::read(&path).unwrap();
+    let base = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
+    std::fs::write(&path, &raw[..4 + base]).unwrap();
+}
+
+/// The newest record is cut short and two older records have the same time.
+/// Undo has already chosen the newest record, so it reports that record and
+/// never the tie; the same as when the older times differ by one second.
+#[test]
+fn a_tie_between_older_records_never_hides_the_newest_record() {
+    for older_apart in [0, 1] {
+        let case = Case::new("newest-cut");
+        let newest = temp("newest-cut-n");
+        let c = case.apply(&case.first.0);
+        let d = case.apply(&case.second.0);
+        let n = case.apply(&newest.0);
+        cut_record(&case, &n);
+        case.set_time(&c, TIED_SECS);
+        case.set_time(&d, TIED_SECS + older_apart);
+        case.set_time(&n, TIED_SECS + 10);
+        let out = case.run(&["undo"]);
+        let shown = text(&out);
+        assert_eq!(out.status.code(), Some(3), "{shown}");
+        assert!(
+            shown.contains("this undo record is missing more than one entry"),
+            "{shown}"
+        );
+        assert!(!shown.contains("same time"), "{shown}");
+        assert!(!shown.contains(&format!("--id {c}")), "{shown}");
+        let value = json(&case.run(&["undo", "--json"]));
+        assert_eq!(
+            value.get("'same_time_records' in str(v['details'])"),
+            "false"
+        );
+        assert_eq!(case.files_home(&case.first.0), 0);
+        assert_eq!(case.files_home(&case.second.0), 0);
+    }
+}
+
+/// The hint past a cut-short record names another folder's undo. When that
+/// folder's own undo would stop at a tie, the hint says so and gives the steps
+/// that work.
+#[test]
+fn the_hint_past_a_stopped_record_is_true_when_that_folder_has_a_tie() {
+    let case = Case::new("hint");
+    let newest = temp("hint-n");
+    let root = case.first.0.clone();
+    let mut ids = vec![
+        case.apply_kind(&root, "report", "pdf"),
+        case.apply_kind(&root, "photo", "jpg"),
+    ];
+    let n = case.apply(&newest.0);
+    // One file of the newest apply is gone from where apply put it, so plain
+    // undo keeps stopping at that record.
+    std::fs::remove_file(newest.0.join("Documents/report_1.pdf")).unwrap();
+    for id in &ids {
+        case.set_time(id, TIED_SECS);
+    }
+    case.set_time(&n, TIED_SECS + 10);
+    ids.sort();
+    let out = case.run(&["undo"]);
+    let shown = text(&out);
+    assert!(shown.contains("keeps stopping at this record"), "{shown}");
+    assert!(
+        shown.contains("has 2 applies that can still be undone with the same time, so sweep undo"),
+        "{shown}"
+    );
+    assert!(!shown.contains("To undo the apply of"), "{shown}");
+    let steps: Vec<String> = shown
+        .lines()
+        .filter_map(|line| {
+            line.split_once("run: sweep undo --id ")
+                .map(|(_, id)| id.to_owned())
+        })
+        .collect();
+    assert_eq!(steps, ids, "{shown}");
+    for id in &ids {
+        for id in &ids {
+            case.set_time(id, TIED_SECS);
+        }
+        let out = case.shell(&format!("sweep undo --id {id}"));
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    assert_eq!(case.kind_home(&root, "report", "pdf"), 3);
+    assert_eq!(case.kind_home(&root, "photo", "jpg"), 3);
+}
+
+/// Three live records of one folder with the same time. After `undo --id` of
+/// one, sweep says the folder undo now stops, with a step for each of the
+/// other two, and `sweep undo FOLDER` then refuses exactly that way.
+#[test]
+fn after_an_id_undo_the_folder_tie_is_named_and_the_folder_undo_refuses_as_said() {
+    let case = Case::new("after");
+    let root = case.first.0.clone();
+    let mut ids = vec![
+        case.apply_kind(&root, "report", "pdf"),
+        case.apply_kind(&root, "photo", "jpg"),
+        case.apply_kind(&root, "song", "mp3"),
+    ];
+    for id in &ids {
+        case.set_time(id, TIED_SECS);
+    }
+    ids.sort();
+    let first = ids.remove(0);
+    let out = case.run(&["undo", "--id", &first]);
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    let folder = format!("sweep undo '{}'", root.to_str().unwrap());
+    assert!(
+        shown.contains(&format!(
+            "2 applies of this folder that can still be undone have the same time, so {folder} stops and moves nothing.\nTo undo one of them, run: sweep undo --id {}\nOr run: sweep undo --id {}",
+            ids[0], ids[1]
+        )),
+        "{shown}"
+    );
+    let out = case.run(&["undo", root.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    let refused = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        refused.starts_with(
+            "sweep: 2 undo records of this folder that can still be undone have the same time"
+        ),
+        "{refused}"
+    );
+    assert!(
+        refused.contains(&format!(
+            "To undo one of them, run: sweep undo --id {}",
+            ids[0]
+        )),
+        "{refused}"
+    );
+    assert!(
+        refused.contains(&format!("Or run: sweep undo --id {}", ids[1])),
+        "{refused}"
+    );
+    assert!(!refused.contains(&first), "{refused}");
+}
+
+/// A tied record that cannot be opened may be the newest, so undo stops at
+/// it and names it as unopened, not as a tie.
+#[test]
+fn a_tie_with_a_record_that_does_not_open_stops_at_that_record() {
+    let (case, ids) = Case::tied();
+    std::fs::write(
+        case.record(&ids[1]),
+        b"synthetic bytes, not a sealed record",
+    )
+    .unwrap();
+    for id in &ids {
+        case.set_time(id, TIED_SECS);
+    }
+    let out = case.run(&["undo"]);
+    let shown = text(&out);
+    assert_eq!(out.status.code(), Some(3), "{shown}");
+    assert!(shown.contains(&ids[1]), "{shown}");
+    assert!(shown.contains("cannot be opened"), "{shown}");
+    assert!(!shown.contains("same time"), "{shown}");
+    assert_eq!(
+        json(&case.run(&["undo", "--json"])).get("v['reason']['code']"),
+        r#""journal_unreadable""#
+    );
+    assert_eq!(case.files_home(&case.first.0), 0);
+    assert_eq!(case.files_home(&case.second.0), 0);
+}
+
+/// Four records with the same time, two finished and two live: only the two
+/// live ones are named, in the text and in the JSON.
+#[test]
+fn a_mixed_tie_names_only_the_records_with_work_left() {
+    let case = Case::new("mixed");
+    let folders = [
+        temp("mixed-a"),
+        temp("mixed-b"),
+        temp("mixed-c"),
+        temp("mixed-d"),
+    ];
+    let all: Vec<String> = folders.iter().map(|f| case.apply(&f.0)).collect();
+    for finished in [&all[0], &all[2]] {
+        let out = case.run(&["undo", "--id", finished]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    for id in &all {
+        case.set_time(id, TIED_SECS);
+    }
+    let mut live = [all[1].clone(), all[3].clone()];
+    live.sort();
+    let out = case.run(&["undo"]);
+    let shown = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(3), "{shown}");
+    assert!(
+        shown.starts_with("sweep: 2 undo records that can still be undone have the same time"),
+        "{shown}"
+    );
+    for finished in [&all[0], &all[2]] {
+        assert!(!shown.contains(finished.as_str()), "{shown}");
+    }
+    let value = json(&case.run(&["undo", "--json"]));
+    assert_eq!(
+        value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
+        format!(r#"["{}", "{}"]"#, live[0], live[1])
+    );
+}

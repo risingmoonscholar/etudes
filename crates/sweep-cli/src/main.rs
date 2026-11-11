@@ -4265,6 +4265,8 @@ fn sweep_journal_matching(
         previous = same_time_as;
     }
     let mut journals = Vec::new();
+    // Ties among older records, found after a newer record was chosen.
+    let mut tied: Vec<Vec<String>> = Vec::new();
     for group in groups {
         let mut matching = Vec::new();
         for candidate in group {
@@ -4286,12 +4288,19 @@ fn sweep_journal_matching(
             .filter(|j| !journal_is_fully_undone(j, sl))
             .map(|j| j.id.clone())
             .collect();
+        live.sort();
         if live.len() > 1 {
-            live.sort();
-            return Err(RecordError {
-                id: None,
-                error: etude_core::journal::JournalError::SameTime(live),
-            });
+            if journals.is_empty() {
+                // Nothing is chosen yet, and these are the newest records
+                // with work left: undo would choose between them.
+                return Err(RecordError {
+                    id: None,
+                    error: etude_core::journal::JournalError::SameTime(live),
+                });
+            }
+            // A newer record is already chosen. This tie matters only if the
+            // search below lands on one of these records.
+            tied.push(live);
         }
         for j in matching {
             if journals.is_empty() && !journal_is_fully_undone(&j, sl) {
@@ -4307,6 +4316,15 @@ fn sweep_journal_matching(
         }
     }
     if let Some(index) = etude_core::apply::next_undo_journal(&journals, sl) {
+        if let Some(group) = tied
+            .into_iter()
+            .find(|group| group.contains(&journals[index].id))
+        {
+            return Err(RecordError {
+                id: None,
+                error: etude_core::journal::JournalError::SameTime(group),
+            });
+        }
         return Ok(Some(journals.remove(index)));
     }
     Ok(None)
@@ -4682,17 +4700,19 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
             // Applies of this folder with work left have the same time, so
             // `sweep undo FOLDER` stops. Each one still undoes by its id.
             lines.push(format!(
-                "{} applies of this folder have the same time, so sweep undo of this folder stops.",
+                "{} applies of this folder that can still be undone have the same time, so {folder_step} stops and moves nothing.",
                 ids.len()
             ));
-            for (index, id) in ids.iter().take(RECORDS_LISTED).enumerate() {
-                if let Some(step) = etude_cli_support::problems::record_id_step("sweep", id) {
-                    lines.push(if index == 0 {
-                        format!("To undo one of them, run: {step}")
-                    } else {
-                        format!("Or run: {step}")
-                    });
-                }
+            lines.extend(etude_cli_support::problems::same_time_step_lines(
+                "sweep",
+                &ids,
+                &format!(
+                    "To see them, run: sweep status {}",
+                    etude_cli_support::quoted_path(&target)
+                ),
+            ));
+            if not_opened > 0 {
+                lines.push(may_be_more());
             }
             return AfterUndo {
                 lines,
@@ -5072,11 +5092,40 @@ fn run_undo(
         if asked == UndoAsked::Newest
             && let Some(older) = other_folder_to_undo(sl, &root)
         {
-            println!(
-                "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
-                etude_cli_support::shown(&older),
-                undo_step(&older)
-            );
+            match older
+                .canonicalize()
+                .map_err(|_| ())
+                .map(|target| sweep_journal_for_root(sl, &target))
+            {
+                // That folder's own undo would stop at a tie: give the steps
+                // that do work, one record each.
+                Ok(Err(RecordError {
+                    id: None,
+                    error: etude_core::journal::JournalError::SameTime(ids),
+                })) => {
+                    println!(
+                        "  sweep undo with no folder keeps stopping at this record. {} has {} applies that can still be undone with the same time, so {} stops too.",
+                        etude_cli_support::shown(&older),
+                        ids.len(),
+                        undo_step(&older)
+                    );
+                    for line in etude_cli_support::problems::same_time_step_lines(
+                        "sweep",
+                        &ids,
+                        &format!(
+                            "To see them, run: sweep status {}",
+                            etude_cli_support::quoted_path(&older)
+                        ),
+                    ) {
+                        println!("  {line}");
+                    }
+                }
+                _ => println!(
+                    "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
+                    etude_cli_support::shown(&older),
+                    undo_step(&older)
+                ),
+            }
         }
     }
     if r.already_reversed > 0 {
