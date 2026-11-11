@@ -238,35 +238,75 @@ assert_eq "$LOCKED_TAGS_BEFORE" "$(locked_tags)" "tag apply preserves the tags o
   && pass "tag apply leaves the locked file untagged" || fail "tag apply tagged a locked file"
 
 # Lock a pending item after planning, while the apply is held by its watcher.
+# The watcher stops apply after the first journalled move it sees, and apply
+# can move more items before the stop lands, so it cannot promise to stop just
+# before a chosen item. The victim is therefore the LAST item in the order
+# apply moves (the plan's member order, which the journal keeps): any confirmed
+# stop before apply ends leaves it pending. The watcher's own index and total
+# must agree with that plan, and the process must be in state T. A trial whose
+# apply ended first is checked as a whole apply, then retried on a fresh folder;
+# only four missed windows in a row are unproven.
 DUMP="$BIN/journal-dump"
+LATE_N=300
+LOCKED=0
 if [ -x "$DUMP" ]; then
-  L="$W/late-lock"; mkdir -p "$L"
-  for i in $(seq 1 300); do printf 'late payload %s' "$i" > "$L/report-$i.pdf"; done
-  VICTIM="$L/report-90.pdf"
-  "$SWEEP" apply "$L" --since 0 --yes >"$W/late-lock.out" 2>&1 & PID=$!
-  if "$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$L" "$VICTIM" "$PID" >"$W/lock-watch" 2>"$W/lock-watch.err"; then
-    if ps -o state= -p "$PID" | grep -q T && [ -f "$VICTIM" ]; then
-      chflags uchg "$VICTIM"
-      pass "pending item locked while apply was confirmed stopped"
-      kill -CONT "$PID"; wait "$PID"; RC=$?
-      assert_eq 0 "$RC" "late lock is held while the other moves finish"
-      assert_eq 'late payload 90' "$(cat "$VICTIM" 2>/dev/null)" "late-locked item stays with its bytes"
-      chflags nouchg "$VICTIM"
-      STEP=$(sed -n 's/^Undo with: sweep //p' "$W/late-lock.out" | head -1)
-      if [ -n "$STEP" ]; then
-        eval "\"\$SWEEP\" $STEP" >"$W/late-recovery.out" 2>&1
-        assert_eq 0 "$?" "printed late-lock recovery step succeeds"
-      else
-        fail "partial apply omitted its printed recovery step: $(cat "$W/late-lock.out")"
-      fi
-      assert_eq 300 "$(find "$L" -maxdepth 1 -type f | wc -l | tr -d ' ')" "late-lock recovery returns every file"
-    else
-      kill -CONT "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null
-      unproven "late lock during apply" "watcher did not leave a stopped pending item"
+  for trial in 1 2 3 4; do
+    L="$W/late-lock-$trial"; mkdir -p "$L"
+    for i in $(seq 1 "$LATE_N"); do printf 'late payload %s' "$i" > "$L/report-$i.pdf"; done
+    PICK=$("$SWEEP" "$L" --since 0 --json 2>/dev/null | python3 -c '
+import json, sys
+groups = json.load(sys.stdin)["details"]["groups"]
+members = [m for g in groups for m in g["members"]]
+print(len(members) - 1)
+print(members[-1])
+')
+    VICTIM_INDEX="${PICK%%$'\n'*}"
+    VICTIM="${PICK#*$'\n'}"
+    if [ "$VICTIM_INDEX" != "$((LATE_N - 1))" ] || [ ! -f "$VICTIM" ]; then
+      fail "the late-lock plan does not list all $LATE_N files: $PICK"
+      break
     fi
-  else
-    kill -CONT "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null
-    unproven "late lock during apply" "watcher could not hold the pending item: $(cat "$W/lock-watch.err")"
+    "$SWEEP" apply "$L" --since 0 --yes >"$W/late-lock.out" 2>&1 & PID=$!
+    if WITNESS=$("$DUMP" --watch-apply "$ETUDE_STATE_DIR" "$L" "$VICTIM" "$PID" 2>"$W/lock-watch.err"); then
+      read -r WATCH_MOVED WATCH_TOTAL WATCH_INDEX <<< "$WITNESS"
+      if [ "$WATCH_TOTAL" = "$LATE_N" ] && [ "$WATCH_INDEX" = "$VICTIM_INDEX" ] \
+          && ps -o state= -p "$PID" | grep -q T && [ -f "$VICTIM" ]; then
+        chflags uchg "$VICTIM"
+        LOCKED=1
+        break
+      fi
+      echo "    note     trial $trial: watcher stop did not match the plan ($WITNESS of $LATE_N, victim $VICTIM_INDEX)"
+    else
+      echo "    note     trial $trial: $(cat "$W/lock-watch.err")"
+    fi
+    # A missed window: the apply ran on its own. It must still be a whole,
+    # correct apply, so a broken run is a FAIL here, never a retry. A good
+    # run adds no pass, so the pass count is the same whichever trial locks.
+    kill -CONT "$PID" 2>/dev/null || true; wait "$PID"; RC=$?
+    LEFT=$(find "$L" -maxdepth 1 -type f | wc -l | tr -d ' ')
+    if [ "$RC" != 0 ] || [ "$LEFT" != 0 ]; then
+      fail "trial $trial apply that ran past the watcher exited $RC and left $LEFT of $LATE_N files: $(cat "$W/late-lock.out")"
+      break
+    fi
+    chflags -R nouchg "$L" 2>/dev/null; rm -rf "$L"
+  done
+  if [ "$LOCKED" = 1 ]; then
+    pass "pending item locked while apply was confirmed stopped ($WATCH_MOVED/$WATCH_TOTAL moved, victim at $WATCH_INDEX, trial $trial)"
+    kill -CONT "$PID"; wait "$PID"; RC=$?
+    assert_eq 0 "$RC" "late lock is held while the other moves finish"
+    VICTIM_NAME=$(basename "$VICTIM" .pdf)
+    assert_eq "late payload ${VICTIM_NAME#report-}" "$(cat "$VICTIM" 2>/dev/null)" "late-locked item stays with its bytes"
+    chflags nouchg "$VICTIM"
+    STEP=$(sed -n 's/^Undo with: sweep //p' "$W/late-lock.out" | head -1)
+    if [ -n "$STEP" ]; then
+      eval "\"\$SWEEP\" $STEP" >"$W/late-recovery.out" 2>&1
+      assert_eq 0 "$?" "printed late-lock recovery step succeeds"
+    else
+      fail "partial apply omitted its printed recovery step: $(cat "$W/late-lock.out")"
+    fi
+    assert_eq "$LATE_N" "$(find "$L" -maxdepth 1 -type f | wc -l | tr -d ' ')" "late-lock recovery returns every file"
+  elif [ "$FAILED" -eq 0 ]; then
+    unproven "late lock during apply" "no confirmed stopped apply with the last planned item pending across four trials: $(cat "$W/lock-watch.err")"
   fi
 else
   unproven "late lock during apply" "journal watcher unavailable"
