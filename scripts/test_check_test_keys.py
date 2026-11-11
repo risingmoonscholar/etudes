@@ -130,6 +130,131 @@ fn sweep() -> Command { keyed_tool(env!("CARGO_BIN_EXE_sweep")) }
         })
         self.assertEqual(2, len(problems), problems)
 
+    def test_the_rule_is_per_spawn_not_per_function(self):
+        problems = self.problems("""
+fn two() {
+    let _ = keyed_tool(env!("CARGO_BIN_EXE_sweep")).output();
+    let _ = Command::new("sh").arg(env!("CARGO_BIN_EXE_sweep")).output();
+}
+""")
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("case.rs:4", problems[0])
+
+    def test_a_held_path_is_followed_to_where_it_is_used(self):
+        source = """
+fn held() {
+    let bin = Path::new(env!("CARGO_BIN_EXE_sweep")).parent().unwrap();
+    let _ = Command::new("/bin/sh").env("PATH", bin).output();
+}
+"""
+        problems = self.problems(source)
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("case.rs:4", problems[0])
+        self.assertEqual([], self.problems(source.replace(
+            'Command::new("/bin/sh")', 'with_test_key(&mut Command::new("/bin/sh"))')))
+
+    def test_a_keyed_variable_carries_its_key_to_later_statements(self):
+        self.assertEqual([], self.problems("""
+fn later() {
+    let mut command = Command::new("python3");
+    with_test_key(&mut command);
+    command.args(["x", env!("CARGO_BIN_EXE_sweep")]);
+}
+"""))
+
+    def test_removing_the_key_or_the_environment_needs_a_fence(self):
+        for removal in ('env_remove("ETUDE_JOURNAL_KEY")', "env_clear()"):
+            with self.subTest(removal=removal):
+                problems = self.problems(f"""
+fn keyless() {{
+    let _ = keyed_tool(env!("CARGO_BIN_EXE_sweep")).{removal}.output();
+}}
+""")
+                self.assertEqual(1, len(problems), problems)
+                self.assertIn("outside a function marked", problems[0])
+                self.assertEqual([], self.problems(f"""
+// keychain-fenced: no key on purpose.
+fn keyless() {{
+    let _ = fenced_tool(env!("CARGO_BIN_EXE_sweep")).{removal}.output();
+}}
+"""))
+
+    def test_a_helper_name_in_a_string_or_comment_is_not_a_call(self):
+        problems = self.problems("""
+fn pretend() {
+    // keyed_tool( is only mentioned here
+    let _ = Command::new("sh").args(["-c", "keyed_tool(", env!("CARGO_BIN_EXE_sweep")]).output();
+}
+""")
+        self.assertEqual(1, len(problems), problems)
+
+    def test_sandbox_exec_in_a_string_or_comment_is_not_a_fence(self):
+        problems = self.problems("""
+// keychain-fenced: claims a fence.
+fn keyless() {
+    // sandbox-exec would go here
+    eprintln!("runs under sandbox-exec");
+    let _ = Command::new("sh").output();
+}
+""")
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("never fences", problems[0])
+        self.assertEqual([], self.problems("""
+// keychain-fenced: fences by hand.
+fn keyless() {
+    let _ = Command::new("/usr/bin/sandbox-exec").arg("-p").output();
+}
+"""))
+
+    def test_cargo_run_is_a_spawn(self):
+        source = 'fn run() { let _ = Command::new("cargo").args(["run", "-p", "sweep-cli"]).output(); }\n'
+        self.assertEqual(1, len(self.problems(source)))
+        self.assertEqual([], self.problems(source.replace('Command::new("cargo")',
+                                                          'with_test_key(&mut Command::new("cargo"))')))
+        self.assertEqual([], self.problems(
+            'fn tree() { let _ = Command::new("cargo").args(["tree"]).output(); }\n'))
+
+    def test_a_current_exe_spawn_needs_a_key(self):
+        bare = 'fn again() { let _ = Command::new(std::env::current_exe().unwrap()).output(); }\n'
+        problems = self.problems(bare)
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("current_exe", problems[0])
+        keyed = bare.replace(".output()", '.env("ETUDE_JOURNAL_KEY", key).output()')
+        self.assertEqual([], self.problems(keyed))
+        held = """
+fn again() {
+    let exe = std::env::current_exe().unwrap();
+    let _ = Command::new(&exe).output();
+}
+"""
+        self.assertEqual(1, len(self.problems(held)))
+        # Reading the path (to scan it, say) is not a spawn.
+        self.assertEqual([], self.problems("""
+fn scan() {
+    let exe = std::env::current_exe().unwrap();
+    let _ = Command::new("nm").arg(&exe).output();
+}
+"""))
+
+    def test_a_shell_string_naming_a_build_folder_is_a_spawn(self):
+        source = 'fn sh() { let _ = Command::new("sh").args(["-c", "target/debug/sweep apply x"]).output(); }\n'
+        self.assertEqual(1, len(self.problems(source)))
+        self.assertEqual([], self.problems(source.replace('Command::new("sh")',
+                                                          'with_test_key(&mut Command::new("sh"))')))
+
+    def test_automatic_binaries_count_as_tools(self):
+        extra = {
+            "crates/journal-dump/Cargo.toml": '[package]\nname = "journal-dump"\n',
+            "crates/journal-dump/src/main.rs": "fn main() {}\n",
+            "crates/fixtures/Cargo.toml": '[package]\nname = "fixtures"\n',
+            "crates/fixtures/src/bin/mkfx.rs": "fn main() {}\n",
+        }
+        for program in ("journal-dump", "mkfx", "target/debug/mkfx"):
+            with self.subTest(program=program):
+                problems = self.problems(
+                    f'fn run() {{ let _ = Command::new("{program}").output(); }}\n', extra=extra)
+                self.assertTrue(problems, program)
+
     def test_the_repository_passes(self):
         root = Path(__file__).resolve().parent.parent
         self.assertEqual([], check_test_keys.check(root))

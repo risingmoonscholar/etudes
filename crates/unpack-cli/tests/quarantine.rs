@@ -1,5 +1,8 @@
+// The quarantine matrix is macOS only, and so is its use of the helper.
+#[cfg(target_os = "macos")]
 #[path = "../../etude-cli-support/test-support/test_tool.rs"]
 mod test_tool;
+#[cfg(target_os = "macos")]
 use test_tool::with_test_key;
 
 #[cfg(target_os = "macos")]

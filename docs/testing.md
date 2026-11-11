@@ -17,8 +17,10 @@ program that opens a TCP connection must succeed unsandboxed and be denied
 under the profile. On macOS, all tests except the SIGTERM process-control
 witness run under denial; Seatbelt hides child enumeration from that test, so
 the script runs it separately outside denial. That witness makes no network
-calls. The denied suite witnesses that its exercised code paths open no
-sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
+calls. The two tests that run a tool with no key are skipped there too, because
+they need their own keychain block, which cannot be set up inside another one;
+the keychain run covers them. The denied suite witnesses that its exercised
+code paths open no sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
 subprocess call sites.
 
 It uses `sandbox-exec`, so it is macOS like everything else here. Run it
@@ -36,9 +38,11 @@ add one to it. No test does either. Every test that runs a tool goes through
 one shared helper, which gives the run a random key, a throwaway state folder
 and a throwaway home folder. A test that must run a tool with no key runs it
 where the keychain program is not allowed to start, and fails rather than run
-if that cannot be arranged. CI runs the whole suite inside that same block,
-after proving the block stops a harmless program, and a separate check fails
-the build when a test runs a tool without the helper.
+if that cannot be arranged. CI runs the suite inside that same block, after
+proving the block stops a harmless program. One test runs outside it: the test
+that stops unpack mid-extraction cannot see the extractor from inside the
+block, so it runs outside, still with a key from the helper. A separate check
+fails the build when a test runs a tool without the helper.
 
 ## Try it without risking a real folder
 

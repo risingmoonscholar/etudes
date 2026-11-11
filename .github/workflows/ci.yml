@@ -148,7 +148,7 @@ jobs:
       # demo states -- 356 files proposed, 105 of them res://-referenced, the
       # new binary refusing with exit 2. A demo whose facts stop being
       # measurable is a demo that must not be shown.
-      # run.sh and record.sh build and run sweep 0.4.0, which uses the login
+      # run.sh, record.sh and beats.sh build or run sweep 0.4.0, which uses the login
       # keychain, so they refuse to start anywhere but CI.
       - name: The refusal demo scripts refuse to start outside CI
         run: python3 -m unittest discover -s scripts -p 'test_refusal_demo_guard.py' -v

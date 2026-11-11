@@ -1,7 +1,7 @@
 """The refusal demo scripts refuse to start outside CI.
 
-site/refusal/run.sh builds sweep 0.4.0 and runs apply with it; record.sh runs
-a 0.4.0 binary. That version uses the login keychain, so both must stop before
+site/refusal/run.sh builds sweep 0.4.0 and runs apply with it; record.sh and
+beats.sh run a 0.4.0 binary. That version uses the login keychain, so both must stop before
 anything is built or run unless GITHUB_ACTIONS=true.
 
 No real git, cargo or sweep runs here. Fake `git`, `cargo` and sweep binaries
@@ -20,6 +20,7 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 RUN = ROOT / "site/refusal/run.sh"
 RECORD = ROOT / "site/refusal/record.sh"
+BEATS = ROOT / "site/refusal/beats.sh"
 
 
 class Sandbox:
@@ -60,8 +61,8 @@ class Sandbox:
             env["GITHUB_ACTIONS"] = ci
         return env
 
-    def run(self, script, ci):
-        process = subprocess.Popen(["/bin/bash", str(script)], env=self.env(ci),
+    def run(self, script, ci, *args):
+        process = subprocess.Popen(["/bin/bash", str(script), *args], env=self.env(ci),
                                    cwd=self.base, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    start_new_session=True)
@@ -74,10 +75,10 @@ class Sandbox:
 
 
 class RefusalDemoGuardTests(unittest.TestCase):
-    def check_refuses(self, script, ci):
+    def check_refuses(self, script, ci, *args):
         with tempfile.TemporaryDirectory() as directory:
             box = Sandbox(directory)
-            code, _, err = box.run(script, ci)
+            code, _, err = box.run(script, ci, *args)
             self.assertNotEqual(0, code, err)
             self.assertIn("refusing to start", err)
             self.assertIn("sweep 0.4.0", err)
@@ -95,13 +96,18 @@ class RefusalDemoGuardTests(unittest.TestCase):
         self.check_refuses(RECORD, None)
         self.check_refuses(RECORD, "")
 
+    def test_beats_refuses_outside_ci(self):
+        for beat in ("apply", "undo", "plan"):
+            self.check_refuses(BEATS, None, beat)
+        self.check_refuses(BEATS, "1", "apply")
+
     def test_the_fakes_are_what_the_scripts_would_reach(self):
         # Control: with the guard open, each script reaches a fake (which
         # fails), so a missing marker above means the guard stopped it.
-        for script in (RUN, RECORD):
+        for script, args in ((RUN, ()), (RECORD, ()), (BEATS, ("apply",))):
             with tempfile.TemporaryDirectory() as directory:
                 box = Sandbox(directory)
-                box.run(script, "true")
+                box.run(script, "true", *args)
                 self.assertTrue(box.marker.exists(),
                                 f"{script.name} reached no fake with the guard open; "
                                 "the refusal test would prove nothing")

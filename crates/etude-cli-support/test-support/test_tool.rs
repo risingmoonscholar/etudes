@@ -70,8 +70,11 @@ fn random_key() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Folders left by earlier test processes. Each process removes its own
-/// folder only when the next run starts, so this keeps the count bounded.
+/// Remove folders left by earlier test processes. A test process has no safe
+/// moment to remove its own folder (its tools may still be writing there when
+/// the last test returns), so each one is left behind, inside the build's own
+/// temp folder, and removed by a later run once it is more than a day old. A
+/// day keeps clear of any test process still running.
 fn remove_stale_folders(base: &Path) {
     let Ok(entries) = std::fs::read_dir(base) else {
         return;

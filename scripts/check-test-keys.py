@@ -12,22 +12,31 @@ the shared helper in crates/etude-cli-support/test-support/test_tool.rs:
   fenced_tool(path)       a run with no key, where the keychain program
                           cannot start
 
-The rules, for every Rust file under crates/*/tests, crates/*/src and
-crates/*/test-support:
+The rules are per spawn: each statement that starts a tool must itself be keyed.
+For every Rust file under crates/*/tests, crates/*/src and crates/*/test-support:
 
   1. A binary path (env!("CARGO_BIN_EXE_..."), a constant holding one, or the
-     bare name of a workspace binary in Command::new) given straight to
-     Command::new fails. It must go to keyed_tool or fenced_tool instead.
-  2. Any other mention of a binary path must sit in a function that also calls
-     with_test_key, keyed_tool or fenced_tool, so the wrapper that runs it gets
-     the key.
-  3. A function marked with a `// keychain-fenced:` comment above it is
-     accepted as it is, but it must actually fence: it has to call fenced_tool
-     or sandbox-exec.
-  4. A binary path outside any function is only allowed as a constant; its
-     uses are then checked by the rules above.
+     name of a workspace binary, from [[bin]] or src/bin/*.rs or a package's
+     src/main.rs) given straight to Command::new fails; use keyed_tool.
+  2. Any other mention of a binary path must be in a keyed statement: one that
+     calls with_test_key, keyed_tool or fenced_tool, or that continues a
+     command already passed to one of them. A `let` that only holds the path
+     passes the rule on to every later statement that uses the name.
+  3. `cargo run`, a Command::new of a path built from current_exe(), and a
+     string naming target/debug/ or target/release/ are spawns of a workspace
+     binary too. A current_exe() spawn (a unit test running its own test
+     binary, where the helper is not available) may instead set
+     ETUDE_JOURNAL_KEY itself in the same statement.
+  4. env_remove("ETUDE_JOURNAL_KEY") and env_clear() fail outside a function
+     marked fenced.
+  5. A function marked with a `// keychain-fenced:` comment directly above it
+     is accepted, but it must actually fence: call fenced_tool, or spawn
+     sandbox-exec.
+  6. A binary path outside any function is only allowed as a constant; its
+     uses are checked by the rules above.
 
-Usage: scripts/check-test-keys.py [--root DIR]
+Matches inside comments and string literals never count as a helper call or a
+fence. Usage: scripts/check-test-keys.py [--root DIR]
 Exit:  0 every spawn is keyed or fenced, 1 at least one is not.
 """
 
@@ -37,14 +46,15 @@ import re
 import sys
 
 HELPER = "crates/etude-cli-support/test-support/test_tool.rs"
-HELPER_CALLS = ("keyed_tool(", "with_test_key(", "fenced_tool(")
-FENCE_CALLS = ("fenced_tool(", "sandbox-exec")
+HELPER_CALL = re.compile(r"\b(?:keyed_tool|with_test_key|fenced_tool)\s*\(")
+FENCE_SPAWN = re.compile(r'\bfenced_tool\s*\(|Command::new\(\s*"(?:/usr/bin/)?sandbox-exec"')
 MARKER = "keychain-fenced:"
+KEYWORDS = {"let", "mut", "ref", "Some", "Ok", "Err", "None", "else", "if", "match", "_"}
 
 
 def code_mask(text):
-    """Return (code, strings): code has comments blanked; strings marks
-    which characters are inside a string or char literal."""
+    """Return (code, in_string): code has comments blanked; in_string marks
+    the characters inside a string literal (not the quotes)."""
     out = list(text)
     in_string = [False] * len(text)
     i, n = 0, len(text)
@@ -90,64 +100,96 @@ def code_mask(text):
     return "".join(out), in_string
 
 
-def functions(code, in_string):
-    """Yield (start_of_signature, body_start, body_end) for every fn."""
-    for m in re.finditer(r"\bfn\s+\w+", code):
-        if in_string[m.start()]:
-            continue
+def blank_strings(code, in_string):
+    return "".join(" " if s else c for c, s in zip(code, in_string))
+
+
+def functions(bare):
+    """Yield (fn_start, body_start, body_end) for every fn, from string-free code."""
+    for m in re.finditer(r"\bfn\s+\w+", bare):
         depth, j = 0, m.end()
-        # Find the opening brace of the body, skipping generics and arguments.
-        while j < len(code):
-            ch = code[j]
-            if in_string[j]:
-                j += 1
-                continue
+        while j < len(bare):
+            ch = bare[j]
             if ch in "(<[":
                 depth += 1
             elif ch in ")>]":
                 depth -= 1
             elif ch == ";" and depth <= 0:
-                break  # a declaration with no body
+                break
             elif ch == "{" and depth <= 0:
                 break
             j += 1
-        if j >= len(code) or code[j] != "{":
+        if j >= len(bare) or bare[j] != "{":
             continue
         start, depth = j, 0
-        while j < len(code):
-            if not in_string[j]:
-                if code[j] == "{":
-                    depth += 1
-                elif code[j] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        break
+        while j < len(bare):
+            if bare[j] == "{":
+                depth += 1
+            elif bare[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
             j += 1
         yield m.start(), start, j
 
 
 def marked(text, fn_start):
-    """True if the comment and attribute lines directly above a fn carry the
-    keychain-fenced marker."""
+    """True if the comment and attribute lines directly above a fn carry the marker."""
     lines = text[:fn_start].split("\n")
-    lines.pop()  # the partial line that holds `fn` (or `pub fn`, `async fn`)
+    lines.pop()
     while lines:
         line = lines.pop().strip()
         if line.startswith("//") or line.startswith("#["):
-            if MARKER in line:
+            if line.startswith("//") and MARKER in line:
                 return True
             continue
         return False
     return False
 
 
+def statement(bare, pos, lo, hi):
+    """The statement around pos, within [lo, hi): bounded by ; { } at bracket depth 0."""
+    depth, i = 0, pos - 1
+    while i > lo:
+        ch = bare[i]
+        if ch in ")]":
+            depth += 1
+        elif ch in "([":
+            depth = max(depth - 1, 0) if depth else 0
+        elif ch in ";{}" and depth == 0:
+            break
+        i -= 1
+    start = i + 1
+    depth, j = 0, pos
+    while j < hi:
+        ch = bare[j]
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+            if depth < 0:
+                depth = 0
+        elif ch in ";{}" and depth == 0:
+            break
+        j += 1
+    return start, j
+
+
 def binary_names(root):
     names = set()
     for manifest in root.glob("crates/*/Cargo.toml"):
-        for block in re.findall(r"\[\[bin\]\]([^\[]*)", manifest.read_text()):
+        text = manifest.read_text()
+        for block in re.findall(r"\[\[bin\]\]([^\[]*)", text):
             m = re.search(r'name\s*=\s*"([^"]+)"', block)
             if m:
                 names.add(m.group(1))
+        crate = manifest.parent
+        # Cargo's automatic binaries.
+        names.update(p.stem for p in crate.glob("src/bin/*.rs"))
+        names.update(p.name for p in crate.glob("src/bin/*/") if (p / "main.rs").exists())
+        package = re.search(r'\[package\][^\[]*?name\s*=\s*"([^"]+)"', text)
+        if package and (crate / "src/main.rs").exists() and "[[bin]]" not in text:
+            names.add(package.group(1))
     return names
 
 
@@ -163,61 +205,137 @@ def line_of(text, pos):
     return text.count("\n", 0, pos) + 1
 
 
+class Function:
+    def __init__(self, bare, start, body_start, body_end):
+        self.bare, self.start, self.lo, self.hi = bare, start, body_start + 1, body_end
+        self.keyed_vars = set()
+        body = bare[self.lo:self.hi]
+        for m in re.finditer(r"\bwith_test_key\s*\(\s*&mut\s+(\w+)\s*\)", body):
+            self.keyed_vars.add(m.group(1))
+        for m in re.finditer(r"\blet\s+(?:mut\s+)?(\w+)\s*(?::[^=]*)?=\s*(?:keyed_tool|fenced_tool|with_test_key)\s*\(", body):
+            self.keyed_vars.add(m.group(1))
+
+    def keyed(self, start, end):
+        text = self.bare[start:end]
+        if HELPER_CALL.search(text):
+            return True
+        lead = re.match(r"\s*(?:let\s+[^=]*=\s*)?(\w+)\s*\.", text)
+        return bool(lead and lead.group(1) in self.keyed_vars)
+
+    def bound_names(self, start, end):
+        m = re.match(r"\s*let\s+([^=]*?)\s*(?::[^=]*)?=", self.bare[start:end])
+        if not m:
+            return set()
+        return {w for w in re.findall(r"[A-Za-z_]\w*", m.group(1)) if w not in KEYWORDS}
+
+    def follow(self, pos, depth=0):
+        """None if the use at pos is in a keyed statement (or only bound for
+        later keyed use); otherwise the position of an unkeyed use."""
+        start, end = statement(self.bare, pos, self.lo, self.hi)
+        if self.keyed(start, end):
+            return None
+        names = self.bound_names(start, end)
+        if not names or depth > 3:
+            return pos
+        for name in names:
+            for m in re.finditer(r"\b%s\b" % re.escape(name), self.bare[end:self.hi]):
+                bad = self.follow(end + m.start(), depth + 1)
+                if bad is not None:
+                    return bad
+        return None
+
+
 def check(root):
     root = pathlib.Path(root)
     files = {path: path.read_text() for path in sources(root)}
-    masks = {path: code_mask(text) for path, text in files.items()}
+    lexed = {}
+    for path, text in files.items():
+        code, in_string = code_mask(text)
+        lexed[path] = (code, in_string, blank_strings(code, in_string))
 
-    # Constants that hold a binary path, wherever they are defined. Their uses
-    # are checked like the env! call itself (contract tests include a shared
-    # file that uses a constant its includer defines).
     constants = set()
-    for path, (code, _) in masks.items():
+    for code, _, _ in lexed.values():
         constants.update(re.findall(
             r"\b(?:const|static)\s+([A-Z_][A-Z0-9_]*)\s*:[^=;]*=\s*env!\(\s*\"CARGO_BIN_EXE_", code))
     names = binary_names(root)
 
     problems = []
     for path, text in files.items():
-        code, in_string = masks[path]
+        code, in_string, bare = lexed[path]
         rel = path.relative_to(root)
-        hits = []  # (position, how it is written)
+        fns = [Function(bare, *span) for span in functions(bare)]
+
+        def enclosing(pos):
+            inside = [f for f in fns if f.lo <= pos < f.hi]
+            return min(inside, key=lambda f: f.hi - f.lo) if inside else None
+
+        # (position, how it is written, kind)
+        hits = []
         for m in re.finditer(r'env!\(\s*"CARGO_BIN_EXE_[^"]*"\s*\)', code):
-            hits.append((m.start(), m.group(0)))
+            hits.append((m.start(), m.group(0), "path"))
         for name in constants:
-            for m in re.finditer(r"\b%s\b" % name, code):
-                if not in_string[m.start()]:
-                    hits.append((m.start(), name))
+            for m in re.finditer(r"\b%s\b" % name, bare):
+                hits.append((m.start(), name, "path"))
         for m in re.finditer(r'Command::new\(\s*"([^"]+)"', code):
             program = m.group(1)
             if program in names or any(program.endswith("/" + b) for b in names):
-                hits.append((m.start() + len("Command::new("), f'"{program}"'))
+                hits.append((m.start() + len("Command::new("), f'"{program}"', "path"))
+            elif program == "cargo":
+                fn = enclosing(m.start())
+                if fn:
+                    s, e = statement(bare, m.start(), fn.lo, fn.hi)
+                    if re.search(r'"run"', code[s:e]):
+                        hits.append((m.start(), "cargo run", "spawn"))
+        for m in re.finditer(r"target/(?:debug|release)/", code):
+            if in_string[m.start()]:
+                hits.append((m.start(), m.group(0), "spawn"))
+        for m in re.finditer(r"\bcurrent_exe\s*\(", bare):
+            hits.append((m.start(), "current_exe()", "exe"))
 
-        spans = list(functions(code, in_string))
-        for pos, written in sorted(hits):
-            before = code[:pos].rstrip()
+        for pos, written, kind in sorted(hits):
             line = line_of(text, pos)
-            enclosing = [s for s in spans if s[1] < pos < s[2]]
-            if not enclosing:
-                definition = re.search(r"\b(?:const|static)\s+[A-Z_][A-Z0-9_]*\s*:[^=;]*=\s*$", before)
-                if definition or re.search(r"\b(?:const|static)\s+%s\b" % re.escape(written), code[max(0, pos - 20):pos + len(written)]):
+            fn = enclosing(pos)
+            if fn is None:
+                before = code[:pos].rstrip()
+                if kind == "path" and (re.search(r"\b(?:const|static)\s+[A-Z_][A-Z0-9_]*\s*:[^=;]*=\s*$", before)
+                                       or re.match(r"\s*:", code[pos + len(written):])):
+                    continue
+                if kind == "exe":
                     continue
                 problems.append(f"{rel}:{line}: {written} outside a function; hold it in a const or move it into a keyed function")
                 continue
-            fn_start, body_start, body_end = enclosing[-1]  # the innermost
-            body = code[body_start:body_end]
-            if marked(text, fn_start):
-                if not any(call in text[body_start:body_end] for call in FENCE_CALLS):
-                    problems.append(f"{rel}:{line_of(text, fn_start)}: marked {MARKER} but never fences (no fenced_tool or sandbox-exec)")
+            if marked(text, fn.start):
+                continue  # judged once per function below
+            if kind == "exe":
+                problem = exe_problem(fn, code, bare, pos, rel, line)
+                if problem:
+                    problems.append(problem)
                 continue
-            if before.endswith("Command::new("):
+            before = bare[:pos].rstrip()
+            if kind == "path" and before.endswith("Command::new("):
                 problems.append(f"{rel}:{line}: Command::new({written}) runs a tool with no test key; use keyed_tool({written})")
                 continue
-            if before.endswith("keyed_tool(") or before.endswith("fenced_tool("):
+            if kind == "path" and re.search(r"\b(?:keyed_tool|fenced_tool)\s*\($", before):
                 continue
-            if not any(call in body for call in HELPER_CALLS):
-                problems.append(f"{rel}:{line}: {written} is used in a function that never calls with_test_key, keyed_tool or fenced_tool")
-    # Each rule above only matters if the helper exists and still sets the key.
+            bad = fn.follow(pos)
+            if bad is not None:
+                where = line_of(text, bad)
+                problems.append(f"{rel}:{where}: {written} reaches a statement that never calls "
+                                "with_test_key, keyed_tool or fenced_tool")
+
+        for m in re.finditer(r'\benv_remove\(\s*"ETUDE_JOURNAL_KEY"\s*\)|\benv_clear\(\s*\)', code):
+            if in_string[m.start()]:
+                continue
+            fn = enclosing(m.start())
+            if fn is None or not marked(text, fn.start):
+                problems.append(f"{rel}:{line_of(text, m.start())}: {m.group(0)} outside a function marked "
+                                f"{MARKER}; a run with no key must be fenced")
+
+        for fn in fns:
+            if marked(text, fn.start) and not FENCE_SPAWN.search(blank_quoted_except_command(code, in_string, fn)):
+                problems.append(f"{rel}:{line_of(text, fn.start)}: marked {MARKER} but never fences "
+                                "(no fenced_tool or sandbox-exec spawn)")
+
     helper = root / HELPER
     if helper.exists():
         helper_text = helper.read_text()
@@ -227,6 +345,42 @@ def check(root):
     elif files:
         problems.append(f"{HELPER}: missing")
     return problems
+
+
+def blank_quoted_except_command(code, in_string, fn):
+    """The function body with string contents blanked, except a string that is
+    the program given to Command::new (so a sandbox-exec spawn still counts,
+    and a mere mention of sandbox-exec in a message does not)."""
+    body = list(code[fn.lo:fn.hi])
+    keep = set()
+    for m in re.finditer(r'Command::new\(\s*"([^"]*)"', code[fn.lo:fn.hi]):
+        keep.update(range(m.start(1), m.end(1)))
+    for k in range(len(body)):
+        if in_string[fn.lo + k] and k not in keep:
+            body[k] = " "
+    return "".join(body)
+
+
+def exe_problem(fn, code, bare, pos, rel, line):
+    """A path built from current_exe() is a spawn when it reaches Command::new."""
+    start, end = statement(bare, pos, fn.lo, fn.hi)
+    stmt = bare[start:end]
+    spawned = re.search(r"Command::new\([^;]*current_exe\s*\(", stmt)
+    names = fn.bound_names(start, end)
+    uses = []
+    if not spawned:
+        for name in names:
+            for m in re.finditer(r"Command::new\(\s*&?%s\b" % re.escape(name), bare[end:fn.hi]):
+                uses.append(end + m.start())
+        if not uses:
+            return None
+    for at in ([pos] if spawned else uses):
+        s, e = statement(bare, at, fn.lo, fn.hi)
+        if fn.keyed(s, e) or re.search(r'\.env\(\s*"ETUDE_JOURNAL_KEY"', code[s:e]):
+            continue
+        return (f"{rel}:{line}: a binary built from current_exe() is started with no journal key; "
+                "use keyed_tool, or set ETUDE_JOURNAL_KEY in the same statement")
+    return None
 
 
 def main():
