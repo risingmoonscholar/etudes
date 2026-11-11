@@ -15,6 +15,10 @@
 // the tool where the keychain program cannot start, and it fails the test
 // before running anything if that cannot be arranged.
 //
+// Behind both, a debug build run by cargo has ETUDE_TEST_NO_KEYCHAIN set
+// (.cargo/config.toml): a tool that would reach the keychain exits 101 with
+// a message instead. `fenced_tool` removes it, to test the real keyless path.
+//
 // scripts/check-test-keys.py fails CI when a test names a tool binary without
 // going through this file.
 
@@ -130,7 +134,12 @@ pub fn fenced_tool(program: impl AsRef<OsStr>) -> Command {
         Command::new(program)
     };
     with_test_key(&mut command);
-    command.env_remove("ETUDE_JOURNAL_KEY");
+    // No key, and none of the test-build guard either (which would stop the
+    // tool before it reaches the keychain): this run tests the real keyless
+    // path, and the fence above is what keeps it away from the keychain.
+    command
+        .env_remove("ETUDE_JOURNAL_KEY")
+        .env_remove("ETUDE_TEST_NO_KEYCHAIN");
     command
 }
 
@@ -160,5 +169,21 @@ fn assert_keychain_fence_works() {
         *WORKS.get_or_init(keychain_fence_works),
         "the keychain fence (sandbox-exec) is unavailable here; refusing to run \
          a tool without a journal key, because it would reach the login keychain"
+    );
+}
+
+/// Fail if a tool stopped because it reached for the login keychain in a test
+/// build (exit 101 and the test-build message). Tests that accept "refused for
+/// want of a keychain" call this first, so that refusal can never pass for one.
+pub fn assert_not_a_keychain_violation(out: &std::process::Output) {
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        out.status.code() != Some(101)
+            && !text.contains("the login keychain is off-limits in tests"),
+        "a tool ran without a journal key and reached for the login keychain: {text}"
     );
 }

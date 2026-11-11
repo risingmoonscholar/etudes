@@ -12,7 +12,7 @@ use std::process::Command;
 
 #[path = "../../etude-cli-support/test-support/test_tool.rs"]
 mod test_tool;
-use test_tool::keyed_tool;
+use test_tool::{assert_not_a_keychain_violation, keyed_tool};
 
 struct TestDir(PathBuf);
 impl Drop for TestDir {
@@ -100,6 +100,7 @@ fn run_case_inner(tag: &str, frames: usize, with_path: bool) {
         .arg("--yes")
         .output()
         .expect("run apply");
+    assert_not_a_keychain_violation(&applied);
     if !applied.status.success() {
         eprintln!("skipped: apply did not succeed (no keychain?)");
         return;

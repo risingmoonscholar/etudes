@@ -8,7 +8,7 @@ use std::process::Command;
 
 #[path = "../../etude-cli-support/test-support/test_tool.rs"]
 mod test_tool;
-use test_tool::keyed_tool;
+use test_tool::{assert_not_a_keychain_violation, keyed_tool};
 
 struct TestDir(PathBuf);
 
@@ -44,6 +44,7 @@ fn sweep_bin() -> Command {
 /// Both branches assert something. The environment picks which claim is under
 /// test, never whether one is.
 fn assert_refused_for_want_of_a_keychain(out: &std::process::Output) {
+    assert_not_a_keychain_violation(out);
     let msg = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stderr),

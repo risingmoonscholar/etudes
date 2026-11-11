@@ -40,5 +40,11 @@ fn fenced_tool_runs_with_no_key() {
                 .any(|(k, v)| k == OsStr::new("ETUDE_JOURNAL_KEY") && v.is_none()),
             "a fenced run must remove the journal key"
         );
+        assert!(
+            command
+                .get_envs()
+                .any(|(k, v)| k == OsStr::new("ETUDE_TEST_NO_KEYCHAIN") && v.is_none()),
+            "a fenced run must remove the test-build guard, to test the real keyless path"
+        );
     }
 }

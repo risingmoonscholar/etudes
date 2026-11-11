@@ -11,7 +11,7 @@ use std::process::Command;
 
 #[path = "../../etude-cli-support/test-support/test_tool.rs"]
 mod test_tool;
-use test_tool::keyed_tool;
+use test_tool::{assert_not_a_keychain_violation, keyed_tool};
 
 struct TestDir(PathBuf);
 
@@ -50,6 +50,7 @@ fn sweep(state: &std::path::Path) -> Command {
 /// something. The environment picks which claim is under test, never whether
 /// one is.
 fn refused_for_want_of_a_keychain(out: &std::process::Output) -> bool {
+    assert_not_a_keychain_violation(out);
     if out.status.code() == Some(0) || out.status.code() == Some(1) {
         return false;
     }

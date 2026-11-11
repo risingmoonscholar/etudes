@@ -8,7 +8,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 854 tests
+cargo test --all                # 855 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -17,9 +17,10 @@ program that opens a TCP connection must succeed unsandboxed and be denied
 under the profile. On macOS, all tests except the SIGTERM process-control
 witness run under denial; Seatbelt hides child enumeration from that test, so
 the script runs it separately outside denial. That witness makes no network
-calls. The two tests that run a tool with no key are skipped there too, because
-they need their own keychain block, which cannot be set up inside another one;
-the keychain run covers them. The denied suite witnesses that its exercised
+calls. Two more tests are skipped there: one runs stash with no key, and the
+other checks the no-key helper on a harmless program. Both set up their own
+keychain block, which cannot be set up inside another one; the keychain run
+covers them. The denied suite witnesses that its exercised
 code paths open no sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
 subprocess call sites.
 
@@ -44,6 +45,12 @@ that stops unpack mid-extraction cannot see the extractor from inside the
 block, so it runs outside, still with a key from the helper. A separate check
 fails the build when a test runs a tool without the helper.
 
+Behind all of that, the tools themselves refuse. A debug build started by
+`cargo test` or `cargo run` in this repository stops with exit 101 and says
+"the login keychain is off-limits in tests" instead of asking the keychain for
+a key, so a test that forgets its key fails loudly. Release builds do not
+contain this check.
+
 ## Try it without risking a real folder
 
 The fixture generator builds a deliberately adversarial tree: tax forms,
@@ -54,6 +61,8 @@ read during development or testing.
 ```sh
 cargo run -p fixtures --bin mkfx -- /tmp/demo
 cargo run -p sweep-cli --bin sweep -- /tmp/demo
+# stash keeps an undo journal, so it needs a journal key (see above)
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 ```
 
