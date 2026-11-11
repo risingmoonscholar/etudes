@@ -2383,10 +2383,17 @@ fn shown_folder_name(name: &str) -> String {
     }
 }
 
-/// The commands to run after this scan, exactly as they must be typed. Apply
-/// plans again from its own flags, so a footer that dropped `--depth 2` offered
-/// a different set of files from the one on screen. Under --quiet the path stays
-/// a placeholder, because --quiet promises not to print names.
+/// The commands to run after this scan, exactly as they must be typed, each
+/// followed by one line that says what it does. Apply plans again from its own
+/// flags, so a footer that dropped `--depth 2` offered a different set of files
+/// from the one on screen. Under --quiet the path stays a placeholder, because
+/// --quiet promises not to print names.
+///
+/// `sweep apply PATH --yes` scans again and moves what it finds then, not the
+/// plan on screen. The footer used to print it as "Apply:" under the plan, which
+/// read as "apply this plan". So each step now says that it scans again, and the
+/// footer gives the export step that binds a plan. After --export-plan the one
+/// step is the bound apply with the real digest, which moves only that plan.
 fn next_commands(args: &[String], quiet: bool, exported: Option<&(String, String)>) -> Vec<String> {
     use etude_cli_support::shell_word;
     let word = |text: &str, placeholder: &str| {
@@ -2397,10 +2404,13 @@ fn next_commands(args: &[String], quiet: bool, exported: Option<&(String, String
         }
     };
     if let Some((file, digest)) = exported {
-        return vec![format!(
-            "Apply this plan: sweep apply --plan {} --plan-digest {digest} --yes",
-            word(file, "<file>")
-        )];
+        return vec![
+            format!(
+                "Apply this plan: sweep apply --plan {} --plan-digest {digest} --yes",
+                word(file, "<file>")
+            ),
+            "        This moves only this plan. It refuses if the folder changed.".to_owned(),
+        ];
     }
     let path = match path_arg("", args) {
         Ok(Some(path)) => word(&path.to_string_lossy(), "<path>"),
@@ -2425,10 +2435,29 @@ fn next_commands(args: &[String], quiet: bool, exported: Option<&(String, String
     // Review takes no --map, so it cannot offer the plan a mapped scan showed.
     if !has(args, "--map") {
         next.push(format!("Review: sweep review {path}{carried}"));
+        next.push(
+            "        This scans again, shows each group, and moves only the groups you accept."
+                .to_owned(),
+        );
     }
     next.push(format!("Apply:  sweep apply {path}{carried} --yes"));
+    next.push(
+        "        This scans again and moves what it finds then. That can differ from this plan."
+            .to_owned(),
+    );
+    next.push(format!("Save:   sweep {path}{carried} --export-plan FILE"));
+    next.push(
+        "        This scans again, saves that plan to FILE, and prints the command that moves only that plan."
+            .to_owned(),
+    );
     next
 }
+
+/// The grace window keeps files changed in the last day out of the plan. A file
+/// older than that can still be open in a program, such as a log being written,
+/// and sweep has no way to see that. One line, with the plan, before the steps.
+const IN_USE_NOTE: &str =
+    "sweep cannot tell if a file is still in use by a program. Check the plan before you apply it.";
 
 /// Apply refuses a moving plan in a locked folder. A tag plan moves nothing.
 fn root_is_locked(p: &plan::Plan) -> bool {
@@ -2556,6 +2585,9 @@ fn render(p: &plan::Plan, quiet: bool, explain: bool, read_contents: bool, next:
             if blocked.len() == 1 { "it" } else { "them" }
         );
         return;
+    }
+    if !quiet {
+        println!("{IN_USE_NOTE}");
     }
     for command in next {
         println!("{command}");
@@ -5458,6 +5490,74 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn words(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    /// The footer under a plan must not read as "apply this plan": apply and
+    /// review scan again, and the export step is the one that binds a plan.
+    #[test]
+    fn next_steps_say_that_apply_and_review_scan_again() {
+        let next = next_commands(&words(&["inbox", "--depth", "2"]), false, None);
+        assert_eq!(
+            next,
+            [
+                "Review: sweep review inbox --depth 2",
+                "        This scans again, shows each group, and moves only the groups you accept.",
+                "Apply:  sweep apply inbox --depth 2 --yes",
+                "        This scans again and moves what it finds then. That can differ from this plan.",
+                "Save:   sweep inbox --depth 2 --export-plan FILE",
+                "        This scans again, saves that plan to FILE, and prints the command that moves only that plan.",
+            ]
+        );
+    }
+
+    /// A mapped scan offers no review, and still says what apply does.
+    #[test]
+    fn mapped_next_steps_keep_the_map_and_the_warning() {
+        let next = next_commands(&words(&["in box", "--map", "fig=Design"]), false, None);
+        assert_eq!(
+            next[0],
+            "Apply:  sweep apply 'in box' --map fig=Design --yes"
+        );
+        assert!(next[1].contains("scans again"));
+        assert_eq!(
+            next[2],
+            "Save:   sweep 'in box' --map fig=Design --export-plan FILE"
+        );
+        assert!(!next.iter().any(|line| line.contains("review")));
+    }
+
+    #[test]
+    fn quiet_next_steps_name_no_path() {
+        let next = next_commands(&words(&["inbox"]), true, None);
+        assert!(next.iter().all(|line| !line.contains("inbox")));
+        assert!(next.contains(&"Apply:  sweep apply <path> --yes".to_owned()));
+        assert!(next.contains(&"Save:   sweep <path> --export-plan FILE".to_owned()));
+    }
+
+    /// After --export-plan the step is the bound apply with the real digest,
+    /// and no step that scans again.
+    #[test]
+    fn exported_next_step_is_the_bound_apply_with_the_real_digest() {
+        let exported = ("/tmp/my plan".to_owned(), "ab12".to_owned());
+        let next = next_commands(&words(&["inbox"]), false, Some(&exported));
+        assert_eq!(
+            next,
+            [
+                "Apply this plan: sweep apply --plan '/tmp/my plan' --plan-digest ab12 --yes",
+                "        This moves only this plan. It refuses if the folder changed.",
+            ]
+        );
+    }
+
+    #[test]
+    fn in_use_note_is_one_short_line() {
+        assert!(!IN_USE_NOTE.contains('\n'));
+        assert!(IN_USE_NOTE.contains("in use by a program"));
+        assert!(IN_USE_NOTE.ends_with("Check the plan before you apply it."));
+    }
 
     #[test]
     fn agent_named_note_escapes_control_characters_in_every_name() {

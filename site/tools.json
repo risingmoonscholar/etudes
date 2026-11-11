@@ -18,7 +18,7 @@
         {
           "command": "sweep apply ~/Desktop --yes",
           "usage": "sweep apply PATH --yes",
-          "says": "Moves every group in the plan."
+          "says": "Scans the folder again and moves every group it finds then."
         },
         {
           "command": "sweep undo ~/Desktop",

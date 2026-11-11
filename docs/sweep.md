@@ -25,14 +25,30 @@ Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no conte
 
 Nothing has been moved.  Nothing left this machine.
 Note: this listing is in your terminal scrollback.
+sweep cannot tell if a file is still in use by a program. Check the plan before you apply it.
 Review: sweep review ~/Desktop
+        This scans again, shows each group, and moves only the groups you accept.
 Apply:  sweep apply ~/Desktop --yes
+        This scans again and moves what it finds then. That can differ from this plan.
+Save:   sweep ~/Desktop --export-plan FILE
+        This scans again, saves that plan to FILE, and prints the command that moves only that plan.
 Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed.
 ```
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
 medical records and the driver's licence are the files reported as personal
 records, and no flag moves them.
+
+`sweep apply ~/Desktop --yes` does not apply the plan on screen. It scans the
+folder again and makes a new plan. If files changed after the preview, it can
+move different files. To move only a plan you have seen, save it with
+`--export-plan FILE`. Then run the `sweep apply --plan FILE --plan-digest SHA
+--yes` command that the export prints. That apply refuses if the folder changed.
+See [Applying an observed plan](plan-binding.md).
+
+The grace window (`--since`) leaves alone files that changed in the last day.
+An older file can still be in use by a program, such as a log that is still
+being written. Sweep cannot tell. Check the plan before you apply it.
 
 ## What sweep refuses to touch
 

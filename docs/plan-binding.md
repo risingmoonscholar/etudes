@@ -2,6 +2,8 @@
 
 Sweep and stash can explicitly export a bounded plan and later apply those original observations. A changed tree is refused with the code `plan_stale` and a message that names the folder and says to make a new plan; replay does not scan a replacement proposal and apply it silently.
 
+`sweep apply PATH --yes` after a preview does not apply that preview. It scans the folder again and makes a new plan, so it can move different files if the folder changed. `sweep review PATH` also scans again; it shows each group of the new plan before anything moves. To move only the plan you saw, export it and apply the export with its digest, as below. A sweep plan made with `--export-plan` prints that exact command, with the real digest.
+
 ```sh
 sweep ~/Desktop --since 0 --export-plan ~/desktop.plan --json
 sweep apply --plan ~/desktop.plan --plan-digest SHA256_FROM_EXPORT --yes --json
