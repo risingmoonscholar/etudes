@@ -213,29 +213,76 @@ assert_exit 0 "unpack extracts next to a locked file" -- "$UNPACK" "$W/notes.zip
 [ "$(cat "$U/locked.txt")" = "keep" ] && pass "the locked neighbour is untouched" || fail "the locked neighbour changed"
 
 # A tags apply must hold locked items as well as a move apply.
+# Tags are read through libc getxattr (macOS Python has no os.getxattr), as
+# 91 does. A missing tag is "none"; any other read error stops the helper,
+# and that is a FAIL, never an empty string compared with an empty string.
+cat > "$W/tagtool.py" <<'PYTAG'
+import ctypes, ctypes.util, errno, json, os, pathlib, plistlib, stat, sys
+
+NAME = b"com.apple.metadata:_kMDItemUserTags"
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+for fn in (libc.getxattr, libc.setxattr):
+    fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+libc.getxattr.restype = ctypes.c_ssize_t
+libc.setxattr.restype = ctypes.c_int
+NOFOLLOW = 1
+ENOATTR = 93
+
+
+def get(path):
+    size = libc.getxattr(os.fsencode(path), NAME, None, 0, 0, NOFOLLOW)
+    if size < 0:
+        code = ctypes.get_errno()
+        if code == ENOATTR:
+            return None
+        raise OSError(code, f"getxattr: {os.strerror(code)}")
+    buf = ctypes.create_string_buffer(size)
+    got = libc.getxattr(os.fsencode(path), NAME, buf, size, 0, NOFOLLOW)
+    if got < 0:
+        code = ctypes.get_errno()
+        raise OSError(code, f"getxattr: {os.strerror(code)}")
+    return buf.raw[:got]
+
+
+if sys.argv[1] == "set":
+    data = plistlib.dumps(sys.argv[3:], fmt=plistlib.FMT_BINARY)
+    if libc.setxattr(os.fsencode(sys.argv[2]), NAME, data, len(data), 0, NOFOLLOW) != 0:
+        raise OSError(ctypes.get_errno(), "setxattr")
+elif sys.argv[1] == "locked":
+    rows = {}
+    for p in sorted(pathlib.Path(sys.argv[2]).rglob('*')):
+        if p.is_file() and not p.is_symlink() and p.lstat().st_flags & stat.UF_IMMUTABLE:
+            value = get(p)
+            rows[str(p)] = None if value is None else value.hex()
+    print(json.dumps(rows, sort_keys=True))
+else:
+    sys.exit(f"unknown command {sys.argv[1]}")
+PYTAG
 T="$W/tag-locked"; mkdir -p "$T"
 for i in 1 2 3 4; do printf 'tag document %s' "$i" > "$T/report-$i.pdf"; done
 printf 'locked tag document' > "$T/locked.pdf"; chflags uchg "$T/locked.pdf"
+# A locked file that already has a tag, so the before/after compare holds a
+# real value: a tag run that rewrites a locked file's tags changes it.
+printf 'locked tagged document' > "$T/locked-tagged.pdf"
+python3 "$W/tagtool.py" set "$T/locked-tagged.pdf" $'Blue\n4' || fail "could not tag the locked-tagged fixture"
+chflags uchg "$T/locked-tagged.pdf"
 "$SWEEP" "$T" --scheme tags --map pdf=Filed --since 0 --export-plan "$W/tags2.plan" --json > "$W/tag-export.json"
 assert_eq 0 "$?" "export a tags plan"
 TAG_DIGEST=$(json_get "$W/tag-export.json" 'd["details"]["binding"]["plan_digest"]')
-locked_tags() {
-  python3 - "$W" <<'PYTAG'
-import json, os, pathlib, stat, sys
-rows = {}
-for p in pathlib.Path(sys.argv[1]).rglob('*'):
-    if p.is_file() and p.stat().st_flags & stat.UF_IMMUTABLE:
-        try: value = os.getxattr(p, 'com.apple.metadata:_kMDItemUserTags').hex()
-        except OSError: value = None
-        rows[str(p)] = value
-print(json.dumps(rows, sort_keys=True))
-PYTAG
-}
-LOCKED_TAGS_BEFORE=$(locked_tags)
+if LOCKED_TAGS_BEFORE=$(python3 "$W/tagtool.py" locked "$W" 2>"$W/tagtool.err"); then
+  TAGGED_BEFORE=$(printf '%s' "$LOCKED_TAGS_BEFORE" | python3 -c 'import json,sys; print(sum(v is not None for v in json.load(sys.stdin).values()))')
+  [ "$TAGGED_BEFORE" -ge 1 ] && pass "$TAGGED_BEFORE locked fixture file(s) carry a tag before the tag apply" \
+    || fail "no locked fixture file carries a tag, so the compare would prove nothing"
+else
+  fail "could not read the locked files' tags before the tag apply: $(cat "$W/tagtool.err")"
+fi
 assert_exit 0 "tag apply processes unlocked files" -- "$SWEEP" apply --plan "$W/tags2.plan" --plan-digest "$TAG_DIGEST" --yes
-assert_eq "$LOCKED_TAGS_BEFORE" "$(locked_tags)" "tag apply preserves the tags of every locked fixture file"
-[ -z "$(xattr -p com.apple.metadata:_kMDItemUserTags "$T/locked.pdf" 2>/dev/null)" ] \
-  && pass "tag apply leaves the locked file untagged" || fail "tag apply tagged a locked file"
+if LOCKED_TAGS_AFTER=$(python3 "$W/tagtool.py" locked "$W" 2>"$W/tagtool.err"); then
+  assert_eq "$LOCKED_TAGS_BEFORE" "$LOCKED_TAGS_AFTER" "tag apply preserves the tags of every locked fixture file"
+else
+  fail "could not read the locked files' tags after the tag apply: $(cat "$W/tagtool.err")"
+fi
+assert_eq '{}' "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(json.dumps({k: v for k, v in d.items() if k.endswith("/tag-locked/locked.pdf") and v is not None}))' "${LOCKED_TAGS_AFTER:-null}" 2>&1)" "tag apply leaves the locked file untagged"
 
 # Lock a pending item after planning, while the apply is held by its watcher.
 # The watcher stops apply after the first journalled move it sees, and apply
