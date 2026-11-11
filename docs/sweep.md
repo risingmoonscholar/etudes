@@ -25,14 +25,37 @@ Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no conte
 
 Nothing has been moved.  Nothing left this machine.
 Note: this listing is in your terminal scrollback.
+sweep cannot tell if a file is still in use by a program. Check the plan before you apply it.
 Review: sweep review ~/Desktop
+        This scans again, shows each group, and moves only the groups you accept.
 Apply:  sweep apply ~/Desktop --yes
+        This scans again and moves what it finds then. That can differ from this plan.
+Save:   sweep ~/Desktop --export-plan ~/sweep.plan
+        This scans again and saves that plan to ~/sweep.plan, outside this folder. It prints the command that moves only that plan.
 Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed.
 ```
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
 medical records and the driver's licence are the files reported as personal
 records, and no flag moves them.
+
+`sweep apply ~/Desktop --yes` does not apply the plan on screen. It scans the
+folder again and makes a new plan. If files changed after the preview, it can
+move different files. To move only a plan you have seen, save it with
+`--export-plan FILE`, where FILE is a new file outside the folder. The Save
+step gives one: `~/sweep.plan`, or `/tmp/sweep.plan` when you scan your home
+folder or a folder that holds it. When that name is taken, it gives
+`sweep-2.plan`, then `sweep-3.plan`, and so on. Then run the `sweep apply --plan FILE --plan-digest SHA --yes` command
+that the export prints, with the real digest. That apply refuses if anything
+the scan looked at has changed. `sweep review` also scans again, but it shows
+each group before anything moves. When a scan with `--inspect-content` read file
+contents, the footer says that apply and review do not read them, so only the
+Save step keeps that check.
+See [Applying an observed plan](plan-binding.md).
+
+The grace window (`--since`) leaves alone files that changed in the last day.
+An older file can still be in use by a program, such as a log that is still
+being written. Sweep cannot tell. Check the plan before you apply it.
 
 ## What sweep refuses to touch
 

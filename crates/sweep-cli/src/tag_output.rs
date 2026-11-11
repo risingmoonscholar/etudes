@@ -60,7 +60,9 @@ fn promise() {
     );
 }
 
-pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
+/// `exported` is the bound-apply step after --export-plan, with the real
+/// digest; without an export the footer says how to make one.
+pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool, exported: &[String]) {
     banner(p, read_contents);
     let rows = p.tag_summary();
     let width = rows
@@ -132,9 +134,15 @@ pub fn render(p: &Plan, quiet: bool, explain: bool, read_contents: bool) {
     if !quiet {
         println!("Note: this listing is in your terminal scrollback.");
     }
-    println!(
-        "Apply: save this plan with --export-plan FILE, then run\n       sweep apply --plan FILE --plan-digest SHA --yes"
-    );
+    if exported.is_empty() {
+        println!(
+            "Apply: save this plan with --export-plan FILE, then run\n       sweep apply --plan FILE --plan-digest SHA --yes"
+        );
+    } else {
+        for line in exported {
+            println!("{line}");
+        }
+    }
     promise();
     println!("Undo puts each file's previous tags back: sweep undo");
 }

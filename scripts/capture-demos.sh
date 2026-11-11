@@ -36,6 +36,12 @@ mkdir -p "$caps"
 # reads naturally. Only its parent path is substituted at render time.
 home="$work/home"
 mkdir -p "$home"
+# The tools run with this throwaway HOME, removed with $work, so no capture
+# writes in the real home folder and no output depends on it: the plan's Save
+# step offers the first free name in ~, and a sweep.plan left in the real home
+# would make it read sweep-2.plan. Set after the build, which needs the real
+# HOME for cargo.
+export HOME="$home"
 "$bin/mkfx" "$home/Desktop" >/dev/null
 
 n=0

@@ -47,6 +47,10 @@ stash pop ~/Desktop             # move them back
 unpack a.zip --list             # show what is inside; extract nothing
 ```
 
+`sweep apply ~/Desktop --yes` scans the folder again and moves what it finds
+then. It does not apply the plan you saw. To move only a plan you have seen,
+see [Applying an observed plan](docs/plan-binding.md).
+
 To see all the commands and options of a tool, run `sweep help`, `stash help`
 or `unpack help`.
 

@@ -87,5 +87,6 @@
   "128-moves-from-checked-source-folders": 24,
   "129-unpack-private-copy-code": 20,
   "130-undo-says-what-remains": 43,
-  "131-same-time-records": 91
+  "131-same-time-records": 91,
+  "132-sweep-footer-lines": 21
 }
