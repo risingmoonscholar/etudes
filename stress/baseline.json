@@ -18,7 +18,7 @@
   "30-concurrent-applies": 9,
   "30-graceful-signal-mid-apply": 2,
   "30-interrupted-stash-pop": 15,
-  "30-journal-supplied-key": 237,
+  "30-journal-supplied-key": 273,
   "30-journal-truncation": 41,
   "30-kill-mid-undo": 38,
   "30-same-root-contention": 307,
