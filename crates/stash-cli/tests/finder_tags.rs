@@ -7,6 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 const TAG: &str = "com.apple.metadata:_kMDItemUserTags";
 const KEY: &str = "0202020202020202020202020202020202020202020202020202020202020202";
 
@@ -65,7 +69,7 @@ fn tag_value(path: &Path) -> Option<String> {
 }
 
 fn stash(scene: &Scene, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stash"))
+    keyed_tool(env!("CARGO_BIN_EXE_stash"))
         .env("ETUDE_STATE_DIR", &scene.state)
         .env("ETUDE_JOURNAL_KEY", KEY)
         .args(args)

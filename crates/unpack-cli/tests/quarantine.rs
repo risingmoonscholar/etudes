@@ -1,6 +1,13 @@
+// The quarantine matrix is macOS only, and so is its use of the helper.
+#[cfg(target_os = "macos")]
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+#[cfg(target_os = "macos")]
+use test_tool::with_test_key;
+
 #[cfg(target_os = "macos")]
 fn matrix(mode: &str) {
-    let output = std::process::Command::new("python3")
+    let output = with_test_key(&mut std::process::Command::new("python3"))
         .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/quarantine_matrix.py"))
         .arg(mode)
         .arg(env!("CARGO_BIN_EXE_unpack"))

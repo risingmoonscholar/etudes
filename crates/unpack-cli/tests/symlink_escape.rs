@@ -3,6 +3,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct TestDir(PathBuf);
 
 impl Drop for TestDir {
@@ -52,7 +56,7 @@ fn a_tar_carrying_a_symlink_is_refused_and_touches_nothing() {
     assert!(tar.success(), "tar failed with {tar}");
 
     let dest = root.0.join("target");
-    let unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .arg("--into")
         .arg(&dest)
@@ -121,7 +125,7 @@ fn a_zip_carrying_a_symlink_is_refused_and_touches_nothing() {
     assert!(zip.success(), "zip failed with {zip}");
 
     let dest = root.0.join("target");
-    let unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .arg("--into")
         .arg(&dest)
@@ -184,7 +188,7 @@ fn a_benign_zip_with_directory_spaced_and_non_ascii_names_extracts() {
     assert!(zip.success(), "zip failed with {zip}");
 
     let dest = root.0.join("target");
-    let unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .arg("--into")
         .arg(&dest)
@@ -224,7 +228,7 @@ fn a_benign_tar_gz_reports_the_visible_entry_count_as_checked() {
     assert!(tar.success(), "tar failed with {tar}");
 
     let dest = root.0.join("target");
-    let unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .arg("--into")
         .arg(&dest)
@@ -280,7 +284,7 @@ fn a_benign_tar_with_an_old_timestamp_extracts() {
     assert!(tar.success(), "tar failed with {tar}");
 
     let dest = root.0.join("target");
-    let unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .arg("--into")
         .arg(&dest)

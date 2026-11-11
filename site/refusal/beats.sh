@@ -6,6 +6,21 @@
 # Every command here also appears, asserted, in run.sh -- the recording stays
 # true to the program because the same facts are checked in CI.
 set -uo pipefail
+
+# OLD_SWEEP is sweep 0.4.0, which takes its journal key from the login keychain
+# and ignores ETUDE_JOURNAL_KEY. The apply and undo beats run it, so on a
+# person's Mac this would read, and can create, a key in their real keychain.
+# It runs only in CI. The check comes first: nothing runs before it.
+if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+  cat >&2 <<'REFUSE'
+beats.sh: refusing to start. This script runs sweep 0.4.0, including apply
+and undo. Sweep 0.4.0 uses the login keychain for its journal key, so on this
+machine it would read, and could create, a key in your real keychain. For that
+reason it runs only in CI (GITHUB_ACTIONS=true).
+Nothing was run.
+REFUSE
+  exit 2
+fi
 OLD="${OLD_SWEEP:?}"; NEW="${NEW_SWEEP:?}"; FX="${FIXTURE:?}"
 M="   "
 run() { printf '%s\033[33m>\033[0m %s\n\n' "$M" "$1"; sleep 0.8

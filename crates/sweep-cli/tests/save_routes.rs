@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 struct Fixture {
     base: PathBuf,
     root: PathBuf,
@@ -29,7 +33,7 @@ impl Fixture {
         }
     }
     fn run(&self, args: &[&str]) -> Output {
-        let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+        let out = keyed_tool(env!("CARGO_BIN_EXE_sweep"))
             .args(args)
             .env("HOME", self.base.join("home"))
             .env("ETUDE_STATE_DIR", &self.state)
@@ -138,7 +142,7 @@ fn hint_prints_the_folder_as_typed_and_it_runs_from_there() {
         std::fs::write(typed.join(name), b"synthetic").unwrap();
     }
     let run_in = |dir: &std::path::Path, args: &[&str]| {
-        let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+        let out = keyed_tool(env!("CARGO_BIN_EXE_sweep"))
             .args(args)
             .current_dir(dir)
             .env("HOME", &home)
@@ -180,7 +184,7 @@ fn hint_prints_the_folder_as_typed_and_it_runs_from_there() {
         let command =
             line.trim()
                 .replacen("sweep", &format!("'{}'", env!("CARGO_BIN_EXE_sweep")), 1);
-        let out = Command::new("sh")
+        let out = with_test_key(&mut Command::new("sh"))
             .args(["-c", &command])
             .current_dir(dir)
             .env("HOME", &home)
@@ -195,7 +199,7 @@ fn hint_prints_the_folder_as_typed_and_it_runs_from_there() {
         );
     }
     // JSON keeps the resolved path, so an agent needs no shell to expand `~`.
-    let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+    let out = keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .args(["--since", "0", "--json", "~/My Files"])
         .current_dir(&home)
         .env("HOME", &home)

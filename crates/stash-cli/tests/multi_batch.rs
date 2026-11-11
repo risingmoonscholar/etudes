@@ -5,6 +5,11 @@ use std::{
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -25,7 +30,7 @@ impl Fixture {
         path
     }
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stash"));
+        let mut command = keyed_tool(env!("CARGO_BIN_EXE_stash"));
         command
             .env("ETUDE_STATE_DIR", self.0.join("state"))
             .env("ETUDE_JOURNAL_KEY", "56".repeat(32))

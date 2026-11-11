@@ -6,6 +6,10 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 const UNPACK: &str = env!("CARGO_BIN_EXE_unpack");
 
 fn tool(program: &str, args: &[&str], cwd: &Path) {
@@ -27,7 +31,7 @@ fn tree(dir: &ProbeDir, files: usize) {
 }
 
 fn unpack(args: &[&str]) -> Output {
-    Command::new(UNPACK).args(args).output().unwrap()
+    keyed_tool(UNPACK).args(args).output().unwrap()
 }
 
 fn records(stderr: &[u8]) -> Vec<String> {
@@ -306,7 +310,7 @@ fn a_bare_gzip_is_one_member_and_not_complete_while_it_is_still_being_written() 
         archive.display()
     );
     tool("/bin/sh", &["-c", &script], &dir.0);
-    let mut child = Command::new(UNPACK)
+    let mut child = keyed_tool(UNPACK)
         .args([
             archive.to_str().unwrap(),
             "--into",
@@ -557,7 +561,7 @@ fn slow_zip(dir: &ProbeDir, members: usize) -> std::path::PathBuf {
 /// Run until a record shows extraction under way, then signal, and return every
 /// line unpack wrote plus how many complete members staging held at that moment.
 fn interrupt(dir: &ProbeDir, archive: &Path, signal: &str) -> (Vec<String>, usize, Option<i32>) {
-    let mut child = Command::new(UNPACK)
+    let mut child = keyed_tool(UNPACK)
         .args([
             archive.to_str().unwrap(),
             "--into",

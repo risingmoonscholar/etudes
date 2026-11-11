@@ -276,4 +276,32 @@ assert_eq "$journals" "$(shasum "$ETUDE_STATE_DIR"/*.journal)" 'unpack leaves en
 assert_exit 0 'sweep undo after unpack restores' -- "$SWEEP" undo "$W/unpack-history"
 restored "$W/unpack-history" 'sweep restores after unpack'
 
+# Test builds stop before the keychain when ETUDE_TEST_NO_KEYCHAIN is set; the
+# shipped (release) binaries must not contain that check at all. With the flag
+# set, a keyless run inside the fence still gives the ordinary keychain
+# refusal, never the test-build stop, and keyed runs behave as before.
+rm -f "$ETUDE_STATE_DIR"/*.journal
+make_tree "$W/release-guard"
+if keychain_fence_works; then
+  out=$(keychain_fenced env ETUDE_TEST_NO_KEYCHAIN=1 "$SWEEP" apply "$W/release-guard" --yes 2>&1); code=$?
+  assert_eq 2 "$code" 'release sweep with the test flag refuses as before, not with the test-build stop'
+  [[ "$out" == *keychain* && "$out" != *'off-limits in tests'* ]] && pass 'release sweep gives the ordinary keychain refusal' || fail "release sweep honoured the test-build flag: $out"
+  out=$(keychain_fenced env ETUDE_TEST_NO_KEYCHAIN=1 "$STASH" "$W/release-guard" 2>&1); code=$?
+  assert_eq 2 "$code" 'release stash with the test flag refuses as before, not with the test-build stop'
+  [[ "$out" != *'off-limits in tests'* ]] && pass 'release stash gives the ordinary keychain refusal' || fail "release stash honoured the test-build flag: $out"
+  restored "$W/release-guard" 'release keychain refusals with the test flag move nothing'
+else
+  unproven 'release builds ignore the test-build flag' 'sandbox-exec could not block /usr/bin/security here, and this suite never reaches the real keychain'
+fi
+assert_exit 0 'keyed release sweep apply with the test flag set' -- env ETUDE_TEST_NO_KEYCHAIN=1 "$SWEEP" apply "$W/release-guard" --yes
+assert_exit 0 'keyed release sweep undo with the test flag set' -- env ETUDE_TEST_NO_KEYCHAIN=1 "$SWEEP" undo "$W/release-guard"
+restored "$W/release-guard" 'keyed release sweep with the test flag restores'
+assert_exit 0 'keyed release stash with the test flag set' -- env ETUDE_TEST_NO_KEYCHAIN=1 "$STASH" "$W/release-guard"
+assert_exit 0 'keyed release stash pop with the test flag set' -- env ETUDE_TEST_NO_KEYCHAIN=1 "$STASH" pop "$W/release-guard"
+restored "$W/release-guard" 'keyed release stash with the test flag restores'
+mkdir -p "$W/unpack-flag"
+tar -cf "$W/unpack-flag/flag.tar" -C "$W/unpack-source" payload.txt
+assert_exit 0 'release unpack with the test flag set' -- env ETUDE_TEST_NO_KEYCHAIN=1 "$UNPACK" "$W/unpack-flag/flag.tar"
+assert_eq 'archive payload' "$(cat "$W/unpack-flag/flag/payload.txt" 2>/dev/null)" 'release unpack with the test flag extracts original bytes'
+
 [ "$FAILED" -eq 0 ]

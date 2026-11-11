@@ -6,6 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 const KEY: &str = "0404040404040404040404040404040404040404040404040404040404040404";
 
 struct Scene {
@@ -56,7 +60,7 @@ fn lock(path: &Path) {
 }
 
 fn stash(scene: &Scene, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stash"))
+    keyed_tool(env!("CARGO_BIN_EXE_stash"))
         .env("ETUDE_STATE_DIR", &scene.state)
         .env("ETUDE_JOURNAL_KEY", KEY)
         .args(args)
@@ -286,7 +290,7 @@ fn a_locked_root_prints_a_stash_command_that_works_after_unlocking() {
         .arg(&folder)
         .status()
         .unwrap();
-    let again = Command::new("/bin/sh")
+    let again = with_test_key(&mut Command::new("/bin/sh"))
         .arg("-c")
         .arg(step.replacen("stash", &format!("'{}'", env!("CARGO_BIN_EXE_stash")), 1))
         .env("ETUDE_STATE_DIR", &s.state)

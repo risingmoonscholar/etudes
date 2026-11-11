@@ -4,6 +4,10 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
@@ -28,7 +32,7 @@ impl Fixture {
             )
             .unwrap();
         }
-        let mut command = Command::new(env!("CARGO_BIN_EXE_sweep"));
+        let mut command = keyed_tool(env!("CARGO_BIN_EXE_sweep"));
         command
             .args([
                 "apply",

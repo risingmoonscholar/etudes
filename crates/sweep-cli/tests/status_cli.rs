@@ -1,5 +1,8 @@
 use std::path::PathBuf;
-use std::process::Command;
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
 
 struct TestDir(PathBuf);
 impl Drop for TestDir {
@@ -18,7 +21,7 @@ fn temp(tag: &str) -> PathBuf {
     ))
 }
 fn run(state: &PathBuf, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .env("ETUDE_STATE_DIR", state)
         .env(
             "ETUDE_JOURNAL_KEY",

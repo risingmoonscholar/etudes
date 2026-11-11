@@ -143,7 +143,34 @@ fn getrandom_fill(buf: &mut [u8]) -> Result<(), KeepError> {
         .map_err(|_| KeepError::Crypto("no secure randomness available"))
 }
 
+/// Said, on stderr, when a test build is about to reach the login keychain.
+pub const TEST_KEYCHAIN_REFUSAL: &str =
+    "test build: a tool ran without ETUDE_JOURNAL_KEY; the login keychain is off-limits in tests";
+
+/// True when this is a test build that must never reach the login keychain:
+/// a debug build run with ETUDE_TEST_NO_KEYCHAIN set to anything non-empty
+/// (.cargo/config.toml sets it for every `cargo test` and `cargo run` here).
+/// A release build never compiles the check in, so its behaviour is unchanged.
+fn keychain_off_limits(flag: Option<std::ffi::OsString>) -> bool {
+    #[cfg(debug_assertions)]
+    {
+        flag.is_some_and(|value| !value.is_empty())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = flag;
+        false
+    }
+}
+
 fn security() -> Result<Command, KeepError> {
+    // Every keychain call goes through here. In a test build the keychain is
+    // off-limits: stop with a distinct failure (exit 101, like a panic) that
+    // no test can mistake for an ordinary "no keychain" refusal.
+    if keychain_off_limits(std::env::var_os("ETUDE_TEST_NO_KEYCHAIN")) {
+        eprintln!("{TEST_KEYCHAIN_REFUSAL}");
+        std::process::exit(101);
+    }
     // exists() rather than is_file(): /usr/bin/security may be a symlink.
     if !Path::new(SECURITY_BIN).exists() {
         return Err(KeepError::Keychain(
@@ -311,6 +338,24 @@ mod tests {
     use super::*;
 
     const K: [u8; 32] = [7u8; 32];
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_test_build_keeps_the_keychain_off_limits_when_asked() {
+        assert!(keychain_off_limits(Some("1".into())));
+        assert!(keychain_off_limits(Some("yes".into())));
+        assert!(!keychain_off_limits(Some("".into())));
+        assert!(!keychain_off_limits(None));
+    }
+
+    /// Run with `cargo test --release -p etude-keep`: a release build ignores
+    /// the variable, so the shipped tools behave exactly as before.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn a_release_build_has_no_test_guard() {
+        assert!(!keychain_off_limits(Some("1".into())));
+        assert!(!keychain_off_limits(None));
+    }
 
     #[test]
     fn only_item_not_found_counts_as_no_key() {

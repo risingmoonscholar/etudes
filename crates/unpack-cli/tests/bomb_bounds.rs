@@ -9,8 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 fn unpack_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_unpack"))
+    keyed_tool(env!("CARGO_BIN_EXE_unpack"))
 }
 
 struct TestDir(PathBuf);

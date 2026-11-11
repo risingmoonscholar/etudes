@@ -4,8 +4,12 @@ include!("../../etude-cli-support/test-support/progress_probe.rs");
 
 use std::process::{Command, Output, Stdio};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 fn sweep(dir: &ProbeDir, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .args(args)
         .env("ETUDE_STATE_DIR", dir.join("state"))
         .env("ETUDE_JOURNAL_KEY", "22".repeat(32))
@@ -214,7 +218,7 @@ _, stderr = child.communicate(timeout=60)
 sys.stderr.buffer.write(stderr)
 sys.exit(child.returncode)
 "#;
-    let run = Command::new("python3")
+    let run = with_test_key(&mut Command::new("python3"))
         .args(["-I", "-c", driver, env!("CARGO_BIN_EXE_sweep")])
         .args(["review", &root, "--since", "0", "--progress-json"])
         .env("ETUDE_STATE_DIR", dir.join("state"))

@@ -8,7 +8,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 852 tests
+cargo test --all                # 855 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -17,8 +17,11 @@ program that opens a TCP connection must succeed unsandboxed and be denied
 under the profile. On macOS, all tests except the SIGTERM process-control
 witness run under denial; Seatbelt hides child enumeration from that test, so
 the script runs it separately outside denial. That witness makes no network
-calls. The denied suite witnesses that its exercised code paths open no
-sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
+calls. Two more tests are skipped there: one runs stash with no key, and the
+other checks the no-key helper on a harmless program. Both set up their own
+keychain block, which cannot be set up inside another one; the keychain run
+covers them. The denied suite witnesses that its exercised
+code paths open no sockets; it does not exercise the `security`, `unzip`, `gunzip`, or `tar`
 subprocess call sites.
 
 It uses `sandbox-exec`, so it is macOS like everything else here. Run it
@@ -28,6 +31,25 @@ anything is worse than no witness.
 
 Beyond that, `etude-core` has **zero dependencies**, asserted by a test. There is no third-party code in the path that decides what happens
 to your files.
+
+## Tests never use your keychain
+
+Without a journal key, the tools read the key from the login keychain, and can
+add one to it. No test does either. Every test that runs a tool goes through
+one shared helper, which gives the run a random key, a throwaway state folder
+and a throwaway home folder. A test that must run a tool with no key runs it
+where the keychain program is not allowed to start, and fails rather than run
+if that cannot be arranged. CI runs the suite inside that same block, after
+proving the block stops a harmless program. One test runs outside it: the test
+that stops unpack mid-extraction cannot see the extractor from inside the
+block, so it runs outside, still with a key from the helper. A separate check
+fails the build when a test runs a tool without the helper.
+
+Behind all of that, the tools themselves refuse. A debug build started by
+`cargo test` or `cargo run` in this repository stops with exit 101 and says
+"the login keychain is off-limits in tests" instead of asking the keychain for
+a key, so a test that forgets its key fails loudly. Release builds do not
+contain this check.
 
 ## Try it without risking a real folder
 
@@ -39,6 +61,8 @@ read during development or testing.
 ```sh
 cargo run -p fixtures --bin mkfx -- /tmp/demo
 cargo run -p sweep-cli --bin sweep -- /tmp/demo
+# stash keeps an undo journal, so it needs a journal key (see above)
+export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 cargo run -p stash-cli --bin stash -- /tmp/demo --for 3d
 ```
 
