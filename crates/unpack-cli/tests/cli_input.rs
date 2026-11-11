@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct TestDir(PathBuf);
 
 impl TestDir {
@@ -31,7 +35,7 @@ impl TestDir {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_unpack"))
+        keyed_tool(env!("CARGO_BIN_EXE_unpack"))
             .args(args)
             .output()
             .unwrap()

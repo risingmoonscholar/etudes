@@ -4,6 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -48,7 +52,7 @@ fn a_large_tar_extracts_while_the_size_poll_races_its_renames() {
     assert!(made.success());
     for run in 0..5 {
         let into = fixture.0.join(format!("out-{run}"));
-        let output = Command::new(env!("CARGO_BIN_EXE_unpack"))
+        let output = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
             .arg(&archive)
             .arg("--into")
             .arg(&into)

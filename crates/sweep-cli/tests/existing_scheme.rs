@@ -1,5 +1,9 @@
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
 
 struct Fixture {
     base: PathBuf,
@@ -43,7 +47,7 @@ impl Fixture {
     }
 
     fn run(&self, arguments: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_sweep"))
+        keyed_tool(env!("CARGO_BIN_EXE_sweep"))
             .args(arguments)
             .env("ETUDE_STATE_DIR", &self.state)
             .env("ETUDE_JOURNAL_KEY", "42".repeat(32))

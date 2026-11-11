@@ -4,8 +4,12 @@ include!("../../etude-cli-support/test-support/progress_probe.rs");
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 fn stash(dir: &ProbeDir, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_stash"))
+    keyed_tool(env!("CARGO_BIN_EXE_stash"))
         .args(args)
         .env("ETUDE_STATE_DIR", dir.join("state"))
         .env("ETUDE_JOURNAL_KEY", "33".repeat(32))

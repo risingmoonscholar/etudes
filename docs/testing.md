@@ -8,7 +8,7 @@ Every étude ships the same two witnesses. Neither is a promise; both are
 commands you can run.
 
 ```sh
-cargo test --all                # 852 tests
+cargo test --all                # 854 tests
 scripts/no-network-test.sh      # all but the process-control test under socket denial
 ```
 
@@ -28,6 +28,17 @@ anything is worse than no witness.
 
 Beyond that, `etude-core` has **zero dependencies**, asserted by a test. There is no third-party code in the path that decides what happens
 to your files.
+
+## Tests never use your keychain
+
+Without a journal key, the tools read the key from the login keychain, and can
+add one to it. No test does either. Every test that runs a tool goes through
+one shared helper, which gives the run a random key, a throwaway state folder
+and a throwaway home folder. A test that must run a tool with no key runs it
+where the keychain program is not allowed to start, and fails rather than run
+if that cannot be arranged. CI runs the whole suite inside that same block,
+after proving the block stops a harmless program, and a separate check fails
+the build when a test runs a tool without the helper.
 
 ## Try it without risking a real folder
 

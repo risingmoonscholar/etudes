@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 fn observed_category(output: &Output, category: &str) -> Option<u64> {
     let mut child = Command::new("python3")
         .args(["-c", "import json,sys; data=json.load(sys.stdin); row=next((r for r in data['observations']['categories'] if r['category']==sys.argv[1]),None); print('none' if row is None else row['observed'])", category])
@@ -71,7 +75,7 @@ impl Fixture {
         path
     }
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stash"));
+        let mut command = keyed_tool(env!("CARGO_BIN_EXE_stash"));
         command
             .env("ETUDE_STATE_DIR", self.root.join("state"))
             .env("ETUDE_JOURNAL_KEY", "34".repeat(32));

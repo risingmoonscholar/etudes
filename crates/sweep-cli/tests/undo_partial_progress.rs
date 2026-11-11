@@ -16,6 +16,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct TestDir(PathBuf);
 
 impl Drop for TestDir {
@@ -47,7 +51,7 @@ fn unique_temp(tag: &str) -> PathBuf {
 }
 
 fn sweep_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
 }
 
 /// Reverse-undo-order trick: scan sorts by path, and undo walks entries in

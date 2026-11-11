@@ -1,10 +1,14 @@
 //! Process-level exit-code contract for the shipped `stash` binary.
 //!
 //! Spawns the real binary so the codes match what a caller would see.
-//! Journal encryption uses the login keychain (same path as production).
+//! Every run gets a test journal key, so the login keychain is never used.
 
 use std::path::PathBuf;
 use std::process::Command;
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{fenced_tool, keyed_tool};
 
 struct TestDir(PathBuf);
 
@@ -26,7 +30,7 @@ fn unique_temp(tag: &str) -> PathBuf {
 }
 
 fn stash_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_stash"))
+    keyed_tool(env!("CARGO_BIN_EXE_stash"))
 }
 
 /// Whether a stash can actually be recorded here.
@@ -225,6 +229,8 @@ fn unknown_status_id_has_a_typed_unknown_operation_reason() {
     assert!(stdout.contains("\"retry\":\"never\""), "{stdout}");
 }
 
+// keychain-fenced: this runs stash with no journal key on purpose, so it runs
+// where the keychain program cannot start, and fails if that cannot be done.
 #[test]
 fn status_by_id_does_not_migrate_legacy_state() {
     let home = unique_temp("status-read-only-home");
@@ -235,7 +241,7 @@ fn status_by_id_does_not_migrate_legacy_state() {
     std::fs::write(legacy.join("sentinel"), b"keep").unwrap();
     let _home = TestDir(home.clone());
 
-    let output = stash_bin()
+    let output = fenced_tool(env!("CARGO_BIN_EXE_stash"))
         .env_remove("ETUDE_STATE_DIR")
         .env_remove("ETUDE_JOURNAL_KEY")
         .env("HOME", &home)

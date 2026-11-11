@@ -9,6 +9,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct TestDir(PathBuf);
 
 impl Drop for TestDir {
@@ -29,7 +33,7 @@ fn unique(tag: &str) -> PathBuf {
 }
 
 fn sweep(state: &std::path::Path) -> Command {
-    let mut c = Command::new(env!("CARGO_BIN_EXE_sweep"));
+    let mut c = keyed_tool(env!("CARGO_BIN_EXE_sweep"));
     c.env("ETUDE_STATE_DIR", state);
     c
 }
