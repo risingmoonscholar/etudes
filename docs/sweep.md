@@ -44,11 +44,13 @@ folder again and makes a new plan. If files changed after the preview, it can
 move different files. To move only a plan you have seen, save it with
 `--export-plan FILE`, where FILE is a new file outside the folder. The Save
 step gives one: `~/sweep.plan`, or `/tmp/sweep.plan` when you scan your home
-folder or a folder that holds it. Then run the `sweep apply --plan FILE --plan-digest SHA --yes` command
+folder or a folder that holds it. When that name is taken, it gives
+`sweep-2.plan`, then `sweep-3.plan`, and so on. Then run the `sweep apply --plan FILE --plan-digest SHA --yes` command
 that the export prints, with the real digest. That apply refuses if anything
 the scan looked at has changed. `sweep review` also scans again, but it shows
-each group before anything moves. A scan with `--inspect-content` reads file
-contents; apply and review do not, so only the Save step keeps that check.
+each group before anything moves. When a scan with `--inspect-content` read file
+contents, the footer says that apply and review do not read them, so only the
+Save step keeps that check.
 See [Applying an observed plan](plan-binding.md).
 
 The grace window (`--since`) leaves alone files that changed in the last day.

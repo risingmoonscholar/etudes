@@ -1529,8 +1529,11 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
     };
     let context = current_binding_context(&bound.context().profile);
     if let Err(error) = bound.validate(&context) {
-        return etude_cli_support::problems::plan_check_problem("sweep", &bound.root, &error)
-            .report();
+        return own_step(
+            etude_cli_support::problems::plan_check_problem("sweep", &bound.root, &error),
+            &bound,
+        )
+        .report();
     }
     if bound.plan.adds_tags && !cfg!(target_os = "macos") {
         eprintln!("sweep: this plan adds Finder tags, which needs macOS");
@@ -1555,8 +1558,11 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
         group.accepted = only.as_ref().is_none_or(|name| name == &group.name);
     }
     if let Err(error) = bound.finalize_choices() {
-        return etude_cli_support::problems::plan_check_problem("sweep", &bound.root, &error)
-            .report();
+        return own_step(
+            etude_cli_support::problems::plan_check_problem("sweep", &bound.root, &error),
+            &bound,
+        )
+        .report();
     }
     if bound.moves() == 0 {
         etude_cli_support::envelope::no_undo_needed();
@@ -1591,6 +1597,69 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
     run_apply(&bound, &context, sl, "apply")
 }
 
+/// The step that makes a new plan like this one. The shared refusal names only
+/// the folder, so for a tag plan the pasted step made a folder plan. The plan
+/// records its scheme, its --map routes (as its groups) and --include-tagged;
+/// --depth, --since and --allow-sync are bound only as a digest, so the step
+/// asks for them in words.
+fn new_plan_step(bound: &plan::BoundPlan) -> String {
+    use etude_cli_support::{quoted_path, shell_word};
+    let mut step = format!("sweep {}", quoted_path(&bound.root));
+    let scheme = if bound.adds_tags {
+        Some("tags")
+    } else {
+        binding_field(&bound.context().profile, "scheme").filter(|name| *name != "folders")
+    };
+    if let Some(scheme) = scheme {
+        step.push_str(&format!(
+            " --scheme {}",
+            shell_word(scheme).unwrap_or_default()
+        ));
+    }
+    let mut maps: Vec<String> = Vec::new();
+    for group in &bound.groups {
+        let ext = match &group.signal {
+            plan::Signal::Mapped {
+                ext, saved: false, ..
+            }
+            | plan::Signal::Tagged { ext, .. } => ext,
+            _ => continue,
+        };
+        let route = format!("{ext}={}", group.name);
+        if !maps.contains(&route) {
+            maps.push(route);
+        }
+    }
+    for route in maps {
+        let route = shell_word(&route).unwrap_or_else(|| "EXT=NAME".to_owned());
+        step.push_str(&format!(" --map {route}"));
+    }
+    if bound.include_tagged {
+        step.push_str(" --include-tagged");
+    }
+    format!(
+        "{step} --export-plan NEW_PLAN_FILE\nIf you used --depth, --since or --allow-sync for that plan, add them too."
+    )
+}
+
+/// The shared refusal text, with this plan's own step in place of the
+/// folder-only one.
+fn with_own_step(text: String, bound: &plan::BoundPlan) -> String {
+    let generic = format!(
+        "sweep {} --export-plan NEW_PLAN_FILE",
+        etude_cli_support::quoted_path(&bound.root)
+    );
+    text.replace(&generic, &new_plan_step(bound))
+}
+
+fn own_step(
+    mut problem: etude_cli_support::problems::Problem,
+    bound: &plan::BoundPlan,
+) -> etude_cli_support::problems::Problem {
+    problem.text = with_own_step(problem.text, bound);
+    problem
+}
+
 /// Load a plan file for `apply --plan` or `propose`, and refuse one that is not
 /// sweep's or whose profile no longer holds.
 fn load_saved_plan(file: &Path, digest: &str) -> Result<plan::BoundPlan, ExitCode> {
@@ -1602,7 +1671,10 @@ fn load_saved_plan(file: &Path, digest: &str) -> Result<plan::BoundPlan, ExitCod
         return Err(problems::plan_of_another_tool("sweep", &maker).report());
     }
     if !bound.context().profile.starts_with("sweep-metadata-v1;") {
-        eprintln!("{}", problems::plan_stale_text("sweep", &bound.root));
+        eprintln!(
+            "{}",
+            with_own_step(problems::plan_stale_text("sweep", &bound.root), &bound)
+        );
         return Err(refusal(
             etude_cli_support::reason::Code::PlanStale,
             Some(etude_cli_support::reason::Subject::wait("plan", None)),
@@ -1980,7 +2052,18 @@ fn run_scan(path: &Path, args: &[String]) -> ExitCode {
     }
 
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let next = next_commands(args, quiet, exported.as_ref(), &plan.root, home.as_deref());
+    let next = next_commands(
+        args,
+        &Footer {
+            quiet,
+            exported: exported.as_ref(),
+            tags: plan.adds_tags,
+            read_contents: stats.is_some(),
+            root: &plan.root,
+            home: home.as_deref(),
+            tmp: Path::new("/tmp"),
+        },
+    );
     if plan.adds_tags {
         // Without an export, a tag plan has no step that scans again: tags are
         // added only from an exported plan, so its own footer says how.
@@ -2401,13 +2484,23 @@ fn shown_folder_name(name: &str) -> String {
 /// read as "apply this plan". So each step now says that it scans again, and the
 /// footer gives the export step that binds a plan. After --export-plan the one
 /// step is the bound apply with the real digest, which moves only that plan.
-fn next_commands(
-    args: &[String],
+/// What the steps under a plan depend on, besides the flags typed.
+struct Footer<'a> {
     quiet: bool,
-    exported: Option<&(String, String)>,
-    root: &Path,
-    home: Option<&Path>,
-) -> Vec<String> {
+    /// The file and digest after --export-plan.
+    exported: Option<&'a (String, String)>,
+    /// A tag plan: its exported apply adds tags and moves nothing.
+    tags: bool,
+    /// The content check ran on this scan (consent given, contents read).
+    read_contents: bool,
+    root: &'a Path,
+    home: Option<&'a Path>,
+    /// Where the Save step falls back to when ~ is inside the scan: `/tmp`.
+    tmp: &'a Path,
+}
+
+fn next_commands(args: &[String], footer: &Footer) -> Vec<String> {
+    let quiet = footer.quiet;
     use etude_cli_support::shell_word;
     let word = |text: &str, placeholder: &str| {
         if quiet {
@@ -2416,8 +2509,8 @@ fn next_commands(
             shell_word(text).unwrap_or_else(|| placeholder.to_owned())
         }
     };
-    if let Some((file, digest)) = exported {
-        return exported_steps(&word(file, "<file>"), digest);
+    if let Some((file, digest)) = footer.exported {
+        return exported_steps(&word(file, "<file>"), digest, footer.tags);
     }
     let path = match path_arg("", args) {
         Ok(Some(path)) => word(&path.to_string_lossy(), "<path>"),
@@ -2440,7 +2533,9 @@ fn next_commands(
     }
     // Only a scan reads contents. Apply and review take no --inspect-content,
     // so they cannot repeat what it held back; the export binds that choice.
-    let inspected = has(args, "--inspect-content");
+    // The warning is for a scan that really read them: one whose consent was
+    // declined read nothing, and its plan held nothing back that way.
+    let inspected = footer.read_contents;
     let mut next = Vec::new();
     // Review takes no --map, so it cannot offer the plan a mapped scan showed.
     if !has(args, "--map") {
@@ -2461,8 +2556,12 @@ fn next_commands(
                 .to_owned(),
         );
     }
-    let content = if inspected { " --inspect-content" } else { "" };
-    match plan_file_outside(root, home) {
+    let content = if has(args, "--inspect-content") {
+        " --inspect-content"
+    } else {
+        ""
+    };
+    match plan_file_outside(footer.root, footer.home, footer.tmp) {
         Some(file) => {
             next.push(format!(
                 "Save:   sweep {path}{carried}{content} --export-plan {file}"
@@ -2487,30 +2586,46 @@ fn next_commands(
 /// The step after an export: the bound apply with the real digest. Apply
 /// checks what the scan observed, so a change it never looked at, such as a
 /// file deeper than --depth, is not a refusal; it is not in the plan either.
-fn exported_steps(file: &str, digest: &str) -> Vec<String> {
+/// A tag plan adds tags and moves nothing, so it says that instead.
+fn exported_steps(file: &str, digest: &str, tags: bool) -> Vec<String> {
+    let what = if tags {
+        "This adds only the tags in this plan and moves nothing."
+    } else {
+        "This moves only this plan."
+    };
     vec![
         format!("Apply this plan: sweep apply --plan {file} --plan-digest {digest} --yes"),
-        "        This moves only this plan. It refuses if anything it scanned has changed."
-            .to_owned(),
+        format!("        {what} It refuses if anything it scanned has changed."),
     ]
 }
 
-/// The name the Save step offers, as typed: a new file that is outside the
-/// scanned folder whatever folder the person pastes it from. `~/sweep.plan`,
-/// unless the scan is of the home folder or a folder that holds it; then
-/// `/tmp/sweep.plan`. None when both are inside, as for a scan of `/`.
-fn plan_file_outside(root: &Path, home: Option<&Path>) -> Option<&'static str> {
+/// The name the Save step offers, as typed: a new file outside the scanned
+/// folder whatever folder the person pastes it from. In `~`, unless the scan
+/// is of the home folder or a folder that holds it; then in `tmp`. The name
+/// is `sweep.plan`, or `sweep-2.plan` and on when that is taken, because an
+/// export never writes over a file. None when no place or name is free, as
+/// for a scan of `/`.
+fn plan_file_outside(root: &Path, home: Option<&Path>, tmp: &Path) -> Option<String> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let tmp = Path::new("/tmp");
-    [("~/sweep.plan", home), ("/tmp/sweep.plan", Some(tmp))]
+    let tmp_shown = tmp.display().to_string();
+    [("~", home), (tmp_shown.as_str(), Some(tmp))]
         .into_iter()
-        .find(|(_, folder)| {
-            folder
-                .filter(|folder| folder.is_absolute())
-                .and_then(|folder| folder.canonicalize().ok())
-                .is_some_and(|folder| !folder.join("sweep.plan").starts_with(&root))
+        .find_map(|(shown, folder)| {
+            let folder = folder
+                .filter(|folder| folder.is_absolute())?
+                .canonicalize()
+                .ok()?;
+            if folder.join("sweep.plan").starts_with(&root) {
+                return None;
+            }
+            (1..=999)
+                .map(|n| match n {
+                    1 => "sweep.plan".to_owned(),
+                    n => format!("sweep-{n}.plan"),
+                })
+                .find(|name| folder.join(name).symlink_metadata().is_err())
+                .map(|name| format!("{shown}/{name}"))
         })
-        .map(|(file, _)| file)
 }
 
 /// The grace window keeps files changed in the last day out of the plan. A file
@@ -3627,7 +3742,7 @@ fn stale_apply_text(
     if p.is_live() || operation == "review" {
         problems::folder_changed_just_now("sweep", &p.root)
     } else {
-        problems::plan_stale_text("sweep", &p.root)
+        with_own_step(problems::plan_stale_text("sweep", &p.root), p)
     }
 }
 
@@ -4006,8 +4121,11 @@ fn cmd_propose(args: &[String]) -> ExitCode {
     };
     let context = current_binding_context(&bound.context().profile);
     if let Err(error) = bound.validate(&context) {
-        return etude_cli_support::problems::plan_check_problem("sweep", &bound.root, &error)
-            .report();
+        return own_step(
+            etude_cli_support::problems::plan_check_problem("sweep", &bound.root, &error),
+            &bound,
+        )
+        .report();
     }
     let bytes = match read_proposal(Path::new(&proposal)) {
         Ok(bytes) => bytes,
@@ -5553,28 +5671,38 @@ mod tests {
         args.iter().map(|a| (*a).to_owned()).collect()
     }
 
-    /// A scratch folder that stands for the scanned folder, and one for HOME
-    /// beside it, so the Save step's file is outside the scan.
-    fn scene(label: &str) -> (PathBuf, PathBuf) {
+    /// A scratch folder that stands for the scanned folder, one for HOME and
+    /// one for /tmp beside it, so no test writes the real /tmp.
+    fn scene(label: &str) -> (PathBuf, PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!("sweep-next-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        let (root, home) = (base.join("inbox"), base.join("home"));
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&home).unwrap();
-        (root, home)
+        let (root, home, tmp) = (base.join("inbox"), base.join("home"), base.join("tmp"));
+        for folder in [&root, &home, &tmp] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        (root, home, tmp)
+    }
+
+    fn footer<'a>(root: &'a Path, home: &'a Path, tmp: &'a Path) -> Footer<'a> {
+        Footer {
+            quiet: false,
+            exported: None,
+            tags: false,
+            read_contents: false,
+            root,
+            home: Some(home),
+            tmp,
+        }
     }
 
     /// The footer under a plan must not read as "apply this plan": apply and
     /// review scan again, and the export step is the one that binds a plan.
     #[test]
     fn next_steps_say_that_apply_and_review_scan_again() {
-        let (root, home) = scene("plain");
+        let (root, home, tmp) = scene("plain");
         let next = next_commands(
             &words(&["inbox", "--depth", "2"]),
-            false,
-            None,
-            &root,
-            Some(&home),
+            &footer(&root, &home, &tmp),
         );
         assert_eq!(
             next,
@@ -5590,34 +5718,61 @@ mod tests {
     }
 
     /// A scan of the home folder, or of a folder that holds it, cannot save
-    /// to ~/; a scan that holds /tmp as well gets no example name at all.
+    /// to ~/; a scan that holds the other place as well gets no example name.
     #[test]
     fn the_save_file_is_always_outside_the_scanned_folder() {
-        let (root, home) = scene("outside");
-        assert_eq!(plan_file_outside(&root, Some(&home)), Some("~/sweep.plan"));
+        let (root, home, tmp) = scene("outside");
+        let shown_tmp = |name: &str| Some(format!("{}/{name}", tmp.display()));
         assert_eq!(
-            plan_file_outside(&home, Some(&home)),
-            Some("/tmp/sweep.plan")
+            plan_file_outside(&root, Some(&home), &tmp).as_deref(),
+            Some("~/sweep.plan")
         );
         assert_eq!(
-            plan_file_outside(root.parent().unwrap(), Some(&home)),
-            Some("/tmp/sweep.plan")
+            plan_file_outside(&home, Some(&home), &tmp),
+            shown_tmp("sweep.plan")
         );
-        assert_eq!(plan_file_outside(&root, None), Some("/tmp/sweep.plan"));
-        assert_eq!(plan_file_outside(Path::new("/"), Some(&home)), None);
-        let next = next_commands(&words(&["/"]), false, None, Path::new("/"), Some(&home));
+        let base = root.parent().unwrap();
+        assert_eq!(plan_file_outside(base, Some(&home), &tmp), None);
+        assert_eq!(
+            plan_file_outside(&root, None, &tmp),
+            shown_tmp("sweep.plan")
+        );
+        assert_eq!(plan_file_outside(Path::new("/"), Some(&home), &tmp), None);
+        let next = next_commands(&words(&["/"]), &footer(Path::new("/"), &home, &tmp));
         assert_eq!(next[4], "Save:   sweep / --export-plan FILE");
         assert!(
             next[5].starts_with("        Replace FILE with a new file name outside this folder.")
         );
     }
 
+    /// An export never writes over a file, so a name already taken, by an
+    /// earlier Save or by anything else, is skipped in both places.
+    #[test]
+    fn the_save_file_is_a_name_not_taken_yet() {
+        let (root, home, tmp) = scene("taken");
+        std::fs::write(home.join("sweep.plan"), "").unwrap();
+        assert_eq!(
+            plan_file_outside(&root, Some(&home), &tmp).as_deref(),
+            Some("~/sweep-2.plan")
+        );
+        std::fs::create_dir(home.join("sweep-2.plan")).unwrap();
+        assert_eq!(
+            plan_file_outside(&root, Some(&home), &tmp).as_deref(),
+            Some("~/sweep-3.plan")
+        );
+        std::fs::write(tmp.join("sweep.plan"), "").unwrap();
+        assert_eq!(
+            plan_file_outside(&home, Some(&home), &tmp),
+            Some(format!("{}/sweep-2.plan", tmp.display()))
+        );
+    }
+
     /// A mapped scan offers no review, and still says what apply does.
     #[test]
     fn mapped_next_steps_keep_the_map_and_the_warning() {
-        let (root, home) = scene("mapped");
+        let (root, home, tmp) = scene("mapped");
         let args = words(&["in box", "--map", "fig=Design"]);
-        let next = next_commands(&args, false, None, &root, Some(&home));
+        let next = next_commands(&args, &footer(&root, &home, &tmp));
         assert_eq!(
             next[0],
             "Apply:  sweep apply 'in box' --map fig=Design --yes"
@@ -5630,53 +5785,96 @@ mod tests {
         assert!(!next.iter().any(|line| line.contains("review")));
     }
 
-    /// Apply and review take no --inspect-content, so the footer says what
-    /// that drops, and the Save step keeps the content check.
+    const CONTENT_LINE: &str = "        Apply and review do not read file contents. They can move a file that the content check held back.";
+
+    /// Apply and review take no --inspect-content, so after a scan that read
+    /// contents the footer says what that drops, and Save keeps the check.
     #[test]
     fn inspected_next_steps_name_the_checks_apply_skips() {
-        let (root, home) = scene("inspect");
+        let (root, home, tmp) = scene("inspect");
         let args = words(&["inbox", "--inspect-content"]);
-        let next = next_commands(&args, false, None, &root, Some(&home));
+        let read = Footer {
+            read_contents: true,
+            ..footer(&root, &home, &tmp)
+        };
+        let next = next_commands(&args, &read);
         assert_eq!(next[2], "Apply:  sweep apply inbox --yes");
-        assert_eq!(
-            next[4],
-            "        Apply and review do not read file contents. They can move a file that the content check held back."
-        );
+        assert_eq!(next[4], CONTENT_LINE);
         assert_eq!(
             next[5],
             "Save:   sweep inbox --inspect-content --export-plan ~/sweep.plan"
         );
     }
 
+    /// Consent declined, or no terminal: nothing was read, so nothing was held
+    /// back by contents and the line would be false.
+    #[test]
+    fn a_scan_that_read_no_contents_has_no_content_line() {
+        let (root, home, tmp) = scene("unread");
+        let args = words(&["inbox", "--inspect-content"]);
+        let next = next_commands(&args, &footer(&root, &home, &tmp));
+        assert!(!next.iter().any(|line| line == CONTENT_LINE), "{next:?}");
+        assert_eq!(
+            next[4],
+            "Save:   sweep inbox --inspect-content --export-plan ~/sweep.plan"
+        );
+    }
+
     #[test]
     fn quiet_next_steps_name_no_path() {
-        let (root, home) = scene("quiet");
-        let next = next_commands(&words(&["inbox"]), true, None, &root, Some(&home));
+        let (root, home, tmp) = scene("quiet");
+        let quiet = Footer {
+            quiet: true,
+            ..footer(&root, &home, &tmp)
+        };
+        let next = next_commands(&words(&["inbox"]), &quiet);
         assert!(next.iter().all(|line| !line.contains("inbox")));
         assert!(next.contains(&"Apply:  sweep apply <path> --yes".to_owned()));
         assert!(next.contains(&"Save:   sweep <path> --export-plan ~/sweep.plan".to_owned()));
     }
 
     /// After --export-plan the step is the bound apply with the real digest,
-    /// and no step that scans again.
+    /// and no step that scans again. A tag plan says it adds tags.
     #[test]
     fn exported_next_step_is_the_bound_apply_with_the_real_digest() {
-        let (root, home) = scene("exported");
+        let (root, home, tmp) = scene("exported");
         let exported = ("/tmp/my plan".to_owned(), "ab12".to_owned());
-        let next = next_commands(
-            &words(&["inbox"]),
-            false,
-            Some(&exported),
-            &root,
-            Some(&home),
-        );
+        let bound = Footer {
+            exported: Some(&exported),
+            ..footer(&root, &home, &tmp)
+        };
+        let apply = "Apply this plan: sweep apply --plan '/tmp/my plan' --plan-digest ab12 --yes";
         assert_eq!(
-            next,
+            next_commands(&words(&["inbox"]), &bound),
             [
-                "Apply this plan: sweep apply --plan '/tmp/my plan' --plan-digest ab12 --yes",
+                apply,
                 "        This moves only this plan. It refuses if anything it scanned has changed.",
             ]
         );
+        let tags = Footer {
+            tags: true,
+            ..bound
+        };
+        assert_eq!(
+            next_commands(&words(&["inbox"]), &tags),
+            [
+                apply,
+                "        This adds only the tags in this plan and moves nothing. It refuses if anything it scanned has changed.",
+            ]
+        );
+    }
+
+    /// The help says what apply does now, and how to apply a saved plan.
+    #[test]
+    fn help_says_apply_scans_again_and_names_the_exact_plan_form() {
+        for line in [
+            "    sweep apply PATH --yes       scan again; move every group found then\n",
+            "    sweep PATH --export-plan F   save the plan to F, a new file outside PATH\n",
+            "    sweep apply --plan F --plan-digest SHA --yes\n                                 move exactly the saved plan\n",
+        ] {
+            assert!(USAGE.contains(line), "help lost: {line}");
+        }
+        assert!(!USAGE.contains("move every proposed group"));
     }
 
     #[test]

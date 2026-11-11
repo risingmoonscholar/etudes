@@ -170,15 +170,20 @@ fn a_blocked_folder_gets_no_in_use_line_and_no_steps() {
 }
 
 /// Save, pasted as printed, then the exact-plan command it prints, pasted as
-/// printed, moves the files.
-fn save_then_apply(s: &Scene, cwd: &Path, path: &str) {
+/// printed, moves the files. `plan` is the name the Save step must offer.
+fn save_then_apply(s: &Scene, cwd: &Path, path: &str, plan: &str) {
     let out = text(&sweep(s, cwd, &[path, "--since", "0"]));
     let save = step(&out, "Save:   ");
-    assert!(save.ends_with("--export-plan ~/sweep.plan"), "{out}");
+    assert!(save.ends_with(&format!("--export-plan ~/{plan}")), "{out}");
     let saved = paste(s, cwd, save);
     let saved_text = text(&saved);
     assert!(saved.status.success(), "{save}\n{saved_text}");
-    assert!(s.home.join("sweep.plan").is_file(), "{saved_text}");
+    assert!(s.home.join(plan).is_file(), "{saved_text}");
+    assert!(
+        saved_text
+            .contains("This moves only this plan. It refuses if anything it scanned has changed."),
+        "{saved_text}"
+    );
     let apply = step(&saved_text, "Apply this plan: ");
     assert!(!apply.contains("SHA"), "{apply}");
     let applied = paste(s, cwd, apply);
@@ -194,23 +199,81 @@ fn save_then_apply(s: &Scene, cwd: &Path, path: &str) {
 #[test]
 fn the_save_line_pastes_from_inside_the_folder() {
     let s = scene("inside");
-    save_then_apply(&s, &s.root, ".");
+    save_then_apply(&s, &s.root, ".", "sweep.plan");
 }
 
 #[test]
 fn the_save_line_pastes_from_outside_the_folder() {
     let s = scene("outside");
-    save_then_apply(&s, &s.base, s.root.to_str().unwrap());
+    save_then_apply(&s, &s.base, s.root.to_str().unwrap(), "sweep.plan");
 }
 
-/// After an export, a tag plan prints the exact apply with the real digest,
-/// not the generic `--plan FILE --plan-digest SHA`.
+/// The first plan file stays after its apply. The next scan's Save step must
+/// offer a name that is free, or the paste fails with "already exists".
 #[test]
-fn an_exported_tag_plan_prints_the_exact_apply() {
-    let s = scene("tags");
-    let plan = s.home.join("tags.plan");
-    let out = text(&sweep(
-        &s,
+fn the_save_line_pastes_a_second_time() {
+    let s = scene("twice");
+    save_then_apply(&s, &s.root, ".", "sweep.plan");
+    for name in ["a.pdf", "b.pdf", "c.pdf"] {
+        fs::rename(s.root.join("Documents").join(name), s.root.join(name)).unwrap();
+    }
+    fs::remove_dir(s.root.join("Documents")).unwrap();
+    save_then_apply(&s, &s.root, ".", "sweep-2.plan");
+    assert!(s.home.join("sweep.plan").is_file());
+}
+
+const TAG: &str = "com.apple.metadata:_kMDItemUserTags";
+
+/// The tag names on a file, read back through `xattr` and `plutil`.
+fn tags_of(path: &Path) -> Vec<String> {
+    let hex = Command::new("xattr")
+        .args(["-px", TAG])
+        .arg(path)
+        .output()
+        .unwrap();
+    if !hex.status.success() {
+        return Vec::new();
+    }
+    let digits: Vec<u8> = hex
+        .stdout
+        .iter()
+        .copied()
+        .filter(u8::is_ascii_hexdigit)
+        .collect();
+    let bytes: Vec<u8> = digits
+        .chunks(2)
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect();
+    let mut child = Command::new("plutil")
+        .args(["-convert", "json", "-o", "-", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), &bytes).unwrap();
+    let json = String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap();
+    json.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .filter(|t| !t.is_empty())
+        .map(|t| t.trim_matches('"').to_owned())
+        .collect()
+}
+
+fn names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(root)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+fn export_tags(s: &Scene, plan: &Path) -> String {
+    text(&sweep(
+        s,
         &s.base,
         &[
             s.root.to_str().unwrap(),
@@ -223,7 +286,17 @@ fn an_exported_tag_plan_prints_the_exact_apply() {
             "--export-plan",
             plan.to_str().unwrap(),
         ],
-    ));
+    ))
+}
+
+/// After an export, a tag plan prints the exact apply with the real digest,
+/// says it adds tags and moves nothing, and that is what pasting it does.
+#[test]
+fn an_exported_tag_plan_prints_the_exact_apply_and_it_only_adds_tags() {
+    let s = scene("tags");
+    fs::write(s.root.join("notes.txt"), "not mapped").unwrap();
+    let plan = s.home.join("tags.plan");
+    let out = export_tags(&s, &plan);
     let apply = step(&out, "Apply this plan: ");
     assert!(
         apply.starts_with(&format!(
@@ -234,4 +307,88 @@ fn an_exported_tag_plan_prints_the_exact_apply() {
     );
     assert!(!apply.contains("SHA"), "{out}");
     assert!(!out.contains("--plan FILE"), "{out}");
+    assert!(
+        out.contains("        This adds only the tags in this plan and moves nothing. It refuses if anything it scanned has changed."),
+        "{out}"
+    );
+    assert!(!out.contains("This moves only this plan."), "{out}");
+    let before = names(&s.root);
+    let applied = paste(&s, &s.base, apply);
+    assert!(applied.status.success(), "{apply}\n{}", text(&applied));
+    assert_eq!(names(&s.root), before, "a file moved");
+    for name in ["a.pdf", "b.pdf", "c.pdf"] {
+        assert_eq!(tags_of(&s.root.join(name)), ["Receipts"], "{name}");
+    }
+    assert!(tags_of(&s.root.join("notes.txt")).is_empty());
+}
+
+/// A stale tag plan's recovery step makes a tag plan again, not a folder plan.
+#[test]
+fn a_stale_tag_plan_says_how_to_make_a_tag_plan_again() {
+    let s = scene("stale-tags");
+    let plan = s.home.join("old.plan");
+    let out = export_tags(&s, &plan);
+    let apply = step(&out, "Apply this plan: ").to_owned();
+    fs::write(s.root.join("d.pdf"), "a file added after the plan").unwrap();
+    let refused = paste(&s, &s.base, &apply);
+    let said = text(&refused);
+    assert_eq!(refused.status.code(), Some(2), "{said}");
+    let again = step(&said, "Make a new plan: ");
+    assert_eq!(
+        again,
+        format!(
+            "sweep '{}' --scheme tags --map pdf=Receipts --export-plan NEW_PLAN_FILE",
+            s.root.display()
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("If you used --depth, --since or --allow-sync for that plan, add them too."),
+        "{said}"
+    );
+    let fresh = s.home.join("new.plan");
+    let remade = paste(
+        &s,
+        &s.base,
+        &format!(
+            "{} --since 0",
+            again.replace("NEW_PLAN_FILE", fresh.to_str().unwrap())
+        ),
+    );
+    let remade_text = text(&remade);
+    assert!(remade.status.success(), "{remade_text}");
+    assert!(
+        remade_text.contains("Nothing has been tagged or moved."),
+        "{remade_text}"
+    );
+    assert!(
+        remade_text.contains("This adds only the tags in this plan"),
+        "{remade_text}"
+    );
+}
+
+/// With no terminal the consent prompt reads no answer, so no contents are
+/// read: the footer must not warn that apply skips a check that never ran.
+#[test]
+fn inspect_content_without_consent_adds_no_content_line() {
+    let s = scene("unread");
+    let out = text(&sweep(
+        &s,
+        &s.base,
+        &[
+            s.root.to_str().unwrap(),
+            "--since",
+            "0",
+            "--inspect-content",
+        ],
+    ));
+    assert!(out.contains("Contents were not read"), "{out}");
+    assert!(
+        !out.contains("Apply and review do not read file contents"),
+        "{out}"
+    );
+    assert!(
+        step(&out, "Save:   ").ends_with("--inspect-content --export-plan ~/sweep.plan"),
+        "{out}"
+    );
 }
