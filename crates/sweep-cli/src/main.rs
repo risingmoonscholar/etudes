@@ -4077,13 +4077,17 @@ fn newest_undoable(
 
 /// The newest other folder with an apply left to reverse. A record that will not
 /// open is passed over here: naming the folder then gives its own honest answer.
-fn other_folder_to_undo(sl: &dyn etude_core::journal::Sealer, root: &Path) -> Option<PathBuf> {
+/// Its folder and the id of that apply's record.
+fn other_folder_to_undo(
+    sl: &dyn etude_core::journal::Sealer,
+    root: &Path,
+) -> Option<(PathBuf, String)> {
     etude_core::journal::candidates_with_ties("sweep")
         .ok()?
         .into_iter()
         .filter_map(|(id, _)| id.load("sweep", sl).ok())
         .find(|j| j.root != root && j.root.is_dir() && !journal_is_fully_undone(j, sl))
-        .map(|j| j.root)
+        .map(|j| (j.root, j.id))
 }
 
 /// An undo record that could not be opened. No id means the folder of records
@@ -4706,10 +4710,7 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
             lines.extend(etude_cli_support::problems::same_time_step_lines(
                 "sweep",
                 &ids,
-                &format!(
-                    "To see them, run: sweep status {}",
-                    etude_cli_support::quoted_path(&target)
-                ),
+                &format!("To list every id without moving anything, run: {folder_step} --json"),
             ));
             if not_opened > 0 {
                 lines.push(may_be_more());
@@ -5090,7 +5091,7 @@ fn run_undo(
         // Only `sweep undo` with no folder keeps stopping at this record. Anyone
         // who named a folder is not held up by it.
         if asked == UndoAsked::Newest
-            && let Some(older) = other_folder_to_undo(sl, &root)
+            && let Some((older, older_id)) = other_folder_to_undo(sl, &root)
         {
             match older
                 .canonicalize()
@@ -5113,14 +5114,33 @@ fn run_undo(
                         "sweep",
                         &ids,
                         &format!(
-                            "To see them, run: sweep status {}",
-                            etude_cli_support::quoted_path(&older)
+                            "To list every id without moving anything, run: {} --json",
+                            undo_step(&older)
                         ),
                     ) {
                         println!("  {line}");
                     }
                 }
-                _ => println!(
+                // That folder's own undo would stop at a record that does not
+                // open. The apply found above opens, and its id reaches it.
+                Ok(Err(RecordError { id: Some(bad), .. })) => {
+                    println!(
+                        "  sweep undo with no folder keeps stopping at this record. {} stops too, at the undo record {}, which cannot be opened.",
+                        undo_step(&older),
+                        etude_cli_support::shown_text(&bad)
+                    );
+                    println!(
+                        "  To undo the apply of {} that opens, run: {}",
+                        etude_cli_support::shown(&older),
+                        undo_id_step(&older_id)
+                    );
+                }
+                Ok(Err(_)) | Err(()) => println!(
+                    "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
+                    etude_cli_support::shown(&older),
+                    undo_id_step(&older_id)
+                ),
+                Ok(Ok(_)) => println!(
                     "  sweep undo with no folder keeps stopping at this record. To undo the apply of {}, run: {}",
                     etude_cli_support::shown(&older),
                     undo_step(&older)

@@ -704,3 +704,171 @@ fn a_mixed_tie_names_only_the_records_with_work_left() {
         format!(r#"["{}", "{}"]"#, live[0], live[1])
     );
 }
+
+/// A record of `case.state` that does not open: bytes no key can open.
+fn unopened_record(case: &Case, id: &str, secs: u64) {
+    std::fs::write(case.record(id), b"synthetic bytes, not a sealed record").unwrap();
+    case.set_time(id, secs);
+}
+
+/// Seven tied live records of one folder and one older record that does not
+/// open. After `undo --id` of one, the six left get five steps and a line for
+/// the sixth whose step lists every id and moves nothing, and the record that
+/// does not open is still counted.
+#[test]
+fn after_an_id_undo_more_than_five_tied_are_reachable_and_unopened_is_counted() {
+    let case = Case::new("seven");
+    let root = case.first.0.clone();
+    let kinds = [
+        ("report", "pdf"),
+        ("photo", "jpg"),
+        ("song", "mp3"),
+        ("bundle", "zip"),
+        ("clip", "mov"),
+        ("sheet", "xlsx"),
+        ("track", "wav"),
+    ];
+    let mut ids: Vec<String> = kinds
+        .iter()
+        .map(|(stem, ext)| case.apply_kind(&root, stem, ext))
+        .collect();
+    for id in &ids {
+        case.set_time(id, TIED_SECS);
+    }
+    unopened_record(&case, "unopened", TIED_SECS - 100);
+    ids.sort();
+    let first = ids.remove(0);
+    let out = case.run(&["undo", "--id", &first]);
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    let folder = format!("sweep undo '{}'", root.to_str().unwrap());
+    let mut expected = vec![format!(
+        "6 applies of this folder that can still be undone have the same time, so {folder} stops and moves nothing."
+    )];
+    expected.push(format!(
+        "To undo one of them, run: sweep undo --id {}",
+        ids[0]
+    ));
+    for id in &ids[1..5] {
+        expected.push(format!("Or run: sweep undo --id {id}"));
+    }
+    expected.push(format!(
+        "1 more has the same time. To list every id without moving anything, run: {folder} --json"
+    ));
+    expected.push(
+        "1 undo record could not be opened, so more applies of this folder may remain.".to_owned(),
+    );
+    assert!(shown.contains(&expected.join("\n")), "{shown}");
+
+    // The printed listing step, pasted: it refuses, moves nothing, and its
+    // JSON lists all six.
+    let homes = |case: &Case| -> Vec<usize> {
+        kinds
+            .iter()
+            .map(|(stem, ext)| case.kind_home(&root, stem, ext))
+            .collect()
+    };
+    let before = homes(&case);
+    let step = shown
+        .lines()
+        .find_map(|line| {
+            line.split_once("moving anything, run: ")
+                .map(|(_, step)| step.to_owned())
+        })
+        .unwrap();
+    let out = case.shell(&step);
+    assert_eq!(out.status.code(), Some(3), "{step}: {}", text(&out));
+    let value = json(&out);
+    assert_eq!(value.get("v['reason']['code']"), r#""journal_times_tied""#);
+    assert_eq!(
+        value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
+        format!(
+            "[{}]",
+            ids.iter()
+                .map(|id| format!(r#""{id}""#))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    );
+    assert_eq!(homes(&case), before);
+}
+
+/// The hint past a stopped record names another folder's undo. When that
+/// undo would stop at a record that does not open, the hint says so and gives
+/// the --id step of the apply that opens, and that step works.
+#[test]
+fn the_hint_past_a_stopped_record_is_true_when_that_folder_undo_stops_at_an_unopened_record() {
+    let case = Case::new("hint-unopened");
+    let newest = temp("hint-unopened-n");
+    let g = case.apply(&case.first.0);
+    let n = case.apply(&newest.0);
+    std::fs::remove_file(newest.0.join("Documents/report_1.pdf")).unwrap();
+    case.set_time(&g, TIED_SECS - 20);
+    unopened_record(&case, "unopened", TIED_SECS - 10);
+    case.set_time(&n, TIED_SECS);
+    let out = case.run(&["undo"]);
+    let shown = text(&out);
+    let folder = format!("sweep undo '{}'", case.first.0.to_str().unwrap());
+    assert!(
+        shown.contains(&format!(
+            "  sweep undo with no folder keeps stopping at this record. {folder} stops too, at the undo record unopened, which cannot be opened.\n  To undo the apply of {} that opens, run: sweep undo --id {g}",
+            case.first.0.to_str().unwrap()
+        )),
+        "{shown}"
+    );
+    // The folder step really does stop there, and the id step works.
+    let out = case.shell(&folder);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(text(&out).contains("cannot be opened"), "{}", text(&out));
+    let out = case.shell(&format!("sweep undo --id {g}"));
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(case.files_home(&case.first.0), 3);
+}
+
+/// Copy a record's first frame, its plan, under a new id: the new record says
+/// its files were never moved, and the old record owns those same moves.
+/// Sweep's records bind their id by file name, so the copy opens.
+fn planned_copy(case: &Case, from: &str, to: &str) {
+    let raw = std::fs::read(case.record(from)).unwrap();
+    let base = u32::from_le_bytes(raw[0..4].try_into().unwrap()) as usize;
+    std::fs::write(case.record(to), &raw[..4 + base]).unwrap();
+}
+
+/// The newest record N says its files were never moved; the older record C
+/// moved them, so undo's search lands on C. C has the same time as D, so the
+/// order between them is unknown and undo refuses, naming C and D. With one
+/// second between C and D the same undo reverses C.
+#[test]
+fn a_search_that_lands_on_a_tied_record_refuses() {
+    for apart in [0, 1] {
+        let case = Case::new("lands");
+        let root = case.first.0.clone();
+        let c = case.apply_kind(&root, "report", "pdf");
+        let d = case.apply_kind(&root, "photo", "jpg");
+        let mut parts: Vec<String> = c.split('-').map(str::to_owned).collect();
+        parts[0] = (parts[0].parse::<u128>().unwrap() + 1_000_000_000_000).to_string();
+        let n = parts.join("-");
+        planned_copy(&case, &c, &n);
+        case.set_time(&c, TIED_SECS);
+        case.set_time(&d, TIED_SECS - apart);
+        case.set_time(&n, TIED_SECS + 10);
+        let out = case.run(&["undo", root.to_str().unwrap(), "--json"]);
+        let value = json(&out);
+        if apart == 0 {
+            assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+            assert_eq!(value.get("v['reason']['code']"), r#""journal_times_tied""#);
+            let mut tied = [c.clone(), d.clone()];
+            tied.sort();
+            assert_eq!(
+                value.get("[r['operation_id'] for r in v['details']['same_time_records']]"),
+                format!(r#"["{}", "{}"]"#, tied[0], tied[1])
+            );
+            assert_eq!(case.kind_home(&root, "report", "pdf"), 0);
+        } else {
+            assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+            assert_eq!(value.get("v['recovery']['operation']"), format!(r#""{c}""#));
+            assert_eq!(case.kind_home(&root, "report", "pdf"), 3);
+        }
+        assert_eq!(case.kind_home(&root, "photo", "jpg"), 0);
+    }
+}

@@ -638,9 +638,10 @@ pub fn same_time_step_lines(tool: &str, ids: &[String], more_hint: &str) -> Vec<
         })
         .collect();
     if steps.len() > SAME_TIME_LISTED {
+        let more = steps.len() - SAME_TIME_LISTED;
         lines.push(format!(
-            "{} more have the same time. {more_hint}",
-            steps.len() - SAME_TIME_LISTED
+            "{more} more {} the same time. {more_hint}",
+            if more == 1 { "has" } else { "have" }
         ));
     }
     lines
