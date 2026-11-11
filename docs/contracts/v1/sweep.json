@@ -61,7 +61,7 @@
     "details": "may contain operation paths; treat as sensitive"
   },
   "details": {
-    "schema_version": 17,
+    "schema_version": 18,
     "tool_version": "<manifest-version>",
     "operation_id": "<per-invocation>",
     "status": "done",
@@ -340,6 +340,15 @@
           "apply"
         ],
         "why": "Routes could not be saved to the profile; the result says whether files moved. Fix the profile or its folder, or add the route by hand."
+      },
+      {
+        "code": "journal_times_tied",
+        "retry": "after_change",
+        "subject_kind": "journal",
+        "operations": [
+          "undo"
+        ],
+        "why": "Two or more saved journals carry the same time, so the tool cannot tell which one is newer and guesses nothing. Each one still opens by its id; details.same_time_records lists each id with its step."
       }
     ],
     "contract_query": {
@@ -751,7 +760,8 @@
       "recovery_id": "durable_journal_id_in_recovery.operation;_top_level_operation_id_remains_per_invocation",
       "side_effects": "none;_no_key_creation_migration_pruning_or_file_content_reads",
       "disclosure": "path_query_returns_newest_first_without_file_names",
-      "command": "undo_by_that_row's_id;_null_when_nothing_is_left_to_reverse"
+      "command": "undo_by_that_row's_id;_null_when_nothing_is_left_to_reverse",
+      "same_time": "records_with_the_same_modification_time_are_still_listed;_each_such_row_adds_same_time_as_with_the_other_ids;_absent_otherwise;_their_order_is_by_id_and_says_nothing_about_which_is_newer"
     },
     "undo_lookup": {
       "queries": [
@@ -761,7 +771,8 @@
       ],
       "by_id": "opens_only_that_record_and_searches_no_other_to_choose_it;_other_records_are_read_only_to_keep_a_folder_they_may_need",
       "by_id_refusals": "a_path_beside_it,_a_repeat,_an_empty_value_or_an_invalid_id_is_invalid_arguments;_an_id_no_record_holds_is_unknown_operation",
-      "unreadable_record": "undo_and_undo_path_stop_at_it;_details.records_that_open_lists_up_to_5_live_records,_newest_first,_each_with_its_step"
+      "unreadable_record": "undo_and_undo_path_stop_at_it;_details.records_that_open_lists_up_to_5_live_records,_newest_first,_each_with_its_step",
+      "same_time": "undo_and_undo_path_refuse_with_journal_times_tied_when_two_records_have_the_same_modification_time;_no_record_is_guessed_newer;_details.same_time_records_lists_every_tied_id_with_its_undo_--id_step;_undo_--id_is_unaffected"
     },
     "tag_scheme": {
       "flag": "--scheme tags",

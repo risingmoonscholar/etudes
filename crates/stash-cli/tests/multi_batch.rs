@@ -417,6 +417,137 @@ fn equal_creation_time_refuses_latest_without_mutation() {
     );
     assert_eq!(before, f.snapshot());
 }
+/// Run a printed step as a person pastes it, with only this build on PATH.
+fn shell(f: &Fixture, step: &str) -> Output {
+    let bin = Path::new(env!("CARGO_BIN_EXE_stash")).parent().unwrap();
+    Command::new("/bin/sh")
+        .env("ETUDE_STATE_DIR", f.0.join("state"))
+        .env("ETUDE_JOURNAL_KEY", "56".repeat(32))
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .current_dir(f.0.join("tree"))
+        .args(["-c", step])
+        .output()
+        .unwrap()
+}
+/// The refusal for records with the same time: every id named, its own code,
+/// nothing restored, and each printed step works while the times still tie.
+fn same_time_refusal_names_each_and_steps_work(f: &Fixture, ids: &[&str]) {
+    let mut sorted: Vec<&str> = ids.to_vec();
+    sorted.sort();
+    let before = f.snapshot();
+    let out = f.command().args(["pop", "--latest"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(
+        stderr,
+        format!(
+            "stash: 2 stashes have the same time, so stash cannot tell which one is newer. Nothing was restored.\n\
+             To restore one of them, run: stash pop --id {a}\n\
+             Or run: stash pop --id {b}\n\
+             To see every stash, run: stash status --all\n",
+            a = sorted[0],
+            b = sorted[1]
+        )
+    );
+    assert_eq!(before, f.snapshot());
+    let out = f
+        .command()
+        .args(["pop", "--latest", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    assert_eq!(
+        json_query(&out, "value['reason']['code']"),
+        "journal_times_tied"
+    );
+    assert_eq!(json_query(&out, "value['reason']['retry']"), "after_change");
+    assert_eq!(
+        json_query(&out, "value['reason']['subject']['kind']"),
+        "journal"
+    );
+    assert_eq!(
+        json_query(
+            &out,
+            "' '.join(r['operation_id'] for r in value['details']['same_time_records'])"
+        ),
+        sorted.join(" ")
+    );
+    assert_eq!(
+        json_query(
+            &out,
+            "'|'.join(r['command'] for r in value['details']['same_time_records'])"
+        ),
+        format!("stash pop --id {}|stash pop --id {}", sorted[0], sorted[1])
+    );
+    assert_eq!(before, f.snapshot());
+    let steps: Vec<&str> = stderr
+        .lines()
+        .filter_map(|line| line.split_once("run: ").map(|(_, step)| step))
+        .collect();
+    assert_eq!(steps.len(), 3, "{stderr}");
+    success(&shell(f, steps[2]));
+    for step in &steps[..2] {
+        equal_mtimes(f);
+        let out = shell(f, step);
+        assert!(
+            out.status.success(),
+            "{step}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+#[test]
+fn legacy_tie_names_both_stashes_and_each_pop_step_works() {
+    let f = Fixture::new();
+    let one = f.file("one.txt", b"one");
+    let a = f.stash(None);
+    rebind(&f, &a, "legacy-a", true);
+    let two = f.file("two.txt", b"two");
+    let b = f.stash(None);
+    rebind(&f, &b, "legacy-b", true);
+    equal_mtimes(&f);
+    same_time_refusal_names_each_and_steps_work(&f, &["legacy-b", "legacy-a"]);
+    assert_eq!(fs::read(one).unwrap(), b"one");
+    assert_eq!(fs::read(two).unwrap(), b"two");
+}
+#[test]
+fn creation_tie_names_both_stashes_and_each_pop_step_works() {
+    let f = Fixture::new();
+    let one = f.file("one.txt", b"one");
+    let a = f.stash(None);
+    let two = f.file("two.txt", b"two");
+    let b = f.stash(None);
+    let mut parts = b.split('-').map(str::to_string).collect::<Vec<_>>();
+    parts[0] = a.split('-').next().unwrap().into();
+    let tied = parts.join("-");
+    rebind(&f, &b, &tied, false);
+    same_time_refusal_names_each_and_steps_work(&f, &[&a, &tied]);
+    assert_eq!(fs::read(one).unwrap(), b"one");
+    assert_eq!(fs::read(two).unwrap(), b"two");
+}
+/// A pop by folder needs one live stash and no order, so records with the
+/// same time do not block it.
+#[test]
+fn path_pop_is_not_blocked_by_same_time_records() {
+    let f = Fixture::new();
+    let other = f.0.join("other");
+    fs::create_dir_all(&other).unwrap();
+    fs::write(other.join("elsewhere.txt"), b"elsewhere").unwrap();
+    let mine = f.file("mine.txt", b"mine");
+    f.stash(None);
+    success(&f.command().arg(&other).arg("--json").output().unwrap());
+    assert_eq!(f.journals().len(), 2);
+    equal_mtimes(&f);
+    let out = f
+        .command()
+        .arg("pop")
+        .arg(f.0.join("tree"))
+        .output()
+        .unwrap();
+    success(&out);
+    assert_eq!(fs::read(mine).unwrap(), b"mine");
+    assert!(!other.join("elsewhere.txt").exists());
+}
 #[test]
 fn exact_id_wrong_key_refuses_without_fallback_or_mutation() {
     let f = Fixture::new();

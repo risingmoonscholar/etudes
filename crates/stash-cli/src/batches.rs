@@ -190,12 +190,9 @@ pub fn select(selector: Selector, sealer: &dyn Sealer) -> Result<Option<Journal>
         },
         None => None,
     };
-    if !latest {
-        match journal::candidates_by_recency("stash") {
-            Ok(_) | Err(JournalError::NotFound) => {}
-            Err(error) => return Err(error),
-        }
-    }
+    // A pop by folder needs exactly one live batch, so no order is consulted
+    // and records with the same time do not stand in its way. The inventory
+    // still refuses an entry that is not a regular file.
     let mut values = inventory(sealer)?;
     values.retain(|journal| root.as_ref().is_none_or(|root| matches_root(journal, root)));
     if values.is_empty() {
@@ -210,7 +207,14 @@ pub fn select(selector: Selector, sealer: &dyn Sealer) -> Result<Option<Journal>
     if values.iter().all(|journal| creation(&journal.id).is_some()) {
         values.sort_by_key(|journal| std::cmp::Reverse(creation(&journal.id).unwrap()));
         if values.len() > 1 && creation(&values[0].id) == creation(&values[1].id) {
-            return Err(JournalError::Malformed("batch creation order is ambiguous"));
+            let newest = creation(&values[0].id);
+            let mut tied: Vec<String> = values
+                .iter()
+                .filter(|journal| creation(&journal.id) == newest)
+                .map(|journal| journal.id.clone())
+                .collect();
+            tied.sort();
+            return Err(JournalError::SameTime(tied));
         }
         return Ok(Some(values.remove(0)));
     }

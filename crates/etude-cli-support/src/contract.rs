@@ -141,8 +141,8 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 13,
-                Tool::Stash => 14,
+                Tool::Sweep => SCHEMA_VERSION + 14,
+                Tool::Stash => 15,
                 Tool::Unpack => SCHEMA_VERSION + 5,
             }),
         ),
@@ -517,12 +517,14 @@ pub fn declaration(
             ("side_effects", j::str("none;_no_key_creation_migration_pruning_or_file_content_reads")),
             ("disclosure", j::str("path_query_returns_newest_first_without_file_names")),
             ("command", j::str("undo_by_that_row's_id;_null_when_nothing_is_left_to_reverse")),
+            ("same_time", j::str("records_with_the_same_modification_time_are_still_listed;_each_such_row_adds_same_time_as_with_the_other_ids;_absent_otherwise;_their_order_is_by_id_and_says_nothing_about_which_is_newer")),
         ])));
         fields.push(("undo_lookup", j::obj(&[
             ("queries", strings(&["undo", "undo PATH", "undo --id OPERATION"])),
             ("by_id", j::str("opens_only_that_record_and_searches_no_other_to_choose_it;_other_records_are_read_only_to_keep_a_folder_they_may_need")),
             ("by_id_refusals", j::str("a_path_beside_it,_a_repeat,_an_empty_value_or_an_invalid_id_is_invalid_arguments;_an_id_no_record_holds_is_unknown_operation")),
             ("unreadable_record", j::str("undo_and_undo_path_stop_at_it;_details.records_that_open_lists_up_to_5_live_records,_newest_first,_each_with_its_step")),
+            ("same_time", j::str("undo_and_undo_path_refuse_with_journal_times_tied_when_two_records_have_the_same_modification_time;_no_record_is_guessed_newer;_details.same_time_records_lists_every_tied_id_with_its_undo_--id_step;_undo_--id_is_unaffected")),
         ])));
         fields.push(("tag_scheme", j::obj(&[
             ("flag", j::str("--scheme tags")),
@@ -563,9 +565,9 @@ pub fn declaration(
             ("exact_restore", j::str("pop_--id_ID_or_current_creation_ID;_bounded_selector;_missing_or_damaged_id_never_falls_back")),
             ("partial_restore", j::str("inspect_--id_ID_lists_path_free_opaque_item_ids;_pop_--id_ID_--item_ITEM_durably_restores_one_item")),
             ("remaining_held", j::str("reported_from_nofollow_destination_metadata_after_partial_restore;_changed_or_missing_items_are_not_claimed_restored")),
-            ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier")),
+            ("latest", j::str("latest_live_stash_by_original_creation_nanos_in_current_id;_ties_refused;_legacy_unrecognised_ids_use_modification_time_with_its_tie_barrier;_a_tie_is_journal_times_tied_with_details.same_time_records_listing_every_tied_id_with_its_pop_--id_step")),
             ("latest_scope", j::str("no_path_means_machine_wide_stash_journals;_path_limits_to_exact_journal_root")),
-            ("path_restore", j::str("one_live_batch_required;_multiple_matches_refused")),
+            ("path_restore", j::str("one_live_batch_required;_multiple_matches_refused;_no_order_consulted_so_modification_time_ties_do_not_block_it")),
             ("status", j::str("one_row_per_live_journal;_held_count_from_nofollow_destination_metadata;_redacted_roots_without_paths_disclosure")),
             ("due", j::str("deadline_from_selected_journal_holding_name;_information_only;_if_due_refuses_early_explicit_pop")),
             ("no_journal", j::str("explicit_legacy_mode_has_no_restorable_stash_id;_manual_restore_required")),

@@ -263,7 +263,9 @@ fn cmd_status(args: &[String]) -> ExitCode {
     {
         return etude_cli_support::problems::folder_open_problem("sweep", folder, &error).report();
     }
-    let candidates = match etude_core::journal::candidates_by_recency("sweep") {
+    // Status shows the order and chooses nothing, so records with the same
+    // time are listed, each marked, instead of refusing the whole list.
+    let candidates = match etude_core::journal::candidates_with_ties("sweep") {
         Ok(candidates) => candidates,
         Err(etude_core::journal::JournalError::NotFound) => {
             if let Some(id) = id_arg {
@@ -314,7 +316,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
     let sealer = KeychainSeal { key };
     let selected_root = path.as_deref().and_then(|p| std::fs::canonicalize(p).ok());
     let mut summaries = Vec::new();
-    for candidate in candidates {
+    for (candidate, same_time_as) in candidates {
         if id_arg.as_deref().is_some_and(|id| id != candidate.id) {
             continue;
         }
@@ -339,6 +341,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
             not_as_left,
             damaged,
             journal.root.clone(),
+            same_time_as,
         ));
         if id_arg.is_some() {
             break;
@@ -358,7 +361,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
     }
     etude_cli_support::envelope::reason(Reason::completed());
     etude_cli_support::envelope::status("done");
-    for (summary, not_as_left, damaged, folder) in summaries {
+    for (summary, not_as_left, damaged, folder, same_time_as) in summaries {
         let state = match summary.state {
             etude_core::journal::JournalState::Refused => "refused",
             etude_core::journal::JournalState::Completed => "completed",
@@ -371,7 +374,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
         } else {
             String::new()
         };
-        let item = etude_core::json::obj(&[
+        let mut fields = vec![
             ("operation_id", etude_core::json::str(&summary.id)),
             ("tool", etude_core::json::str(&summary.tool)),
             ("state", etude_core::json::str(state)),
@@ -397,8 +400,14 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     etude_core::json::str(&command)
                 },
             ),
-        ]);
-        etude_cli_support::envelope::detail(item);
+        ];
+        if !same_time_as.is_empty() {
+            fields.push((
+                "same_time_as",
+                etude_core::json::arr(same_time_as.iter().map(|id| etude_core::json::str(id))),
+            ));
+        }
+        etude_cli_support::envelope::detail(etude_core::json::obj(&fields));
         if !json {
             println!(
                 "{} {} planned={} moved={} reversed={}{}",
@@ -425,6 +434,21 @@ fn cmd_status(args: &[String]) -> ExitCode {
             if damaged {
                 println!(
                     "  This undo record is damaged, so these counts may be low. Files may still be moved."
+                );
+            }
+            if !same_time_as.is_empty() {
+                println!(
+                    "  This record has the same time as {}. sweep cannot tell which one is newer, so a plain sweep undo stops.{}",
+                    same_time_as
+                        .iter()
+                        .map(|id| etude_cli_support::shown_text(id))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if command.is_empty() {
+                        ""
+                    } else {
+                        " Its --id step still works."
+                    }
                 );
             }
         }
@@ -3548,6 +3572,11 @@ fn undo_step(root: &Path) -> String {
     format!("sweep undo {}", etude_cli_support::quoted_path(&root))
 }
 
+/// The status command for one folder: it lists that folder's applies with ids.
+fn status_step(root: &Path) -> String {
+    format!("sweep status {}", etude_cli_support::quoted_path(root))
+}
+
 /// The undo command for one record. It cannot reverse any other apply.
 fn undo_id_step(id: &str) -> String {
     format!("sweep undo --id {id}")
@@ -4096,14 +4125,19 @@ fn refuse_unreadable_record(
                 print_other_records(id, sl);
             }
         }
-        None => eprintln!(
-            "{}",
-            problems::record_folder_problem("sweep", &record.error)
-        ),
+        None => {
+            eprintln!(
+                "{}",
+                problems::record_folder_problem("sweep", &record.error)
+            );
+            if let etude_core::journal::JournalError::SameTime(ids) = &record.error {
+                etude_cli_support::envelope::detail(problems::same_time_details("sweep", ids));
+            }
+        }
     }
     etude_cli_support::envelope::status("refused");
     failure(
-        etude_cli_support::reason::Code::JournalUnreadable,
+        problems::record_listing_code(&record.error),
         Some(etude_cli_support::reason::Subject::wait("journal", None)),
     )
 }
@@ -4570,6 +4604,17 @@ fn after_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> 
     let candidates = match etude_core::journal::candidates_by_recency("sweep") {
         Ok(candidates) => candidates,
         Err(etude_core::journal::JournalError::NotFound) => return silent(Some(0), Some(0)),
+        Err(etude_core::journal::JournalError::SameTime(ids)) => {
+            return AfterUndo {
+                lines: vec![format!(
+                    "{} undo records have the same time, so sweep cannot tell whether another apply of this folder remains. To see the applies of this folder and their ids, run: {}",
+                    ids.len(),
+                    status_step(&target)
+                )],
+                remaining: None,
+                not_opened: None,
+            };
+        }
         Err(_) => {
             return AfterUndo {
                 lines: vec!["sweep could not list its undo records, so it cannot tell whether another apply of this folder remains.".to_owned()],

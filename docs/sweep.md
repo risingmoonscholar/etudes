@@ -245,7 +245,9 @@ each needs its own undo. When you apply to a folder twice, run undo twice. After
 says what the next undo of that folder will reach, and gives a step that does
 it. When an undo restored every file and says nothing about another apply, no
 apply of that folder is left to undo. When an undo record does not open, sweep
-says it cannot tell. See [undo, status and journals](undo-and-journals.md).
+says it cannot tell. When two undo records have the same time, sweep cannot tell
+which one is newer, so it moves nothing and prints `sweep undo --id ID` for each
+one. See [undo, status and journals](undo-and-journals.md).
 
 ## Rules the tools share
 

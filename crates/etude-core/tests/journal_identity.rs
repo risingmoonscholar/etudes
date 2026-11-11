@@ -216,6 +216,10 @@ fn exact_loading_ignores_unrelated_ties_and_damaged_journals() {
             .unwrap();
     }
     assert!(journal::candidates_by_recency("stash").is_err());
+    match journal::candidates_by_recency("stash") {
+        Err(JournalError::SameTime(ids)) => assert_eq!(ids, ["batch-a", "batch-b"]),
+        other => panic!("expected the tied ids, got {:?}", other.map(|c| c.len())),
+    }
     assert_eq!(journal::candidates_unordered("stash").unwrap().len(), 2);
     fs::write(
         fixture.0.join("stash-damaged.journal"),
