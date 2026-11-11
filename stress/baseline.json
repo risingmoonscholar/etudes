@@ -74,7 +74,7 @@
   "109-unpack-messages": 668,
   "110-final-message-consistency": 438,
   "111-sweep-undo-id": 303,
-  "112-locked-items": 49,
+  "112-locked-items": 53,
   "113-shared-progress": 22,
   "114-unpack-staging-recovery": 42,
   "115-non-utf8-arguments": 98,
