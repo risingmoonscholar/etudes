@@ -78,6 +78,10 @@ what = "the causal-trace events these checks emit when ETUDES_TRACE is set"
 watched_by = []
 unwatched = "the events are written and never read back -- nothing validates the chain, the digests, or the schema. Emitting is not checking."
 
+[surface.test-side-effects]
+what = "what running the test suite does to the machine of whoever runs it, including the login keychain"
+watched_by = ["check-test-keys.py", "keychain-fenced-test.sh"]
+
 # --- the checks themselves ------------------------------------------------
 
 [check."cargo test --all"]
@@ -115,3 +119,11 @@ failable = "verified by tampering with each asserted count and the exit code"
 [check."check-release.py"]
 guards = "candidate installation in CI; public tag existence and tagged installation when --published is run; release prose still requires review"
 failable = "test_check_release.py rejects a missing tag, similarly named tags, an incorrect installed version and success without filesystem effects"
+
+[check."check-test-keys.py"]
+guards = "every test that runs a tool gives it a journal key through the shared helper, or runs it fenced"
+failable = "test_check_test_keys.py feeds it a spawn with no key, a raw spawn beside a keyed one, an unkeyed wrapper, a constant, a bare binary name, a missing helper and a fenced marker that does not fence, and each must fail"
+
+[check."keychain-fenced-test.sh"]
+guards = "no test reaches the login keychain while the suite runs"
+failable = "it proves the fence stops a harmless program before trusting it, and exits 2 when the fence is unavailable or the control does not fail by denial"

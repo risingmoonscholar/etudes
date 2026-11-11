@@ -1,9 +1,12 @@
-;; Seatbelt profile for M8. Everything is permitted except the network.
+;; Seatbelt profile for M8. Everything is permitted except the network, and
+;; starting the keychain program.
 ;;
-;; The suite needs the filesystem (it builds fixture trees in TMPDIR) and needs
-;; to spawn `security` for the keychain, so this denies exactly one thing and
-;; leaves the rest alone. A narrower profile would fail for reasons unrelated to
-;; the claim being tested, which would make the witness useless.
+;; The suite needs the filesystem (it builds fixture trees in TMPDIR), so this
+;; denies the network and leaves the rest alone. A narrower profile would fail
+;; for reasons unrelated to the claim being tested, which would make the
+;; witness useless. Tests never use the login keychain, so the keychain program
+;; is denied here too: this run is as keychain-safe as the keychain-fence run.
 (version 1)
 (allow default)
 (deny network*)
+(deny process-exec (literal "/usr/bin/security"))

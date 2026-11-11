@@ -7,6 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 const KEY: &str = "0303030303030303030303030303030303030303030303030303030303030303";
 
 struct Scene {
@@ -58,7 +62,7 @@ fn lock(path: &Path) {
 }
 
 fn sweep(scene: &Scene, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .env("ETUDE_STATE_DIR", &scene.state)
         .env("ETUDE_JOURNAL_KEY", KEY)
         .args(args)

@@ -10,6 +10,21 @@
 # Paced with sleeps so it reads at human speed. No output is edited; if a
 # number here disagrees with run.sh, run.sh is right and this is stale.
 set -uo pipefail
+
+# OLD_SWEEP is sweep 0.4.0, which takes its journal key from the login keychain
+# and ignores ETUDE_JOURNAL_KEY. This script runs apply and undo with it, so on
+# a person's Mac it would read, and can create, a key in their real keychain.
+# It runs only in CI. The check comes first: nothing runs before it.
+if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+  cat >&2 <<'REFUSE'
+record.sh: refusing to start. This script runs sweep 0.4.0, including apply
+and undo. Sweep 0.4.0 uses the login keychain for its journal key, so on this
+machine it would read, and could create, a key in your real keychain. For that
+reason it runs only in CI (GITHUB_ACTIONS=true).
+Nothing was run.
+REFUSE
+  exit 2
+fi
 OLD="${OLD_SWEEP:?set OLD_SWEEP to a v0.4.0 binary}"
 NEW="${NEW_SWEEP:?set NEW_SWEEP to a v0.5.0 binary}"
 FX="${FIXTURE:?set FIXTURE to a Pixelorama checkout at 98cab8f}"

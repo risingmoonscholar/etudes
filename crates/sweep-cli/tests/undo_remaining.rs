@@ -4,6 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 struct TestDir(PathBuf);
@@ -47,7 +51,7 @@ impl Case {
     }
 
     fn run_with(&self, key: &str, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_sweep"))
+        keyed_tool(env!("CARGO_BIN_EXE_sweep"))
             .env("ETUDE_STATE_DIR", &self.state.0)
             .env("ETUDE_JOURNAL_KEY", key)
             .env("HOME", &self.home.0)
@@ -126,7 +130,7 @@ impl Case {
     /// its quoting is read the way a shell reads it. Text is stdout then stderr.
     fn step(&self, step: &str) -> (Option<i32>, String) {
         let bin = Path::new(env!("CARGO_BIN_EXE_sweep")).parent().unwrap();
-        let out = Command::new("/bin/sh")
+        let out = with_test_key(&mut Command::new("/bin/sh"))
             .arg("-c")
             .arg(step)
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))

@@ -6,10 +6,14 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
 #[cfg(target_os = "macos")]
 use std::process::Stdio;
 use std::process::{Command, Output};
 use std::time::{Duration, SystemTime};
+use test_tool::keyed_tool;
 
 struct TestDir(PathBuf);
 
@@ -31,7 +35,7 @@ fn unique_temp(tag: &str) -> PathBuf {
 }
 
 fn sweep_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
 }
 
 fn write_file(path: &Path) {

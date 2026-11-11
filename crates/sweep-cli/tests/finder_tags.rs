@@ -7,6 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 const TAG: &str = "com.apple.metadata:_kMDItemUserTags";
 const KEY: &str = "0101010101010101010101010101010101010101010101010101010101010101";
 const PROMISE: &str = "Sweep decides from filesystem and Finder organization metadata only; it never reads file contents to decide. When it moves a file it reads the first and last 4 KiB, so undo can tell if that file changed.";
@@ -67,7 +71,7 @@ fn tag_value(path: &Path) -> Option<String> {
 }
 
 fn sweep(scene: &Scene, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .env("ETUDE_STATE_DIR", &scene.state)
         .env("ETUDE_JOURNAL_KEY", KEY)
         .args(args)
@@ -151,7 +155,7 @@ fn include_tagged_is_loud_and_the_tag_survives_the_move() {
     }
     // Review warns only once it has someone to ask. `script` gives it a terminal,
     // and its empty stdin quits at the first question.
-    let reviewed = Command::new("/usr/bin/script")
+    let reviewed = with_test_key(&mut Command::new("/usr/bin/script"))
         .args(["-q", "/dev/null", env!("CARGO_BIN_EXE_sweep")])
         .args(["review", root, "--include-tagged", "--since", "0"])
         .env("ETUDE_STATE_DIR", &s.state)

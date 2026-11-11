@@ -15,6 +15,9 @@ fn run_contract_witness(negative_controls: bool) {
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts/check-tool-contracts.py");
     let mut command = std::process::Command::new("python3");
+    // The witness gives each run its own key too; this keeps the rule simple:
+    // nothing a test starts can reach the login keychain.
+    test_tool::with_test_key(&mut command);
     command.arg(script).args(["--tool", CONTRACT_TOOL, "--bin", CONTRACT_BINARY]);
     if negative_controls {
         command.arg("--negative-controls");

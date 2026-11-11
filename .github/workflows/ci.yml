@@ -74,10 +74,18 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - name: The temp-folder check can tell a leak from a clean run
         run: bash scripts/check-temp-leak.sh --self-test
+      # Tests never use the login keychain. Every test that runs a tool must
+      # give it a key through the shared helper; this fails one that does not.
+      - name: Every test that runs a tool gives it a journal key
+        run: python3 scripts/check-test-keys.py
+      - name: The test-key check rejects a tool run with no key
+        run: python3 -m unittest discover -s scripts -p 'test_check_test_keys.py' -v
       # In a private TMPDIR, so a test that forgets its folder fails here
-      # instead of filling the disk a run at a time.
-      - name: cargo test --all, leaving nothing in the temp folder
-        run: bash scripts/check-temp-leak.sh -- cargo test --all
+      # instead of filling the disk a run at a time. And where the keychain
+      # program cannot start: the script first proves the fence stops a
+      # harmless program, and fails the step if the fence is unavailable.
+      - name: cargo test --all inside the keychain fence, leaving nothing in the temp folder
+        run: bash scripts/check-temp-leak.sh -- bash scripts/keychain-fenced-test.sh
       # The suite again with sockets denied by the OS. sandbox-exec is macOS
       # only; the script exits 2 elsewhere, so the linux job does not run it.
       - run: bash scripts/no-network-test.sh
@@ -140,6 +148,10 @@ jobs:
       # demo states -- 356 files proposed, 105 of them res://-referenced, the
       # new binary refusing with exit 2. A demo whose facts stop being
       # measurable is a demo that must not be shown.
+      # run.sh, record.sh and beats.sh build or run sweep 0.4.0, which uses the login
+      # keychain, so they refuse to start anywhere but CI.
+      - name: The refusal demo scripts refuse to start outside CI
+        run: python3 -m unittest discover -s scripts -p 'test_refusal_demo_guard.py' -v
       - name: The refusal demo still tells the truth
         run: |
           mkdir -p "$RUNNER_TEMP/evidence"
