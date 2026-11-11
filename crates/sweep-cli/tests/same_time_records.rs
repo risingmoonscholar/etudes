@@ -7,6 +7,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 const KEY: &str = "5a3c9e0f1b2d4c6e8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f";
 /// 2027-01-15, a time no apply in this test writes by itself.
 const TIED_SECS: u64 = 1_800_000_000;
@@ -51,7 +55,7 @@ impl Case {
     }
 
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_sweep"));
+        let mut command = keyed_tool(env!("CARGO_BIN_EXE_sweep"));
         command
             .env("ETUDE_STATE_DIR", &self.state.0)
             .env("ETUDE_JOURNAL_KEY", KEY)
@@ -68,7 +72,8 @@ impl Case {
     /// folder is on PATH, so no installed sweep can answer in its place.
     fn shell(&self, step: &str) -> Output {
         let bin = Path::new(env!("CARGO_BIN_EXE_sweep")).parent().unwrap();
-        Command::new("/bin/sh")
+        let mut shell = Command::new("/bin/sh");
+        with_test_key(&mut shell)
             .env("ETUDE_STATE_DIR", &self.state.0)
             .env("ETUDE_JOURNAL_KEY", KEY)
             .env("HOME", &self.home.0)

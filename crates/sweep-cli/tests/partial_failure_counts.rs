@@ -2,13 +2,12 @@
 //! hooks are not exposed by the production CLI, so a read-only second route
 //! supplies the deterministic failure here.
 #![cfg(unix)]
-use std::{
-    fs,
-    io::Read,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    process::{Command, Output},
-};
+use std::{fs, io::Read, os::unix::fs::PermissionsExt, path::PathBuf, process::Output};
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct Fixture {
     base: PathBuf,
     key: String,
@@ -49,7 +48,7 @@ impl Fixture {
         f
     }
     fn run(&self, args: &[&str], json: bool) -> Output {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sweep"));
+        let mut cmd = keyed_tool(env!("CARGO_BIN_EXE_sweep"));
         cmd.args(args).arg(self.base.join("root"));
         if json {
             cmd.arg("--json");

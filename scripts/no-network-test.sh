@@ -75,8 +75,15 @@ if [ "$(uname -s)" = Darwin ]; then
   # Seatbelt hides child-process enumeration from this one process-control
   # test, which makes no network calls. Keep every other test under denial,
   # then run the focused witness outside the sandbox with that exception clear.
+  # The fenced tests run a tool with no key inside their own keychain fence.
+  # A sandbox cannot apply a different profile inside this one, so they fail
+  # closed here; they are skipped by exact name because the keychain-fence CI
+  # step (scripts/keychain-fenced-test.sh) runs them. This profile also denies
+  # the keychain program, so nothing in this run can reach the keychain.
   sandbox-exec -f "$PROFILE" cargo test --offline --quiet -- \
-    --skip sigterm_stops_extractor_cleans_staging_and_reports_final_result || {
+    --skip sigterm_stops_extractor_cleans_staging_and_reports_final_result \
+    --skip status_by_id_does_not_migrate_legacy_state \
+    --skip fenced_tool_runs_with_no_key --exact || {
       status=$?
       echo "FAIL: the denied suite failed before the process-control test." >&2
       exit "$status"

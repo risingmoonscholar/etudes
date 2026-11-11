@@ -8,8 +8,12 @@
 //! seam these tests read.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::{Duration, SystemTime};
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
 
 const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const OTHER_KEY: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
@@ -36,7 +40,7 @@ fn temp(tag: &str) -> TestDir {
 }
 
 fn run(base: &Path, key: &str, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_sweep"))
+    keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .env("HOME", base.join("home"))
         .env("ETUDE_STATE_DIR", base.join("state"))
         .env("ETUDE_JOURNAL_KEY", key)
@@ -209,7 +213,7 @@ fn forget_names_the_stash_records_it_keeps_and_how_to_remove_one() {
     let base = temp("forget");
     let record = base.0.join("state").join("stash-unopenable.journal");
     std::fs::write(&record, b"sealed under a key nobody has").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+    let out = keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .env("HOME", base.0.join("home"))
         .env("ETUDE_STATE_DIR", base.0.join("state"))
         .env("ETUDE_JOURNAL_KEY", KEY)
@@ -236,7 +240,7 @@ fn forget_yes_still_names_the_stash_records_it_keeps() {
     std::fs::write(&record, b"sealed under a key nobody has").unwrap();
     let sweep_record = base.0.join("state").join("sweep-gone.journal");
     std::fs::write(&sweep_record, b"sealed").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_sweep"))
+    let out = keyed_tool(env!("CARGO_BIN_EXE_sweep"))
         .env("HOME", base.0.join("home"))
         .env("ETUDE_STATE_DIR", base.0.join("state"))
         .env("ETUDE_JOURNAL_KEY", KEY)

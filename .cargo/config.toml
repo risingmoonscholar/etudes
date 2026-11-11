@@ -1,0 +1,8 @@
+# Every `cargo test` and `cargo run` in this repository sets this for the
+# processes it starts and their children. In a debug build, a tool that is
+# about to ask the login keychain for its journal key stops instead, with exit
+# 101 and a message saying so (crates/etude-keep/src/lib.rs). Tests never use
+# the login keychain; this makes a test that forgets its key fail loudly.
+# Release builds do not contain the check, so this has no effect on them.
+[env]
+ETUDE_TEST_NO_KEYCHAIN = "1"

@@ -5,6 +5,11 @@ use std::{
     process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
 };
+
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::{keyed_tool, with_test_key};
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -25,7 +30,7 @@ impl Fixture {
         path
     }
     fn command(&self) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_stash"));
+        let mut command = keyed_tool(env!("CARGO_BIN_EXE_stash"));
         command
             .env("ETUDE_STATE_DIR", self.0.join("state"))
             .env("ETUDE_JOURNAL_KEY", "56".repeat(32))
@@ -420,7 +425,8 @@ fn equal_creation_time_refuses_latest_without_mutation() {
 /// Run a printed step as a person pastes it, with only this build on PATH.
 fn shell(f: &Fixture, step: &str) -> Output {
     let bin = Path::new(env!("CARGO_BIN_EXE_stash")).parent().unwrap();
-    Command::new("/bin/sh")
+    let mut shell = Command::new("/bin/sh");
+    with_test_key(&mut shell)
         .env("ETUDE_STATE_DIR", f.0.join("state"))
         .env("ETUDE_JOURNAL_KEY", "56".repeat(32))
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))

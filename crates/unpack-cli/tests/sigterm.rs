@@ -6,6 +6,10 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct TestDir(PathBuf);
 impl TestDir {
     fn new() -> Self {
@@ -271,7 +275,7 @@ fn sigterm_stops_extractor_cleans_staging_and_reports_final_result() {
     let dir = TestDir::new();
     let archive = make_active_extractor_zip(&dir.0);
     let dest = dir.0.join("out");
-    let unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .args(["--into", dest.to_str().unwrap(), "--max-size", "1G"])
         .stdout(Stdio::piped())

@@ -25,6 +25,21 @@
 # here, and that is asserted rather than asserted-in-a-comment.
 set -euo pipefail
 
+# Sweep 0.4.0 takes its journal key from the login keychain and ignores
+# ETUDE_JOURNAL_KEY, so running it on a person's Mac reads, and can create, a
+# key in their real keychain. This script builds it and runs apply with it, so
+# it runs only in CI. The check comes first: nothing is built or run before it.
+if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+  cat >&2 <<'REFUSE'
+run.sh: refusing to start. This script builds sweep 0.4.0 from its tag and
+runs it, including apply. Sweep 0.4.0 uses the login keychain for its journal
+key, so on this machine it would read, and could create, a key in your real
+keychain. For that reason it runs only in CI (GITHUB_ACTIONS=true).
+Nothing was built or run.
+REFUSE
+  exit 2
+fi
+
 FIXTURE_REPO="https://github.com/orama-interactive/Pixelorama"
 FIXTURE_SHA="98cab8f50ff79bb6575f9789e12e2532c70e5c60"
 OLD_TAG="v0.4.0"; OLD_COMMIT="138f8b5a48b497ffd872e71365a8aa1ad79abf7a"

@@ -9,6 +9,10 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "../../etude-cli-support/test-support/test_tool.rs"]
+mod test_tool;
+use test_tool::keyed_tool;
+
 struct TestDir(PathBuf);
 impl TestDir {
     fn new(label: &str) -> Self {
@@ -132,7 +136,7 @@ fn assert_kill_leaves_no_copy(name: &str) {
     std::fs::create_dir(&out).unwrap();
     let dest = out.join("dest");
 
-    let mut unpack = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let mut unpack = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .args(["--into", dest.to_str().unwrap(), "--max-size", "4G"])
         .env("TMPDIR", &temp)
@@ -197,7 +201,7 @@ fn extractor_messages_name_the_archive_and_never_the_descriptor() {
     let dir = TestDir::new("message");
     let archive = dir.0.join("broken.txt.gz");
     std::fs::write(&archive, b"this is not gzip data").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_unpack"))
+    let output = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
         .arg(&archive)
         .arg("--json")
         .output()
@@ -254,7 +258,7 @@ fn every_format_extracts_after_two_listings_share_one_descriptor() {
             archive
         };
         let dest = work.join("out");
-        let output = Command::new(env!("CARGO_BIN_EXE_unpack"))
+        let output = keyed_tool(env!("CARGO_BIN_EXE_unpack"))
             .arg(&archive)
             .args(["--into", dest.to_str().unwrap()])
             .output()
