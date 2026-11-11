@@ -343,7 +343,7 @@ fn a_stale_tag_plan_says_how_to_make_a_tag_plan_again() {
         "{said}"
     );
     assert!(
-        said.contains("If you used --depth, --since or --allow-sync for that plan, add them too."),
+        said.contains("If you used --depth, --since, --allow-sync or --inspect-content for that plan, add them too, and any --map routes that matched no file."),
         "{said}"
     );
     let fresh = s.home.join("new.plan");
@@ -390,5 +390,38 @@ fn inspect_content_without_consent_adds_no_content_line() {
     assert!(
         step(&out, "Save:   ").ends_with("--inspect-content --export-plan ~/sweep.plan"),
         "{out}"
+    );
+}
+
+/// A plan made with --inspect-content binds that choice only in its digest.
+/// The stale step must ask for it, or the new plan drops the content check.
+#[test]
+fn a_stale_inspected_plan_asks_for_inspect_content_again() {
+    let s = scene("stale-inspected");
+    let plan = s.home.join("inspected.plan");
+    let out = text(&sweep(
+        &s,
+        &s.base,
+        &[
+            s.root.to_str().unwrap(),
+            "--since",
+            "0",
+            "--inspect-content",
+            "--export-plan",
+            plan.to_str().unwrap(),
+        ],
+    ));
+    let apply = step(&out, "Apply this plan: ").to_owned();
+    fs::write(s.root.join("d.pdf"), "a file added after the plan").unwrap();
+    let refused = paste(&s, &s.base, &apply);
+    let said = text(&refused);
+    assert_eq!(refused.status.code(), Some(2), "{said}");
+    assert!(
+        step(&said, "Make a new plan: ").ends_with("--export-plan NEW_PLAN_FILE"),
+        "{said}"
+    );
+    assert!(
+        said.contains("If you used --depth, --since, --allow-sync or --inspect-content for that plan, add them too, and any --map routes that matched no file."),
+        "{said}"
     );
 }

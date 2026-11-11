@@ -1599,9 +1599,12 @@ fn apply_exported_plan(args: &[String], file: &str) -> ExitCode {
 
 /// The step that makes a new plan like this one. The shared refusal names only
 /// the folder, so for a tag plan the pasted step made a folder plan. The plan
-/// records its scheme, its --map routes (as its groups) and --include-tagged;
-/// --depth, --since and --allow-sync are bound only as a digest, so the step
-/// asks for them in words.
+/// records its scheme, the --map routes that matched files (as its groups) and
+/// --include-tagged. --depth, --since, --allow-sync and --inspect-content are
+/// bound only as a digest, and a route that matched no file is not in the
+/// plan at all, so the step asks for those in words. Dropping
+/// --inspect-content silently would remake the plan without the content
+/// check, and it could then move a file that check held back.
 fn new_plan_step(bound: &plan::BoundPlan) -> String {
     use etude_cli_support::{quoted_path, shell_word};
     let mut step = format!("sweep {}", quoted_path(&bound.root));
@@ -1638,7 +1641,7 @@ fn new_plan_step(bound: &plan::BoundPlan) -> String {
         step.push_str(" --include-tagged");
     }
     format!(
-        "{step} --export-plan NEW_PLAN_FILE\nIf you used --depth, --since or --allow-sync for that plan, add them too."
+        "{step} --export-plan NEW_PLAN_FILE\nIf you used --depth, --since, --allow-sync or --inspect-content for that plan, add them too, and any --map routes that matched no file."
     )
 }
 
