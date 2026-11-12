@@ -26,12 +26,12 @@
     },
     "after": {
       "ref": "HEAD",
-      "rev": "594de60e43f221e72a6442bd15ced80ca36f9a4e",
-      "commit": "594de60",
+      "rev": "bda6de3553f8f802840258706bca6e4424ccd167",
+      "commit": "bda6de3",
       "tag": null,
       "build": "cargo build --release --locked -p unpack-cli",
       "version_output": "unpack 0.5.5",
-      "sha256": "41cc1dd5fb2ba57d8b93ed16f700ccf99465cc97938a4e969ab6e3297337bf93"
+      "sha256": "9edbc00a0e6fa171c7249b6592e865c387d6c764331387a7626e150a3a2e4d31"
     }
   },
   "sides": {

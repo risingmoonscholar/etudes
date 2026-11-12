@@ -26,12 +26,12 @@
     },
     "after": {
       "ref": "HEAD",
-      "rev": "594de60e43f221e72a6442bd15ced80ca36f9a4e",
-      "commit": "594de60",
+      "rev": "bda6de3553f8f802840258706bca6e4424ccd167",
+      "commit": "bda6de3",
       "tag": null,
       "build": "cargo build --release --locked -p stash-cli",
       "version_output": "stash 0.5.5",
-      "sha256": "960d9b09cad3f9e4cb3f8665fbbf3e963d63c99d854d7fbc9da29383882b2398"
+      "sha256": "72176adecb8f61141b7842033268c2b2cbf6b805c0a1cdb3224925ebe86ec966"
     }
   },
   "sides": {
@@ -47,7 +47,7 @@
           "command": "stash 'my desk'",
           "exit": 0,
           "log": "before-1.txt",
-          "sha256": "e31a1a71ac341f9293da39b121a6081aebe29769ff8bc62d056309611f6abe3b"
+          "sha256": "ca29059fffbbba9c2170e58cc2dd2eaec4cbb971fa2be16d3161cde8dd5833f2"
         },
         {
           "command": "stash status",
@@ -63,10 +63,10 @@
       ],
       "listing_after": [
         "my desk/",
-        "my desk/.stash-0-stash-91244-1794487139318760000/",
-        "my desk/.stash-0-stash-91244-1794487139318760000/note1.txt",
-        "my desk/.stash-0-stash-91244-1794487139318760000/note2.txt",
-        "my desk/.stash-0-stash-91244-1794487139318760000/note3.txt"
+        "my desk/.stash-0-stash-30000-1794490601391010000/",
+        "my desk/.stash-0-stash-30000-1794490601391010000/note1.txt",
+        "my desk/.stash-0-stash-30000-1794490601391010000/note2.txt",
+        "my desk/.stash-0-stash-30000-1794490601391010000/note3.txt"
       ]
     },
     "after": {
@@ -81,7 +81,7 @@
           "command": "stash 'my desk'",
           "exit": 0,
           "log": "after-1.txt",
-          "sha256": "8774a82fa729d1b0734acdf36947e479ac98a5415755b5988f17c3344747c9d5"
+          "sha256": "2bd95b977cec902cef5b083c4cce41fab014bcf137cda170e0a9519083c50429"
         },
         {
           "command": "stash status",
