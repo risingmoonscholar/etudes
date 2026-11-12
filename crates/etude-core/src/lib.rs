@@ -13,7 +13,7 @@
 //! before undo.
 
 pub mod apply;
-pub mod classify;
+pub mod evidence;
 pub mod gate;
 pub mod journal;
 pub mod json;

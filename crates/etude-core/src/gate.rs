@@ -28,8 +28,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::Untouched;
+use crate::evidence::{Facts, Family};
 use crate::plan::Inspector;
-use crate::scan::{Entry, ScanOutcome};
+use crate::scan::ScanOutcome;
 
 /// What the gate is told, beyond the scan itself.
 pub struct GatePolicy<'p> {
@@ -51,20 +52,22 @@ pub struct GatePolicy<'p> {
 pub struct Gated<'a> {
     /// Held files, the scan's holds first, then the rest in scan order.
     pub held: Vec<(PathBuf, Untouched)>,
-    /// Every entry the gate let through, in scan order. Folders included: a
-    /// folder no rule claims is still reported as left alone.
-    pub candidates: Vec<&'a Entry>,
+    /// The facts of every entry the gate let through, in scan order. Folders
+    /// included: a folder no rule claims is still reported as left alone.
+    pub candidates: Vec<&'a Facts<'a>>,
 }
 
-/// Families a loose project document can reference: a .flp's samples are
-/// Media, a .blend's textures are Images.
-const HELD_FAMILIES: &[&str] = &["Media", "Images", "Scripts", "Data"];
-
-/// Sort the scan into held files and candidates. Reads no file contents
-/// unless the policy carries an inspector, and decides no destination.
-pub fn gate<'a>(scan: &'a ScanOutcome, mut policy: GatePolicy<'_>) -> Gated<'a> {
+/// Sort the scan into held files and candidates. `facts` is the scan's
+/// evidence, one per entry in scan order (`evidence::observe`). Reads no file
+/// contents unless the policy carries an inspector, and decides no
+/// destination.
+pub fn gate<'a>(
+    scan: &ScanOutcome,
+    facts: &'a [Facts<'a>],
+    mut policy: GatePolicy<'_>,
+) -> Gated<'a> {
     let mut held: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
-    let mut candidates: Vec<&Entry> = Vec::new();
+    let mut candidates: Vec<&Facts> = Vec::new();
 
     // Loose project documents at the top level, before anything else. A .flp
     // sitting in Downloads used to refuse the ENTIRE sweep (it went through
@@ -79,26 +82,27 @@ pub fn gate<'a>(scan: &'a ScanOutcome, mut policy: GatePolicy<'_>) -> Gated<'a> 
     // project file -- and a project referencing a file named
     // "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a real layout. The
     // name pattern is the same one the Screenshots detector uses.
-    let loose_documents: Vec<&Entry> = scan
-        .entries
+    let first_document = facts
         .iter()
-        .filter(|e| !e.is_dir && crate::scan::is_document_marker(&e.name))
-        .collect();
-    let held_near_document = |e: &Entry| -> Option<String> {
-        let first = loose_documents.first()?;
-        if crate::classify::is_screenshot(e) {
+        .map(|f| f.entry)
+        .find(|e| !e.is_dir && crate::scan::is_document_marker(&e.name));
+    let held_near_document = |f: &Facts| -> Option<String> {
+        let first = first_document?;
+        if f.capture.is_some() {
             return None;
         }
-        let fam = crate::classify::type_family(&e.ext)?;
-        HELD_FAMILIES.contains(&fam).then(|| first.name.clone())
+        f.family
+            .is_some_and(Family::can_be_referenced)
+            .then(|| first.name.clone())
     };
 
-    for e in &scan.entries {
+    for f in facts {
+        let e = f.entry;
         if !e.is_dir && crate::scan::is_document_marker(&e.name) {
             held.push((e.path.clone(), Untouched::ProjectDocument));
             continue;
         }
-        if let Some(marker) = held_near_document(e) {
+        if let Some(marker) = held_near_document(f) {
             held.push((e.path.clone(), Untouched::NearProjectDocument(marker)));
             continue;
         }
@@ -165,7 +169,7 @@ pub fn gate<'a>(scan: &'a ScanOutcome, mut policy: GatePolicy<'_>) -> Gated<'a> 
             held.push((e.path.clone(), Untouched::TooRecent));
             continue;
         }
-        candidates.push(e);
+        candidates.push(f);
     }
 
     Gated { held, candidates }
@@ -175,6 +179,8 @@ pub fn gate<'a>(scan: &'a ScanOutcome, mut policy: GatePolicy<'_>) -> Gated<'a> 
 mod tests {
     use super::*;
     use crate::Category;
+    use crate::evidence;
+    use crate::scan::Entry;
     use std::path::Path;
     use std::time::SystemTime;
 
@@ -258,8 +264,10 @@ mod tests {
             category: Category::Medical,
             asked: Vec::new(),
         };
+        let facts = evidence::observe(&scan);
         let gated = gate(
             &scan,
+            &facts,
             GatePolicy {
                 grace: Some(DAY),
                 ignore_window: false,
@@ -406,8 +414,10 @@ mod tests {
                 Untouched::ProjectDocument,
             ),
         ];
+        let facts = evidence::observe(&scan);
         let gated = gate(
             &scan,
+            &facts,
             GatePolicy {
                 grace: None,
                 ignore_window: false,
@@ -433,8 +443,10 @@ mod tests {
             entry("unknown.pdf", None),
             entry("recent.pdf", Some(SystemTime::now())),
         ]);
+        let facts = evidence::observe(&scan);
         let gated = gate(
             &scan,
+            &facts,
             GatePolicy {
                 grace: Some(DAY),
                 ignore_window: true,
@@ -446,6 +458,6 @@ mod tests {
             vec![(PathBuf::from("/fixture/unknown.pdf"), Untouched::TooRecent)]
         );
         assert_eq!(gated.candidates.len(), 1);
-        assert_eq!(gated.candidates[0].name, "recent.pdf");
+        assert_eq!(gated.candidates[0].entry.name, "recent.pdf");
     }
 }

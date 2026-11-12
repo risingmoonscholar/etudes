@@ -793,10 +793,17 @@ fn member_document_scope(root: &Path, dir: &Path) -> DocumentScope {
     scope
 }
 
+/// A file a project document in its folder could point at, so it is held
+/// with the document. Screen captures are exempt, as in the gate's
+/// near-document hold: a project does not reference a file named
+/// "Screenshot 2026-08-12 at 9.15.11 AM.png". The walk decides this before
+/// the plan's evidence exists, so it reads the same facts from the entry.
 fn reference_file(e: &Entry) -> bool {
-    !crate::classify::is_screenshot(e)
-        && crate::classify::type_family(&e.ext)
-            .is_some_and(|family| ["Media", "Images", "Scripts", "Data"].contains(&family))
+    let facts = crate::evidence::Facts::of(e);
+    facts.capture.is_none()
+        && facts
+            .family
+            .is_some_and(crate::evidence::Family::can_be_referenced)
 }
 
 fn hold_scope(out: &mut ScanOutcome, start: usize, dir: &Path, scope: &DocumentScope) {
