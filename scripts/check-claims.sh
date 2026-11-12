@@ -220,13 +220,21 @@ for tool in sweep stash unpack; do
   claim docs/contracts/README.md "\`v[0-9]+/$tool\.json\`.*are the\$" '[0-9]+' "current $tool declaration pin" "$decl"
   case $tool in
     stash) claim docs/contracts/README.md 'declaration is version [0-9]+ and its surrounding' '[0-9]+' "current stash declaration" "$decl"
-           claim docs/contracts/README.md 'declaration is version [0-9]+ in `v[0-9]+/stash' '[0-9]+' "current stash declaration" "$decl" ;;
-    unpack) claim docs/contracts/README.md 'under `details.schema_version` is version [0-9]+' '[0-9]+$' "current unpack declaration" "$decl" ;;
+           claim docs/contracts/README.md 'declaration is version [0-9]+ in `v[0-9]+/stash' '[0-9]+' "current stash declaration" "$decl"
+           claim docs/contracts/README.md 'declaration is version [0-9]+ in `v[0-9]+/stash' 'v[0-9]+' "current stash pin" "v$decl" ;;
+    unpack) claim docs/contracts/README.md 'under `details.schema_version` is version [0-9]+' '[0-9]+$' "current unpack declaration" "$decl"
+            claim docs/contracts/README.md '`v[0-9]+/unpack\.json` pins the' 'v[0-9]+' "current unpack pin" "v$decl"
+            claim docs/unpack.md 'unpack capability declaration is version [0-9]+' '[0-9]+$' "current unpack declaration" "$decl"
+            claim docs/unpack.md '`docs/contracts/v[0-9]+/unpack\.json` is the canonical pin' 'v[0-9]+' "current unpack pin" "v$decl" ;;
   esac
   # A tagged release's page describes what shipped; a later bump leaves it alone.
   ver=$(grep -m1 '^version' "crates/$tool-cli/Cargo.toml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
   page="site/releases/$tool-v$ver.html"
-  if [ -f "$page" ] && ! git rev-parse -q --verify "refs/tags/$tool-v$ver" >/dev/null; then
+  if git rev-parse -q --verify "refs/tags/$tool-v$ver" >/dev/null; then
+    ok "$tool v$ver is tagged; its release page describes what shipped, so its declaration is not checked"
+  elif [ ! -f "$page" ]; then
+    ok "$tool v$ver has no release page yet, so no page states its declaration"
+  else
     claim "$page" "$tool capability declaration is version [0-9]+" '[0-9]+$' "$tool declaration version" "$decl"
   fi
 done
