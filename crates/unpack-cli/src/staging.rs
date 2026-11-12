@@ -6,6 +6,7 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 const MARKER: &str = "unpack staging lock v1";
@@ -27,6 +28,17 @@ pub struct Staging {
     /// None on a volume without advisory locks. Such a folder has no lock file,
     /// so a later run can never prove it abandoned and leaves it in place.
     pub lock: Option<ExclusiveLock>,
+    /// The folder itself, held open. Its parent can be moved while unpack
+    /// works, and the folder goes with it; this is how it is found again.
+    folder: File,
+}
+
+/// Where the private folder is now.
+pub enum Whereabouts {
+    At(PathBuf),
+    /// Not at its path, and its new place could not be read or did not prove
+    /// to be this folder. It may be gone, or anywhere.
+    Unknown,
 }
 
 pub fn lock_path(stage: &Path) -> Option<PathBuf> {
@@ -67,7 +79,12 @@ impl Staging {
                 std::fs::remove_dir(&path)?;
                 continue;
             }
-            let initialized = (|| -> io::Result<Option<ExclusiveLock>> {
+            let initialized = (|| -> io::Result<(Option<ExclusiveLock>, File)> {
+                let folder = File::open(&path)?;
+                let held = folder.metadata()?;
+                if !held.is_dir() || !same(&held, &path.symlink_metadata()?) {
+                    return Err(io::Error::other("the private folder changed"));
+                }
                 let file = File::options()
                     .read(true)
                     .write(true)
@@ -85,7 +102,7 @@ impl Staging {
                         // Extraction worked here before locks existed and must
                         // keep working. Only later cleanup is given up.
                         std::fs::remove_file(&lock_path)?;
-                        return Ok(None);
+                        return Ok((None, folder));
                     }
                     Err(error) => return Err(error),
                 };
@@ -93,10 +110,10 @@ impl Staging {
                 // Publish readiness only while already holding the lock.
                 let marker = marker_for(&path.symlink_metadata()?);
                 lock.file().write_all(marker.as_bytes())?;
-                Ok(Some(lock))
+                Ok((Some(lock), folder))
             })();
             return match initialized {
-                Ok(lock) => Ok(Self { path, lock }),
+                Ok((lock, folder)) => Ok(Self { path, lock, folder }),
                 Err(error) => {
                     if let cleanup @ (super::Cleanup::Remains { .. }
                     | super::Cleanup::Unverified { .. }) = super::cleanup_destination(&path)
@@ -122,6 +139,58 @@ impl Staging {
         }
         std::fs::remove_file(path)
     }
+
+    /// Where the folder is now: at its path, or wherever it was moved to,
+    /// such as with its parent folder. A place counts only when the name
+    /// there is this same folder, by device and inode.
+    pub fn whereabouts(&self) -> Whereabouts {
+        let Ok(held) = self.folder.metadata() else {
+            return Whereabouts::Unknown;
+        };
+        match self.path.symlink_metadata() {
+            Ok(md) if same(&held, &md) => return Whereabouts::At(self.path.clone()),
+            // Something else has this name now. It is not ours to remove.
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            // The name cannot be checked, so the folder may still be there.
+            // Removal will fail the same way and say so for this path.
+            Err(_) => return Whereabouts::At(self.path.clone()),
+        }
+        match current_path(&self.folder) {
+            Some(now) if now.symlink_metadata().is_ok_and(|md| same(&held, &md)) => {
+                Whereabouts::At(now)
+            }
+            // A removed folder can still report its last path, so a missing
+            // name there does not prove it is gone.
+            _ => Whereabouts::Unknown,
+        }
+    }
+}
+
+/// The path the system has for an open folder now, following renames of the
+/// folder or of any folder above it.
+#[cfg(target_os = "macos")]
+fn current_path(folder: &File) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    unsafe extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    // F_GETPATH is 50 in the platform's sys/fcntl.h, and it fills a buffer
+    // of MAXPATHLEN (1024, sys/param.h) bytes.
+    let mut buffer = vec![0_u8; 1024];
+    // SAFETY: the descriptor is open for the life of `folder`, and the buffer
+    // holds MAXPATHLEN bytes, as F_GETPATH requires.
+    if unsafe { fcntl(folder.as_raw_fd(), 50, buffer.as_mut_ptr()) } == -1 {
+        return None;
+    }
+    let end = buffer.iter().position(|&byte| byte == 0)?;
+    buffer.truncate(end);
+    Some(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_path(folder: &File) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/self/fd/{}", folder.as_raw_fd())).ok()
 }
 
 fn same(left: &Metadata, right: &Metadata) -> bool {
