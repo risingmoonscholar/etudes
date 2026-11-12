@@ -66,32 +66,7 @@ impl Sealer for Seal {
     }
 }
 fn tag(path: &Path) {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    unsafe extern "C" {
-        fn setxattr(
-            p: *const std::ffi::c_char,
-            n: *const std::ffi::c_char,
-            v: *const std::ffi::c_void,
-            s: usize,
-            position: u32,
-            options: i32,
-        ) -> i32;
-    }
-    let p = CString::new(path.as_os_str().as_bytes()).unwrap();
-    // Signature verified against the local SDK's sys/xattr.h.
-    assert_eq!(
-        unsafe {
-            setxattr(
-                p.as_ptr(),
-                c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
-                b"tag".as_ptr().cast(),
-                3,
-                0,
-                0,
-            )
-        },
-        0
-    );
+    etude_core::xattr::write(path, etude_core::tags::ATTRIBUTE, b"tag").unwrap();
 }
 
 fn verify(case: &str) {

@@ -85,14 +85,6 @@ impl Inspector for GoldenInspector {
 
 unsafe extern "C" {
     fn chflags(path: *const std::ffi::c_char, flags: u32) -> i32;
-    fn setxattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        value: *const std::ffi::c_void,
-        size: usize,
-        position: u32,
-        options: i32,
-    ) -> i32;
     fn lutimes(path: *const std::ffi::c_char, times: *const Timeval) -> i32;
 }
 
@@ -111,19 +103,7 @@ fn c_path(path: &Path) -> CString {
 }
 
 fn set_attr(path: &Path, name: &std::ffi::CStr, value: &[u8]) {
-    let path = c_path(path);
-    // SAFETY: valid C strings and a slice that outlives the call.
-    let rc = unsafe {
-        setxattr(
-            path.as_ptr(),
-            name.as_ptr(),
-            value.as_ptr().cast(),
-            value.len(),
-            0,
-            0,
-        )
-    };
-    assert_eq!(rc, 0, "could not set a fixture attribute");
+    etude_core::xattr::write(path, name, value).expect("could not set a fixture attribute");
 }
 
 fn set_flags(path: &Path, flags: u32) -> i32 {

@@ -24,6 +24,7 @@ pub mod redact;
 pub mod scan;
 pub mod sensitive;
 pub mod tags;
+pub mod xattr;
 
 pub use apply::{ApplyFailure, ApplyReport, UndoReport};
 pub use journal::Journal;

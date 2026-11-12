@@ -14,6 +14,7 @@
 //! matters (the journal keeps the bytes it found and the bytes it wrote), and
 //! as parsed strings only to decide what to add.
 
+use crate::xattr;
 use std::io;
 use std::path::Path;
 
@@ -246,181 +247,54 @@ pub fn encode(entries: &[String]) -> Option<Vec<u8>> {
     (body.len() <= MAX_ATTR_BYTES).then_some(body)
 }
 
+/// The extended attribute Finder keeps a file's tags in.
+pub const ATTRIBUTE: &std::ffi::CStr = c"com.apple.metadata:_kMDItemUserTags";
+
 /// Read a file's tag attribute: `Ok(None)` when it has none. A volume that
 /// cannot hold attributes, an unreadable file or an oversized value is an
 /// error, never "no tags".
 pub fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    crate::scan::observe_read("finder_tag_names", platform::read(path))
+    let outcome = if xattr::SUPPORTED {
+        xattr::read(path, ATTRIBUTE, MAX_ATTR_BYTES).map_err(|error| {
+            match xattr::Refusal::of(&error) {
+                Some(xattr::Refusal::TooLarge) => {
+                    io::Error::other("tag attribute is too large to handle")
+                }
+                Some(xattr::Refusal::KeptChanging) => {
+                    io::Error::other("tag attribute kept changing while it was read")
+                }
+                None => error,
+            }
+        })
+    } else {
+        Err(unsupported())
+    };
+    crate::scan::observe_read("finder_tag_names", outcome)
 }
 
 /// Replace the tag attribute with exactly these bytes.
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    platform::write(path, bytes)
+    if !xattr::SUPPORTED {
+        return Err(unsupported());
+    }
+    xattr::write(path, ATTRIBUTE, bytes)
 }
 
 /// Remove the tag attribute. A missing attribute is already removed.
 pub fn remove(path: &Path) -> io::Result<()> {
-    platform::remove(path)
+    if !xattr::SUPPORTED {
+        return Err(unsupported());
+    }
+    xattr::remove(path, ATTRIBUTE)
 }
 
-#[cfg(target_os = "macos")]
-mod platform {
-    use super::MAX_ATTR_BYTES;
-    use std::ffi::CString;
-    use std::io;
-    use std::os::unix::ffi::OsStrExt;
-    use std::path::Path;
-
-    /// Darwin `XATTR_NOFOLLOW`: act on the directory entry, never a link target.
-    const XATTR_NOFOLLOW: i32 = 0x0001;
-    /// Darwin `ENOATTR`: the attribute is absent.
-    const ENOATTR: i32 = 93;
-    /// Darwin `ERANGE`: the buffer was too small.
-    const ERANGE: i32 = 34;
-    const NAME: &std::ffi::CStr = c"com.apple.metadata:_kMDItemUserTags";
-
-    unsafe extern "C" {
-        fn getxattr(
-            path: *const std::ffi::c_char,
-            name: *const std::ffi::c_char,
-            value: *mut std::ffi::c_void,
-            size: usize,
-            position: u32,
-            options: i32,
-        ) -> isize;
-        fn setxattr(
-            path: *const std::ffi::c_char,
-            name: *const std::ffi::c_char,
-            value: *const std::ffi::c_void,
-            size: usize,
-            position: u32,
-            options: i32,
-        ) -> i32;
-        fn removexattr(
-            path: *const std::ffi::c_char,
-            name: *const std::ffi::c_char,
-            options: i32,
-        ) -> i32;
-    }
-
-    fn c_path(path: &Path) -> io::Result<CString> {
-        CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| io::Error::other("path contains a NUL byte"))
-    }
-
-    pub fn read(path: &Path) -> io::Result<Option<Vec<u8>>> {
-        let path = c_path(path)?;
-        for _ in 0..3 {
-            // SAFETY: both strings are NUL-terminated and a null buffer of
-            // length zero asks only for the size.
-            let size = unsafe {
-                getxattr(
-                    path.as_ptr(),
-                    NAME.as_ptr(),
-                    std::ptr::null_mut(),
-                    0,
-                    0,
-                    XATTR_NOFOLLOW,
-                )
-            };
-            if size < 0 {
-                let error = io::Error::last_os_error();
-                return match error.raw_os_error() {
-                    Some(ENOATTR) => Ok(None),
-                    _ => Err(error),
-                };
-            }
-            let size = size as usize;
-            if size > MAX_ATTR_BYTES {
-                return Err(io::Error::other("tag attribute is too large to handle"));
-            }
-            let mut buffer = vec![0u8; size];
-            // SAFETY: the buffer owns `size` writable bytes.
-            let got = unsafe {
-                getxattr(
-                    path.as_ptr(),
-                    NAME.as_ptr(),
-                    buffer.as_mut_ptr().cast(),
-                    size,
-                    0,
-                    XATTR_NOFOLLOW,
-                )
-            };
-            if got < 0 {
-                let error = io::Error::last_os_error();
-                match error.raw_os_error() {
-                    Some(ERANGE) => continue,
-                    Some(ENOATTR) => return Ok(None),
-                    _ => return Err(error),
-                }
-            }
-            buffer.truncate(got as usize);
-            return Ok(Some(buffer));
-        }
-        Err(io::Error::other(
-            "tag attribute kept changing while it was read",
-        ))
-    }
-
-    pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let path = c_path(path)?;
-        // SAFETY: valid C strings and a slice that outlives the call.
-        let rc = unsafe {
-            setxattr(
-                path.as_ptr(),
-                NAME.as_ptr(),
-                bytes.as_ptr().cast(),
-                bytes.len(),
-                0,
-                XATTR_NOFOLLOW,
-            )
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-
-    pub fn remove(path: &Path) -> io::Result<()> {
-        let path = c_path(path)?;
-        // SAFETY: valid NUL-terminated strings.
-        let rc = unsafe { removexattr(path.as_ptr(), NAME.as_ptr(), XATTR_NOFOLLOW) };
-        if rc == 0 {
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(ENOATTR) {
-            Ok(())
-        } else {
-            Err(error)
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-mod platform {
-    use std::io;
-    use std::path::Path;
-
-    fn unsupported() -> io::Error {
-        io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Finder tags are a macOS feature",
-        )
-    }
-
-    pub fn read(_: &Path) -> io::Result<Option<Vec<u8>>> {
-        Err(unsupported())
-    }
-
-    pub fn write(_: &Path, _: &[u8]) -> io::Result<()> {
-        Err(unsupported())
-    }
-
-    pub fn remove(_: &Path) -> io::Result<()> {
-        Err(unsupported())
-    }
+/// Elsewhere than macOS, tags are refused by name rather than by the
+/// attribute layer's general message.
+fn unsupported() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Finder tags are a macOS feature",
+    )
 }
 
 #[cfg(test)]
