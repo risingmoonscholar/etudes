@@ -28,7 +28,7 @@ fn no_sensitive_fixture_is_ever_grouped() {
     // The core promise: "organises the obvious and leaves the private alone."
     let (root, fx) = fixture("sensitive");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     for s in &fx.sensitive {
         // scan() canonicalizes, which on macOS rewrites /var to /private/var.
@@ -68,7 +68,7 @@ fn package_directory_interior_never_appears_in_a_plan() {
         },
     )
     .expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     let leaked: Vec<_> = p
         .groups
@@ -141,8 +141,14 @@ fn plan_is_deterministic_across_runs() {
     let (root, _fx) = fixture("determinism");
     let cfg = ScanConfig::default();
 
-    let a = plan::build(&scan::scan(&root, &cfg).expect("scan a"));
-    let b = plan::build(&scan::scan(&root, &cfg).expect("scan b"));
+    let a = plan::build(
+        &scan::scan(&root, &cfg).expect("scan a"),
+        plan::Request::default(),
+    );
+    let b = plan::build(
+        &scan::scan(&root, &cfg).expect("scan b"),
+        plan::Request::default(),
+    );
 
     let names_a: Vec<_> = a
         .groups
@@ -170,7 +176,7 @@ fn no_group_is_named_after_a_sensitive_category() {
     // The naming rule: sweep never coins a label the filesystem did not contain.
     let (root, _fx) = fixture("naming");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     let forbidden = [
         "tax",
@@ -198,7 +204,7 @@ fn no_group_is_named_after_a_sensitive_category() {
 fn a_file_belongs_to_at_most_one_group() {
     let (root, _fx) = fixture("exclusive");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     let mut seen: Vec<&PathBuf> = Vec::new();
     for g in &p.groups {
@@ -215,7 +221,7 @@ fn every_scanned_file_is_either_grouped_or_explained() {
     // No file may silently vanish from the accounting.
     let (root, _fx) = fixture("accounting");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     let grouped: usize = p.groups.iter().map(|g| g.members.len()).sum();
     assert_eq!(
@@ -234,7 +240,7 @@ fn the_screenshot_group_is_found_and_correctly_sized() {
     // The wow moment must actually fire on a realistic tree.
     let (root, _fx) = fixture("screenshots");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     let shots = p
         .groups
@@ -274,7 +280,10 @@ fn a_flat_project_folder_keeps_its_layout_without_a_refusal() {
         grace: None,
         ..ScanConfig::default()
     };
-    let plan = plan::build(&scan::scan(&root, &cfg).expect("scanned, not refused"));
+    let plan = plan::build(
+        &scan::scan(&root, &cfg).expect("scanned, not refused"),
+        plan::Request::default(),
+    );
     assert!(
         plan.groups.is_empty(),
         "something in a flat Ableton project would move: {:?}",
@@ -343,7 +352,7 @@ fn a_file_changed_within_the_grace_window_is_not_grouped() {
     }
 
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
     assert_eq!(
         p.too_recent(),
         4,
@@ -361,7 +370,7 @@ fn a_file_changed_within_the_grace_window_is_not_grouped() {
         ..Default::default()
     };
     let out2 = scan::scan(&root, &no_grace).expect("scan");
-    let p2 = plan::build(&out2);
+    let p2 = plan::build(&out2, plan::Request::default());
     assert_eq!(
         p2.groups.len(),
         1,
@@ -391,7 +400,7 @@ fn a_download_in_flight_is_never_grouped() {
         ..Default::default()
     };
     let out = scan::scan(&root, &cfg).expect("scan");
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
 
     assert_eq!(
         p.in_flight(),
@@ -456,7 +465,7 @@ fn a_project_nested_in_a_swept_folder_is_not_descended_into() {
         );
     }
 
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
     assert!(
         p.groups.iter().any(|g| g.name == "Documents"),
         "the folder's own loose invoices should still group; only the project is off limits"
@@ -499,7 +508,7 @@ fn a_loose_document_holds_its_reference_surface_not_the_folder() {
         ..ScanConfig::default()
     };
     let out = scan::scan(&root, &cfg).expect("a folder holding a stray document is sweepable");
-    let plan = plan::build(&out);
+    let plan = plan::build(&out, plan::Request::default());
 
     // The PDFs group; the document and the audio it could reference do not.
     assert!(
@@ -554,7 +563,10 @@ fn screenshots_sort_past_a_loose_document() {
         grace: None,
         ..ScanConfig::default()
     };
-    let plan = plan::build(&scan::scan(&root, &cfg).expect("sweepable"));
+    let plan = plan::build(
+        &scan::scan(&root, &cfg).expect("sweepable"),
+        plan::Request::default(),
+    );
     assert!(
         plan.groups
             .iter()

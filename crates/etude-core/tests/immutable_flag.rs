@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use etude_core::apply::{self, ApplyError};
 use etude_core::journal::{EntryState, Journal, Sealer};
+use etude_core::mode::Mode;
 use etude_core::plan::{self, Group, Plan, Signal};
 use etude_core::scan::{self, ScanConfig};
 
@@ -153,7 +154,7 @@ fn the_scan_holds_a_locked_file_and_counts_it_without_its_name() {
         assert_eq!(out.locked_skipped, 1, "whole_units={whole_units}");
         let names: Vec<_> = out.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["a.txt", "c.txt"]);
-        let plan = plan::build(&out);
+        let plan = plan::build(&out, plan::Request::default());
         assert_eq!(plan.locked_skipped, 1);
         assert!(plan.to_json().contains("\"locked_skipped\":1"));
     }
@@ -249,7 +250,7 @@ fn a_destination_folder_locked_at_planning_holds_its_group() {
     fs::create_dir(&destination).unwrap();
     lock_path(&destination);
     let out = scan::scan(&s.root, &config(false)).unwrap();
-    let plan = plan::build(&out);
+    let plan = plan::build(&out, plan::Request::default());
     assert!(
         plan.groups.iter().all(|g| g.name != "Screenshots"),
         "no group moves into a locked folder: {:?}",
@@ -269,7 +270,13 @@ fn a_tag_plan_never_tags_a_locked_file() {
     lock_path(&s.files[1]);
     let out = scan::scan(&s.root, &config(false)).unwrap();
     let specs = plan::validate_tag_maps(&[("txt".into(), "Notes".into())]).unwrap();
-    let mut plan = plan::build_tags(&out, &specs, None);
+    let mut plan = plan::build(
+        &out,
+        plan::Request {
+            mode: Mode::Tags { specs },
+            inspector: None,
+        },
+    );
     for group in &mut plan.groups {
         group.accepted = true;
     }

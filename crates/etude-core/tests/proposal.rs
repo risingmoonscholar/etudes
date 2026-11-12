@@ -100,7 +100,7 @@ impl Fixture {
             },
         )
         .unwrap();
-        let mut proposal = plan::build(&outcome);
+        let mut proposal = plan::build(&outcome, plan::Request::default());
         for group in &mut proposal.groups {
             group.accepted = true;
         }
@@ -286,7 +286,7 @@ fn a_plan_naming_an_unobserved_unclaimed_file_is_refused() {
             },
         )
         .unwrap();
-        plan::build(&outcome)
+        plan::build(&outcome, plan::Request::default())
     };
     // The personal-looking file is observed, but it is not left alone for want
     // of a group, so it cannot be listed as unclaimed.
@@ -588,7 +588,7 @@ fn one_bad_decision_refuses_the_whole_proposal() {
 fn a_plan_from_another_tool_takes_no_proposal() {
     let fixture = Fixture::new();
     let outcome = scan::scan(&fixture.root, &ScanConfig::default()).unwrap();
-    let mut other = plan::build(&outcome);
+    let mut other = plan::build(&outcome, plan::Request::default());
     for group in &mut other.groups {
         group.accepted = true;
     }

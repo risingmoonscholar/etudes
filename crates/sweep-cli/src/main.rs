@@ -21,6 +21,7 @@ mod tag_output;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use etude_core::mode::Mode;
 use etude_core::plan;
 use etude_core::scan::{self, ScanConfig};
 
@@ -1334,6 +1335,23 @@ struct SchemeConfig {
     profile_sha256: String,
 }
 
+impl SchemeConfig {
+    /// The planner's mode for this scheme, with its routes or tags.
+    fn mode(&self) -> Mode {
+        match self.name.as_str() {
+            "tags" => Mode::Tags {
+                specs: self.tag_maps.clone(),
+            },
+            "existing" => Mode::Existing {
+                routes: self.maps.clone(),
+            },
+            _ => Mode::Folders {
+                maps: self.maps.clone(),
+            },
+        }
+    }
+}
+
 /// Why a scheme could not be set up. A saved profile that is absent and one
 /// that cannot be used are different answers, and neither is a typed argument.
 #[derive(Debug)]
@@ -1717,14 +1735,13 @@ fn plan_for(
     outcome: &scan::ScanOutcome,
     inspector: Option<&mut dyn plan::Inspector>,
 ) -> plan::Plan {
-    match (scheme.name.as_str(), inspector) {
-        ("tags", inspector) => plan::build_tags(outcome, &scheme.tag_maps, inspector),
-        ("existing", None) => plan::build_existing(outcome, &scheme.maps),
-        ("existing", Some(inspector)) => {
-            plan::build_existing_with(outcome, inspector, &scheme.maps)
-        }
-        (_, inspector) => plan::build_with_maps(outcome, inspector, &scheme.maps),
-    }
+    plan::build(
+        outcome,
+        plan::Request {
+            mode: scheme.mode(),
+            inspector,
+        },
+    )
 }
 
 fn scan_and_plan(
@@ -2921,11 +2938,7 @@ fn cmd_review(args: &[String]) -> ExitCode {
             return scan_exit_code(&e);
         }
     };
-    let mut p = if scheme.name == "existing" {
-        plan::build_existing(&outcome, &scheme.maps)
-    } else {
-        plan::build_mapped(&outcome, &scheme.maps)
-    };
+    let mut p = plan_for(&scheme, &outcome, None);
     // Only the refusal: a note about the folder would read as a review starting.
     if !p.groups.is_empty() && review::refuse_without_terminal() {
         return refusal(etude_cli_support::reason::Code::InvalidArguments, None);
@@ -4017,11 +4030,7 @@ fn cmd_apply(args: &[String]) -> ExitCode {
             Some(etude_cli_support::reason::Subject::wait("input", None)),
         );
     }
-    let mut p = if scheme.name == "existing" {
-        plan::build_existing(&outcome, &scheme.maps)
-    } else {
-        plan::build_mapped(&outcome, &scheme.maps)
-    };
+    let mut p = plan_for(&scheme, &outcome, None);
     if let Some(msg) = only
         .as_deref()
         .and_then(|name| no_such_group(name, &p.groups, "here"))

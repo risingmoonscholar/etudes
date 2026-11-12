@@ -2115,7 +2115,13 @@ mod tests {
             "fixture-v1",
             "metadata-v1",
         );
-        assert!(crate::plan::BoundPlan::from_plan(crate::plan::build(&outcome), context).is_err());
+        assert!(
+            crate::plan::BoundPlan::from_plan(
+                crate::plan::build(&outcome, crate::plan::Request::default()),
+                context
+            )
+            .is_err()
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -2427,7 +2433,7 @@ mod tests {
 
         // Build the plan, so the claim is about what would actually happen to
         // the textures rather than about what the scan collected.
-        let plan = crate::plan::build(&got);
+        let plan = crate::plan::build(&got, crate::plan::Request::default());
         let grouped: usize = plan.groups.iter().map(|g| g.members.len()).sum();
         assert_eq!(
             grouped, 0,

@@ -102,7 +102,7 @@ fn setup(tag: &str) -> (PathBuf, fixtures::Fixture, BoundPlan) {
     unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
-    let mut p = plan::build(&out);
+    let mut p = plan::build(&out, plan::Request::default());
     for g in &mut p.groups {
         g.accepted = true;
     }
@@ -965,7 +965,7 @@ fn live_stale_outcome_reports_the_saved_empty_journal_id() {
         },
     )
     .expect("live scan");
-    let mut proposal = plan::build(&out);
+    let mut proposal = plan::build(&out, plan::Request::default());
     for group in &mut proposal.groups {
         group.accepted = true;
     }

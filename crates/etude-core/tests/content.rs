@@ -63,9 +63,15 @@ fn inspection_refuses_files_that_metadata_alone_would_have_moved() {
     let root = fixture("widens");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
 
-    let without = plan::build(&out);
+    let without = plan::build(&out, plan::Request::default());
     let mut insp = StubInspector { reads: Vec::new() };
-    let with = plan::build_with(&out, Some(&mut insp));
+    let with = plan::build(
+        &out,
+        plan::Request {
+            inspector: Some(&mut insp),
+            ..Default::default()
+        },
+    );
 
     for name in fixtures::INNOCENT_NAMES_SENSITIVE_CONTENT {
         let path = root.canonicalize().unwrap().join(name);
@@ -94,9 +100,15 @@ fn inspection_never_creates_or_renames_a_group() {
     let root = fixture("names");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
 
-    let without = plan::build(&out);
+    let without = plan::build(&out, plan::Request::default());
     let mut insp = StubInspector { reads: Vec::new() };
-    let with = plan::build_with(&out, Some(&mut insp));
+    let with = plan::build(
+        &out,
+        plan::Request {
+            inspector: Some(&mut insp),
+            ..Default::default()
+        },
+    );
 
     let names_without: Vec<&String> = without.groups.iter().map(|g| &g.name).collect();
     let names_with: Vec<&String> = with.groups.iter().map(|g| &g.name).collect();
@@ -160,7 +172,13 @@ fn a_harmless_file_with_the_same_name_shape_is_not_refused() {
     let root = fixture("control");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
     let mut insp = StubInspector { reads: Vec::new() };
-    let p = plan::build_with(&out, Some(&mut insp));
+    let p = plan::build(
+        &out,
+        plan::Request {
+            inspector: Some(&mut insp),
+            ..Default::default()
+        },
+    );
 
     let control = root
         .canonicalize()
@@ -181,7 +199,13 @@ fn a_file_already_refused_by_name_is_never_opened() {
     let root = fixture("noreopen");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
     let mut insp = StubInspector { reads: Vec::new() };
-    let _ = plan::build_with(&out, Some(&mut insp));
+    let _ = plan::build(
+        &out,
+        plan::Request {
+            inspector: Some(&mut insp),
+            ..Default::default()
+        },
+    );
 
     for name in fixtures::SENSITIVE_NAMES {
         let path = root.canonicalize().unwrap().join(name);
@@ -198,7 +222,13 @@ fn accounting_still_balances_with_inspection_on() {
     let root = fixture("balance");
     let out = scan::scan(&root, &ScanConfig::default()).expect("scan");
     let mut insp = StubInspector { reads: Vec::new() };
-    let p = plan::build_with(&out, Some(&mut insp));
+    let p = plan::build(
+        &out,
+        plan::Request {
+            inspector: Some(&mut insp),
+            ..Default::default()
+        },
+    );
 
     let grouped: usize = p.groups.iter().map(|g| g.members.len()).sum();
     assert_eq!(

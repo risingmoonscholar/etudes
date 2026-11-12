@@ -48,7 +48,7 @@ impl Fixture {
             },
         )
         .unwrap();
-        let mut proposal = plan::build(&out);
+        let mut proposal = plan::build(&out, plan::Request::default());
         for group in &mut proposal.groups {
             group.accepted = true;
         }
@@ -229,7 +229,7 @@ fn immediate_apply_keeps_open_inode_while_exported_replay_remains_strict() {
         },
     )
     .unwrap();
-    let mut proposal = plan::build(&out);
+    let mut proposal = plan::build(&out, plan::Request::default());
     for group in &mut proposal.groups {
         group.accepted = true;
     }
@@ -266,7 +266,7 @@ fn immediate_apply_still_refuses_replaced_sources_and_new_markers() {
             },
         )
         .unwrap();
-        let mut proposal = plan::build(&out);
+        let mut proposal = plan::build(&out, plan::Request::default());
         for group in &mut proposal.groups {
             group.accepted = true;
         }
@@ -658,7 +658,7 @@ fn beaten_after_validate(
         },
     )
     .unwrap();
-    let mut proposal = plan::build(&out);
+    let mut proposal = plan::build(&out, plan::Request::default());
     for group in &mut proposal.groups {
         group.accepted = true;
     }
@@ -742,7 +742,7 @@ fn group_folder_made_after_the_journal_is_a_recorded_conflict() {
         },
     )
     .unwrap();
-    let mut proposal = plan::build(&out);
+    let mut proposal = plan::build(&out, plan::Request::default());
     for group in &mut proposal.groups {
         group.accepted = true;
     }
@@ -788,7 +788,7 @@ fn file_landing_at_the_rename_is_a_recorded_conflict_about_a_file() {
         },
     )
     .unwrap();
-    let mut proposal = plan::build(&out);
+    let mut proposal = plan::build(&out, plan::Request::default());
     for group in &mut proposal.groups {
         group.accepted = true;
     }
