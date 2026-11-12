@@ -2756,11 +2756,8 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     ])
                 );
             } else {
-                println!(
-                    "{} in {} stashed from the selected folder.",
-                    etude_cli_support::counted(counts.iter().sum::<usize>(), "item", "items"),
-                    etude_cli_support::counted(batches.len(), "operation", "operations"),
-                );
+                let in_place: Vec<bool> = batches.iter().map(holding_in_place).collect();
+                println!("{}", status_headline(&counts, &in_place));
                 for batch in &batches {
                     if !holding_in_place(batch) {
                         println!(
@@ -3266,6 +3263,41 @@ fn holding_in_place(batch: &etude_core::Journal) -> bool {
             .iter()
             .filter(|made| made.path == recorded)
             .all(|made| made.device == meta.dev() && made.inode == meta.ino())
+}
+
+/// The first line of `status` for a folder that records name. `counts[i]` is
+/// what batch `i` still holds, and `in_place[i]` whether its holding folder is
+/// here. A record whose folder was moved or replaced holds nothing here, so it
+/// is not counted as stashed from this folder.
+fn status_headline(counts: &[usize], in_place: &[bool]) -> String {
+    use etude_cli_support::counted;
+    let here = in_place.iter().filter(|here| **here).count();
+    let away = in_place.len() - here;
+    let items: usize = counts
+        .iter()
+        .zip(in_place)
+        .filter(|(_, here)| **here)
+        .map(|(n, _)| n)
+        .sum();
+    let mut lines = Vec::new();
+    if here > 0 {
+        lines.push(format!(
+            "{} in {} stashed from the selected folder.",
+            counted(items, "item", "items"),
+            counted(here, "operation", "operations")
+        ));
+    }
+    if away > 0 {
+        let (name, its) = if away == 1 {
+            ("operation names", "its")
+        } else {
+            ("operations name", "their")
+        };
+        lines.push(format!(
+            "{away} {name} this folder, but {its} items are not here."
+        ));
+    }
+    lines.join("\n")
 }
 
 /// What pop says when the folder a stash was made in is not that folder any
@@ -3843,6 +3875,22 @@ mod tests {
             );
             assert!(told.ends_with("Its operation id is 1-2-0-ab."));
         }
+    }
+
+    #[test]
+    fn status_headline_does_not_count_a_record_whose_items_are_not_here() {
+        assert_eq!(
+            status_headline(&[0], &[false]),
+            "1 operation names this folder, but its items are not here."
+        );
+        assert_eq!(
+            status_headline(&[2, 0, 0], &[true, false, false]),
+            "2 items in 1 operation stashed from the selected folder.\n2 operations name this folder, but their items are not here."
+        );
+        assert_eq!(
+            status_headline(&[1, 2], &[true, true]),
+            "3 items in 2 operations stashed from the selected folder."
+        );
     }
 
     #[test]

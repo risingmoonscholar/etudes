@@ -180,6 +180,8 @@ for case in quote escape; do
   OUT=$(cd "$from" && "$STASH" status 2>&1 </dev/null)
   assert_no_panic "$case: status in the replaced folder" "$OUT"
   no_escape "$case: status in the replaced folder" "$OUT"
+  assert_eq "1 operation names this folder, but its items are not here." "$(printf '%s\n' "$OUT" | head -1)" "$case: the first line says the items are not here"
+  hasnt "$case: no count of items that are not here" "$OUT" "0 items"
   has "$case: says the record cannot be restored here" "$OUT" "its folder was moved or replaced, so stash pop cannot restore it here."
   hasnt "$case: no pop step in the replaced folder" "${OUT//so stash pop cannot/}" "stash pop"
   GOT=$(cd "$from" && "$STASH" status --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["not_restorable_here"])')
