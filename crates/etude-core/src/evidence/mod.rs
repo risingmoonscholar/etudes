@@ -12,6 +12,7 @@
 //! entry alone.
 
 pub mod capture;
+pub mod capture_names;
 pub mod device;
 pub mod family;
 
@@ -41,7 +42,7 @@ impl<'a> Facts<'a> {
         Facts {
             entry,
             family: Family::of_extension(&entry.ext),
-            capture: capture::recognise_by_known_name(&entry.name, &entry.ext),
+            capture: capture::recognise_by_name(&entry.name),
             camera: device::is_camera(&entry.name, &entry.ext),
             installer: device::is_installer(&entry.ext),
         }
