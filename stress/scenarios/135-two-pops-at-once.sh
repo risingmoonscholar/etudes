@@ -134,6 +134,12 @@ trial() {  # trial MODE: MODE is text or json for the second pop
   else
     fail "$mode: second pop did not wait for the first (still running: $(kill -0 "$B" 2>/dev/null && echo yes || echo no)): $(cat "$W/b.out" "$W/b.err" | grep -v -e 'items$' -e '^{' | head -5)"
   fi
+  # Nothing moves while the first pop is stopped and the second waits.
+  if [ "$(home "$D")" = "$restored" ]; then
+    pass "$mode: while the second pop waits, it restores nothing ($restored of $TOTAL still home)"
+  else
+    fail "$mode: files moved while the first pop was stopped: $(home "$D") home, $restored when it stopped"
+  fi
   if grep -q 'another `stash pop` is restoring this stash now' "$W/b.err"; then
     pass "$mode: second pop names the other pop"
   else

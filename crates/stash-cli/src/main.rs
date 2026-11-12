@@ -1955,20 +1955,30 @@ fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
         // Darwin SDK sys/fcntl.h: O_NOFOLLOW | O_NONBLOCK.
         options.custom_flags(0x100 | 0x4);
     }
-    #[cfg(target_os = "linux")]
+    // Linux asm-generic/fcntl.h: O_NONBLOCK, and O_NOFOLLOW, whose value
+    // differs by architecture. Elsewhere the regular-file check below still
+    // refuses a link.
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86")))]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(0x20000 | 0x800);
     }
+    #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x8000 | 0x800);
+    }
     let mut said = false;
-    loop {
+    // Each turn follows one save by the other pop, so a few are plenty.
+    for _ in 0..100 {
         let file = scan::observe_read("file_open", options.open(&path)).ok()?;
         match lock(&file, false) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if !said {
                     eprintln!(
-                        "stash: another `stash pop` is restoring this stash now. Waiting for it to finish."
+                        "stash: another `stash pop` is restoring this stash now. Waiting for it to finish.\n\
+                         \x20      Press Ctrl-C to stop waiting; that changes nothing."
                     );
                     said = true;
                 }
@@ -1978,10 +1988,15 @@ fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
         }
         let held = file.metadata().ok()?;
         let current = std::fs::symlink_metadata(&path).ok()?;
-        if held.is_file() && (held.dev(), held.ino()) == (current.dev(), current.ino()) {
+        // Something other than a record file: no hold, and no retry.
+        if !held.is_file() || !current.is_file() {
+            return None;
+        }
+        if (held.dev(), held.ino()) == (current.dev(), current.ino()) {
             return Some(file);
         }
     }
+    None
 }
 
 fn cmd_pop(args: &[String]) -> ExitCode {
