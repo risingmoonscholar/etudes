@@ -27,7 +27,7 @@ Scope domains resolve as follows:
 
 | Domain | Meaning |
 | --- | --- |
-| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices, inodes and `st_flags` (the immutable flag) under the requested root, within the tool's scan depth and skip rules. Sweep also reads the 32-byte `com.apple.FinderInfo` attribute of visible regular files to skip Finder aliases by the `kIsAlias` flag; this is counted in the `metadata` observation category. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The tag presence read is counted in the `finder_tag_presence` observation category |
+| `selected_tree_metadata` | Directory entries, names, types, sizes, modes, dates, devices, inodes and `st_flags` (the immutable flag) under the requested root, within the tool's scan depth and skip rules. Sweep also reads the 32-byte `com.apple.FinderInfo` attribute of visible regular files to skip Finder aliases by the `kIsAlias` flag; this is counted in the `metadata` observation category. For items sweep may move this includes whether a Finder tag attribute is present, asked through a zero-length buffer so tag names are never read; Finder comments are never queried. The tag presence read is counted in the `finder_tag_presence` observation category. Sweep also checks the presence of `com.apple.metadata:kMDItemIsScreenCapture` on files with a still-capture extension, asked through a zero-length buffer so no value is read and no file is opened; it is not asked for a folder, a recording, any other extension, or an entry a scan-time rule already holds, and stash never asks it. A failed check reads as absent. This read is counted in the `screen_capture_presence` observation category |
 | `finder_tag_names` | `sweep --scheme tags` only: the tag attribute of files sweep may tag, read in full to learn which tags exist in the folder, which files already carry the tag asked for, and what to put back on undo. Nothing else is read from the attribute list, Finder comments are never queried, and file contents are not read. The read is counted in the `finder_tag_names` observation category |
 | `selected_tree_finder_tags` | `sweep --scheme tags` only: the tag attribute of planned files, replaced by the old tag list plus one tag on apply of an exported plan, and by the recorded old bytes on undo. No file is moved, renamed, created or deleted |
 | `ancestor_metadata` | Ancestor names and metadata used for system-location, cloud-sync and filesystem checks |
@@ -116,7 +116,7 @@ The original immutable declarations remain under `history/v1/`; their byte
 digests are checked by the witness. Canonical pins in `v2/` retain the preceding version-2 declarations; `v3/`
 pins the preceding version-3 declarations. `v4/` pins version-4 declarations;
 `v5/` pins version-5 declarations of all three tools. Later directories pin each
-later declaration: `v18/sweep.json`, `v15/stash.json` and `v9/unpack.json` are the
+later declaration: `v19/sweep.json`, `v15/stash.json` and `v9/unpack.json` are the
 current pins.
 They fix all fields, types and declared semantics. The published `v1/*.json` fixture
 locations mirror each tool's current canonical envelope for existing documentation
@@ -299,7 +299,7 @@ durable journal identifier.
 `scope` identifies the tool and operation and includes its conditional declared
 read/write domains and startup domains. Those are capabilities, not observations.
 `observations.categories` records instrumented read operations by category:
-metadata, Finder tag presence, Finder tag names (tag scheme only), directory enumeration, access opens, encrypted
+metadata, Finder tag presence, screen capture presence, Finder tag names (tag scheme only), directory enumeration, access opens, encrypted
 journal bytes, key acquisition, fingerprint bytes, cross-device copying and
 archive copying.
 `attempted` counts calls, `observed` successful calls, `failed` failed calls,
@@ -537,3 +537,25 @@ proves the code for sweep by tying two records' times; for stash it is
 unproven there, because stash reaches it only through legacy or rewritten ids,
 which stash-cli's tests write. `v18/sweep.json` and `v15/stash.json` pin these
 declarations and `v1/` mirrors them; earlier pins remain unchanged.
+
+**Declaration version 19 (sweep)** adds one read to `selected_tree_metadata`:
+the presence of `com.apple.metadata:kMDItemIsScreenCapture` on files with a
+still-capture extension, asked through a zero-length buffer so no value is
+read. On macOS 15.8.2 `screencapture -x` wrote this attribute on a still and a
+`screencapture -v` recording carried none, so sweep never asks it of a
+recording; it never asks it of a folder or of an entry a scan-time rule
+already holds, asks it at most once per file in a scan, and opens no file. A
+failed check reads as absent and is counted as failed. The read is counted in
+the new `screen_capture_presence` observation category. The still extensions
+are `png`, `jpg`, `jpeg`, `heic`, `tiff`, `tif`, `gif`, `pdf` and `bmp`;
+recordings are `mov`. A new `screen_captures` section states the order of the
+evidence: the attribute (stills only), then a name that starts with the OS's
+own localized prefix, then the known English names. Stills form `Screenshots`
+and recordings form `Screen Recordings`; a screen-capture group in `--json`
+adds `capture_kind` and `capture_basis`. An exported plan marks a capture
+group with plan signal tag 9; plans written earlier read unchanged, and a plan
+that holds tag 9 needs version 19 or later. No refusal code is added, and the
+result envelope stays at version 4. The declaration's digest is the plan's
+observation contract, so a plan exported by an earlier build is refused as
+stale. `v19/sweep.json` pins this declaration and `v1/sweep.json` mirrors it;
+earlier pins remain unchanged.

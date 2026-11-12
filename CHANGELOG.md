@@ -10,9 +10,18 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+### Added
+
+- **sweep:** screen recordings get their own group (issue #223). Before, a recording that macOS saved went into `Media` with every other video, in every language. Now three or more recordings (`mov`) whose names start the way macOS names a recording form `Screen Recordings`, apart from the stills in `Screenshots`. `Screen Recordings` is a reserved name, like `Screenshots`.
+
 ### Fixed
 
+- **sweep:** screenshots are grouped on a Mac in any language (issue #222). Before, sweep knew only names that start with `Screenshot`, `Screen Shot` or `CleanShot`, so on a German Mac three files named `Bildschirmfoto 2026-…png` went into `Images`. Now sweep checks three kinds of evidence, in this order: for files with a still-capture extension, the attribute `com.apple.metadata:kMDItemIsScreenCapture`, asked through a zero-length buffer so no value is read; a name that starts with the exact text macOS writes before the date, in any of the 43 languages it ships; and the English names it already knew. `screencapture` wrote the attribute on a still on macOS 15.8.2 and wrote none on a recording, so recordings are known by name only. The names come from macOS's own string table, `screencaptureui.app/Contents/Resources/Localizable.loctable`, and are compared character by character, so the soft hyphen in the Dutch word and the curly apostrophe in the French word count. Stills are `png`, `jpg`, `jpeg`, `heic`, `tiff`, `tif`, `gif`, `pdf` and `bmp`, after `man screencapture`. The plan line names the weakest evidence in the group: "marked by macOS as screen captures", "named by macOS as screen captures", or `named "Screenshot ..."`, and `--json` adds `capture_kind` and `capture_basis` to the group. A screenshot that looks like a personal record is still left alone, and any screen capture, still or recording, still sorts past a loose project document. The attribute check is counted in the new `screen_capture_presence` observation category; a check that fails is read as "absent" and counted as failed. Sweep capability declaration version 19 adds it to `selected_tree_metadata` and describes the rules under `screen_captures`. stash asks for no attribute, but a capture named by macOS in any language now sorts past a loose project document in a stashed folder too.
 - **sweep:** a tag plan (`--scheme tags`) now tags files inside folders sweep made, such as `Screenshots/`, and no longer says they are already in their destination, which means nothing for a tag (#221). A tag moves nothing, so where a file sits no longer decides whether it gets one. Two related effects are gone too: a file that no `--map` takes is listed as matching no group (`no_clear_group_paths` in `--json`) even when a built-in folder group would have taken it, and a locked folder that a built-in group would use no longer adds files to `skipped.locked_skipped`. A file sweep holds for safety is still never tagged. `left_alone.in_place` stays in tag plan JSON, and is now always 0 with no paths.
+
+### Other changes
+
+- A plan exported by an earlier sweep build is now refused as stale. The capability declaration changed, and an exported plan is bound to its digest. Run the scan again and export a new plan. An exported plan that holds a screen-capture group marks it with plan signal tag 9 and needs declaration 19 or later; plans written earlier still read.
 
 ## [0.5.5] candidate — sweep, stash and unpack
 
