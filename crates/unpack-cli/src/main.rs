@@ -1481,13 +1481,13 @@ fn unpack_checked(
     progress.settle();
     match extracted {
         Err(ExtractError::Stopped) => {
-            let cleanup = cleanup_destination(staging);
+            let cleanup = cleanup_staging(&staged);
             etude_cli_support::envelope::status("refused");
             eprintln!("unpack: stopped after SIGTERM. {}", cleanup.message());
             return refusal(ReasonCode::ExtractionStopped, input_subject(archive));
         }
         Err(ExtractError::ToolFailed(output)) => {
-            let cleanup = cleanup_destination(staging);
+            let cleanup = cleanup_staging(&staged);
             if output.disk_full {
                 eprintln!(
                     "unpack: the disk ran out of room while extracting {}. {} \
@@ -1512,7 +1512,7 @@ fn unpack_checked(
             return failure(ReasonCode::ArchiveUnreadable, input_subject(archive));
         }
         Err(ExtractError::CopyUnopened) => {
-            let cleanup = cleanup_destination(staging);
+            let cleanup = cleanup_staging(&staged);
             eprintln!(
                 "{}",
                 copy_unopened_message(archive, "extract", Some(&cleanup.message()))
@@ -1520,7 +1520,7 @@ fn unpack_checked(
             return failure(ReasonCode::PrivateCopyUnopened, input_subject(archive));
         }
         Err(ExtractError::Other(e)) => {
-            let cleanup = cleanup_destination(staging);
+            let cleanup = cleanup_staging(&staged);
             eprintln!(
                 "unpack: could not finish extracting {}: {}. {}",
                 shown(archive),
@@ -1533,7 +1533,7 @@ fn unpack_checked(
             // Remove what landed before the soft limit was observed. A partial extraction
             // left behind is the mess this tool exists to avoid, and it is
             // worse here than usual: the user did not choose to start it.
-            let cleanup = cleanup_destination(staging);
+            let cleanup = cleanup_staging(&staged);
             let Breach::Total(n) = breach;
             // The limit was not the problem if the disk could not have held
             // that much anyway: a larger limit would not help.
@@ -1568,7 +1568,7 @@ fn unpack_checked(
 
     // Audit before tidying, so discarded metadata cannot hide unsafe members.
     if let Err(error) = audit_staging(staging) {
-        return audit_refusal(staging, &dest, archive, &error);
+        return audit_refusal(&staged, &dest, archive, &error);
     }
 
     // --- 5. tidy -----------------------------------------------------------
@@ -1591,7 +1591,7 @@ fn unpack_checked(
                 quarantine_failed_message(
                     &error,
                     &dest,
-                    &cleanup_destination(staging).message(),
+                    &cleanup_staging(&staged).message(),
                     &by_hand(fmt, archive, &dest),
                 )
             );
@@ -1610,21 +1610,21 @@ fn unpack_checked(
         Ok(count) => match count.checked_sub(1) {
             Some(count) => count,
             None => {
-                return audit_refusal(staging, &dest, archive, "the private lock file is missing");
+                return audit_refusal(&staged, &dest, archive, "the private lock file is missing");
             }
         },
-        Err(error) => return audit_refusal(staging, &dest, archive, &error),
+        Err(error) => return audit_refusal(&staged, &dest, archive, &error),
     };
     if let Err(error) = staged.remove_lock() {
         return audit_refusal(
-            staging,
+            &staged,
             &dest,
             archive,
             &format!("could not remove the private lock file: {error}"),
         );
     }
     if let Err(error) = publish_staging(staging, &dest) {
-        let cleanup = cleanup_destination(staging);
+        let cleanup = cleanup_staging(&staged);
         etude_cli_support::envelope::status("refused");
         if dest.symlink_metadata().is_ok() {
             eprintln!(
@@ -1674,7 +1674,7 @@ fn unpack_checked(
     }
 
     let kept = entries.len() - junk;
-    println!("\n  Extracted to {}/", dest.display());
+    println!("\n  Extracted to {}/", shown(&dest));
     println!("  {}", counted(kept, "entry", "entries"));
     if flattened {
         println!("  Removed a duplicate wrapper folder");
@@ -2069,6 +2069,11 @@ enum Cleanup {
         path: PathBuf,
         error: std::io::Error,
     },
+    /// The private folder left its path while unpack worked and could not be
+    /// found again, so nothing can be said about what remains.
+    Lost {
+        was: PathBuf,
+    },
 }
 
 impl Cleanup {
@@ -2088,7 +2093,52 @@ impl Cleanup {
                 shown(path),
                 plain_io_error(error)
             ),
+            Self::Lost { was } => format!(
+                "The partial extraction is no longer at {}: it was moved or removed while \
+                 unpack worked, and unpack could not tell where it is now. If its folder was \
+                 moved, look in the new place for a hidden folder named {} and delete it.",
+                shown(was),
+                shown(Path::new(was.file_name().unwrap_or_default()))
+            ),
         }
+    }
+}
+
+/// Remove the private folder wherever it is now. Its parent folder can be
+/// moved while unpack works, taking the folder with it, and then a removal by
+/// its old path finds nothing. That proves nothing, so the held folder is
+/// asked where it went, and only that same folder is removed.
+fn cleanup_staging(staged: &staging::Staging) -> Cleanup {
+    cleanup_staging_with(staged, |path| std::fs::remove_dir_all(path))
+}
+
+fn cleanup_staging_with(
+    staged: &staging::Staging,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> Cleanup {
+    // A folder that keeps moving while it is removed is looked for again,
+    // a few times only.
+    for _ in 0..3 {
+        let path = match staged.whereabouts() {
+            staging::Whereabouts::At(path) => path,
+            // Never removed: the name was not proved to be this folder.
+            staging::Whereabouts::Unchecked { path, error } => {
+                return Cleanup::Unverified { path, error };
+            }
+            staging::Whereabouts::Unknown => break,
+        };
+        let error = match remove(&path) {
+            Ok(()) => return Cleanup::Removed,
+            Err(error) => error,
+        };
+        match path.symlink_metadata() {
+            Ok(_) => return Cleanup::Remains { path, error },
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Cleanup::Unverified { path, error },
+        }
+    }
+    Cleanup::Lost {
+        was: staged.path.clone(),
     }
 }
 
@@ -2326,11 +2376,11 @@ fn audit_staging(staging: &Path) -> Result<usize, String> {
     walk(staging, &root)
 }
 
-fn audit_refusal(staging: &Path, dest: &Path, archive: &Path, error: &str) -> ExitCode {
+fn audit_refusal(staged: &staging::Staging, dest: &Path, archive: &Path, error: &str) -> ExitCode {
     eprintln!(
         "unpack: the extracted files failed a safety check ({error}). Nothing was placed at {}. {}",
         shown(dest),
-        cleanup_destination(staging).message()
+        cleanup_staging(staged).message()
     );
     refusal(ReasonCode::UnsafeInput, input_subject(archive))
 }
@@ -3835,6 +3885,133 @@ mod tests {
             !dest.exists(),
             "successful cleanup left its destination behind"
         );
+    }
+
+    /// A private folder holding one extracted file, in `p1` of a new folder.
+    fn reserved_in(tag: &str) -> (PathBuf, staging::Staging) {
+        let root = std::env::temp_dir().join(format!("unpack-moved-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("p1")).expect("create parent");
+        let staged = staging::Staging::reserve(&root.join("p1/out"), &[]).expect("reserve");
+        std::fs::write(staged.path.join("member"), b"extracted").expect("write member");
+        (root, staged)
+    }
+
+    #[test]
+    fn a_private_folder_moved_with_its_parent_is_removed_where_it_went() {
+        let (root, staged) = reserved_in("parent");
+        std::fs::rename(root.join("p1"), root.join("p2")).expect("move parent");
+
+        let cleanup = cleanup_staging(&staged);
+
+        assert!(matches!(cleanup, Cleanup::Removed));
+        assert_eq!(cleanup.message(), "Nothing was left behind.");
+        assert_eq!(std::fs::read_dir(root.join("p2")).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_private_folder_under_an_unsearchable_parent_is_not_called_moved() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, staged) = reserved_in("noperm");
+        let parent = root.join("p1");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let cleanup = cleanup_staging(&staged);
+        let message = cleanup.message();
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            // The system may spell the same place differently, as
+            // /private/var for /var.
+            matches!(&cleanup, Cleanup::Unverified { path, .. }
+                if path.file_name() == staged.path.file_name()
+                    && path.ends_with(Path::new("p1").join(staged.path.file_name().unwrap()))),
+            "{message}"
+        );
+        assert!(
+            message.contains("could not check whether it is still there"),
+            "{message}"
+        );
+        assert!(staged.path.join("member").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_checked_is_never_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, staged) = reserved_in("uncheckedimpostor");
+        // The folder is deleted and another takes its name. The system can
+        // still give the deleted folder's last path, which is now the other.
+        std::fs::remove_dir_all(&staged.path).unwrap();
+        std::fs::create_dir(&staged.path).unwrap();
+        std::fs::write(staged.path.join("keep"), b"keep").unwrap();
+        let parent = root.join("p1");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut attempted = false;
+        let cleanup = cleanup_staging_with(&staged, |_| {
+            attempted = true;
+            Ok(())
+        });
+        let message = cleanup.message();
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!attempted, "removal was attempted on a name never proved");
+        assert!(matches!(cleanup, Cleanup::Unverified { .. }), "{message}");
+        assert!(
+            message.contains("could not check whether it is still there"),
+            "{message}"
+        );
+        assert_eq!(std::fs::read(staged.path.join("keep")).unwrap(), b"keep");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_private_folder_is_found_when_a_file_took_its_parents_name() {
+        let (root, staged) = reserved_in("fileparent");
+        std::fs::rename(root.join("p1"), root.join("p2")).expect("move parent");
+        std::fs::write(root.join("p1"), b"").expect("a file takes the old name");
+
+        let cleanup = cleanup_staging(&staged);
+
+        assert!(matches!(cleanup, Cleanup::Removed));
+        assert_eq!(std::fs::read_dir(root.join("p2")).unwrap().count(), 0);
+        assert_eq!(std::fs::read(root.join("p1")).unwrap(), b"");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_that_took_the_old_name_is_not_removed() {
+        let (root, staged) = reserved_in("impostor");
+        let moved = root.join("p1/elsewhere");
+        std::fs::rename(&staged.path, &moved).expect("move private folder");
+        std::fs::create_dir(&staged.path).expect("make a folder with the old name");
+        std::fs::write(staged.path.join("keep"), b"keep").expect("write keep");
+
+        let cleanup = cleanup_staging(&staged);
+
+        assert!(matches!(cleanup, Cleanup::Removed));
+        assert!(!moved.exists(), "the moved private folder stayed");
+        assert_eq!(std::fs::read(staged.path.join("keep")).unwrap(), b"keep");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_private_folder_that_cannot_be_found_is_not_called_removed() {
+        let (root, staged) = reserved_in("lost");
+        std::fs::remove_dir_all(&staged.path).unwrap();
+
+        let cleanup = cleanup_staging(&staged);
+
+        assert!(matches!(cleanup, Cleanup::Lost { .. }));
+        let message = cleanup.message();
+        assert!(!message.contains("Nothing was left behind"), "{message}");
+        assert!(
+            message.contains(&format!("is no longer at {}", staged.path.display())),
+            "{message}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A zip of one file, `plain.txt`, in a new folder of its own.
