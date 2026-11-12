@@ -52,10 +52,14 @@ fn scene(label: &str) -> Scene {
 }
 
 fn tools_path() -> String {
-    // Cargo names the built tool for this test. The test binary's own place
-    // moves between Cargo versions, so it is not used to find the tools.
-    let sweep = Path::new(env!("CARGO_BIN_EXE_sweep"));
-    let bin = sweep.parent().unwrap();
+    // The test binary sits in a different folder under target/<profile>/ in
+    // different Cargo versions; the tools are in target/<profile>/ itself.
+    let test = std::env::current_exe().unwrap();
+    let bin = test
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join("sweep").is_file())
+        .unwrap_or_else(|| panic!("no sweep above {}", test.display()));
     assert!(bin.join("sweep").is_file(), "no sweep in {}", bin.display());
     format!("{}:/usr/bin:/bin", bin.display())
 }
