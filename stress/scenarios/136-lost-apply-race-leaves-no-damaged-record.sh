@@ -18,7 +18,9 @@ set -u
 #   - one `sweep undo` puts every file back, and a second has nothing to undo
 #
 # stash runs the same apply code, so the same race is run with two `stash
-# FOLDER`. The loser is refused as a stale plan with nothing moved, `stash
+# FOLDER`. The loser is refused as a stale plan with nothing moved and the
+# words "FOLDER changed just now, perhaps by another run. Nothing was moved.
+# Run it again.", with no step to export a plan it never made, `stash
 # status --id` reads its record as refused with nothing planned, `stash
 # status` lists only the winner's stash, and once that is popped, status and
 # pop both say nothing is stashed.
@@ -195,9 +197,16 @@ kill -CONT "$PID"
 wait "$PID"; LOSER=$?
 PID=""
 assert_eq 2 "$LOSER" "stash: the first stash is refused, not reported as stopped part-way"
-grep -qF "Nothing was moved." "$W/stash-loser.err" \
-  && pass "stash: the first stash says nothing was moved" \
-  || fail "stash: the first stash did not say nothing was moved: $(cat "$W/stash-loser.err")"
+# No plan was saved, so the words are about the folder, not about a plan, and
+# the step is to run the same stash again, which scans the folder again.
+grep -qxF "stash: $G changed just now, perhaps by another run. Nothing was moved. Run it again." "$W/stash-loser.err" \
+  && pass "stash: the first stash says the folder changed and nothing was moved" \
+  || fail "stash: the first stash did not give the folder-changed words: $(cat "$W/stash-loser.err")"
+if grep -qE 'NEW_PLAN_FILE|--export-plan|this plan' "$W/stash-loser.err"; then
+  fail "stash: the first stash printed a plan step though no plan was saved: $(cat "$W/stash-loser.err")"
+else
+  pass "stash: the first stash prints no plan step"
+fi
 read -r STATUS MOVED REASON LOSER_ID <<<"$(python3 -I - "$W/stash-loser.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
