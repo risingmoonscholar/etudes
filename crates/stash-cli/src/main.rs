@@ -2109,7 +2109,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             // earlier undo moved these home and was killed before it could write
             // that down, so this run only had to agree with the disk.
             println!(
-                "  {} already home from an interrupted restore; the undo record now says so.",
+                "  {} already back in place; the undo record now says so.",
                 etude_cli_support::counted(r.reconciled.len(), "item was", "items were")
             );
         }
@@ -2770,7 +2770,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         Place::Here => {}
                         Place::Home => {
                             println!(
-                                "  {}: its items are back in this folder. Clear the record with: stash pop --id {}",
+                                "  {}: its holding folder is gone, and files with its items' names, sizes and times are in this folder. To check them against the record and clear it if they match: stash pop --id {}",
                                 batch.id, batch.id
                             );
                             continue;
@@ -3022,10 +3022,11 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
     let sealer = KeychainSeal { key };
     match etude_core::Journal::load_sealed_exact("stash", &id, &sealer) {
         Ok(journal) => {
-            let why_not = if batches::live(&journal) {
+            let live = batches::live(&journal);
+            let why_not = if live {
                 place(&journal).why_not()
             } else {
-                None
+                Some("nothing of it is left to restore.")
             };
             if flag(args, "--json") {
                 println!("{}", status_id_payload(&journal, why_not.is_none()));
@@ -3343,12 +3344,17 @@ fn root_identity_matches(batch: &etude_core::Journal, at: &Path) -> Option<bool>
 enum Place {
     /// The folder and its holding folder are the ones stash recorded.
     Here,
-    /// The folder is the one recorded, its holding folder is gone, and every
-    /// moved item is back in its place: pop only clears the record.
+    /// The folder is the one recorded, its holding folder is gone, and a file
+    /// with each moved item's name, size and time is in its place. Pop checks
+    /// their contents too, then clears the record if they match. Status reads
+    /// metadata only, so it cannot say more than that.
     Home,
     /// The folder is the one recorded, its holding folder is gone, and some
     /// item is not back: there is nothing for pop to restore from.
     Gone,
+    /// As Gone, and a file that is not the item has an item's name: its size
+    /// or time differs from the record.
+    NotTheItems,
     /// The holding folder at the recorded place is not the one stash made.
     HoldingReplaced,
     /// The folder at the recorded place is not the one stashed: it was moved
@@ -3363,6 +3369,9 @@ impl Place {
             Place::Here | Place::Home => None,
             Place::Gone => Some(
                 "its holding folder is gone and its items are not back in their folder, so stash pop cannot restore it.",
+            ),
+            Place::NotTheItems => Some(
+                "its holding folder is gone and its items are not back in their folder; other files now have some of their names, so stash pop cannot restore it.",
             ),
             Place::HoldingReplaced => {
                 Some("its holding folder was replaced, so stash pop cannot restore it here.")
@@ -3385,12 +3394,24 @@ fn place(batch: &etude_core::Journal) -> Place {
     };
     match std::fs::symlink_metadata(&recorded) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let home = batch
-                .entries
-                .iter()
-                .filter(|entry| entry.is_moved())
-                .all(|entry| std::fs::symlink_metadata(&entry.from).is_ok());
-            if home { Place::Home } else { Place::Gone }
+            // The size and time pop compares; pop also compares the first and
+            // last bytes, which status does not read.
+            let mut missing = false;
+            let mut other = false;
+            for entry in batch.entries.iter().filter(|entry| entry.is_moved()) {
+                match size_and_time(&entry.from) {
+                    Some((size, mtime)) if size == entry.size && mtime == entry.mtime_secs => {}
+                    Some(_) => other = true,
+                    None => missing = true,
+                }
+            }
+            if other {
+                Place::NotTheItems
+            } else if missing {
+                Place::Gone
+            } else {
+                Place::Home
+            }
         }
         Err(_) => Place::HoldingReplaced,
         Ok(_) => {
@@ -3407,6 +3428,19 @@ fn place(batch: &etude_core::Journal) -> Place {
             }
         }
     }
+}
+
+/// The size and modification time in whole seconds of what is at `path`, read
+/// as the record's fingerprint reads them (the link itself, not its target).
+fn size_and_time(path: &Path) -> Option<(u64, i64)> {
+    let meta = etude_core::scan::observe_read("metadata", std::fs::symlink_metadata(path)).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0);
+    Some((meta.len(), mtime))
 }
 
 /// Whether `stash pop` can restore `batch` from where its record says.
@@ -4097,7 +4131,12 @@ mod tests {
 
     #[test]
     fn a_record_whose_items_cannot_be_restored_says_why_and_offers_no_step() {
-        for place in [Place::Gone, Place::HoldingReplaced, Place::Away] {
+        for place in [
+            Place::Gone,
+            Place::NotTheItems,
+            Place::HoldingReplaced,
+            Place::Away,
+        ] {
             let why = place.why_not().expect("a reason");
             assert!(
                 why.ends_with("so stash pop cannot restore it.")
