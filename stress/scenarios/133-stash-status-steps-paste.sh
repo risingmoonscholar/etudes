@@ -7,7 +7,9 @@
 # exactly as printed. A folder whose only stash has no undo record (made with
 # --no-journal) is not one pop can restore, so status from elsewhere does not
 # offer it, and status in that folder prints no pop step, only where the items
-# are and that they move back by hand.
+# are and that they move back by hand. A stashed folder that was moved names
+# where it was stashed from and how to move it back and restore it, unless
+# something else now sits there.
 #
 # The folder names hold a space and a single quote, or an escape character. No
 # raw escape byte may reach the terminal, and --json carries the real path.
@@ -129,4 +131,43 @@ for case in quote escape; do
   GOT=$(printf '%s' "$JSON" | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["holding"]); print(d["undo_record"])')
   assert_eq "$real"$'\n'"False" "$GOT" "$case: --json gives the real holding path and no undo record"
   hasnt "$case: --json has no pop step" "$JSON" "stash pop"
+
+  # A stashed folder that was moved: status in its new place names where it was
+  # stashed from, and both printed steps, run as printed, put every file back.
+  from="$W/$case/from $name"; to="$W/$case/to $name"
+  files "$from" a b
+  "$STASH" "$from" >/dev/null 2>&1 </dev/null
+  mv "$from" "$to"
+  OUT=$(cd "$to" && "$STASH" status 2>&1 </dev/null)
+  assert_no_panic "$case: status on a moved folder" "$OUT"
+  no_escape "$case: status on a moved folder" "$OUT"
+  hasnt "$case: a moved folder still has its record" "$OUT" "no undo record"
+  has "$case: says it has moved" "$OUT" "and that folder has moved here."
+  JSON=$(cd "$to" && "$STASH" status --json 2>/dev/null </dev/null)
+  GOT=$(printf '%s' "$JSON" | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["moved_from"]); print(d["undo_record"]); print(d["way_back"]); print(bool(d["operation_id"]))')
+  assert_eq "$from"$'\n'"True"$'\n'"clear"$'\n'"True" "$GOT" "$case: --json gives where it was, the record and the id"
+  step "$case: move back" "$OUT" "Move it back with: "
+  move=$STEP
+  step "$case: restore moved" "$OUT" "Then restore it with: "
+  pop=$STEP
+  STEP=$move; run_step "$case: move back"
+  STEP=$pop; run_step "$case: restore moved"
+  assert_eq "2" "$(held "$from")" "$case: every file is back where it was stashed"
+  [ ! -e "$to" ] && pass "$case: nothing is left at the moved place" || fail "$case: $to still exists"
+  assert_eq "" "$(find "$from" -mindepth 1 -maxdepth 1 -name '.stash-*')" "$case: no holding folder is left"
+
+  # Moved again, and something else now sits where it was stashed from: no
+  # step that would fail or put one folder inside the other.
+  "$STASH" "$from" >/dev/null 2>&1 </dev/null
+  mv "$from" "$to"; mkdir "$from"
+  OUT=$(cd "$to" && "$STASH" status 2>&1 </dev/null)
+  assert_no_panic "$case: status when the old place is taken" "$OUT"
+  no_escape "$case: status when the old place is taken" "$OUT"
+  has "$case: says the old place is taken" "$OUT" "Something else is now at "
+  has "$case: names the operation id" "$OUT" "Its operation id is "
+  hasnt "$case: no move when the old place is taken" "$OUT" "mv "
+  hasnt "$case: no pop when the old place is taken" "$OUT" "stash pop"
+  JSON=$(cd "$to" && "$STASH" status --json 2>/dev/null </dev/null)
+  GOT=$(printf '%s' "$JSON" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["way_back"])')
+  assert_eq "taken" "$GOT" "$case: --json says the old place is taken"
 done

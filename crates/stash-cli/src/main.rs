@@ -2809,6 +2809,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
             .map(|r| r.flatten().count())
             .unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let moved = moved_here(&dir, &sealer);
             if flag(args, "--json") {
                 use etude_core::json as j;
                 let due = deadline_of(name);
@@ -2827,7 +2828,28 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
                         ("elsewhere", "null".into()),
                         ("holding", j::path(&dir)),
-                        ("undo_record", j::bool(false)),
+                        ("undo_record", j::bool(moved.is_some())),
+                        (
+                            "moved_from",
+                            moved
+                                .as_ref()
+                                .map(|m| j::path(&m.from))
+                                .unwrap_or_else(|| "null".into()),
+                        ),
+                        (
+                            "operation_id",
+                            moved
+                                .as_ref()
+                                .map(|m| j::str(&m.id))
+                                .unwrap_or_else(|| "null".into()),
+                        ),
+                        (
+                            "way_back",
+                            moved
+                                .as_ref()
+                                .map(|m| j::str(m.way_back.code()))
+                                .unwrap_or_else(|| "null".into()),
+                        ),
                     ])
                 );
                 return ExitCode::SUCCESS;
@@ -2835,7 +2857,13 @@ fn cmd_status(args: &[String]) -> ExitCode {
             let due = deadline_of(name).map(|t| (t, t <= now_secs()));
             println!(
                 "{}",
-                unrecorded_here(&root, &dir, n, due.map(|(t, over)| (human_time(t), over)))
+                unrecorded_here(
+                    &root,
+                    &dir,
+                    n,
+                    due.map(|(t, over)| (human_time(t), over)),
+                    moved.as_ref()
+                )
             );
             ExitCode::SUCCESS
         }
@@ -3090,23 +3118,117 @@ fn nothing_here(here: &Path, elsewhere: Option<(&Path, usize)>) -> String {
     }
 }
 
-/// What `status` says about a holding folder that no undo record matches. stash
-/// made it, but without a record (made with --no-journal, or the record is gone)
-/// pop cannot restore it, so no pop step is printed: only where the items are.
-/// `due` is the readable deadline and whether it has passed.
-fn unrecorded_here(root: &Path, holding: &Path, n: usize, due: Option<(String, bool)>) -> String {
+/// A live undo record whose holding folder is this one, made while the folder
+/// was somewhere else. The folder has been moved or renamed since.
+struct MovedHere {
+    /// Where the folder was when it was stashed.
+    from: PathBuf,
+    id: String,
+    way_back: WayBack,
+}
+
+/// Whether the folder can be moved back to where it was stashed from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WayBack {
+    Clear,
+    /// Something else is at that path now.
+    Taken,
+    /// The path's parent is not a folder any more.
+    NoParent,
+}
+
+impl WayBack {
+    fn code(self) -> &'static str {
+        match self {
+            WayBack::Clear => "clear",
+            WayBack::Taken => "taken",
+            WayBack::NoParent => "parent_missing",
+        }
+    }
+
+    fn of(from: &Path) -> WayBack {
+        if std::fs::symlink_metadata(from).is_ok() {
+            WayBack::Taken
+        } else if from.parent().is_some_and(Path::is_dir) {
+            WayBack::Clear
+        } else {
+            WayBack::NoParent
+        }
+    }
+}
+
+/// The live record that made `holding`, found by the holding folder's device
+/// and inode, which the record keeps from when stash created it. A name alone
+/// is not enough: a copy or a look-alike folder must not be taken for it.
+fn moved_here(holding: &Path, sealer: &dyn etude_core::journal::Sealer) -> Option<MovedHere> {
+    use std::os::unix::fs::MetadataExt;
+    let here = std::fs::symlink_metadata(holding).ok()?;
+    let (batches, _) = batches::survey(sealer).ok()?;
+    batches.into_iter().find_map(|batch| {
+        let recorded = batches::holding(&batch).ok()?;
+        if recorded.file_name() != holding.file_name() {
+            return None;
+        }
+        batch
+            .created_directories
+            .iter()
+            .any(|made| {
+                made.path == recorded && made.device == here.dev() && made.inode == here.ino()
+            })
+            .then(|| MovedHere {
+                way_back: WayBack::of(&batch.root),
+                from: batch.root,
+                id: batch.id,
+            })
+    })
+}
+
+/// What `status` says about a holding folder that no undo record matches by
+/// this folder's path. If a live record made it before the folder was moved,
+/// it says where the folder was and how to put it back. Otherwise there is no
+/// record (made with --no-journal, or the record is gone) and pop cannot
+/// restore it, so no pop step is printed: only where the items are. `due` is
+/// the readable deadline and whether it has passed.
+fn unrecorded_here(
+    root: &Path,
+    holding: &Path,
+    n: usize,
+    due: Option<(String, bool)>,
+    moved: Option<&MovedHere>,
+) -> String {
     use etude_cli_support::{counted, quoted_path, shown};
     let when = match due {
         Some((time, true)) => format!("OVERDUE since {time}."),
         Some((time, false)) => format!("Due back {time}"),
         None => "No deadline set.".to_owned(),
     };
-    format!(
-        "\n{} stashed from {}.\n  {when}\n\nThere is no undo record for this stash, so stash pop cannot restore it.\nThe items are in: {}\nMove them back by hand.",
+    let head = format!(
+        "\n{} stashed from {}.\n  {when}\n\n",
         counted(n, "item", "items"),
-        shown(root),
-        quoted_path(holding)
-    )
+        shown(root)
+    );
+    let Some(moved) = moved else {
+        return format!(
+            "{head}There is no undo record for this stash, so stash pop cannot restore it.\nThe items are in: {}\nMove them back by hand.",
+            quoted_path(holding)
+        );
+    };
+    let from = quoted_path(&moved.from);
+    let id = &moved.id;
+    let made = format!("This stash was made in {from}, and that folder has moved here.");
+    match moved.way_back {
+        WayBack::Clear => format!(
+            "{head}{made}\nMove it back with: mv {} {from}\nThen restore it with: stash pop --id {id}",
+            quoted_path(root)
+        ),
+        WayBack::Taken => format!(
+            "{head}{made}\nSomething else is now at {from}, so this folder cannot be moved back there.\nIts operation id is {id}."
+        ),
+        WayBack::NoParent => format!(
+            "{head}{made}\n{} is no longer a folder, so this folder cannot be moved back there.\nIts operation id is {id}.",
+            quoted_path(moved.from.parent().unwrap_or(Path::new("/")))
+        ),
+    }
 }
 
 /// Epoch seconds to a readable local-ish stamp, without a date dependency.
@@ -3518,6 +3640,7 @@ mod tests {
             Path::new("/tmp/bad\u{1b}[31mname/.stash-0-x"),
             2,
             Some(("2 hours ago".to_owned(), true)),
+            None,
         );
         assert!(
             !told.contains('\u{1b}'),
@@ -3536,9 +3659,50 @@ mod tests {
         assert!(told.ends_with(
             "The items are in: $'/tmp/bad\\x1b[31mname/.stash-0-x'\nMove them back by hand."
         ));
-        let told = unrecorded_here(Path::new("/tmp/d"), Path::new("/tmp/d/.stash-0-x"), 1, None);
+        let told = unrecorded_here(
+            Path::new("/tmp/d"),
+            Path::new("/tmp/d/.stash-0-x"),
+            1,
+            None,
+            None,
+        );
         assert!(told.contains("1 item stashed from /tmp/d.\n  No deadline set.\n"));
         assert!(told.contains("The items are in: '/tmp/d/.stash-0-x'\n"));
+    }
+
+    #[test]
+    fn status_on_a_moved_folder_names_where_it_was_and_the_way_back() {
+        let moved = |way_back| MovedHere {
+            from: PathBuf::from("/tmp/my desk's"),
+            id: "1-2-0-ab".to_owned(),
+            way_back,
+        };
+        let here = Path::new("/tmp/bad\u{1b}name");
+        let holding = here.join(".stash-0-x");
+        let told = unrecorded_here(here, &holding, 1, None, Some(&moved(WayBack::Clear)));
+        assert!(
+            !told.contains('\u{1b}'),
+            "a raw escape reached the terminal"
+        );
+        assert!(
+            !told.contains("no undo record"),
+            "denied a record that exists"
+        );
+        assert!(told.contains(
+            "This stash was made in '/tmp/my desk'\\''s', and that folder has moved here.\n"
+        ));
+        assert!(told.contains("Move it back with: mv $'/tmp/bad\\x1bname' '/tmp/my desk'\\''s'\n"));
+        assert!(told.ends_with("Then restore it with: stash pop --id 1-2-0-ab"));
+
+        for way_back in [WayBack::Taken, WayBack::NoParent] {
+            let told = unrecorded_here(here, &holding, 1, None, Some(&moved(way_back)));
+            assert!(!told.contains("mv "), "offered a move that cannot work");
+            assert!(
+                !told.contains("stash pop"),
+                "offered a pop that cannot work"
+            );
+            assert!(told.ends_with("Its operation id is 1-2-0-ab."));
+        }
     }
 
     #[test]
