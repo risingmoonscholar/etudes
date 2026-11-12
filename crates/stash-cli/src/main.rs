@@ -1911,6 +1911,87 @@ fn refuse_empty_folder_word() -> ExitCode {
     refuse(etude_cli_support::reason::Code::InvalidArguments)
 }
 
+/// One pop at a time for each stash. Two pops that both read the record and
+/// then move the same items back race each other: the slower one finds its
+/// items already home and the holding folder gone, and reports a failed
+/// restore for a stash that is back. The hold is an advisory lock on the
+/// record file, released when the returned file closes. A pop that finds it
+/// held says so and waits for the other to finish. Saving the record replaces
+/// the file, so a hold on a file that is no longer the record is let go and
+/// taken again on the current one.
+///
+/// No hold (a volume without advisory locks, or a record that cannot be
+/// opened) leaves pop as it was; the record is read again either way.
+fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    // flock(2): LOCK_EX, with LOCK_NB unless waiting.
+    let lock = |file: &std::fs::File, wait: bool| loop {
+        if unsafe { flock(file.as_raw_fd(), if wait { 2 } else { 2 | 4 }) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    };
+    let path = journal.path();
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Do not follow a replacement symlink or block on a replacement FIFO.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Darwin SDK sys/fcntl.h: O_NOFOLLOW | O_NONBLOCK.
+        options.custom_flags(0x100 | 0x4);
+    }
+    // Linux asm-generic/fcntl.h: O_NONBLOCK, and O_NOFOLLOW, whose value
+    // differs by architecture. Elsewhere the regular-file check below still
+    // refuses a link.
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x20000 | 0x800);
+    }
+    #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x8000 | 0x800);
+    }
+    let mut said = false;
+    // Each turn follows one save by the other pop, so a few are plenty.
+    for _ in 0..100 {
+        let file = scan::observe_read("file_open", options.open(&path)).ok()?;
+        match lock(&file, false) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if !said {
+                    eprintln!(
+                        "stash: another `stash pop` is restoring this stash now. Waiting for it to finish.\n\
+                         \x20      Press Ctrl-C to stop waiting; that changes nothing."
+                    );
+                    said = true;
+                }
+                lock(&file, true).ok()?;
+            }
+            Err(_) => return None,
+        }
+        let held = file.metadata().ok()?;
+        let current = std::fs::symlink_metadata(&path).ok()?;
+        // Something other than a record file: no hold, and no retry.
+        if !held.is_file() || !current.is_file() {
+            return None;
+        }
+        if (held.dev(), held.ino()) == (current.dev(), current.ino()) {
+            return Some(file);
+        }
+    }
+    None
+}
+
 fn cmd_pop(args: &[String]) -> ExitCode {
     if empty_folder_word(args) {
         return refuse_empty_folder_word();
@@ -1984,6 +2065,14 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         }
         Err(error) => return refuse_unopened_pop(asked_id.as_deref(), &error, &sl),
     };
+    // Held until pop returns. Read the record again under the hold: another
+    // pop may have restored items since it was first read.
+    let _hold = hold_for_pop(&j);
+    let had_work = !journal_is_fully_undone(&j);
+    j = match etude_core::Journal::load_sealed_exact("stash", &j.id, &sl) {
+        Ok(journal) => journal,
+        Err(error) => return refuse_unopened_pop(Some(&j.id), &error, &sl),
+    };
     etude_cli_support::envelope::recovery_operation(&j.id);
     let due = match batches::due(&j) {
         Ok(value) => value,
@@ -2012,7 +2101,11 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         return code;
     }
     if journal_is_fully_undone(&j) {
-        println!("\nNothing to restore. This stash was already popped.");
+        if had_work {
+            println!("\nNothing to restore. Another `stash pop` restored this stash.");
+        } else {
+            println!("\nNothing to restore. This stash was already popped.");
+        }
         etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
         return ExitCode::from(1);
     }
