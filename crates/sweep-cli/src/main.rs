@@ -337,10 +337,14 @@ fn cmd_status(args: &[String]) -> ExitCode {
             continue;
         }
         let not_as_left = etude_core::apply::items_not_as_left(&journal);
-        let damaged =
-            journal.progress_tail_damaged || etude_core::apply::unrecorded_moves(&journal) > 0;
+        // A record another sweep holds is being written now. Its last move may
+        // not be recorded yet, which is not damage, and it is not interrupted.
+        let running = record_held_by_another(&candidate.id);
+        let damaged = !running
+            && (journal.progress_tail_damaged || etude_core::apply::unrecorded_moves(&journal) > 0);
         summaries.push((
             journal.summary(),
+            running,
             not_as_left,
             damaged,
             journal.root.clone(),
@@ -364,15 +368,17 @@ fn cmd_status(args: &[String]) -> ExitCode {
     }
     etude_cli_support::envelope::reason(Reason::completed());
     etude_cli_support::envelope::status("done");
-    for (summary, not_as_left, damaged, folder, same_time_as) in summaries {
+    for (summary, running, not_as_left, damaged, folder, same_time_as) in summaries {
         let state = match summary.state {
+            _ if running => "in_progress",
             etude_core::journal::JournalState::Refused => "refused",
             etude_core::journal::JournalState::Completed => "completed",
             etude_core::journal::JournalState::Interrupted => "interrupted",
             etude_core::journal::JournalState::Reversed => "reversed",
             etude_core::journal::JournalState::PartlyReversed => "partly_reversed",
         };
-        let command = if summary.moved > summary.reversed {
+        // No step while another sweep is still writing the record.
+        let command = if !running && summary.moved > summary.reversed {
             undo_id_step(&summary.id)
         } else {
             String::new()
@@ -426,6 +432,11 @@ fn cmd_status(args: &[String]) -> ExitCode {
                 }
             );
             println!("  folder: {}", etude_cli_support::shown(&folder));
+            if running {
+                println!(
+                    "  sweep is working on this record now. These counts are what it has recorded so far."
+                );
+            }
             if not_as_left > 0 {
                 println!(
                     "  {} not as apply left {}: gone from where it put {}, changed, or the original place is taken.",
@@ -469,6 +480,131 @@ fn path_is_a_file(path: &Path) -> ExitCode {
         etude_cli_support::reason::Code::MissingInput,
         Some(etude_cli_support::reason::Subject::wait("input", None)),
     )
+}
+
+/// Whether another sweep holds this record now: an apply holds its own record
+/// from its first recorded move until it returns. The test takes a shared
+/// advisory lock without waiting and lets it go at once, so it never stops
+/// the holder. No answer (no such file, or a volume without advisory locks)
+/// is no.
+fn record_held_by_another(id: &str) -> bool {
+    if !etude_core::journal::valid_journal_id(id) {
+        return false;
+    }
+    let path = etude_core::journal::state_dir().join(format!("sweep-{id}.journal"));
+    let Some(file) = open_record_for_lock(&path) else {
+        return false;
+    };
+    // flock(2): LOCK_SH | LOCK_NB.
+    matches!(flock_record(&file, 1 | 4), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+}
+
+/// Open a record file only to lock it. It does not follow a replacement
+/// symlink or block on a replacement FIFO, and it must be a regular file.
+fn open_record_for_lock(path: &Path) -> Option<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Darwin SDK sys/fcntl.h: O_NOFOLLOW | O_NONBLOCK.
+        options.custom_flags(0x100 | 0x4);
+    }
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x20000 | 0x800);
+    }
+    #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x8000 | 0x800);
+    }
+    let file = options.open(path).ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// flock(2) on an open record, retried when a signal interrupts it.
+fn flock_record(file: &std::fs::File, operation: i32) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    loop {
+        // SAFETY: a valid open descriptor and a flock operation.
+        if unsafe { flock(file.as_raw_fd(), operation) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+/// An apply's hold on its own record, taken at its first recorded move and
+/// let go when the apply returns, so that `sweep status` reads the record as
+/// in progress rather than interrupted. The record's id holds this process's
+/// id and the time it was made, which is how the apply finds its own.
+struct ApplyHold {
+    started: u128,
+    tried: bool,
+    _file: Option<std::fs::File>,
+}
+
+impl ApplyHold {
+    fn new() -> Self {
+        Self {
+            started: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+            tried: false,
+            _file: None,
+        }
+    }
+
+    fn update(&mut self, event: &etude_core::apply::StructuredProgress) {
+        if self.tried || event.phase != etude_core::apply::ProgressPhase::Advancing {
+            return;
+        }
+        self.tried = true;
+        let pid = std::process::id().to_string();
+        let Ok(entries) = std::fs::read_dir(etude_core::journal::state_dir()) else {
+            return;
+        };
+        let own = entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter_map(|name| {
+                let id = name.strip_prefix("sweep-")?.strip_suffix(".journal")?;
+                let created = etude_core::journal::creation_time(id)?;
+                (id.split('-').nth(1) == Some(pid.as_str()) && created >= self.started)
+                    .then(|| (created, id.to_owned()))
+            })
+            .max();
+        let Some((_, id)) = own else {
+            return;
+        };
+        let path = etude_core::journal::state_dir().join(format!("sweep-{id}.journal"));
+        let Some(file) = open_record_for_lock(&path) else {
+            return;
+        };
+        // flock(2): LOCK_EX | LOCK_NB. A status test holds its shared lock
+        // only for an instant, so try a few times; the apply never waits on
+        // anything longer.
+        for _ in 0..50 {
+            match flock_record(&file, 2 | 4) {
+                Ok(()) => {
+                    self._file = Some(file);
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(_) => return,
+            }
+        }
+    }
 }
 
 fn status_unknown(id: &str) -> ExitCode {
@@ -3384,12 +3520,16 @@ fn run_apply_with_routes(
     let sealer = sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer);
     let mut progress =
         etude_cli_support::progress::Reporter::for_operation("sweep apply", operation);
+    let mut hold = ApplyHold::new();
     let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
         p,
         context,
         sealer,
         None,
-        |event| progress.update(event),
+        |event| {
+            hold.update(&event);
+            progress.update(event)
+        },
     );
     progress.settle();
     let complete = result.as_ref().is_ok_and(|r| routes_complete(r, p.moves()));

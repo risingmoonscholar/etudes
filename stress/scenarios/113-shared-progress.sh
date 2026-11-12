@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -u
 # Every tool's --progress-json, checked against what the run really did.
 #
 # 1. Operation and failure: apply, undo, stash, pop and extraction run to the
@@ -16,7 +17,7 @@
 #    files stay safe; neither reads what the tools said while it happened.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 exec </dev/null
-W=$(workdir) || exit 1; trap 'rm -rf "$W"; eval "$_stress_state_cleanup"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "${W:?}"; eval "$_stress_state_cleanup"' EXIT
 export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 export ETUDE_STATE_DIR="$W/state" SWEEP_GRACE_SECS=0
 CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/check-progress-records.py"
@@ -44,6 +45,39 @@ import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1], errors="replace") if line.startswith("{")]
 print(rows[-1][sys.argv[2]])
 PY
+}
+
+# unpack reports its extraction with the phase type and fields of the shared
+# apply code. Check the shape exactly: the same nine fields on every record,
+# the phase names in their order (planning records first, the last of them
+# with the member count, then advancing records, then one done record last),
+# and a final record that counts every member. ADVANCING is "some" when the
+# operation reports members as it goes and "none" when it does not.
+unpack_phases_ok() {  # LABEL OPERATION STDERR PLANNED ADVANCING
+  local said
+  if said=$(python3 -I - "$2" "$3" "$4" "$5" 2>&1 <<'PY'
+import json, re, sys
+operation, path, planned, advancing = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+rows = [json.loads(line) for line in open(path, errors="replace") if line.startswith("{")]
+fields = {"schema_version", "event", "tool_version", "operation_id", "operation",
+          "phase", "planned", "completed", "journalled"}
+for row in rows:
+    assert set(row) == fields, f"fields {sorted(row)}"
+    assert row["event"] == "progress" and row["operation"] == operation, row
+phases = " ".join(row["phase"] for row in rows)
+middle = "( advancing)+" if advancing == "some" else ""
+assert re.fullmatch(rf"planning( planning)*{middle} done", phases), f"phases {phases}"
+planning = [row for row in rows if row["phase"] == "planning"]
+assert planning[-1]["planned"] == planned, f"last planning record {planning[-1]}"
+last = rows[-1]
+assert (last["planned"], last["completed"], last["journalled"]) == (planned, planned, 0), f"last {last}"
+print(f"{len(rows)} records: {phases}, done at {planned}/{planned}")
+PY
+  ); then
+    pass "$1: $said"
+  else
+    fail "$1: progress records are not the shared shape: $said"
+  fi
 }
 
 stop_confirmed() {
@@ -83,9 +117,11 @@ for n in $(seq 1 500); do : > "$S/nested/folder/f$n"; done
 "$UNPACK" "$W/a.tar" --into "$W/tree" --json --progress-json >"$W/x.out" 2>"$W/x.err"
 assert_eq 0 "$?" "unpack extraction finished"
 records_ok "unpack a tar" extract "$W/x.out" "$W/x.err" --planned 500 --completed 500 --journalled 0 --forbid nested
+unpack_phases_ok "unpack a tar" extract "$W/x.err" 500 some
 "$UNPACK" "$W/a.tar" --list --json --progress-json >"$W/l.out" 2>"$W/l.err"
 assert_eq 0 "$?" "unpack list finished"
 records_ok "unpack --list" list "$W/l.out" "$W/l.err" --planned 500 --completed 500 --forbid nested
+unpack_phases_ok "unpack --list" list "$W/l.err" 500 none
 
 if ! ps -o state= -p $$ >/dev/null 2>&1; then
   unproven "witnessed process interruption" "host denies process-state inspection"
