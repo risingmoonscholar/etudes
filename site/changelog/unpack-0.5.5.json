@@ -1,0 +1,91 @@
+{
+  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files and builds come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only label, headline, lead, next.note and film are written by hand. Whether the release is tagged, and its date, come from git when the site is built.",
+  "tool": "unpack",
+  "version": "0.5.5",
+  "label": "Behavior change",
+  "headline": "unpack now cleans up after an extraction that was stopped",
+  "lead": [
+    {
+      "text": "An extraction that is killed part way leaves a hidden folder beside the archive, with the files it wrote so far. The next "
+    },
+    {
+      "code": "unpack photos.zip"
+    },
+    {
+      "text": " in 0.5.5 removes that folder, says so, and then extracts. It removes the folder only when its lock file proves unpack made it and no extraction still holds it. Version 0.5.4 extracted the same archive and left the hidden folder where it was."
+    }
+  ],
+  "folder": "photos.zip",
+  "before": {
+    "build": "unpack 0.5.4",
+    "runs": [
+      {
+        "command": "unpack photos.zip",
+        "output": [
+          "  Extracted to photos/",
+          "  3 entries"
+        ],
+        "exit": 0
+      }
+    ],
+    "result": {
+      "label": "Left in the hidden folder",
+      "files": [
+        "photo1.jpg"
+      ]
+    },
+    "exit": 0
+  },
+  "after": {
+    "build": "unpack 0.5.5",
+    "runs": [
+      {
+        "command": "unpack photos.zip",
+        "output": [
+          "unpack: removed ./.photos.unpack-0123456789abcdef0123456789abcdef.partial, a folder left by an interrupted extraction.",
+          "  Extracted to photos/",
+          "  3 entries"
+        ],
+        "exit": 0
+      }
+    ],
+    "result": {
+      "label": "Hidden folder removed",
+      "files": []
+    },
+    "exit": 0
+  },
+  "next": {
+    "note": [
+      {
+        "text": "Both versions exit with code 0. To see what an archive holds without writing anything, run "
+      },
+      {
+        "code": "unpack photos.zip --list"
+      },
+      {
+        "text": "."
+      }
+    ],
+    "command": "unpack photos.zip --list",
+    "output": [
+      "3 entries in photos"
+    ],
+    "exit": 0
+  },
+  "builds": {
+    "before": {
+      "name": "tag unpack-v0.5.4",
+      "tag": "unpack-v0.5.4",
+      "commit": "de8f307",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "sha256": "6956e6258ea1c2a12287ebd20c9a10375d50b0f9bbc8254137ade3e9fa96a400"
+    },
+    "after": {
+      "commit": "594de60",
+      "rev": "594de60e43f221e72a6442bd15ced80ca36f9a4e",
+      "sha256": "41cc1dd5fb2ba57d8b93ed16f700ccf99465cc97938a4e969ab6e3297337bf93"
+    }
+  },
+  "runs_note": "Each ran the same commands on a fresh copy of one synthetic archive, photos.zip: a zip archive of 3 photos, and beside it the hidden folder that an extraction stopped part way leaves behind. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."
+}

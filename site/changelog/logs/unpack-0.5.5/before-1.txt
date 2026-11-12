@@ -1,0 +1,5 @@
+
+  Extracted to photos/
+  3 entries
+  Checked 3 paths before writing anything
+  Audited 3 extracted paths before moving anything into place

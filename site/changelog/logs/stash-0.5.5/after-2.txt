@@ -1,0 +1,5 @@
+Nothing stashed in <scratch>/work.
+
+  There is a stash in <scratch>/work/my desk.
+  See it with: stash status '<scratch>/work/my desk'
+  Restore it with: stash pop '<scratch>/work/my desk'

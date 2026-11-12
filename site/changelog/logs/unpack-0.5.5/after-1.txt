@@ -1,0 +1,6 @@
+unpack: removed ./.photos.unpack-0123456789abcdef0123456789abcdef.partial, a folder left by an interrupted extraction.
+
+  Extracted to photos/
+  3 entries
+  Checked 3 paths before writing anything
+  Audited 3 extracted paths before moving anything into place
