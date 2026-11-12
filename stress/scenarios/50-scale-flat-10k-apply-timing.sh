@@ -18,7 +18,7 @@
 #      slot is IMG_0000, which is not DCF-conforming and would not exercise
 #      what this scenario tests. It replaces the IMG_%05d (five digits) this
 #      scenario used to write, which no camera produces (issue #11,
-#      CONTRIBUTING.md). A guard in classify.rs now excludes a numeric marker
+#      CONTRIBUTING.md). A guard in sensitive.rs now excludes a numeric marker
 #      on a DCF-shaped name, so this is a regression witness for that guard,
 #      not a live reproduction.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
@@ -83,7 +83,7 @@ printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
   "$PLAN_S" "$SCANNED" "$GROUP_COUNT" "$PERSONAL" >&2
 
 # --- the substring false-positive, made almost inevitable by scale -----
-# "1099" and "1040" are tax-form markers (classify.rs SENSITIVE_MARKERS) and
+# "1099" and "1040" are tax-form markers (sensitive.rs SENSITIVE_MARKERS) and
 # also ordinary 4-digit substrings. Among 10,000 sequential zero-padded
 # indices, at least one is expected to collide with each. Confirm whether it
 # actually did, and name it if so. A group member vanishing into "personal
@@ -91,7 +91,7 @@ printf '    plan: %ss  (scanned=%s  grouped=%s  looks_personal=%s)\n' \
 # user-visible false positive. It is specific to scale: the reference
 # desktop fixture (a few hundred files, hand-picked names) cannot produce it.
 if [ "$N" -ge 1099 ] && [ "${PERSONAL:-0}" -gt 0 ]; then
-  fail "a DCF-conforming camera file was misclassified as a personal record: $PERSONAL of $N were. IMG_1099.jpg or IMG_1040.jpg would collide with the tax-form markers \"1099\"/\"1040\" by coincidence of their index, and the camera-name guard in classify.rs (is_dcf_camera_stem, see issue #11) is meant to exclude exactly that. grep etude-core/src/classify.rs for is_dcf_camera_stem."
+  fail "a DCF-conforming camera file was misclassified as a personal record: $PERSONAL of $N were. IMG_1099.jpg or IMG_1040.jpg would collide with the tax-form markers \"1099\"/\"1040\" by coincidence of their index, and the camera-name guard in sensitive.rs (is_dcf_camera_stem, see issue #11) is meant to exclude exactly that. grep etude-core/src/sensitive.rs for is_dcf_camera_stem."
 elif [ "$N" -ge 1099 ]; then
   if [ "$N" -eq 9999 ]; then
     pass "every DCF-conforming filename in this run (IMG_0001..IMG_9999, including IMG_1040 and IMG_1099) was correctly left unflagged -- deterministic, not probabilistic: the range is exhaustive, not sampled"

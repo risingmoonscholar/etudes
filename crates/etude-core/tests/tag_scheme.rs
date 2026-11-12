@@ -780,3 +780,61 @@ fn older_tag_journals_with_zero_identity_restore_unchanged_tags() {
     assert_eq!(undone.tags_restored, 1);
     assert_eq!(raw(&s.file("a.pdf")), None);
 }
+
+/// Today a tag plan leaves out a file that is already inside the built-in
+/// folder its folder group would move it to, and reports it as in place. The
+/// tag plan used to learn this by running the whole folder planner; nobody
+/// chose it, and "in place" means nothing for a tag. This pins the behaviour
+/// so the planner split cannot change it by accident. Issue #221 changes it
+/// on purpose and updates this test.
+#[test]
+fn a_file_inside_a_built_in_folder_is_left_out_of_a_tag_plan_for_now() {
+    let _g = lock();
+    let shots = [
+        "Screenshot 2026-01-01 at 10.00.00.png",
+        "Screenshot 2026-01-01 at 10.00.01.png",
+        "Screenshot 2026-01-01 at 10.00.02.png",
+    ];
+    let mut names: Vec<String> = shots.iter().map(|s| (*s).to_owned()).collect();
+    names.extend(["a.png", "b.png", "c.png"].map(String::from));
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let s = scene("in_builtin_folder", &names);
+    fs::create_dir(s.root.join("Screenshots")).unwrap();
+    for shot in shots {
+        let inside = s
+            .root
+            .join("Screenshots")
+            .join(shot.replace("10.00", "11.00"));
+        fs::write(inside, "a screenshot already filed").unwrap();
+    }
+
+    let config = ScanConfig {
+        depth: 2,
+        ..scan_config()
+    };
+    let outcome = scan::scan(&s.root, &config).expect("scan");
+    let plan = plan::build_tags(&outcome, &[spec("png", "Work")], None);
+
+    let tagged: usize = plan.groups.iter().map(|g| g.members.len()).sum();
+    assert_eq!(tagged, 6, "the 3 loose screenshots and the 3 other pngs");
+    assert_eq!(plan.already_in_destination(), 3);
+    let in_place: Vec<&PathBuf> = plan
+        .untouched
+        .iter()
+        .filter(|(_, why)| *why == Untouched::AlreadyInDestination)
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        in_place
+            .iter()
+            .all(|path| path.parent() == Some(s.root.join("Screenshots").as_path())),
+        "only the files inside Screenshots/ are in place: {in_place:?}"
+    );
+    assert!(
+        plan.groups
+            .iter()
+            .flat_map(|g| &g.members)
+            .all(|path| path.parent() == Some(s.root.as_path())),
+        "no file inside Screenshots/ is tagged"
+    );
+}

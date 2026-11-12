@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::classify;
+use crate::gate::{GatePolicy, Gated, gate};
 use crate::scan::{Entry, ScanOutcome};
 use crate::{Category, Untouched};
 
@@ -979,7 +980,7 @@ pub fn build_existing_with(
 
 /// Build a plan, optionally inspecting contents to refuse more files.
 ///
-/// The inspector runs in pass 1 only, alongside the filename check, and its
+/// The inspector runs in the gate only, alongside the filename check, and its
 /// result can do exactly one thing: move a file into the untouched set.
 pub fn build_with(scan: &ScanOutcome, inspector: Option<&mut dyn Inspector>) -> Plan {
     build_with_maps(scan, inspector, &[])
@@ -1015,123 +1016,29 @@ fn would_group(unwindowed: &Plan) -> bool {
 
 fn group_entries(
     scan: &ScanOutcome,
-    mut inspector: Option<&mut dyn Inspector>,
+    inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
     profile_routes: bool,
     ignore_window: bool,
 ) -> Plan {
-    let mut untouched: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
-    let mut remaining: Vec<&Entry> = Vec::new();
-
-    // Pass 1: the refusal detectors. Run first, remove from all others.
-    // Loose project documents at the top level, before anything else. A .flp
-    // sitting in Downloads used to refuse the ENTIRE sweep (it went through
-    // the same check as Cargo.toml, which genuinely does mark a project
-    // root). Now the document stays put, and so does its reference surface:
-    // a .flp's samples are Media, a .blend's textures are Images, so holding
-    // the families the document could point at protects a flat project
-    // folder while the PDFs and installers beside it still sort.
-    //
-    // Screenshot-named files are exempt from the hold. On macOS screenshots
-    // land on the Desktop -- the folder most likely to also hold a stray
-    // project file -- and a project referencing a file named
-    // "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a real layout. The
-    // name pattern is the same one the Screenshots detector uses.
-    let loose_documents: Vec<&Entry> = scan
-        .entries
-        .iter()
-        .filter(|e| !e.is_dir && crate::scan::is_document_marker(&e.name))
-        .collect();
-    const HELD_FAMILIES: &[&str] = &["Media", "Images", "Scripts", "Data"];
-    let held_near_document = |e: &Entry| -> Option<String> {
-        let first = loose_documents.first()?;
-        if classify::is_screenshot(e) {
-            return None;
-        }
-        let fam = classify::type_family(&e.ext)?;
-        HELD_FAMILIES.contains(&fam).then(|| first.name.clone())
-    };
-
-    for e in &scan.entries {
-        if !e.is_dir && crate::scan::is_document_marker(&e.name) {
-            untouched.push((e.path.clone(), Untouched::ProjectDocument));
-            continue;
-        }
-        if let Some(marker) = held_near_document(e) {
-            untouched.push((e.path.clone(), Untouched::NearProjectDocument(marker)));
-            continue;
-        }
-        // Filename first: it is free, and a file already refused by name is
-        // never opened. Reading it could only confirm what we already decided.
-        if let Some(cat) = classify::sensitive(e) {
-            untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
-            continue;
-        }
-        if let Some(insp) = inspector.as_deref_mut()
-            && let Some(cat) = insp.inspect(&e.path, &e.ext)
-        {
-            untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
-            continue;
-        }
-        // A download still running. Moving one leaves a partial file at a
-        // destination the downloader is not writing to, and it never
-        // finishes. Checked before the grace window because it is true
-        // regardless of age -- a stalled download from last week is still in
-        // flight.
-        let lower = e.name.to_ascii_lowercase();
-        if crate::scan::IN_FLIGHT_SUFFIXES
-            .iter()
-            .any(|s| lower.ends_with(s))
-        {
-            untouched.push((e.path.clone(), Untouched::InFlight));
-            continue;
-        }
-        // Too recent to judge. See ScanConfig::grace for why this is mtime
-        // and never atime.
-        // `--since 0` means no window, and it has to mean that for every
-        // file. elapsed() returns Err for a timestamp in the future, and
-        // unwrap_or(true) turned that error into "too recent" even when the
-        // window was zero -- so three PDFs dated 2030 were held back by a
-        // scan that had been told to hold nothing back. Future mtimes are
-        // ordinary: clock skew, restored backups, unpacked archives, network
-        // volumes.
-        //
-        // With a real window a future mtime still counts as too recent. That
-        // is the conservative reading of a file whose clock disagrees with
-        // this one, and it is now a decision rather than the fallback of an
-        // unwrap.
-        // A file whose mtime could not be read, with a window in force. The
-        // window's question is "was this changed recently", and the honest
-        // answer here is that sweep does not know -- so it holds the file
-        // back rather than treating unknown as old. Bypassing the check meant
-        // an unreadable timestamp was silently the most permissive case.
-        if let Some(window) = scan.grace
-            && !window.is_zero()
-            && e.modified.is_none()
-        {
-            untouched.push((e.path.clone(), Untouched::TooRecent));
-            continue;
-        }
-        if !ignore_window
-            && let Some(window) = scan.grace
-            && !window.is_zero()
-            && let Some(modified) = e.modified
-            && modified
-                .elapsed()
-                .map(|since| since < window)
-                .unwrap_or(true)
-        {
-            untouched.push((e.path.clone(), Untouched::TooRecent));
-            continue;
-        }
-        remaining.push(e);
-    }
+    // The gate first: whatever it holds, no rule below ever sees.
+    let Gated {
+        held: mut untouched,
+        candidates: remaining,
+    } = gate(
+        scan,
+        GatePolicy {
+            grace: scan.grace,
+            ignore_window,
+            inspector,
+        },
+    );
 
     let mut groups: Vec<Group> = Vec::new();
     let mut claimed: Vec<PathBuf> = Vec::new();
 
     // A saved profile is an explicit user taxonomy. It may claim files that
-    // a built-in grouping would otherwise take, but only after pass 1 has
+    // a built-in grouping would otherwise take, but only after the gate has
     // removed every personal, project, in-flight, and too-recent refusal.
     // The CLI checked each destination: an existing direct folder keeps
     // `created: false`, which tells apply never to create it if it
@@ -1177,13 +1084,71 @@ fn group_entries(
         }
     }
 
+    groups.extend(built_in_groups(
+        scan,
+        &remaining,
+        &mut claimed,
+        &mut untouched,
+    ));
+
+    // Agent mappings, last and least: they may claim only what every
+    // built-in pass declined. A mapping can never take a file from a
+    // detector, and nothing here runs before the refusals -- a personal
+    // record, a held document's reference surface, a fresh file or an
+    // in-flight download never reaches this point. A --map folder that sweep
+    // would have to make keeps the three-file floor of every structural
+    // group: below it, --map would be an arbitrary one-file move command
+    // wearing a safety vocabulary. Into a folder that is already here, any
+    // number moves, the same as a built-in group.
+    for m in maps.iter().filter(|_| !profile_routes) {
+        let members: Vec<&Entry> = remaining
+            .iter()
+            .filter(|e| !claimed.contains(&e.path))
+            .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
+            .copied()
+            .collect();
+        let Some(members) = settle(scan, &m.folder, members, &mut claimed, &mut untouched) else {
+            continue;
+        };
+        groups.push(Group {
+            name: m.folder.clone(),
+            signal: Signal::Mapped {
+                ext: m.ext.clone(),
+                created: m.created,
+                saved: false,
+            },
+            members: members.iter().map(|e| e.path.clone()).collect(),
+            accepted: false,
+        });
+    }
+
+    // Everything still unclaimed is honestly reported as ungrouped.
+    for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
+        untouched.push((e.path.clone(), Untouched::NoClearGroup));
+    }
+
+    let locked = hold_locked_destinations(scan, &mut groups);
+    assemble(scan, groups, untouched, locked)
+}
+
+/// The built-in rules, after any saved routes: screenshots, a camera burst,
+/// installers, then type families. Each claims only files no earlier rule
+/// claimed, and a file already inside its group's folder is left in place.
+fn built_in_groups(
+    scan: &ScanOutcome,
+    remaining: &[&Entry],
+    claimed: &mut Vec<PathBuf>,
+    untouched: &mut Vec<(PathBuf, Untouched)>,
+) -> Vec<Group> {
+    let mut groups: Vec<Group> = Vec::new();
+
     // Pass 2: structural detectors, highest precision first.
     let shots: Vec<&Entry> = remaining
         .iter()
         .copied()
         .filter(|e| classify::is_screenshot(e) && !claimed.contains(&e.path))
         .collect();
-    if let Some(shots) = settle(scan, "Screenshots", shots, &mut claimed, &mut untouched) {
+    if let Some(shots) = settle(scan, "Screenshots", shots, claimed, untouched) {
         groups.push(Group {
             name: "Screenshots".to_string(),
             signal: Signal::Screenshot,
@@ -1224,7 +1189,7 @@ fn group_entries(
         None => "Photos".to_string(),
     };
     if !cams.is_empty()
-        && let Some(cams) = settle(scan, &name, cams, &mut claimed, &mut untouched)
+        && let Some(cams) = settle(scan, &name, cams, claimed, untouched)
     {
         groups.push(Group {
             name,
@@ -1239,7 +1204,7 @@ fn group_entries(
         .copied()
         .filter(|e| classify::is_installer(e) && !claimed.contains(&e.path))
         .collect();
-    if let Some(inst) = settle(scan, "Installers", inst, &mut claimed, &mut untouched) {
+    if let Some(inst) = settle(scan, "Installers", inst, claimed, untouched) {
         groups.push(Group {
             name: "Installers".to_string(),
             signal: Signal::Installer,
@@ -1280,7 +1245,7 @@ fn group_entries(
             }
         }
         for (family, members) in by_family {
-            let Some(members) = settle(scan, family, members, &mut claimed, &mut untouched) else {
+            let Some(members) = settle(scan, family, members, claimed, untouched) else {
                 continue;
             };
             groups.push(Group {
@@ -1293,43 +1258,12 @@ fn group_entries(
             });
         }
     }
+    groups
+}
 
-    // Agent mappings, last and least: they may claim only what every
-    // built-in pass declined. A mapping can never take a file from a
-    // detector, and nothing here runs before the refusals -- a personal
-    // record, a held document's reference surface, a fresh file or an
-    // in-flight download never reaches this point. A --map folder that sweep
-    // would have to make keeps the three-file floor of every structural
-    // group: below it, --map would be an arbitrary one-file move command
-    // wearing a safety vocabulary. Into a folder that is already here, any
-    // number moves, the same as a built-in group.
-    for m in maps.iter().filter(|_| !profile_routes) {
-        let members: Vec<&Entry> = remaining
-            .iter()
-            .filter(|e| !claimed.contains(&e.path))
-            .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-            .copied()
-            .collect();
-        let Some(members) = settle(scan, &m.folder, members, &mut claimed, &mut untouched) else {
-            continue;
-        };
-        groups.push(Group {
-            name: m.folder.clone(),
-            signal: Signal::Mapped {
-                ext: m.ext.clone(),
-                created: m.created,
-                saved: false,
-            },
-            members: members.iter().map(|e| e.path.clone()).collect(),
-            accepted: false,
-        });
-    }
-
-    // Everything still unclaimed is honestly reported as ungrouped.
-    for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
-        untouched.push((e.path.clone(), Untouched::NoClearGroup));
-    }
-
+/// Hold every group whose destination folder is locked. Returns the scan's
+/// locked counts with the held groups' members added.
+fn hold_locked_destinations(scan: &ScanOutcome, groups: &mut Vec<Group>) -> (usize, usize) {
     // A destination folder that already exists and carries the immutable
     // flag cannot receive anything. Its group is held here, by name, and its
     // members are counted as locked, so apply never has to refuse it.
@@ -1348,7 +1282,18 @@ fn group_entries(
         }
         !locked
     });
+    (locked_skipped, locked_system)
+}
 
+/// The plan for these groups and left-alone files: the left-alone list sorted
+/// by path, and the regular files among those matched by no group listed as
+/// unclaimed.
+fn assemble(
+    scan: &ScanOutcome,
+    groups: Vec<Group>,
+    mut untouched: Vec<(PathBuf, Untouched)>,
+    (locked_skipped, locked_system): (usize, usize),
+) -> Plan {
     untouched.sort_by(|a, b| a.0.cmp(&b.0));
     let unclaimed = untouched
         .iter()
@@ -1484,17 +1429,43 @@ fn tag_entries(
     ignore_window: bool,
 ) -> Plan {
     use std::collections::{BTreeMap, HashSet};
-    let mut plan = group_entries(scan, inspector, &[], false, ignore_window);
-    let refused: HashSet<PathBuf> = plan
-        .untouched
+    // The gate decides what a tag may touch, the same as for a move.
+    let Gated {
+        held: mut untouched,
+        candidates: passed,
+    } = gate(
+        scan,
+        GatePolicy {
+            grace: scan.grace,
+            ignore_window,
+            inspector,
+        },
+    );
+
+    // Issue #221: the tag plan keeps three effects of the folder plan it was
+    // once built from. Nobody chose them, and the built-in folder rules run
+    // here only to reproduce them; they decide no tag.
+    // - A file already inside the built-in folder its group would move it to
+    //   is left out, and reported as in place.
+    // - A file a built-in folder group would take, and no tag takes, is not
+    //   listed as matching no group.
+    // - Files a built-in group would move into a locked folder count as
+    //   locked.
+    // When #221 lands this block goes, and every file the gate lets through
+    // can be tagged.
+    let mut folder_claimed: Vec<PathBuf> = Vec::new();
+    let mut folder_groups = built_in_groups(scan, &passed, &mut folder_claimed, &mut untouched);
+    let locked = hold_locked_destinations(scan, &mut folder_groups);
+    let folder_claimed: HashSet<PathBuf> = folder_claimed.into_iter().collect();
+    let in_place: HashSet<&PathBuf> = untouched
         .iter()
-        .filter(|(_, reason)| *reason != Untouched::NoClearGroup)
-        .map(|(path, _)| path.clone())
+        .filter(|(_, reason)| *reason == Untouched::AlreadyInDestination)
+        .map(|(path, _)| path)
         .collect();
-    let mut candidates: Vec<&Entry> = scan
-        .entries
+    let mut candidates: Vec<&Entry> = passed
         .iter()
-        .filter(|entry| !entry.is_dir && !refused.contains(&entry.path))
+        .copied()
+        .filter(|entry| !entry.is_dir && !in_place.contains(&entry.path))
         .collect();
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -1534,16 +1505,13 @@ fn tag_entries(
             }
             claimed.insert(candidate.path.clone());
             match state {
-                None => plan
-                    .untouched
-                    .push((candidate.path.clone(), Untouched::TagStateUnreadable)),
+                None => untouched.push((candidate.path.clone(), Untouched::TagStateUnreadable)),
                 Some(tags)
                     if tags
                         .iter()
                         .any(|tag| crate::tags::same_name(crate::tags::name_of(tag), &display)) =>
                 {
-                    plan.untouched
-                        .push((candidate.path.clone(), Untouched::TagAlreadyPresent));
+                    untouched.push((candidate.path.clone(), Untouched::TagAlreadyPresent));
                 }
                 Some(_) => members.push(candidate.path.clone()),
             }
@@ -1562,20 +1530,15 @@ fn tag_entries(
             accepted: false,
         });
     }
-    // A claimed file is no longer "matched no group".
-    plan.untouched
-        .retain(|(path, reason)| !(*reason == Untouched::NoClearGroup && claimed.contains(path)));
-    plan.untouched.sort_by(|a, b| a.0.cmp(&b.0));
-    let regular: Vec<PathBuf> = plan
-        .untouched
+    // What no tag and no rule claimed matched no group. Folders included: a
+    // folder is never tagged, and is still reported as left alone.
+    for entry in passed
         .iter()
-        .filter(|(path, reason)| {
-            *reason == Untouched::NoClearGroup && plan.observed_file_size(path).is_some()
-        })
-        .map(|(path, _)| path.clone())
-        .collect();
-    plan.unclaimed = regular;
-    plan.groups = groups;
+        .filter(|e| !folder_claimed.contains(&e.path) && !claimed.contains(&e.path))
+    {
+        untouched.push((entry.path.clone(), Untouched::NoClearGroup));
+    }
+    let mut plan = assemble(scan, groups, untouched, locked);
     plan.adds_tags = true;
     plan.include_tagged = false;
     plan.skipped_tagged = 0;

@@ -14,12 +14,14 @@
 
 pub mod apply;
 pub mod classify;
+pub mod gate;
 pub mod journal;
 pub mod json;
 pub mod plan;
 pub mod proposal;
 pub mod redact;
 pub mod scan;
+pub mod sensitive;
 pub mod tags;
 
 pub use apply::{ApplyFailure, ApplyReport, UndoReport};

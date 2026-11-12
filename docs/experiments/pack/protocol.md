@@ -6,7 +6,7 @@ Version 1 is a proposal for a future `pack` capability. It defines what an archi
 
 Pack creates a new archive from an explicitly selected source tree for an explicitly named recipient or destination class. The caller chooses a policy before preflight. The policy records sensitive-name handling, in-flight-download behavior, archive format and retained metadata streams, and a maximum output size. Missing, unknown, or contradictory policy is refusal. Nothing is inferred from the destination, environment, or agent identity.
 
-The disclosure exclusion set comes from `etude_core::classify::sensitive`; pack must not duplicate that taxonomy. A conformance check compares pack's exclusions with every entry sweep holds as `LooksPersonal` and fails if pack excludes less. This governs disclosure, not sweep's movement policy: a complete project or package may be included but must never be split.
+The disclosure exclusion set comes from `etude_core::sensitive::looks_personal`; pack must not duplicate that taxonomy. A conformance check compares pack's exclusions with every entry sweep holds as `LooksPersonal` and fails if pack excludes less. This governs disclosure, not sweep's movement policy: a complete project or package may be included but must never be split.
 
 ## Preflight and archive shape
 
