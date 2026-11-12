@@ -1190,7 +1190,7 @@ pub(crate) fn eligible_member(path: &Path) -> io::Result<Entry> {
     if is_hidden(&e.name)
         || never_enter(&e.name)
         || is_refused_system_location(path)
-        || crate::classify::sensitive(&e).is_some()
+        || crate::sensitive::looks_personal(&e).is_some()
         || IN_FLIGHT_SUFFIXES
             .iter()
             .any(|suffix| e.name.to_ascii_lowercase().ends_with(suffix))

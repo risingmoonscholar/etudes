@@ -19,7 +19,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 D=$(workdir) || exit 1
 trap 'rm -rf "$D"' EXIT
 # Kept under 1040 so no filename accidentally contains "1040" or "1099" --
-# both are tax-document markers (etude-core/src/classify.rs) that would
+# both are tax-document markers (etude-core/src/sensitive.rs) that would
 # pull a file out of the "widget" group as a false personal-record match,
 # which is correct sensitive-detector behaviour but would corrupt this
 # scenario's move-count arithmetic.

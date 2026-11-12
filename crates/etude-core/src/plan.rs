@@ -1063,7 +1063,7 @@ fn group_entries(
         }
         // Filename first: it is free, and a file already refused by name is
         // never opened. Reading it could only confirm what we already decided.
-        if let Some(cat) = classify::sensitive(e) {
+        if let Some(cat) = crate::sensitive::looks_personal(e) {
             untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
             continue;
         }
