@@ -39,7 +39,12 @@ still includes `details.holding_root: "<redacted>"`, not a usable path.
 Restore the whole operation with `stash pop --id ID`. Use `stash inspect --id ID` to see path-free opaque item
 ids and which items remain held, then `stash pop --id ID --item ITEM` to restore
 one item. Each selected restore is durably recorded, and inspection reports the
-actual held count after partial restores. Pop uses the original absolute parents
+actual held count after partial restores. Where the
+state folder's volume supports advisory locks, one pop of a stash runs at a
+time, and not while the stash is still moving items: a pop that starts then
+says a `stash` or `stash pop` is running on this stash, waits for it to finish,
+then restores only what is still held. Where the volume has no such locks, they
+are not kept apart. Pop uses the original absolute parents
 stored in the encrypted journal, and removes only empty holding directories
 authenticated by that journal. Selected directories retain the existing opaque
 directory fingerprint behavior; this is not a recursive content-integrity
