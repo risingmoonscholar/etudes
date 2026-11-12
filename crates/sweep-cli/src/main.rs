@@ -323,8 +323,15 @@ fn cmd_status(args: &[String]) -> ExitCode {
         if id_arg.as_deref().is_some_and(|id| id != candidate.id) {
             continue;
         }
-        let journal = match candidate.load("sweep", &sealer) {
+        let journal = match settled_read(
+            || candidate.load("sweep", &sealer),
+            || etude_core::Journal::load_sealed_exact("sweep", &candidate.id, &sealer),
+            || std::thread::sleep(std::time::Duration::from_millis(20)),
+        ) {
             Ok(journal) => journal,
+            Err(error) if changed_while_read(&error) => {
+                return status_record_being_written(&candidate.id);
+            }
             Err(error) => {
                 let code = status_journal_error(Some(&candidate.id), error);
                 if id_arg.is_none() {
@@ -478,6 +485,46 @@ fn status_unknown(id: &str) -> ExitCode {
     etude_cli_support::envelope::status("nothing_to_do");
     eprintln!("sweep: unknown operation id");
     ExitCode::from(1)
+}
+
+/// Read a record, and read it again while it changes under the read. An apply
+/// or undo appends to its record as it goes, so a read made then sees it
+/// change; that record is not damaged. `first` is the first read, `again` each
+/// later one, and `pause` comes between them. About a second in all.
+fn settled_read<T>(
+    first: impl FnOnce() -> Result<T, etude_core::journal::JournalError>,
+    mut again: impl FnMut() -> Result<T, etude_core::journal::JournalError>,
+    mut pause: impl FnMut(),
+) -> Result<T, etude_core::journal::JournalError> {
+    let mut read = first();
+    for _ in 0..50 {
+        match &read {
+            Err(error) if changed_while_read(error) => {
+                pause();
+                read = again();
+            }
+            _ => break,
+        }
+    }
+    read
+}
+
+/// `sweep status` of a record that kept changing while it was read.
+fn status_record_being_written(id: &str) -> ExitCode {
+    use etude_cli_support::reason::{Code, Reason, Subject};
+    etude_cli_support::envelope::reason(Reason::refusal(
+        Code::JournalUnreadable,
+        Some(Subject::wait("journal", None)),
+    ));
+    etude_cli_support::envelope::status("error");
+    let path = etude_core::journal::state_dir().join(format!("sweep-{id}.journal"));
+    eprintln!(
+        "sweep: cannot report it now: an apply or undo is writing the undo record {} at this\n\
+         moment, so it changed each time sweep read it. It is not damaged. Nothing was changed.\n\
+         Run the same command again when that apply or undo finishes.",
+        etude_cli_support::shown(&path)
+    );
+    ExitCode::from(3)
 }
 
 fn status_journal_error(id: Option<&str>, error: etude_core::journal::JournalError) -> ExitCode {
@@ -2529,18 +2576,28 @@ struct Footer<'a> {
 fn next_commands(args: &[String], footer: &Footer) -> Vec<String> {
     let quiet = footer.quiet;
     use etude_cli_support::shell_word;
+    // A word that pastes as typed: plain or in single quotes, or, for a name
+    // with a tab, newline, escape or other control character, the $'…' form
+    // the undo step uses. A placeholder would be read by the shell as a
+    // redirect, and could make a file named after the next word.
+    let pasteable = |path: &Path| {
+        path.to_str()
+            .and_then(shell_word)
+            .unwrap_or_else(|| etude_cli_support::quoted_path(path))
+    };
     let word = |text: &str, placeholder: &str| {
         if quiet {
             placeholder.to_owned()
         } else {
-            shell_word(text).unwrap_or_else(|| placeholder.to_owned())
+            pasteable(Path::new(text))
         }
     };
     if let Some((file, digest)) = footer.exported {
         return exported_steps(&word(file, "<file>"), digest, footer.tags);
     }
     let path = match path_arg("", args) {
-        Ok(Some(path)) => word(&path.to_string_lossy(), "<path>"),
+        Ok(Some(_)) if quiet => "<path>".to_owned(),
+        Ok(Some(path)) => pasteable(&path),
         _ => ".".to_owned(),
     };
     let mut carried = String::new();
@@ -2549,7 +2606,7 @@ fn next_commands(args: &[String], footer: &Footer) -> Vec<String> {
         match args[i].as_str() {
             "--depth" | "--since" | "--scheme" | "--map" => {
                 let value = args.get(i + 1).map_or("", String::as_str);
-                let value = shell_word(value).unwrap_or_else(|| "<value>".to_owned());
+                let value = pasteable(Path::new(value));
                 carried.push_str(&format!(" {} {value}", args[i]));
                 i += 1;
             }
@@ -4570,6 +4627,7 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     let read = choose_waiting(
         sl,
         |j| j.id == id,
+        |j: &Journal| Some(j.id.as_str()),
         || {
             Journal::load_sealed_exact("sweep", id, sl).map_err(|error| RecordError {
                 id: Some(id.to_owned()),
@@ -4603,7 +4661,8 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
-    finish_undo(&mut journal, sl, UndoAsked::Id)
+    // An id names one record: there is nothing else to choose.
+    finish_undo(&mut journal, sl, UndoAsked::Id, &|| Ok(None))
 }
 
 fn cmd_undo(args: &[String]) -> ExitCode {
@@ -4646,15 +4705,20 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
                     .report();
             }
         };
-        let read = choose_waiting(
-            sl,
-            |j| j.root.canonicalize().is_ok_and(|root| root == target),
-            || sweep_journal_for_root(sl, &target),
-        );
-        return match read {
+        let choose = || {
+            choose_waiting(
+                sl,
+                |j| j.root.canonicalize().is_ok_and(|root| root == target),
+                |j: &Option<etude_core::Journal>| j.as_ref().map(|j| j.id.as_str()),
+                || sweep_journal_for_root(sl, &target),
+            )
+        };
+        return match choose() {
             Err(record) => refuse_unreadable_record(&record, sl, UndoAsked::Folder),
             Ok(Chose::Restored(j)) => restored_by_another(&j, sl),
-            Ok(Chose::Chosen(Some(mut j))) => finish_undo(&mut j, sl, UndoAsked::Folder),
+            Ok(Chose::Chosen(Some(mut j))) => {
+                finish_undo(&mut j, sl, UndoAsked::Folder, &|| chosen_or_none(choose()))
+            }
             Ok(Chose::Chosen(None)) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
@@ -4676,12 +4740,21 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    // A record read while another undo wrote it, and waited on, was this
-    // undo's first choice: records are read newest first, and the first with
-    // work is chosen. The other undo was undoing it, so it had work.
-    match choose_waiting(sl, |_| true, || newest_undoable(sl)) {
+    // A record read while another undo wrote it, and waited on, is the answer
+    // when it is now restored and no newer apply has work left.
+    let choose = || {
+        choose_waiting(
+            sl,
+            |_| true,
+            |j: &Option<etude_core::Journal>| j.as_ref().map(|j| j.id.as_str()),
+            || newest_undoable(sl),
+        )
+    };
+    match choose() {
         Ok(Chose::Restored(j)) => return restored_by_another(&j, sl),
-        Ok(Chose::Chosen(Some(mut j))) => return finish_undo(&mut j, sl, UndoAsked::Newest),
+        Ok(Chose::Chosen(Some(mut j))) => {
+            return finish_undo(&mut j, sl, UndoAsked::Newest, &|| chosen_or_none(choose()));
+        }
         Ok(Chose::Chosen(None)) => {}
         Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     }
@@ -4709,6 +4782,7 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     let read = choose_waiting(
         sl,
         |j| j.id == newest.id,
+        |j: &etude_core::Journal| Some(j.id.as_str()),
         || {
             etude_core::Journal::load_sealed_exact("sweep", &newest.id, sl).map_err(|error| {
                 RecordError {
@@ -4736,7 +4810,7 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     }
-    finish_undo(&mut j, sl, UndoAsked::Newest)
+    finish_undo(&mut j, sl, UndoAsked::Newest, &|| chosen_or_none(choose()))
 }
 
 /// How the person chose the record. It decides which step can be printed: a
@@ -4873,12 +4947,15 @@ enum Chose<T, R> {
 /// Choose a record, and choose again after waiting when a record changed while
 /// it was being read. Another undo writes its record as it goes, so a read
 /// made then finds it changed; that is not a record that will not open. The
-/// wait ends when that undo does. If the record waited on is now restored and
-/// is the one asked for, that is the answer: choosing again would pass over it
-/// to an older apply, which this undo was never asked to reach.
+/// wait ends when that undo does, and the choice is made again. If the record
+/// waited on is now restored and is the one asked for, and the new choice is
+/// not a newer apply, the waited record is the answer: the new choice would
+/// pass over it to an older apply, which this undo was never asked to reach.
+/// A newer apply with work left is still this undo's to do.
 fn choose_waiting<T>(
     sl: &dyn etude_core::journal::Sealer,
     fits: impl Fn(&etude_core::Journal) -> bool,
+    chosen_id: impl Fn(&T) -> Option<&str>,
     choose: impl FnMut() -> Result<T, RecordError>,
 ) -> Result<Chose<T, etude_core::Journal>, RecordError> {
     choose_waiting_with(
@@ -4895,17 +4972,38 @@ fn choose_waiting<T>(
                 .ok()
                 .filter(|j| fits(j) && journal_is_fully_undone(j, sl))
         },
+        |chosen, waited| chosen_id(chosen).is_some_and(|id| newer_apply(id, waited)),
     )
+}
+
+/// Whether the apply recorded as `id` started after the one recorded as
+/// `than`. A time that cannot be read counts as newer, so undo goes on to it
+/// rather than claim it is done.
+fn newer_apply(id: &str, than: &str) -> bool {
+    use etude_core::journal::creation_time;
+    id != than
+        && match (creation_time(id), creation_time(than)) {
+            (Some(id), Some(than)) => id > than,
+            _ => true,
+        }
 }
 
 /// [`choose_waiting`] with its effects passed in. `wait` waits for the undo
 /// holding a record and says whether there was one; `restored` gives the
-/// record when it fits what was asked and has nothing left to undo.
+/// record when it fits what was asked and has nothing left to undo; `newer`
+/// says whether a choice is an apply newer than the record waited on.
 fn choose_waiting_with<T, R>(
     mut choose: impl FnMut() -> Result<T, RecordError>,
     mut wait: impl FnMut(&str) -> bool,
     restored: impl Fn(&str) -> Option<R>,
+    newer: impl Fn(&T, &str) -> bool,
 ) -> Result<Chose<T, R>, RecordError> {
+    // The record waited on, restored by the undo that held it, with its id.
+    let mut waited: Option<(String, R)> = None;
+    let answer = |chosen: T, waited: Option<(String, R)>| match waited {
+        Some((id, record)) if !newer(&chosen, &id) => Chose::Restored(record),
+        _ => Chose::Chosen(chosen),
+    };
     for _ in 0..8 {
         match choose() {
             Err(RecordError {
@@ -4915,13 +5013,25 @@ fn choose_waiting_with<T, R>(
                 if wait(&id)
                     && let Some(record) = restored(&id)
                 {
-                    return Ok(Chose::Restored(record));
+                    waited = Some((id, record));
                 }
             }
-            other => return other.map(Chose::Chosen),
+            Ok(chosen) => return Ok(answer(chosen, waited)),
+            Err(other) => return Err(other),
         }
     }
-    choose().map(Chose::Chosen)
+    choose().map(|chosen| answer(chosen, waited))
+}
+
+/// The choice from [`choose_waiting`], where a record restored by another undo
+/// leaves nothing more to choose.
+fn chosen_or_none(
+    read: Result<Chose<Option<etude_core::Journal>, etude_core::Journal>, RecordError>,
+) -> Result<Option<etude_core::Journal>, RecordError> {
+    match read? {
+        Chose::Chosen(chosen) => Ok(chosen),
+        Chose::Restored(_) => Ok(None),
+    }
 }
 
 /// Nothing to undo, because another undo restored this record's files while
@@ -4944,15 +5054,18 @@ fn restored_by_another(j: &etude_core::Journal, sl: &dyn etude_core::journal::Se
 }
 
 /// The part of undo that is the same whether a path was named or not.
+/// `choose_again` makes the same choice that chose `j`, for when another undo
+/// restored `j` while this one waited for it.
 fn finish_undo(
     j: &mut etude_core::Journal,
     sl: &dyn etude_core::journal::Sealer,
     asked: UndoAsked,
+    choose_again: &dyn Fn() -> Result<Option<etude_core::Journal>, RecordError>,
 ) -> ExitCode {
     // Held until undo returns. Read the record again under the hold: another
     // undo may have restored files since it was first read. Every caller
     // passes a record with work left.
-    let _hold = hold_for_undo(&j.id, "is restoring these files");
+    let hold = hold_for_undo(&j.id, "is restoring these files");
     // Not through choose_waiting: this run holds the record, and a second
     // hold on it from this run would wait for itself.
     *j = match etude_core::Journal::load_sealed_exact("sweep", &j.id, sl) {
@@ -4966,8 +5079,20 @@ fn finish_undo(
         }
     };
     if journal_is_fully_undone(j, sl) {
-        return restored_by_another(j, sl);
+        // Another undo restored this apply. An undo record is written as it
+        // goes, so an older apply being undone can look newest when this
+        // undo chose. A newer apply with work left is still what this undo
+        // was asked for; an older one is not.
+        drop(hold);
+        return match choose_again() {
+            Ok(Some(mut next)) if newer_apply(&next.id, &j.id) => {
+                finish_undo(&mut next, sl, asked, choose_again)
+            }
+            Err(record) => refuse_unreadable_record(&record, sl, asked),
+            Ok(_) => restored_by_another(j, sl),
+        };
     }
+    let _hold = hold;
     let mut progress = etude_cli_support::progress::Reporter::for_operation("sweep undo", "undo");
     let code = run_undo(j, sl, asked, &mut progress);
     progress.finish(code);
@@ -5590,11 +5715,13 @@ fn run_undo(
         );
     }
     if !r.reconciled.is_empty() {
-        // Different from healed: nothing was reachable by two names here. An
-        // earlier undo moved these home and was killed before it could write
-        // that down, so this run only had to agree with the disk.
+        // Different from healed: nothing was reachable by two names here.
+        // These files were back in place but the record did not say so: an
+        // earlier undo that stopped before it wrote that down, or a person who
+        // moved them back by hand. The disk does not say which, so the line
+        // does not either; this run only had to agree with the disk.
         println!(
-            "  {} already home from an interrupted restore; the undo record now says so.",
+            "  {} already back in place; the undo record now says so.",
             etude_cli_support::counted(r.reconciled.len(), "file was", "files were")
         );
     }
@@ -6217,6 +6344,31 @@ mod tests {
         );
     }
 
+    /// A name with a tab, an escape or a bell is printed in the $'…' form the
+    /// undo step uses, never as a placeholder the shell reads as redirects.
+    #[test]
+    fn next_steps_quote_a_name_with_control_characters() {
+        let (root, home, tmp, _guard) = scene("control");
+        let next = next_commands(
+            &words(&["in\tbox\x1b\x07", "--map", "x\ty=Docs"]),
+            &footer(&root, &home, &tmp),
+        );
+        assert!(next.iter().all(|line| !line.contains('<')), "{next:?}");
+        assert!(
+            next.contains(
+                &"Apply:  sweep apply $'in\\x09box\\x1b\\x07' --map $'x\\x09y=Docs' --yes"
+                    .to_owned()
+            ),
+            "{next:?}"
+        );
+        assert!(next.contains(&"Save:   sweep $'in\\x09box\\x1b\\x07' --map $'x\\x09y=Docs' --export-plan ~/sweep.plan".to_owned()), "{next:?}");
+        let next = next_commands(&words(&["in\nbox"]), &footer(&root, &home, &tmp));
+        assert!(
+            next.contains(&"Review: sweep review $'in\\x0abox'".to_owned()),
+            "{next:?}"
+        );
+    }
+
     #[test]
     fn quiet_next_steps_name_no_path() {
         let (root, home, tmp, _guard) = scene("quiet");
@@ -6631,9 +6783,41 @@ mod tests {
         }
     }
 
+    /// A choice made again in the tests: the record's id, and whether that
+    /// apply is newer than the one waited on ("a").
+    fn newer_than_a(chosen: &&str, waited: &str) -> bool {
+        assert_eq!(waited, "a");
+        chosen.starts_with("newer")
+    }
+
     #[test]
     fn a_waited_record_restored_by_another_undo_is_the_answer() {
-        // Choosing again would find the next, older record with work.
+        // Choosing again finds the next, older record with work, or nothing.
+        for again in ["older", "none"] {
+            let mut calls = 0;
+            let read = choose_waiting_with(
+                || {
+                    calls += 1;
+                    if calls == 1 {
+                        Err(changed("a"))
+                    } else {
+                        Ok(again)
+                    }
+                },
+                |id| id == "a",
+                |id| (id == "a").then_some("a restored"),
+                newer_than_a,
+            );
+            assert!(matches!(read, Ok(Chose::Restored("a restored"))));
+            assert_eq!(calls, 2);
+        }
+    }
+
+    #[test]
+    fn a_newer_apply_with_work_is_still_undone_after_a_wait() {
+        // A newer apply, killed with one move not on record, is read first and
+        // kept; the older record waited on is restored by an undo by its id.
+        // The newest apply still has files moved, so it is the choice.
         let mut calls = 0;
         let read = choose_waiting_with(
             || {
@@ -6641,14 +6825,62 @@ mod tests {
                 if calls == 1 {
                     Err(changed("a"))
                 } else {
-                    Ok("older")
+                    Ok("newer, killed")
                 }
             },
-            |id| id == "a",
-            |id| (id == "a").then_some("a restored"),
+            |_| true,
+            |_| Some("a restored"),
+            newer_than_a,
         );
-        assert!(matches!(read, Ok(Chose::Restored("a restored"))));
-        assert_eq!(calls, 1, "nothing is chosen after the wait");
+        assert!(matches!(read, Ok(Chose::Chosen("newer, killed"))));
+    }
+
+    #[test]
+    fn status_reads_a_record_again_while_it_changes() {
+        use etude_core::journal::JournalError;
+        let changing = || JournalError::Malformed("journal changed after discovery");
+        // It settles: the answer is the settled read.
+        let mut reads = 0;
+        let read = settled_read(
+            || Err::<u32, _>(changing()),
+            || {
+                reads += 1;
+                if reads < 3 { Err(changing()) } else { Ok(7) }
+            },
+            || {},
+        );
+        assert!(matches!(read, Ok(7)));
+        assert_eq!(reads, 3);
+        // It never settles: the error is still the one for a record being
+        // written, which status reports as such, never as damaged.
+        let mut pauses = 0;
+        let read = settled_read(
+            || Err::<u32, _>(changing()),
+            || Err(changing()),
+            || pauses += 1,
+        );
+        assert!(read.is_err_and(|error| changed_while_read(&error)));
+        assert_eq!(pauses, 50);
+        // Any other error is not read again.
+        let read = settled_read(
+            || Err::<u32, _>(JournalError::NotFound),
+            || panic!("not read again"),
+            || panic!("no pause"),
+        );
+        assert!(matches!(read, Err(JournalError::NotFound)));
+    }
+
+    #[test]
+    fn newer_apply_reads_the_time_an_apply_started() {
+        let older = "1794483027356464000-64803-0-33f103d5913ee078";
+        let newer = "1794483027356464001-64803-0-33f103d5913ee078";
+        assert!(newer_apply(newer, older));
+        assert!(!newer_apply(older, newer));
+        assert!(!newer_apply(older, older));
+        assert!(
+            newer_apply("not-an-id", older),
+            "an unreadable time counts as newer"
+        );
     }
 
     #[test]
@@ -6666,6 +6898,7 @@ mod tests {
             },
             |_| true,
             |_| None::<&str>,
+            newer_than_a,
         );
         assert!(matches!(read, Ok(Chose::Chosen("a again"))));
         assert_eq!(calls, 2);
@@ -6677,16 +6910,17 @@ mod tests {
                 if calls == 1 {
                     Err(changed("a"))
                 } else {
-                    Ok("a again")
+                    Ok("older")
                 }
             },
             |_| false,
             |_| Some("never"),
+            newer_than_a,
         );
-        assert!(matches!(read, Ok(Chose::Chosen("a again"))));
+        assert!(matches!(read, Ok(Chose::Chosen("older"))));
         // Any other error is the answer as it is, with no wait.
         let read = choose_waiting_with(
-            || -> Result<(), RecordError> {
+            || -> Result<&str, RecordError> {
                 Err(RecordError {
                     id: Some("a".to_owned()),
                     error: etude_core::journal::JournalError::NotFound,
@@ -6694,6 +6928,7 @@ mod tests {
             },
             |_| panic!("no wait for another error"),
             |_| Some(()),
+            |_, _| false,
         );
         assert!(matches!(
             read,
