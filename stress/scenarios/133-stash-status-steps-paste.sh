@@ -172,7 +172,7 @@ for case in quote escape newline subst dash; do
   OUT=$(cd "$to" && "$STASH" status 2>&1 </dev/null)
   assert_no_panic "$case: status on a moved folder" "$OUT"
   no_escape "$case: status on a moved folder" "$OUT"
-  hasnt "$case: a moved folder still has its record" "$OUT" "no undo record"
+  hasnt "$case: a moved folder still has its record" "$OUT" "No undo record matches"
   has "$case: says it has moved" "$OUT" "and that folder has moved here."
   JSON=$(cd "$to" && "$STASH" status --json 2>/dev/null </dev/null)
   GOT=$(printf '%s' "$JSON" | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["moved_from"]); print(d["undo_record"]); print(d["way_back"]); print(bool(d["operation_id"]))')
