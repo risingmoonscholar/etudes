@@ -15,6 +15,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use etude_core::apply::{self, ApplyFaults, TagRefusal};
 use etude_core::journal::{EntryState, Journal, Sealer};
+use etude_core::mode::Mode;
 use etude_core::plan::{self, BindingContext, BoundPlan, Plan, TagSpec};
 use etude_core::scan::{self, ScanConfig};
 use etude_core::{Signal, Untouched};
@@ -237,7 +238,15 @@ fn scan_config() -> ScanConfig {
 
 fn plan_tags(s: &Scene, specs: &[TagSpec]) -> Plan {
     let outcome = scan::scan(&s.root, &scan_config()).expect("scan");
-    let mut plan = plan::build_tags(&outcome, specs, None);
+    let mut plan = plan::build(
+        &outcome,
+        plan::Request {
+            mode: Mode::Tags {
+                specs: specs.to_vec(),
+            },
+            inspector: None,
+        },
+    );
     for group in &mut plan.groups {
         group.accepted = true;
     }
@@ -362,7 +371,15 @@ fn planning_writes_no_tag_and_touches_no_file_metadata() {
     set_tags(&s.file("a.pdf"), &["Old"]);
     let before = fingerprint_tree(&s.root);
     let outcome = scan::scan(&s.root, &scan_config()).expect("scan");
-    let plan = plan::build_tags(&outcome, &[spec("pdf", "Work"), spec("png", "Pics")], None);
+    let plan = plan::build(
+        &outcome,
+        plan::Request {
+            mode: Mode::Tags {
+                specs: vec![spec("pdf", "Work"), spec("png", "Pics")],
+            },
+            inspector: None,
+        },
+    );
     let _ = plan.to_json();
     assert_eq!(
         plan.moves(),
@@ -841,9 +858,20 @@ fn a_file_inside_a_built_in_folder_is_tagged_like_any_other() {
     let outcome = scan_depth_2(&s);
     // The folder plan of the same scan still calls the filed ones in place,
     // so this case is one the old tag plan got wrong.
-    assert_eq!(plan::build(&outcome).already_in_destination(), 3);
+    assert_eq!(
+        plan::build(&outcome, plan::Request::default()).already_in_destination(),
+        3
+    );
 
-    let plan = plan::build_tags(&outcome, &[spec("png", "Work")], None);
+    let plan = plan::build(
+        &outcome,
+        plan::Request {
+            mode: Mode::Tags {
+                specs: vec![spec("png", "Work")],
+            },
+            inspector: None,
+        },
+    );
     let tagged: Vec<&PathBuf> = plan.groups.iter().flat_map(|g| &g.members).collect();
     assert_eq!(tagged.len(), 9, "every png gets the tag: {tagged:?}");
     for path in &inside {
@@ -870,7 +898,7 @@ fn a_file_no_tag_takes_is_reported_the_same_way_whatever_its_built_in_group() {
     let outcome = scan_depth_2(&s);
     // The folder plan of the same scan groups the screenshots, so this case
     // is one the old tag plan got wrong.
-    let folders = plan::build(&outcome);
+    let folders = plan::build(&outcome, plan::Request::default());
     assert!(
         folders
             .groups
@@ -879,7 +907,15 @@ fn a_file_no_tag_takes_is_reported_the_same_way_whatever_its_built_in_group() {
         "a built-in group takes the screenshots in a folder plan"
     );
 
-    let plan = plan::build_tags(&outcome, &[spec("pdf", "Work")], None);
+    let plan = plan::build(
+        &outcome,
+        plan::Request {
+            mode: Mode::Tags {
+                specs: vec![spec("pdf", "Work")],
+            },
+            inspector: None,
+        },
+    );
     assert_eq!(plan.groups.len(), 1);
     assert_eq!(plan.groups[0].members, vec![s.file("notes.pdf")]);
     let mut unclaimed: Vec<&PathBuf> = plan
@@ -916,11 +952,19 @@ fn a_locked_built_in_folder_does_not_hold_files_from_a_tag() {
     // scan also holds the screenshots as locked, so this case is one the old
     // tag plan got wrong.
     assert_eq!(
-        plan::build(&outcome).locked_skipped,
+        plan::build(&outcome, plan::Request::default()).locked_skipped,
         outcome.locked_skipped + 3
     );
 
-    let plan = plan::build_tags(&outcome, &[spec("png", "Work")], None);
+    let plan = plan::build(
+        &outcome,
+        plan::Request {
+            mode: Mode::Tags {
+                specs: vec![spec("png", "Work")],
+            },
+            inspector: None,
+        },
+    );
     let tagged: usize = plan.groups.iter().map(|g| g.members.len()).sum();
     assert_eq!(tagged, 3, "every screenshot gets the tag");
     assert_eq!(

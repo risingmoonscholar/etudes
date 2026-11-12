@@ -79,7 +79,7 @@ fn an_unreadable_directory_is_counted_not_dropped() {
     );
 
     // The count must survive into the plan, not be dropped by build().
-    let p = plan::build(&out);
+    let p = plan::build(&out, plan::Request::default());
     assert_eq!(
         p.skipped_unreadable, 1,
         "plan::build dropped the unreadable count that scan() produced"

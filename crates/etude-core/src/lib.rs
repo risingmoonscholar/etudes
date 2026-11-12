@@ -17,6 +17,7 @@ pub mod evidence;
 pub mod gate;
 pub mod journal;
 pub mod json;
+pub mod mode;
 pub mod plan;
 pub mod proposal;
 pub mod redact;

@@ -1,4 +1,4 @@
-//! Golden files for plan building: every public entry point, run on a set of
+//! Golden files for plan building: every kind of plan request, run on a set of
 //! synthetic folders, must produce the same plan it produced when the files in
 //! `tests/golden/` were written.
 //!
@@ -8,7 +8,8 @@
 //! says why (CI reads a `Golden-Change:` trailer, see
 //! `scripts/check-golden-frozen.py`).
 //!
-//! Two files per folder and entry point:
+//! Two files per folder and request. A request is named after the entry point
+//! that built it before there was one `plan::build`:
 //!
 //! - `<fixture>__<mode>.json`: `Plan::to_json`, the serializer `--json` uses,
 //!   indented one value per line so a difference reads as a line diff.
@@ -39,7 +40,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use etude_core::plan::{self, BindingContext, BoundPlan, Inspector, Plan};
+use etude_core::mode::Mode;
+use etude_core::plan::{self, BindingContext, BoundPlan, Inspector, Plan, Request};
 use etude_core::scan::{self, ScanConfig, ScanOutcome, TreeSnapshot};
 use etude_core::{Category, Untouched};
 
@@ -745,7 +747,9 @@ fn owned(pairs: Pairs) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Every public plan entry point, in a fixed order.
+/// Every plan request the golden files cover, in a fixed order. Each is named
+/// after the entry point that built it before `plan::build` took a
+/// `Request`, so the file names stay the same.
 fn plans(case: &Case, scan: &ScanOutcome) -> Vec<(&'static str, Plan)> {
     let maps = plan::validate_maps(&owned(case.maps), &scan.root)
         .unwrap_or_else(|e| panic!("{}: maps: {e}", case.name));
@@ -757,26 +761,29 @@ fn plans(case: &Case, scan: &ScanOutcome) -> Vec<(&'static str, Plan)> {
         plan::validate_tag_maps(&owned(case.tags))
             .unwrap_or_else(|e| panic!("{}: tags: {e}", case.name))
     };
+    let folders = || Mode::Folders { maps: Vec::new() };
+    let mapped = || Mode::Folders { maps: maps.clone() };
+    let existing = || Mode::Existing {
+        routes: routes.clone(),
+    };
+    let build = |mode: Mode, inspect: bool| {
+        let mut inspector = GoldenInspector;
+        plan::build(
+            scan,
+            Request {
+                mode,
+                inspector: inspect.then_some(&mut inspector as &mut dyn Inspector),
+            },
+        )
+    };
     vec![
-        ("build", plan::build(scan)),
-        ("build_mapped", plan::build_mapped(scan, &maps)),
-        ("build_existing", plan::build_existing(scan, &routes)),
-        (
-            "build_existing_with",
-            plan::build_existing_with(scan, &mut GoldenInspector, &routes),
-        ),
-        (
-            "build_with",
-            plan::build_with(scan, Some(&mut GoldenInspector)),
-        ),
-        (
-            "build_with_maps",
-            plan::build_with_maps(scan, Some(&mut GoldenInspector), &maps),
-        ),
-        (
-            "build_tags",
-            plan::build_tags(scan, &specs, Some(&mut GoldenInspector)),
-        ),
+        ("build", build(folders(), false)),
+        ("build_mapped", build(mapped(), false)),
+        ("build_existing", build(existing(), false)),
+        ("build_existing_with", build(existing(), true)),
+        ("build_with", build(folders(), true)),
+        ("build_with_maps", build(mapped(), true)),
+        ("build_tags", build(Mode::Tags { specs }, true)),
     ]
 }
 

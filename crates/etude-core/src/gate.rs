@@ -25,7 +25,6 @@
 //! walk can decide them; the gate receives the results as step 1.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::Untouched;
 use crate::evidence::{Facts, Family};
@@ -33,11 +32,10 @@ use crate::plan::Inspector;
 use crate::scan::ScanOutcome;
 
 /// What the gate is told, beyond the scan itself.
+///
+/// The grace window is not here: the gate reads `ScanOutcome::grace`, the
+/// window the scan ran with, so a plan can only apply that one.
 pub struct GatePolicy<'p> {
-    /// The grace window: a file changed within it is too recent to judge.
-    /// Plans pass the scan's own window (`ScanOutcome::grace`), so the plan
-    /// applies the window the scan ran with.
-    pub grace: Option<Duration>,
     /// Let a file through even when its readable modification time is inside
     /// the window. Used only to ask whether recent files would group once the
     /// window passes. A file whose time cannot be read is still held: waiting
@@ -150,7 +148,7 @@ pub fn gate<'a>(
         // answer here is that sweep does not know -- so it holds the file
         // back rather than treating unknown as old. Bypassing the check meant
         // an unreadable timestamp was silently the most permissive case.
-        if let Some(window) = policy.grace
+        if let Some(window) = scan.grace
             && !window.is_zero()
             && e.modified.is_none()
         {
@@ -158,7 +156,7 @@ pub fn gate<'a>(
             continue;
         }
         if !policy.ignore_window
-            && let Some(window) = policy.grace
+            && let Some(window) = scan.grace
             && !window.is_zero()
             && let Some(modified) = e.modified
             && modified
@@ -182,7 +180,7 @@ mod tests {
     use crate::evidence;
     use crate::scan::Entry;
     use std::path::Path;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -259,7 +257,8 @@ mod tests {
         if case.beside_document {
             entries.push(entry("mix.flp", None));
         }
-        let scan = scan_of(entries);
+        let mut scan = scan_of(entries);
+        scan.grace = Some(DAY);
         let mut inspector = Refuses {
             category: Category::Medical,
             asked: Vec::new(),
@@ -269,7 +268,6 @@ mod tests {
             &scan,
             &facts,
             GatePolicy {
-                grace: Some(DAY),
                 ignore_window: false,
                 inspector: case
                     .inspector
@@ -419,7 +417,6 @@ mod tests {
             &scan,
             &facts,
             GatePolicy {
-                grace: None,
                 ignore_window: false,
                 inspector: None,
             },
@@ -439,16 +436,16 @@ mod tests {
     /// that time readable.
     #[test]
     fn ignoring_the_window_still_holds_a_file_whose_time_cannot_be_read() {
-        let scan = scan_of(vec![
+        let mut scan = scan_of(vec![
             entry("unknown.pdf", None),
             entry("recent.pdf", Some(SystemTime::now())),
         ]);
+        scan.grace = Some(DAY);
         let facts = evidence::observe(&scan);
         let gated = gate(
             &scan,
             &facts,
             GatePolicy {
-                grace: Some(DAY),
                 ignore_window: true,
                 inspector: None,
             },

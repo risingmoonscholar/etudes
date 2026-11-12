@@ -1,12 +1,12 @@
 //! Plan construction. Nothing here writes to the filesystem.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use crate::evidence::{self, Facts, Family};
 use crate::gate::{GatePolicy, Gated, gate};
-use crate::scan::{Entry, ScanOutcome};
+use crate::mode::{Claimed, Mode};
+use crate::scan::ScanOutcome;
 use crate::{Category, Untouched};
 
 /// Decision classes in descending precedence. User choices can narrow a plan,
@@ -249,17 +249,9 @@ impl Plan {
             .map(|entry| (entry.identity.device, entry.identity.inode))
     }
 
-    /// Size captured for a regular file in the scan snapshot. `None` for a
-    /// path the snapshot did not observe as a regular file.
-    pub(crate) fn observed_file_size(&self, path: &std::path::Path) -> Option<u64> {
-        let snapshot = self.observations.as_ref()?;
-        let relative = path.strip_prefix(&snapshot.root).ok()?;
-        let committed = crate::scan::TreeSnapshot::path_commitment(relative);
-        snapshot
-            .entries
-            .iter()
-            .find(|entry| entry.path == committed && entry.identity.kind == 1)
-            .map(|entry| entry.identity.size)
+    /// Sizes captured for the regular files in the scan snapshot.
+    pub(crate) fn observed_file_sizes(&self) -> ObservedFileSizes<'_> {
+        ObservedFileSizes::of(self.observations.as_ref())
     }
 
     pub fn display_only(root: PathBuf, groups: Vec<Group>) -> Self {
@@ -323,6 +315,42 @@ impl Plan {
             root_is_synced: scan.root_is_synced,
             allow_sync: scan.allow_sync,
         }
+    }
+}
+
+/// Sizes of the regular files a scan snapshot observed, looked up by real
+/// path. A path the snapshot did not observe as a regular file has none.
+///
+/// Built once for a question about many files. Searching the snapshot's
+/// entries once for each file made planning a large folder cost the square
+/// of its file count (issue #229).
+pub(crate) struct ObservedFileSizes<'s> {
+    root: Option<&'s Path>,
+    sizes: HashMap<&'s Path, u64>,
+}
+
+impl<'s> ObservedFileSizes<'s> {
+    fn of(snapshot: Option<&'s crate::scan::TreeSnapshot>) -> Self {
+        let mut sizes = HashMap::new();
+        for entry in snapshot
+            .iter()
+            .flat_map(|snapshot| &snapshot.entries)
+            .filter(|entry| entry.identity.kind == 1)
+        {
+            sizes
+                .entry(entry.path.as_path())
+                .or_insert(entry.identity.size);
+        }
+        Self {
+            root: snapshot.map(|snapshot| snapshot.root.as_path()),
+            sizes,
+        }
+    }
+
+    pub(crate) fn get(&self, path: &Path) -> Option<u64> {
+        let relative = path.strip_prefix(self.root?).ok()?;
+        let committed = crate::scan::TreeSnapshot::path_commitment(relative);
+        self.sizes.get(committed.as_path()).copied()
     }
 }
 
@@ -658,89 +686,6 @@ impl Plan {
     }
 }
 
-/// Minimum members before sweep makes a NEW folder from its own rule. Below
-/// this, the grouping is a guess from too few files and the honest answer is
-/// "no clear group". The floor guards folder creation only: when the
-/// destination folder is already a direct child of the root, or a saved route
-/// names it, any number of files moves into it.
-const MIN_STRUCTURAL_GROUP: usize = 3;
-
-/// True when `name` is a real directory directly under the root, as the scan
-/// snapshot observed it. Apply checks the same observation before each move
-/// into it, so a folder that is gone by then is refused, never re-created for
-/// a group the floor would not have formed. No snapshot means not observed.
-fn folder_observed(scan: &ScanOutcome, name: &str) -> bool {
-    let Some(snapshot) = &scan.snapshot else {
-        return false;
-    };
-    let committed = crate::scan::TreeSnapshot::path_commitment(std::path::Path::new(name));
-    snapshot
-        .entries
-        .iter()
-        .any(|entry| entry.path == committed && entry.identity.kind == 2)
-}
-
-/// The files a rule has already taken. A later rule never takes one of them:
-/// the first rule to claim a file wins, which is what makes the rule order
-/// mean something.
-///
-/// A set, not a list: every rule asks it once per remaining file, and a list
-/// made that cost grow with the files times the files already claimed. The
-/// claim loop moves into its own module later, and this type goes with it.
-#[derive(Debug, Default)]
-struct ClaimSet(HashSet<PathBuf>);
-
-impl ClaimSet {
-    fn contains(&self, path: &Path) -> bool {
-        self.0.contains(path)
-    }
-
-    fn claim(&mut self, path: &Path) {
-        self.0.insert(path.to_path_buf());
-    }
-
-    fn claim_all<'e>(&mut self, entries: impl IntoIterator<Item = &'e Entry>) {
-        self.0.extend(entries.into_iter().map(|e| e.path.clone()));
-    }
-}
-
-/// Settle one group whose folder is `name`. When that folder is already here,
-/// files directly inside it stay where they are (they are already home) and
-/// any number of the rest moves in. When sweep would have to make the folder,
-/// the floor applies. Returns the files to move, or `None` when there is no
-/// group; only the returned files and the in-place files are claimed.
-fn settle<'a>(
-    scan: &ScanOutcome,
-    name: &str,
-    candidates: Vec<&'a Entry>,
-    claimed: &mut ClaimSet,
-    untouched: &mut Vec<(PathBuf, Untouched)>,
-) -> Option<Vec<&'a Entry>> {
-    if !folder_observed(scan, name) {
-        if candidates.len() < MIN_STRUCTURAL_GROUP {
-            return None;
-        }
-        claimed.claim_all(candidates.iter().copied());
-        return Some(candidates);
-    }
-    let destination = scan.root.join(name);
-    let (in_place, members): (Vec<&Entry>, Vec<&Entry>) = candidates
-        .into_iter()
-        .partition(|e| e.path.parent() == Some(destination.as_path()));
-    for entry in in_place {
-        claimed.claim(&entry.path);
-        untouched.push((entry.path.clone(), Untouched::AlreadyInDestination));
-    }
-    if members.is_empty() {
-        return None;
-    }
-    claimed.claim_all(members.iter().copied());
-    Some(members)
-}
-/// Window within which camera files count as one burst.
-const BURST_DAYS: u32 = 3;
-
-/// Build a plan from metadata alone. Pure: reads no file contents.
 /// One agent-supplied mapping, already validated by `validate_maps`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MapSpec {
@@ -974,59 +919,30 @@ fn validate_maps_impl(
     Ok(out)
 }
 
-pub fn build(scan: &ScanOutcome) -> Plan {
-    build_mapped(scan, &[])
+/// What to plan: the scheme, and the content reader when the person allowed
+/// one. `Request::default()` is a plain `sweep PATH`.
+#[derive(Default)]
+pub struct Request<'p> {
+    pub mode: Mode,
+    /// Consented content reading. It runs in the gate only, alongside the
+    /// filename check, and its answer can do exactly one thing: move a file
+    /// into the untouched set. It does not change where a file goes.
+    pub inspector: Option<&'p mut dyn Inspector>,
 }
 
-pub fn build_mapped(scan: &ScanOutcome, maps: &[MapSpec]) -> Plan {
-    build_with_policy(scan, None, maps, false)
-}
-
-/// Build using the user's persistent existing-folder profile. These routes
-/// are considered after every ordinary refusal and before the built-in
-/// grouping rules, so the profile can express the user's taxonomy without
-/// taking a file a safety rule has already held.
-pub fn build_existing(scan: &ScanOutcome, maps: &[MapSpec]) -> Plan {
-    build_with_policy(scan, None, maps, true)
-}
-
-/// Existing-folder profile variant with caller-supplied content inspection.
-/// Inspection can add refusals only; it does not change profile routing.
-pub fn build_existing_with(
-    scan: &ScanOutcome,
-    inspector: &mut dyn Inspector,
-    maps: &[MapSpec],
-) -> Plan {
-    build_with_policy(scan, Some(inspector), maps, true)
-}
-
-/// Build a plan, optionally inspecting contents to refuse more files.
+/// Build a plan from metadata alone. Writes nothing, and reads no file
+/// contents unless the request carries an inspector.
 ///
-/// The inspector runs in the gate only, alongside the filename check, and its
-/// result can do exactly one thing: move a file into the untouched set.
-pub fn build_with(scan: &ScanOutcome, inspector: Option<&mut dyn Inspector>) -> Plan {
-    build_with_maps(scan, inspector, &[])
-}
-
-pub fn build_with_maps(
-    scan: &ScanOutcome,
-    inspector: Option<&mut dyn Inspector>,
-    maps: &[MapSpec],
-) -> Plan {
-    build_with_policy(scan, inspector, maps, false)
-}
-
-fn build_with_policy(
-    scan: &ScanOutcome,
-    inspector: Option<&mut dyn Inspector>,
-    maps: &[MapSpec],
-    profile_routes: bool,
-) -> Plan {
+/// The evidence first, once for each file; then the gate, which holds every
+/// file that is not safe to touch; then the mode, which decides where the
+/// rest go. No rule sees a file the gate held.
+pub fn build(scan: &ScanOutcome, request: Request) -> Plan {
+    let Request { mode, inspector } = request;
     // The evidence once, for both runs: waiting changes nothing it reads.
     let facts = evidence::observe(scan);
-    let mut plan = group_entries(scan, &facts, inspector, maps, profile_routes, false);
+    let mut plan = plan_once(scan, &facts, &mode, inspector, false);
     if plan.groups.is_empty() && plan.too_recent() > 0 {
-        let unwindowed = group_entries(scan, &facts, None, maps, profile_routes, true);
+        let unwindowed = plan_once(scan, &facts, &mode, None, true);
         plan.recent_would_group = would_group(&unwindowed);
     }
     plan
@@ -1038,267 +954,44 @@ fn would_group(unwindowed: &Plan) -> bool {
     !unwindowed.groups.is_empty() && unwindowed.too_recent() == 0
 }
 
-fn group_entries(
+/// One run of the gate and the mode over the scan's facts.
+fn plan_once(
     scan: &ScanOutcome,
     facts: &[Facts],
+    mode: &Mode,
     inspector: Option<&mut dyn Inspector>,
-    maps: &[MapSpec],
-    profile_routes: bool,
     ignore_window: bool,
 ) -> Plan {
-    // The gate first: whatever it holds, no rule below ever sees.
+    // The gate first: whatever it holds, no rule ever sees.
     let Gated {
         held: mut untouched,
-        candidates: remaining,
+        candidates,
     } = gate(
         scan,
         facts,
         GatePolicy {
-            grace: scan.grace,
             ignore_window,
             inspector,
         },
     );
-
-    let mut groups: Vec<Group> = Vec::new();
-    let mut claimed = ClaimSet::default();
-
-    // A saved profile is an explicit user taxonomy. It may claim files that
-    // a built-in grouping would otherwise take, but only after the gate has
-    // removed every personal, project, in-flight, and too-recent refusal.
-    // The CLI checked each destination: an existing direct folder keeps
-    // `created: false`, which tells apply never to create it if it
-    // disappears; a missing one is `created: true` and apply makes it for
-    // the first file that moves. A route is the person's own choice, not a
-    // guess, so it has no floor: one matching file moves, and a missing
-    // folder is made for it. A routed extension's files never fall to a
-    // built-in group.
-    if profile_routes {
-        for m in maps {
-            let destination = scan.root.join(&m.folder);
-            let in_place: Vec<&Entry> = remaining
-                .iter()
-                .map(|f| f.entry)
-                .filter(|e| !claimed.contains(&e.path))
-                .filter(|e| e.path.parent().is_some_and(|parent| parent == destination))
-                .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-                .collect();
-            for entry in in_place {
-                claimed.claim(&entry.path);
-                untouched.push((entry.path.clone(), Untouched::AlreadyInDestination));
-            }
-            let members: Vec<&Entry> = remaining
-                .iter()
-                .map(|f| f.entry)
-                .filter(|e| !claimed.contains(&e.path))
-                .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-                .collect();
-            if members.is_empty() {
-                continue;
-            }
-            claimed.claim_all(members.iter().copied());
-            groups.push(Group {
-                name: m.folder.clone(),
-                signal: Signal::Mapped {
-                    ext: m.ext.clone(),
-                    created: m.created,
-                    saved: true,
-                },
-                members: members.iter().map(|e| e.path.clone()).collect(),
-                accepted: false,
-            });
-        }
+    let Claimed {
+        mut groups,
+        untouched: decided,
+    } = mode.claim(scan, &candidates);
+    untouched.extend(decided);
+    if mode.adds_tags() {
+        // A tag puts nothing in a folder, so a locked folder holds nothing
+        // back: only what the scan itself held counts as locked.
+        let locked = (scan.locked_skipped, scan.locked_system);
+        let mut plan = assemble(scan, groups, untouched, locked);
+        plan.adds_tags = true;
+        plan.include_tagged = false;
+        plan.skipped_tagged = 0;
+        plan
+    } else {
+        let locked = hold_locked_destinations(scan, &mut groups);
+        assemble(scan, groups, untouched, locked)
     }
-
-    groups.extend(built_in_groups(
-        scan,
-        &remaining,
-        &mut claimed,
-        &mut untouched,
-    ));
-
-    // Agent mappings, last and least: they may claim only what every
-    // built-in pass declined. A mapping can never take a file from a
-    // detector, and nothing here runs before the refusals -- a personal
-    // record, a held document's reference surface, a fresh file or an
-    // in-flight download never reaches this point. A --map folder that sweep
-    // would have to make keeps the three-file floor of every structural
-    // group: below it, --map would be an arbitrary one-file move command
-    // wearing a safety vocabulary. Into a folder that is already here, any
-    // number moves, the same as a built-in group.
-    for m in maps.iter().filter(|_| !profile_routes) {
-        let members: Vec<&Entry> = remaining
-            .iter()
-            .map(|f| f.entry)
-            .filter(|e| !claimed.contains(&e.path))
-            .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-            .collect();
-        let Some(members) = settle(scan, &m.folder, members, &mut claimed, &mut untouched) else {
-            continue;
-        };
-        groups.push(Group {
-            name: m.folder.clone(),
-            signal: Signal::Mapped {
-                ext: m.ext.clone(),
-                created: m.created,
-                saved: false,
-            },
-            members: members.iter().map(|e| e.path.clone()).collect(),
-            accepted: false,
-        });
-    }
-
-    // Everything still unclaimed is honestly reported as ungrouped.
-    for e in remaining
-        .iter()
-        .map(|f| f.entry)
-        .filter(|e| !claimed.contains(&e.path))
-    {
-        untouched.push((e.path.clone(), Untouched::NoClearGroup));
-    }
-
-    let locked = hold_locked_destinations(scan, &mut groups);
-    assemble(scan, groups, untouched, locked)
-}
-
-/// The built-in rules, after any saved routes: screenshots, a camera burst,
-/// installers, then type families. Each claims only files no earlier rule
-/// claimed, and a file already inside its group's folder is left in place.
-fn built_in_groups(
-    scan: &ScanOutcome,
-    remaining: &[&Facts],
-    claimed: &mut ClaimSet,
-    untouched: &mut Vec<(PathBuf, Untouched)>,
-) -> Vec<Group> {
-    let mut groups: Vec<Group> = Vec::new();
-
-    // Pass 2: structural detectors, highest precision first.
-    let shots: Vec<&Entry> = remaining
-        .iter()
-        .filter(|f| f.capture.is_some() && !claimed.contains(&f.entry.path))
-        .map(|f| f.entry)
-        .collect();
-    if let Some(shots) = settle(scan, "Screenshots", shots, claimed, untouched) {
-        groups.push(Group {
-            name: "Screenshots".to_string(),
-            signal: Signal::Screenshot,
-            members: shots.iter().map(|e| e.path.clone()).collect(),
-            accepted: false,
-        });
-    }
-
-    let mut camera_candidates: Vec<&Entry> = remaining
-        .iter()
-        .filter(|f| f.camera)
-        .map(|f| f.entry)
-        .filter(|e| !claimed.contains(&e.path) && e.modified.is_some())
-        .collect();
-    camera_candidates.sort_by_key(|e| e.modified);
-    let burst_window = Duration::from_secs(u64::from(BURST_DAYS) * 86_400);
-    let mut window_start = 0;
-    let mut best_start = 0;
-    let mut best_len = 0;
-    for window_end in 0..camera_candidates.len() {
-        while camera_candidates[window_end]
-            .modified
-            .unwrap()
-            .duration_since(camera_candidates[window_start].modified.unwrap())
-            .unwrap()
-            > burst_window
-        {
-            window_start += 1;
-        }
-        let window_len = window_end - window_start + 1;
-        if window_len > best_len {
-            best_start = window_start;
-            best_len = window_len;
-        }
-    }
-    let cams: Vec<&Entry> = camera_candidates[best_start..best_start + best_len].to_vec();
-    let name = match date_range(&cams) {
-        Some(r) => format!("Photos, {r}"),
-        None => "Photos".to_string(),
-    };
-    if !cams.is_empty()
-        && let Some(cams) = settle(scan, &name, cams, claimed, untouched)
-    {
-        groups.push(Group {
-            name,
-            signal: Signal::CameraBurst { days: BURST_DAYS },
-            members: cams.iter().map(|e| e.path.clone()).collect(),
-            accepted: false,
-        });
-    }
-
-    let inst: Vec<&Entry> = remaining
-        .iter()
-        .filter(|f| f.installer && !claimed.contains(&f.entry.path))
-        .map(|f| f.entry)
-        .collect();
-    if let Some(inst) = settle(scan, "Installers", inst, claimed, untouched) {
-        groups.push(Group {
-            name: "Installers".to_string(),
-            signal: Signal::Installer,
-            members: inst.iter().map(|e| e.path.clone()).collect(),
-            accepted: false,
-        });
-    }
-
-    // There is deliberately no pass grouping by shared words. One existed:
-    // any token in five or more filenames became a folder named after that
-    // token, guarded by a hand-written stoplist. On the first real Downloads
-    // folder it met, it made a folder called "apple" out of a receipt, an
-    // agreement, a script and an export that shared a word, and the stoplist
-    // could never have saved it -- the set of words that are not categories
-    // is the whole vocabulary minus a few dozen. Frequency is not category.
-    //
-    // Its lifetime record on data this repo did not author: zero true
-    // positives, one false positive. Both showcase groups in the fixture were
-    // planted to demonstrate it. The one thing it was right about -- a
-    // project cluster spanning extensions -- is caught by a better,
-    // observable signal: a project file marks its folder as one unit.
-    //
-    // Two independent reviews converged here: one flagged the stoplist as
-    // limited, the other watched the rule produce "apple". Do not
-    // reintroduce a token pass; extend the structural detectors instead.
-
-    // Pass 3: type families. A file's extension says what it IS, which is the
-    // question a folder name should answer. Extensions the table does not
-    // know are left alone rather than swept into an "Other" drawer. The table
-    // is the whole mechanism -- the OS is not consulted -- and unknown means
-    // untouched, because filing formats sweep cannot name would mean
-    // maintaining a list of every app's private extension forever.
-    //
-    // Keyed by folder name, so the groups come out in that name's order, as
-    // they always have.
-    {
-        let mut by_family: BTreeMap<&'static str, Vec<&Entry>> = BTreeMap::new();
-        for f in remaining
-            .iter()
-            .filter(|f| !claimed.contains(&f.entry.path))
-        {
-            if let Some(family) = f.family {
-                by_family
-                    .entry(family.folder_name())
-                    .or_default()
-                    .push(f.entry);
-            }
-        }
-        for (family, members) in by_family {
-            let Some(members) = settle(scan, family, members, claimed, untouched) else {
-                continue;
-            };
-            groups.push(Group {
-                name: family.to_string(),
-                signal: Signal::TypeFamily {
-                    exts: members.iter().map(|e| e.ext.to_lowercase()).collect(),
-                },
-                members: members.iter().map(|e| e.path.clone()).collect(),
-                accepted: false,
-            });
-        }
-    }
-    groups
 }
 
 /// Hold every group whose destination folder is locked. Returns the scan's
@@ -1335,13 +1028,18 @@ fn assemble(
     (locked_skipped, locked_system): (usize, usize),
 ) -> Plan {
     untouched.sort_by(|a, b| a.0.cmp(&b.0));
+    // Only regular files can be placed by a proposal. A package or folder
+    // that no group claimed stays in the left-alone list but is not eligible.
+    let sizes = ObservedFileSizes::of(scan.snapshot.as_ref());
     let unclaimed = untouched
         .iter()
         .filter(|(_, reason)| *reason == Untouched::NoClearGroup)
-        .map(|(path, _)| path.clone())
+        .map(|(path, _)| path)
+        .filter(|path| sizes.get(path).is_some())
+        .cloned()
         .collect();
 
-    let mut plan = Plan {
+    Plan {
         observations: scan.snapshot.clone(),
         root: scan.root.clone(),
         groups,
@@ -1364,17 +1062,7 @@ fn assemble(
         adds_tags: false,
         root_is_synced: scan.root_is_synced,
         allow_sync: scan.allow_sync,
-    };
-    // Only regular files can be placed by a proposal. A package or folder
-    // that no group claimed stays in the left-alone list but is not eligible.
-    let regular: Vec<PathBuf> = plan
-        .unclaimed
-        .iter()
-        .filter(|path| plan.observed_file_size(path).is_some())
-        .cloned()
-        .collect();
-    plan.unclaimed = regular;
-    plan
+    }
 }
 
 /// How "new" is decided for a tag, in two sentences. Finder's own tag list is
@@ -1427,202 +1115,11 @@ pub fn validate_tag_maps(raw: &[(String, String)]) -> Result<Vec<TagSpec>, Strin
     Ok(out)
 }
 
-/// The seven colour tags Finder ships with, and the colour number it stores
-/// after the name. Adding one of these by name must write the number, or the
-/// tag would show without its colour.
-fn finder_colour_tag(name: &str) -> Option<&'static str> {
-    match name.to_lowercase().as_str() {
-        "gray" | "grey" => Some("Gray\n1"),
-        "green" => Some("Green\n2"),
-        "purple" => Some("Purple\n3"),
-        "blue" => Some("Blue\n4"),
-        "yellow" => Some("Yellow\n5"),
-        "red" => Some("Red\n6"),
-        "orange" => Some("Orange\n7"),
-        _ => None,
-    }
-}
-
-/// Build a tag plan: which files get which tag. Reads each taggable file's tag
-/// attribute (never its contents) to learn which tags exist in the folder and
-/// which files already carry the one asked for. Writes nothing.
-///
-/// Every safety refusal still applies: a file sweep would not touch is not
-/// tagged either, and its tags are not read. A file whose tag state cannot be
-/// parsed is listed as unreadable and given nothing.
-pub fn build_tags(
-    scan: &ScanOutcome,
-    specs: &[TagSpec],
-    inspector: Option<&mut dyn Inspector>,
-) -> Plan {
-    // The evidence once, for both runs, as for a folder plan.
-    let facts = evidence::observe(scan);
-    let mut plan = tag_entries(scan, &facts, specs, inspector, false);
-    if plan.groups.is_empty() && plan.too_recent() > 0 {
-        plan.recent_would_group = would_group(&tag_entries(scan, &facts, specs, None, true));
-    }
-    plan
-}
-
-fn tag_entries(
-    scan: &ScanOutcome,
-    facts: &[Facts],
-    specs: &[TagSpec],
-    inspector: Option<&mut dyn Inspector>,
-    ignore_window: bool,
-) -> Plan {
-    use std::collections::BTreeMap;
-    // The gate decides what a tag may touch, the same as for a move.
-    let Gated {
-        held: mut untouched,
-        candidates: passed,
-    } = gate(
-        scan,
-        facts,
-        GatePolicy {
-            grace: scan.grace,
-            ignore_window,
-            inspector,
-        },
-    );
-
-    // A tag moves nothing, so where a file sits has no bearing on whether it
-    // can be tagged: no folder rule runs here. Every file the gate lets
-    // through can be tagged, and nothing in a tag plan is "in place".
-    let mut candidates: Vec<&Entry> = passed
-        .iter()
-        .map(|f| f.entry)
-        .filter(|entry| !entry.is_dir)
-        .collect();
-    candidates.sort_by(|a, b| a.path.cmp(&b.path));
-
-    // Tag state of every file that could be tagged. `None`: unknown.
-    let states: Vec<Option<Vec<String>>> = candidates
-        .iter()
-        .map(|entry| match crate::tags::read(&entry.path) {
-            Ok(None) => Some(Vec::new()),
-            Ok(Some(raw)) => crate::tags::decode(&raw),
-            Err(_) => None,
-        })
-        .collect();
-    // Tags already on those files, by lower-cased name, keeping the first
-    // stored spelling (with its colour) so a new use matches the old one.
-    let mut known: BTreeMap<String, String> = BTreeMap::new();
-    for entry in states.iter().flatten().flatten() {
-        known
-            .entry(crate::tags::name_of(entry).to_lowercase())
-            .or_insert_with(|| entry.clone());
-    }
-
-    let mut groups = Vec::new();
-    let mut claimed = ClaimSet::default();
-    for spec in specs {
-        let (entry, new) = match known.get(&spec.name.to_lowercase()) {
-            Some(existing) => (existing.clone(), false),
-            None => (
-                finder_colour_tag(&spec.name).map_or_else(|| spec.name.clone(), str::to_string),
-                true,
-            ),
-        };
-        let display = crate::tags::name_of(&entry).to_string();
-        let mut members = Vec::new();
-        for (candidate, state) in candidates.iter().zip(&states) {
-            if !candidate.ext.eq_ignore_ascii_case(&spec.ext) {
-                continue;
-            }
-            claimed.claim(&candidate.path);
-            match state {
-                None => untouched.push((candidate.path.clone(), Untouched::TagStateUnreadable)),
-                Some(tags)
-                    if tags
-                        .iter()
-                        .any(|tag| crate::tags::same_name(crate::tags::name_of(tag), &display)) =>
-                {
-                    untouched.push((candidate.path.clone(), Untouched::TagAlreadyPresent));
-                }
-                Some(_) => members.push(candidate.path.clone()),
-            }
-        }
-        if members.is_empty() {
-            continue;
-        }
-        groups.push(Group {
-            name: display,
-            signal: Signal::Tagged {
-                ext: spec.ext.clone(),
-                new,
-                entry,
-            },
-            members,
-            accepted: false,
-        });
-    }
-    // What no tag claimed matched no group. Folders included: a folder is
-    // never tagged, and is still reported as left alone.
-    for entry in passed
-        .iter()
-        .map(|f| f.entry)
-        .filter(|e| !claimed.contains(&e.path))
-    {
-        untouched.push((entry.path.clone(), Untouched::NoClearGroup));
-    }
-    // A tag puts nothing in a folder, so a locked folder holds nothing back:
-    // only what the scan itself held counts as locked.
-    let locked = (scan.locked_skipped, scan.locked_system);
-    let mut plan = assemble(scan, groups, untouched, locked);
-    plan.adds_tags = true;
-    plan.include_tagged = false;
-    plan.skipped_tagged = 0;
-    plan
-}
-
-/// Human date range for a set of entries, from mtime only.
-fn date_range(entries: &[&Entry]) -> Option<String> {
-    let mut times: Vec<SystemTime> = entries.iter().filter_map(|e| e.modified).collect();
-    if times.is_empty() {
-        return None;
-    }
-    times.sort();
-    let lo = times
-        .first()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?
-        .as_secs();
-    let hi = times
-        .last()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())?
-        .as_secs();
-    let ((lo_year, a), (hi_year, b)) = (civil_date(lo as i64), civil_date(hi as i64));
-    Some(if lo_year == hi_year && a == b {
-        a
-    } else if lo_year == hi_year {
-        format!("{a}–{b}, {lo_year}")
-    } else {
-        format!("{a}, {lo_year}–{b}, {hi_year}")
-    })
-}
-
-/// Days-from-epoch to `Mon D`, without pulling in a date crate.
-/// Howard Hinnant's civil_from_days.
-fn civil_date(secs: i64) -> (i64, String) {
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let z = secs.div_euclid(86_400) + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, format!("{} {}", MONTHS[(m - 1) as usize], d))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scan::Entry;
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn map_messages_show_names_as_typed_without_debug_quotes() {
@@ -1743,6 +1240,38 @@ mod tests {
         }
     }
 
+    /// The size index answers what a search of the snapshot answered: a
+    /// regular file under the root has its size; a folder, a path outside
+    /// the root, and any path of a plan with no snapshot have none.
+    #[test]
+    fn observed_file_sizes_know_regular_files_only() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("sweep_sizes_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("folder")).unwrap();
+        fs::write(root.join("five.txt"), b"12345").unwrap();
+        fs::write(root.join("folder/two.txt"), b"12").unwrap();
+        let cfg = crate::scan::ScanConfig {
+            depth: 2,
+            grace: Some(Duration::ZERO),
+            ..Default::default()
+        };
+        let scan = crate::scan::scan(&root, &cfg).unwrap();
+        let plan = build(&scan, Request::default());
+        let sizes = plan.observed_file_sizes();
+        assert_eq!(sizes.get(&scan.root.join("five.txt")), Some(5));
+        assert_eq!(sizes.get(&scan.root.join("folder/two.txt")), Some(2));
+        assert_eq!(sizes.get(&scan.root.join("folder")), None);
+        assert_eq!(sizes.get(&scan.root.join("missing.txt")), None);
+        assert_eq!(sizes.get(Path::new("/elsewhere/five.txt")), None);
+        let shown = Plan::display_only(scan.root.clone(), Vec::new());
+        assert_eq!(
+            shown.observed_file_sizes().get(&scan.root.join("five.txt")),
+            None
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// A file whose mtime cannot be read is held back, not swept.
     ///
     /// The grace window asks "was this changed recently". When the timestamp
@@ -1760,7 +1289,7 @@ mod tests {
         let mut scan = scan_outcome(entries);
         scan.grace = Some(Duration::from_secs(24 * 60 * 60));
 
-        let p = build(&scan);
+        let p = build(&scan, Request::default());
         assert_eq!(
             p.too_recent(),
             3,
@@ -1777,7 +1306,7 @@ mod tests {
 
         // With the window off, they are eligible again -- zero means zero.
         scan.grace = Some(Duration::ZERO);
-        let p = build(&scan);
+        let p = build(&scan, Request::default());
         assert_eq!(
             p.too_recent(),
             0,
@@ -1927,7 +1456,13 @@ mod tests {
                 created: true,
             },
         ];
-        let p = build_existing(&scan, &maps);
+        let p = build(
+            &scan,
+            Request {
+                mode: Mode::Existing { routes: maps },
+                inspector: None,
+            },
+        );
         let members = |name: &str| -> Vec<String> {
             let group = p
                 .groups
@@ -1988,7 +1523,12 @@ mod tests {
             grace: Some(Duration::ZERO),
             ..Default::default()
         };
-        let plan_at = |depth| build(&crate::scan::scan(&root, &cfg(depth)).unwrap());
+        let plan_at = |depth| {
+            build(
+                &crate::scan::scan(&root, &cfg(depth)).unwrap(),
+                Request::default(),
+            )
+        };
         let group_of = |p: &Plan, name: &str| -> Option<Vec<String>> {
             p.groups.iter().find(|g| g.name == name).map(|g| {
                 let mut names: Vec<String> = g
@@ -2038,12 +1578,34 @@ mod tests {
         fs::write(root.join("two.bpy"), b"2").unwrap();
         let missing = validate_maps(&[("bpy".into(), "Fresh".into())], &root).unwrap();
         let scan = crate::scan::scan(&root, &cfg(1)).unwrap();
-        assert_eq!(group_of(&build_mapped(&scan, &missing), "Fresh"), None);
+        assert_eq!(
+            group_of(
+                &build(
+                    &scan,
+                    Request {
+                        mode: Mode::Folders { maps: missing },
+                        inspector: None
+                    }
+                ),
+                "Fresh"
+            ),
+            None
+        );
         fs::create_dir(root.join("Blender")).unwrap();
         let here = validate_maps(&[("bpy".into(), "Blender".into())], &root).unwrap();
         let scan = crate::scan::scan(&root, &cfg(1)).unwrap();
         assert_eq!(
-            group_of(&build_mapped(&scan, &here), "Blender").unwrap(),
+            group_of(
+                &build(
+                    &scan,
+                    Request {
+                        mode: Mode::Folders { maps: here },
+                        inspector: None
+                    }
+                ),
+                "Blender"
+            )
+            .unwrap(),
             ["one.bpy", "two.bpy"]
         );
         let _ = fs::remove_dir_all(&root);
@@ -2071,7 +1633,13 @@ mod tests {
             folder: "Blender".into(),
             created: true,
         }];
-        let p = build_mapped(&scan, &maps);
+        let p = build(
+            &scan,
+            Request {
+                mode: Mode::Folders { maps },
+                inspector: None,
+            },
+        );
         let g = p
             .groups
             .iter()
@@ -2104,7 +1672,13 @@ mod tests {
             folder: "AgentPhotos".into(),
             created: true,
         }];
-        let p = build_mapped(&scan, &maps);
+        let p = build(
+            &scan,
+            Request {
+                mode: Mode::Folders { maps },
+                inspector: None,
+            },
+        );
         assert!(
             p.groups.iter().any(|g| g.name.starts_with("Photos")),
             "the built-in camera detector did not claim its group"
@@ -2162,13 +1736,17 @@ mod tests {
                     entry.modified = Some(now);
                 }
             }
-            let mapped = build_mapped(
+            let maps = vec![MapSpec {
+                ext: (*ext).into(),
+                folder: "AgentChoice".into(),
+                created: true,
+            }];
+            let mapped = build(
                 &scan,
-                &[MapSpec {
-                    ext: (*ext).into(),
-                    folder: "AgentChoice".into(),
-                    created: true,
-                }],
+                Request {
+                    mode: Mode::Folders { maps },
+                    inspector: None,
+                },
             );
             assert!(
                 mapped.groups.iter().all(|g| g.name != "AgentChoice"),
@@ -2193,7 +1771,7 @@ mod tests {
             cam_entry("IMG_0004.jpg", 1_767_225_600), // 2026-01-01
         ];
         let out = scan_outcome(entries);
-        let p = build(&out);
+        let p = build(&out, Request::default());
         assert!(
             !p.groups
                 .iter()
@@ -2213,7 +1791,7 @@ mod tests {
             cam_entry("IMG_0003.jpg", 1_767_312_000), // 2026-01-02
         ];
         let out = scan_outcome(entries);
-        let p = build(&out);
+        let p = build(&out, Request::default());
         let burst = p
             .groups
             .iter()
@@ -2221,18 +1799,6 @@ mod tests {
             .expect("three camera files within 3 days should form a burst group");
         assert_eq!(burst.members.len(), 3);
         assert_eq!(burst.name, "Photos, Dec 31, 2025–Jan 2, 2026");
-    }
-
-    #[test]
-    fn date_range_does_not_collapse_a_multi_year_span_to_one_date() {
-        let a = cam_entry("a.jpg", 1_577_836_800); // 2020-01-01
-        let b = cam_entry("b.jpg", 1_767_225_600); // 2026-01-01
-        let range = date_range(&[&a, &b]).expect("both entries have modified times");
-        assert_ne!(
-            range, "Jan 1",
-            "multi-year range collapsed to a single date"
-        );
-        assert_eq!(range, "Jan 1, 2020–Jan 1, 2026");
     }
 }
 
@@ -2434,6 +2000,7 @@ impl BoundPlan {
         // Files left alone for want of a group: each must be an observed
         // regular file under the root, recorded as unclaimed in the plan's
         // own left-alone list, and not also a planned move.
+        let sizes = self.plan.observed_file_sizes();
         let left_alone: std::collections::HashSet<PathBuf> = self
             .plan
             .untouched
@@ -2446,7 +2013,7 @@ impl BoundPlan {
                 std::io::Error::other("plan source is outside the observed root; replan required")
             })?;
             if !observed.contains(&crate::scan::TreeSnapshot::path_commitment(relative))
-                || self.plan.observed_file_size(path).is_none()
+                || sizes.get(path).is_none()
                 || !left_alone.contains(&crate::scan::TreeSnapshot::path_commitment(path))
                 || !sources.insert(path)
             {

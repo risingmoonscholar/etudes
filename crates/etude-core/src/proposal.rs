@@ -63,6 +63,7 @@ fn item_id(index: usize) -> String {
 /// alone only because no group claimed them. Derived from the plan alone.
 pub fn eligible_items(plan: &BoundPlan) -> Vec<EligibleItem> {
     let mut items = Vec::new();
+    let sizes = plan.observed_file_sizes();
     let mut push = |path: &Path, group: Option<&str>| {
         items.push(EligibleItem {
             id: item_id(items.len()),
@@ -70,7 +71,7 @@ pub fn eligible_items(plan: &BoundPlan) -> Vec<EligibleItem> {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            size: plan.observed_file_size(path).unwrap_or(0),
+            size: sizes.get(path).unwrap_or(0),
             group: group.map(str::to_owned),
             path: path.to_path_buf(),
         });

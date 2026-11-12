@@ -150,7 +150,7 @@ fn plan_build_20000_entries() {
     assert_eq!(out.entries.len(), PLAN_N);
 
     let t1 = Instant::now();
-    let built = plan::build(&out);
+    let built = plan::build(&out, plan::Request::default());
     let dt_plan = t1.elapsed();
     let planned: usize =
         built.groups.iter().map(|g| g.members.len()).sum::<usize>() + built.untouched.len();
