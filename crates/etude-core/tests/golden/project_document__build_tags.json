@@ -19,6 +19,8 @@
     "by_category": [],
     "too_recent": 0,
     "unknown_extensions": {
+      "dmg": 3,
+      "png": 3,
       "zip": 1
     },
     "project_documents": 1,
@@ -30,8 +32,14 @@
     "in_flight": 0,
     "in_place": 0,
     "in_place_paths": [],
-    "no_clear_group": 1,
+    "no_clear_group": 7,
     "no_clear_group_paths": [
+      "$ROOT/PluginA.dmg",
+      "$ROOT/PluginB.dmg",
+      "$ROOT/PluginC.dmg",
+      "$ROOT/Screenshot 2026-01-01 at 10.00.00.png",
+      "$ROOT/Screenshot 2026-01-01 at 10.00.01.png",
+      "$ROOT/Screenshot 2026-01-01 at 10.00.02.png",
       "$ROOT/stems.zip"
     ]
   },

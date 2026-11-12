@@ -6,8 +6,9 @@
       "name": "Work",
       "signal": ".pdf (new tag)",
       "accepted": false,
-      "count": 1,
+      "count": 2,
       "members": [
+        "$ROOT/Documents/old.pdf",
         "$ROOT/agenda.pdf"
       ]
     },
@@ -38,6 +39,10 @@
     "too_recent": 1,
     "unknown_extensions": {
       "csv": 1,
+      "dmg": 2,
+      "jpg": 2,
+      "pkg": 1,
+      "png": 2,
       "xyz": 1
     },
     "project_documents": 0,
@@ -47,12 +52,17 @@
     "packages_skipped": 0,
     "tagged_skipped": 0,
     "in_flight": 1,
-    "in_place": 1,
-    "in_place_paths": [
-      "$ROOT/Documents/old.pdf"
-    ],
-    "no_clear_group": 2,
+    "in_place": 0,
+    "in_place_paths": [],
+    "no_clear_group": 9,
     "no_clear_group_paths": [
+      "$ROOT/Driver.dmg",
+      "$ROOT/IMG_0001.JPG",
+      "$ROOT/IMG_0002.JPG",
+      "$ROOT/Screenshot 2026-01-01 at 10.00.00.png",
+      "$ROOT/Screenshot 2026-01-01 at 10.00.01.png",
+      "$ROOT/Setup.dmg",
+      "$ROOT/Tool.pkg",
       "$ROOT/odd.xyz",
       "$ROOT/table.csv"
     ]
@@ -72,7 +82,7 @@
   "tags": [
     {
       "name": "Work",
-      "files": 1,
+      "files": 2,
       "new": true,
       "extensions": [
         "pdf"

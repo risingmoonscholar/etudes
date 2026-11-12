@@ -6,7 +6,11 @@
     "looks_personal": 0,
     "by_category": [],
     "too_recent": 0,
-    "unknown_extensions": {},
+    "unknown_extensions": {
+      "dmg": 2,
+      "msi": 1,
+      "pkg": 1
+    },
     "project_documents": 0,
     "held_near_document": 0,
     "projects_skipped": 0,
@@ -16,8 +20,13 @@
     "in_flight": 0,
     "in_place": 0,
     "in_place_paths": [],
-    "no_clear_group": 0,
-    "no_clear_group_paths": []
+    "no_clear_group": 4,
+    "no_clear_group_paths": [
+      "$ROOT/Agent.msi",
+      "$ROOT/Driver.dmg",
+      "$ROOT/Setup.dmg",
+      "$ROOT/Tool.pkg"
+    ]
   },
   "skipped": {
     "hidden": 0,

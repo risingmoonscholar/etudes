@@ -10,6 +10,10 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+### Fixed
+
+- **sweep:** a tag plan (`--scheme tags`) now tags files inside folders sweep made, such as `Screenshots/`, and no longer says they are already in their destination, which means nothing for a tag (#221). A tag moves nothing, so where a file sits no longer decides whether it gets one. Two related effects are gone too: a file that no `--map` takes is listed as matching no group (`no_clear_group_paths` in `--json`) even when a built-in folder group would have taken it, and a locked folder that a built-in group would use no longer adds files to `skipped.locked_skipped`. A file sweep holds for safety is still never tagged. `left_alone.in_place` stays in tag plan JSON, and is now always 0 with no paths.
+
 ## [0.5.5] candidate — sweep, stash and unpack
 
 This version is prepared but not published. No release date or completed
