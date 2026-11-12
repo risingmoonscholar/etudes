@@ -13,9 +13,18 @@
 # pop say the stashed folder is not there, with no step that fails again, and a
 # copy of the moved folder is said to match no record.
 #
-# The folder names hold a space and a single quote, or an escape character. No
-# raw escape byte may reach the terminal, and --json carries the real path.
-# The two names each get their own records, so status never names the other.
+# A record counts for a folder only by the device and inode it kept, never by
+# name: a folder whose items were put back by hand and its holding folder
+# removed offers a pop that clears the record; a folder replaced by a copy of
+# itself is said to match no record, and status elsewhere does not offer it; a
+# holding folder moved alone into another folder gets no step to move that
+# folder; and `status --id` gives no step for a record pop cannot restore.
+#
+# The folder names hold a space and a single quote, an escape character, a
+# newline, a command substitution, or a leading dash. No raw escape byte may
+# reach the terminal, nothing in a name is run, and --json carries the real
+# path. Each name gets its own records, so status never names another. Steps
+# run in bash, and in zsh as well when this host has it.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
 W=$(workdir) || exit 1; trap 'rm -rf "${W:?}"' EXIT
@@ -23,6 +32,7 @@ W=$(cd "${W:?}" && pwd -P) && [ -n "$W" ] || exit 1
 require python3 "these checks read JSON with Python" || exit 0
 export HOME="$W/home"; mkdir -p "$HOME" "$W/clear"
 ESC=$'\033'
+ZSH=$(command -v zsh || true)
 
 fresh_state() {  # a stash of another case must not be the one status names
   export ETUDE_STATE_DIR="$W/$1-state"; mkdir -p "$ETUDE_STATE_DIR"
@@ -33,7 +43,15 @@ files() {  # files DIR NAME...: one small file per name
   for name in "$@"; do printf '%s\n' "$name" >"$dir/$name.txt"; done
 }
 # held DIR: how many visible items are in DIR (a holding folder is hidden)
-held() { find "$1" -mindepth 1 -maxdepth 1 ! -name '.*' | wc -l | tr -d ' '; }
+# (counted without reading paths as lines: a name may hold a newline)
+held() { find "$1" -mindepth 1 -maxdepth 1 ! -name '.*' -exec printf . \; | wc -c | tr -d ' '; }
+in_shell() {  # in_shell SH: run STEP as printed in SH, from the clear folder
+  if [ "$1" = zsh ]; then
+    (cd "$W/clear" && STASH="$STASH" STEP="$STEP" "$ZSH" -f -c 'stash() { "$STASH" "$@" }; eval "$STEP"' 2>&1 </dev/null)
+  else
+    (cd "$W/clear" && stash() { "$STASH" "$@"; } && eval "$STEP" 2>&1 </dev/null)
+  fi
+}
 # step LABEL TEXT PREFIX: the printed step after PREFIX on its own line
 step() {
   local line
@@ -41,13 +59,16 @@ step() {
   if [ -n "$line" ]; then pass "$1: step printed"; else fail "$1: no '$3' step in: $2"; fi
   STEP=$line
 }
-# run_step LABEL: run STEP as printed, from the clear folder
+# run_step LABEL [both]: run STEP as printed, in this case's shell. A step that
+# changes nothing is run in both shells when asked.
 run_step() {
-  local out code=0
+  local out code=0 sh
   [ -n "$STEP" ] || { fail "$1: no step to run"; return; }
-  out=$(cd "$W/clear" && stash() { "$STASH" "$@"; } && eval "$STEP" 2>&1 </dev/null) || code=$?
-  if [ "$code" = 0 ]; then pass "$1: step runs as printed"; else fail "$1: '$STEP' exit $code: $out"; fi
-  no_escape "$1: step output" "$out"
+  for sh in $( [ "${2:-}" = both ] && [ -n "$ZSH" ] && echo bash zsh || echo "$RUN_IN"); do
+    code=0; out=$(in_shell "$sh") || code=$?
+    if [ "$code" = 0 ]; then pass "$1: step runs as printed in $sh"; else fail "$1: '$STEP' exit $code in $sh: $out"; fi
+    no_escape "$1: step output" "$out"
+  done
 }
 has() { case "$2" in *"$3"*) pass "$1" ;; *) fail "$1: wanted '$3' in: $2" ;; esac; }
 hasnt() { case "$2" in *"$3"*) fail "$1: found '$3' in: $2" ;; *) pass "$1" ;; esac; }
@@ -55,8 +76,16 @@ no_escape() {
   case "$2" in *"$ESC"*) fail "$1: a raw escape byte reached the terminal" ;; *) pass "$1: no raw escape" ;; esac
 }
 
-for case in quote escape; do
-  if [ "$case" = quote ]; then name="my desk's"; else name="bad${ESC}[31mname"; fi
+for case in quote escape newline subst dash; do
+  case "$case" in
+    quote) name="my desk's" ;;
+    escape) name="bad${ESC}[31mname" ;;
+    newline) name=$'new\nline it\'s' ;;
+    subst) name='$(touch PWNED)`touch PWNED2`' ;;
+    dash) name='-dash' ;;
+  esac
+  RUN_IN=bash
+  case "$case" in escape|subst) [ -n "$ZSH" ] && RUN_IN=zsh ;; esac
   dir="$W/$case/$name"
 
   # From a clear folder: status names the stash elsewhere.
@@ -71,7 +100,7 @@ for case in quote escape; do
   GOT=$(printf '%s' "$JSON" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["elsewhere"])')
   assert_eq "$dir" "$GOT" "$case: --json carries the real path"
   step "$case: see" "$OUT" "See it with: "
-  run_step "$case: see"
+  run_step "$case: see" both
   assert_eq "0" "$(held "$dir")" "$case: seeing restores nothing"
   step "$case: restore elsewhere" "$OUT" "Restore it with: "
   run_step "$case: restore elsewhere"
@@ -86,7 +115,7 @@ for case in quote escape; do
   no_escape "$case: status elsewhere, two stashes" "$OUT"
   hasnt "$case: no bare pop for two stashes" "$OUT" "Restore it with:"
   step "$case: see two" "$OUT" "See them with: "
-  run_step "$case: see two"
+  run_step "$case: see two" both
   assert_eq "0" "$(held "$dir")" "$case: seeing two restores nothing"
   step "$case: restore newest elsewhere" "$OUT" "Restore the newest with: "
   run_step "$case: restore newest elsewhere"
@@ -180,7 +209,7 @@ for case in quote escape; do
   OUT=$(cd "$from" && "$STASH" status 2>&1 </dev/null)
   assert_no_panic "$case: status in the replaced folder" "$OUT"
   no_escape "$case: status in the replaced folder" "$OUT"
-  assert_eq "1 operation names this folder, but its items are not here." "$(printf '%s\n' "$OUT" | head -1)" "$case: the first line says the items are not here"
+  assert_eq "1 operation names this folder but holds nothing here." "$(printf '%s\n' "$OUT" | head -1)" "$case: the first line says nothing is held here"
   hasnt "$case: no count of items that are not here" "$OUT" "0 items"
   has "$case: says the record cannot be restored here" "$OUT" "its folder was moved or replaced, so stash pop cannot restore it here."
   hasnt "$case: no pop step in the replaced folder" "${OUT//so stash pop cannot/}" "stash pop"
@@ -192,7 +221,7 @@ for case in quote escape; do
   no_escape "$case: pop into the replaced folder" "$OUT"
   hasnt "$case: pop prints no step that fails again" "$OUT" "Fix that, then run"
   has "$case: pop says to move the folder back" "$OUT" "move that folder back there, and run this again."
-  assert_eq "2" "$(find "$to" -mindepth 2 -maxdepth 2 | wc -l | tr -d ' ')" "$case: both items are still held in the moved folder"
+  assert_eq "2" "$(find "$to" -mindepth 2 -maxdepth 2 -exec printf . \; | wc -c | tr -d ' ')" "$case: both items are still held in the moved folder"
 
   # A copy of the moved folder holds a holding folder of the same name, which
   # is not the one the record made.
@@ -202,7 +231,7 @@ for case in quote escape; do
   assert_no_panic "$case: status in a copy" "$OUT"
   no_escape "$case: status in a copy" "$OUT"
   has "$case: a copy matches no record" "$OUT" "No undo record matches this stash, so stash pop cannot restore it."
-  has "$case: a copy is not the recorded folder" "$OUT" ", but this folder is not the one it recorded."
+  has "$case: a copy is not the recorded folder" "$OUT" ", but this holding folder is not the one it recorded."
   hasnt "$case: no pop step in a copy" "${OUT//so stash pop cannot/}" "stash pop"
   GOT=$(cd "$copy" && "$STASH" status --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["named_by_record"]); print(d["undo_record"])')
   assert_eq "$from"$'\n'"False" "$GOT" "$case: --json names the record's folder and no matching record"
@@ -212,4 +241,72 @@ for case in quote escape; do
   code=0; OUT=$("$STASH" pop --id "$ID" 2>&1 </dev/null) || code=$?
   assert_eq "0" "$code" "$case: pop works once the folder is back"
   assert_eq "2" "$(held "$from")" "$case: every file is back after moving the folder back"
+
+  # Items put back by hand and the empty holding folder removed, in the folder
+  # that was stashed: pop only clears the record, and status says so.
+  fresh_state "$case-home"
+  home="$W/$case/home $name"
+  files "$home" a b
+  ID=$("$STASH" "$home" --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["stash_id"])')
+  hold=$(find "$home" -mindepth 1 -maxdepth 1 -name '.stash-*' -type d)
+  mv "$hold"/* "$home"/; rmdir "$hold"
+  OUT=$(cd "$home" && "$STASH" status 2>&1 </dev/null)
+  no_escape "$case: status with items put back" "$OUT"
+  hasnt "$case: items put back are not called moved" "$OUT" "moved or replaced"
+  has "$case: says the items are back" "$OUT" "its items are back in this folder."
+  step "$case: clear the record" "$OUT" "$ID: its items are back in this folder. Clear the record with: "
+  run_step "$case: clear the record"
+  assert_eq "2" "$(held "$home")" "$case: the items stay where they were put back"
+  OUT=$(cd "$home" && "$STASH" status 2>&1 </dev/null)
+  has "$case: the record is cleared" "$OUT" "Nothing stashed in "
+
+  # The stashed folder replaced by a copy of itself: the items are here, in a
+  # holding folder no record made, and nothing offers a pop.
+  fresh_state "$case-copied"
+  copied="$W/$case/copied $name"
+  files "$copied" a b
+  ID=$("$STASH" "$copied" --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["stash_id"])')
+  cp -R "$copied" "$copied.new"; rm -rf "${copied:?}"; mv "$copied.new" "$copied"
+  real=$(find "$copied" -mindepth 1 -maxdepth 1 -name '.stash-*' -type d)
+  OUT=$(cd "$copied" && "$STASH" status 2>&1 </dev/null)
+  no_escape "$case: status in a copied folder" "$OUT"
+  has "$case: a copied folder matches no record" "$OUT" "No undo record matches this stash, so stash pop cannot restore it."
+  hasnt "$case: a copied folder does not say the items are elsewhere" "$OUT" "holds nothing here"
+  step "$case: items in a copied folder" "$OUT" "The items are in: "
+  assert_eq "$real" "$(eval "printf '%s' $STEP")" "$case: the printed holding path in a copied folder is the real one"
+  GOT=$(cd "$copied" && "$STASH" status --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["stashed"]); print(d["undo_record"])')
+  assert_eq "2"$'\n'"False" "$GOT" "$case: --json agrees the items are here with no matching record"
+  OUT=$(cd "$W/clear" && "$STASH" status 2>&1 </dev/null)
+  has "$case: status elsewhere does not offer a copied folder" "$OUT" "Nothing stashed in "
+  hasnt "$case: no restore step for a copied folder" "$OUT" "Restore it with"
+  OUT=$("$STASH" status --id "$ID" 2>&1 </dev/null)
+  has "$case: status --id says pop cannot restore it" "$OUT" "so stash pop cannot restore it here."
+  hasnt "$case: status --id offers no pop" "${OUT//so stash pop cannot/}" "stash pop"
+  GOT=$("$STASH" status --id "$ID" --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["resume_or_undo"])')
+  assert_eq "None" "$GOT" "$case: status --id --json gives no step"
+  code=0; OUT=$("$STASH" pop "$copied" 2>&1 </dev/null) || code=$?
+  [ "$code" != 0 ] && pass "$case: pop of a copied folder fails" || fail "$case: pop of a copied folder exit 0"
+  hasnt "$case: pop of a copied folder prints no step that fails again" "$OUT" "Fix that, then run"
+  assert_eq "2" "$(find "$real" -mindepth 1 -maxdepth 1 -exec printf . \; | wc -c | tr -d ' ')" "$case: the copied items stay held"
+
+  # The holding folder alone moved into another folder: no step moves that
+  # other folder to the old place.
+  fresh_state "$case-alone"
+  alone="$W/$case/alone $name"; other="$W/$case/other $name"
+  files "$alone" a b
+  "$STASH" "$alone" >/dev/null 2>&1 </dev/null
+  files "$other" mine
+  mv "$alone"/.stash-* "$other"/; rmdir "$alone"
+  real=$(find "$other" -mindepth 1 -maxdepth 1 -name '.stash-*' -type d)
+  OUT=$(cd "$other" && "$STASH" status 2>&1 </dev/null)
+  no_escape "$case: status on a holding folder moved alone" "$OUT"
+  hasnt "$case: no move step for a holding folder moved alone" "$OUT" "mv "
+  hasnt "$case: not called a moved folder" "$OUT" "has moved here"
+  has "$case: says only the holding folder is here" "$OUT" "and only its holding folder is here, so stash pop cannot restore it."
+  hasnt "$case: no pop step for a holding folder moved alone" "${OUT//so stash pop cannot/}" "stash pop"
+  step "$case: items in a holding folder moved alone" "$OUT" "The items are in: "
+  assert_eq "$real" "$(eval "printf '%s' $STEP")" "$case: the printed holding path is the real one"
+  GOT=$(cd "$other" && "$STASH" status --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["way_back"])')
+  assert_eq "holding_only" "$GOT" "$case: --json says only the holding folder is here"
 done
+assert_eq "" "$(find "$W" -name 'PWNED*')" "nothing in a folder name was run"

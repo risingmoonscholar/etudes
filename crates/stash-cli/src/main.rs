@@ -370,6 +370,9 @@ fn refuse_ambiguous_pop(
         Ok(batches::Selector::Root(root)) => root,
         _ => std::env::current_dir().unwrap_or_default(),
     };
+    // The folder as typed may be relative or start with a dash; the full path
+    // is one word a shell and stash both read as this folder.
+    let root = root.canonicalize().unwrap_or(root);
     let ids = batches::live_ids_for(&root, sealer).unwrap_or_default();
     eprintln!(
         "stash: {} batches are stashed from this folder, and nothing was restored. Choose one:",
@@ -2137,7 +2140,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             let not_in_place = matches!(
                 error,
                 etude_core::apply::ApplyError::DestinationDirectoryChanged(_)
-            ) && !holding_in_place(&j);
+            ) && matches!(place(&j), Place::Away);
             if not_in_place {
                 eprintln!("{}", not_in_place_text(&j));
             } else {
@@ -2336,7 +2339,7 @@ fn pop_one_item(
             if matches!(
                 error,
                 etude_core::apply::ApplyError::DestinationDirectoryChanged(_)
-            ) && !holding_in_place(journal)
+            ) && matches!(place(journal), Place::Away)
             {
                 eprintln!("{}", not_in_place_text(journal));
                 return fail(apply_reason(&error));
@@ -2682,7 +2685,11 @@ fn cmd_status(args: &[String]) -> ExitCode {
             .into_iter()
             .filter(|batch| batches::matches_root(batch, &root))
             .collect();
-        if !batches.is_empty() {
+        let places: Vec<Place> = batches.iter().map(place).collect();
+        // Records that name this folder but hold nothing here give way to a
+        // holding folder that is here: what is said about it is what is true.
+        let speak_for_records = places.contains(&Place::Here) || find_holding(&root).is_none();
+        if !batches.is_empty() && speak_for_records {
             let rows = match batches
                 .iter()
                 .map(|batch| batches::row(batch, false))
@@ -2749,22 +2756,29 @@ fn cmd_status(args: &[String]) -> ExitCode {
                             j::arr(
                                 batches
                                     .iter()
-                                    .filter(|batch| !holding_in_place(batch))
+                                    .filter(|batch| !pop_can_restore(batch))
                                     .map(|batch| j::str(&batch.id))
                             )
                         )
                     ])
                 );
             } else {
-                let in_place: Vec<bool> = batches.iter().map(holding_in_place).collect();
+                let in_place: Vec<bool> = places.iter().map(|p| *p == Place::Here).collect();
                 println!("{}", status_headline(&counts, &in_place));
-                for batch in &batches {
-                    if !holding_in_place(batch) {
-                        println!(
-                            "  {}: its folder was moved or replaced, so stash pop cannot restore it here.",
-                            batch.id
-                        );
-                        continue;
+                for (batch, place) in batches.iter().zip(&places) {
+                    match place {
+                        Place::Here => {}
+                        Place::Home => {
+                            println!(
+                                "  {}: its items are back in this folder. Clear the record with: stash pop --id {}",
+                                batch.id, batch.id
+                            );
+                            continue;
+                        }
+                        other => {
+                            println!("  {}: {}", batch.id, other.why_not().unwrap_or_default());
+                            continue;
+                        }
                     }
                     match damage_note(batch) {
                         Some(note) if etude_core::apply::unrecorded_moves(batch) > 1 => {
@@ -2815,20 +2829,14 @@ fn cmd_status(args: &[String]) -> ExitCode {
                             "elsewhere",
                             other
                                 .as_ref()
-                                .map(|(there, _)| j::path(there))
+                                .map(|there| j::path(&there.root))
                                 .unwrap_or_else(|| "null".into())
                         ),
                     ])
                 );
                 return ExitCode::from(1);
             }
-            println!(
-                "{}",
-                nothing_here(
-                    &root,
-                    other.as_ref().map(|(there, n)| (there.as_path(), *n))
-                )
-            );
+            println!("{}", nothing_here(&root, other.as_ref()));
             ExitCode::from(1)
         }
         Some(dir) => {
@@ -2839,9 +2847,9 @@ fn cmd_status(args: &[String]) -> ExitCode {
             .map(|r| r.flatten().count())
             .unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-            let moved = moved_here(&dir, &sealer);
+            let moved = moved_here(&root, &dir, &sealer);
             let moved_record = match &moved {
-                Found::Moved(record) => Some(record),
+                Found::Moved(record) | Found::HoldingOnly(record) => Some(record),
                 _ => None,
             };
             if flag(args, "--json") {
@@ -2862,7 +2870,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
                         ("elsewhere", "null".into()),
                         ("holding", j::path(&dir)),
-                        ("undo_record", j::bool(matches!(moved, Found::Moved(_)))),
+                        (
+                            "undo_record",
+                            j::bool(matches!(moved, Found::Moved(_) | Found::HoldingOnly(_)))
+                        ),
                         (
                             "named_by_record",
                             match &moved {
@@ -2885,7 +2896,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         (
                             "way_back",
                             moved_record
-                                .map(|m| j::str(m.way_back.code()))
+                                .map(|m| j::str(match moved {
+                                    Found::HoldingOnly(_) => "holding_only",
+                                    _ => m.way_back.code(),
+                                }))
                                 .unwrap_or_else(|| "null".into()),
                         ),
                     ])
@@ -2908,7 +2922,9 @@ fn cmd_status(args: &[String]) -> ExitCode {
     }
 }
 
-fn status_id_payload(journal: &etude_core::Journal) -> String {
+/// `restorable` is false when pop cannot restore it from where its record says;
+/// then there is no step to give.
+fn status_id_payload(journal: &etude_core::Journal, restorable: bool) -> String {
     use etude_core::json as j;
     let summary = journal.summary();
     let state = match summary.state {
@@ -2927,7 +2943,11 @@ fn status_id_payload(journal: &etude_core::Journal) -> String {
         ("reversed", j::num(summary.reversed)),
         (
             "resume_or_undo",
-            j::str(&format!("stash pop --id {}", summary.id)),
+            if restorable {
+                j::str(&format!("stash pop --id {}", summary.id))
+            } else {
+                "null".into()
+            },
         ),
     ])
 }
@@ -3002,8 +3022,13 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
     let sealer = KeychainSeal { key };
     match etude_core::Journal::load_sealed_exact("stash", &id, &sealer) {
         Ok(journal) => {
+            let why_not = if batches::live(&journal) {
+                place(&journal).why_not()
+            } else {
+                None
+            };
             if flag(args, "--json") {
-                println!("{}", status_id_payload(&journal));
+                println!("{}", status_id_payload(&journal, why_not.is_none()));
             } else {
                 let summary = journal.summary();
                 let state = match summary.state {
@@ -3013,9 +3038,17 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
                     etude_core::journal::JournalState::Reversed => "reversed",
                     etude_core::journal::JournalState::PartlyReversed => "partly reversed",
                 };
+                let next = match why_not {
+                    None => format!("Resume or undo with: stash pop --id {}", summary.id),
+                    Some(why) => {
+                        let mut why = why.to_owned();
+                        why.replace_range(..1, &why[..1].to_uppercase());
+                        why
+                    }
+                };
                 println!(
-                    "Operation {}: {state}; planned {}, moved {}, reversed {}. Resume or undo with: stash pop --id {}",
-                    summary.id, summary.planned, summary.moved, summary.reversed, summary.id
+                    "Operation {}: {state}; planned {}, moved {}, reversed {}. {next}",
+                    summary.id, summary.planned, summary.moved, summary.reversed
                 );
             }
             ExitCode::SUCCESS
@@ -3097,11 +3130,22 @@ fn iso_utc(epoch: u64) -> String {
     format!("{y:04}-{mth:02}-{d:02}T{h:02}:{m:02}:{sec:02}Z")
 }
 
+/// A stash in another folder that `stash pop` can restore, for `status` to
+/// point at, and the step that restores it.
+#[derive(Debug, PartialEq, Eq)]
+struct Elsewhere {
+    root: PathBuf,
+    /// How many stashes there pop can restore.
+    n: usize,
+    step: String,
+}
+
 /// The folder of the newest stash that `stash pop` can restore, other than
-/// `here`, and how many live stashes that folder holds. A folder counts only
-/// through a live undo record whose holding folder is still there: a holding
-/// folder with no record (a `--no-journal` stash) is one pop cannot restore.
-fn stash_elsewhere(here: &Path) -> Option<(PathBuf, usize)> {
+/// `here`. A folder counts only through a live undo record whose folder and
+/// holding folder are the ones stash recorded: a holding folder with no record
+/// (a `--no-journal` stash), or one whose folder was moved or replaced, is not
+/// one pop can restore.
+fn stash_elsewhere(here: &Path) -> Option<Elsewhere> {
     // Quietly: a missing key or a record that will not open means status
     // cannot look, which is not worth an error on a read-only command.
     let sl = KeychainSeal {
@@ -3113,45 +3157,64 @@ fn stash_elsewhere(here: &Path) -> Option<(PathBuf, usize)> {
 fn restorable_elsewhere(
     here: &Path,
     sealer: &dyn etude_core::journal::Sealer,
-) -> Option<(PathBuf, usize)> {
+) -> Option<Elsewhere> {
+    use etude_cli_support::quoted_path;
     let (batches, _) = batches::survey(sealer).ok()?;
+    let newest_first = |list: &mut Vec<&etude_core::Journal>| {
+        list.sort_by_key(|batch| std::cmp::Reverse(batches::creation(&batch.id)));
+    };
     let mut restorable: Vec<_> = batches
         .iter()
-        .filter(|batch| batches::holding(batch).is_ok_and(|holding| holding.is_dir()))
-        .filter_map(|batch| Some((batch.root.canonicalize().ok()?, &batch.id)))
-        .filter(|(there, _)| there != here)
+        .filter(|batch| place(batch) == Place::Here)
+        .filter(|batch| batch.root.canonicalize().is_ok_and(|root| root != here))
         .collect();
-    restorable.sort_by_key(|(_, id)| std::cmp::Reverse(batches::creation(id)));
-    let there = restorable.first()?.0.clone();
-    // Counted as pop counts them, so the step below matches what pop does.
-    let n = batches
+    newest_first(&mut restorable);
+    let newest = *restorable.first()?;
+    let there = newest.root.canonicalize().ok()?;
+    let n = restorable
         .iter()
         .filter(|batch| batches::matches_root(batch, &there))
         .count();
-    Some((there, n))
+    // Pop counts every live record of the folder, so a bare `stash pop FOLDER`
+    // works only when there is just the one.
+    let mut all: Vec<_> = batches
+        .iter()
+        .filter(|batch| batches::matches_root(batch, &there))
+        .collect();
+    newest_first(&mut all);
+    let step = if all.len() == 1 {
+        format!("stash pop {}", quoted_path(&there))
+    } else if n > 1 && all.first().is_some_and(|batch| batch.id == newest.id) {
+        format!("stash pop {} --latest", quoted_path(&there))
+    } else {
+        format!("stash pop --id {}", newest.id)
+    };
+    Some(Elsewhere {
+        root: there,
+        n,
+        step,
+    })
 }
 
 /// What `status` says when this folder is clear. Split out so both wordings are
 /// covered by a test without reaching for the keychain.
 /// With two or more stashes in that folder, a bare `stash pop FOLDER` refuses,
 /// so the step restores the newest, as that refusal itself suggests.
-fn nothing_here(here: &Path, elsewhere: Option<(&Path, usize)>) -> String {
+fn nothing_here(here: &Path, elsewhere: Option<&Elsewhere>) -> String {
     use etude_cli_support::{quoted_path, shown};
     match elsewhere {
         None => format!("Nothing stashed in {}.", shown(here)),
-        Some((there, 1)) => format!(
-            "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: stash pop {}",
+        Some(Elsewhere { root, n: 1, step }) => format!(
+            "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: {step}",
             shown(here),
-            shown(there),
-            quoted_path(there),
-            quoted_path(there)
+            shown(root),
+            quoted_path(root)
         ),
-        Some((there, n)) => format!(
-            "Nothing stashed in {}.\n\n  There are {n} stashes in {}.\n  See them with: stash status {}\n  Restore the newest with: stash pop {} --latest",
+        Some(Elsewhere { root, n, step }) => format!(
+            "Nothing stashed in {}.\n\n  There are {n} stashes in {}.\n  See them with: stash status {}\n  Restore the newest with: {step}",
             shown(here),
-            shown(there),
-            quoted_path(there),
-            quoted_path(there)
+            shown(root),
+            quoted_path(root)
         ),
     }
 }
@@ -3197,10 +3260,11 @@ impl WayBack {
 
 /// The live record that made `holding`, found by the holding folder's device
 /// and inode, which the record keeps from when stash created it. A name alone
-/// is not enough: a copy or a look-alike folder must not be taken for it.
-fn moved_here(holding: &Path, sealer: &dyn etude_core::journal::Sealer) -> Found {
-    use std::os::unix::fs::MetadataExt;
-    let Ok(here) = std::fs::symlink_metadata(holding) else {
+/// is not enough: a copy or a look-alike folder must not be taken for it. The
+/// folder `root` counts as the stashed folder, moved, only when its own device
+/// and inode are the ones the record kept for the folder it stashed.
+fn moved_here(root: &Path, holding: &Path, sealer: &dyn etude_core::journal::Sealer) -> Found {
+    let Some(here) = dir_identity(holding) else {
         return Found::Nothing;
     };
     let Ok((batches, _)) = batches::survey(sealer) else {
@@ -3221,14 +3285,21 @@ fn moved_here(holding: &Path, sealer: &dyn etude_core::journal::Sealer) -> Found
         else {
             continue;
         };
-        if made.device == here.dev() && made.inode == here.ino() {
-            return Found::Moved(MovedHere {
-                way_back: WayBack::of(&batch.root),
-                from: batch.root,
-                id: batch.id,
-            });
+        if (made.device, made.inode) != here {
+            found = Found::NotThisOne(batch.root);
+            continue;
         }
-        found = Found::NotThisOne(batch.root);
+        let root_is_the_folder = root_identity_matches(&batch, root) == Some(true);
+        let record = MovedHere {
+            way_back: WayBack::of(&batch.root),
+            from: batch.root,
+            id: batch.id,
+        };
+        return if root_is_the_folder {
+            Found::Moved(record)
+        } else {
+            Found::HoldingOnly(record)
+        };
     }
     found
 }
@@ -3242,27 +3313,105 @@ enum Found {
     /// and this holding folder is not the one it made: it is a copy, or it
     /// came from another volume.
     NotThisOne(PathBuf),
-    /// The live record that made this holding folder, before it was moved.
+    /// The live record that made this holding folder, and this folder is the
+    /// one it stashed, moved here.
     Moved(MovedHere),
+    /// The live record that made this holding folder, but this folder is not
+    /// the one it stashed: the holding folder alone was moved here.
+    HoldingOnly(MovedHere),
 }
 
-/// Whether `batch`'s holding folder is where its record says, and is the folder
-/// stash made there. When it is not, the stashed folder was moved or replaced
-/// and pop cannot restore it from this path.
-fn holding_in_place(batch: &etude_core::Journal) -> bool {
+/// A directory's device and inode, not following a link.
+fn dir_identity(path: &Path) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    meta.is_dir().then(|| (meta.dev(), meta.ino()))
+}
+
+/// Whether the folder at `at` is the one `batch` stashed, by the device and
+/// inode the record kept for it. None when the record kept none.
+fn root_identity_matches(batch: &etude_core::Journal, at: &Path) -> Option<bool> {
+    let recorded = batch
+        .validated_directories
+        .iter()
+        .find(|directory| directory.path == batch.root)?;
+    Some(dir_identity(at) == Some((recorded.device, recorded.inode)))
+}
+
+/// Where a live record's items are, judged from its folder and holding folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Place {
+    /// The folder and its holding folder are the ones stash recorded.
+    Here,
+    /// The folder is the one recorded, its holding folder is gone, and every
+    /// moved item is back in its place: pop only clears the record.
+    Home,
+    /// The folder is the one recorded, its holding folder is gone, and some
+    /// item is not back: there is nothing for pop to restore from.
+    Gone,
+    /// The holding folder at the recorded place is not the one stash made.
+    HoldingReplaced,
+    /// The folder at the recorded place is not the one stashed: it was moved
+    /// or replaced.
+    Away,
+}
+
+impl Place {
+    /// Why pop cannot restore a record in this place, or None when it can.
+    fn why_not(self) -> Option<&'static str> {
+        match self {
+            Place::Here | Place::Home => None,
+            Place::Gone => Some(
+                "its holding folder is gone and its items are not back in their folder, so stash pop cannot restore it.",
+            ),
+            Place::HoldingReplaced => {
+                Some("its holding folder was replaced, so stash pop cannot restore it here.")
+            }
+            Place::Away => {
+                Some("its folder was moved or replaced, so stash pop cannot restore it here.")
+            }
+        }
+    }
+}
+
+fn place(batch: &etude_core::Journal) -> Place {
+    let root_same =
+        root_identity_matches(batch, &batch.root).unwrap_or_else(|| batch.root.is_dir());
+    if !root_same {
+        return Place::Away;
+    }
     let Ok(recorded) = batches::holding(batch) else {
-        return false;
+        return Place::Away;
     };
-    let Ok(meta) = std::fs::symlink_metadata(&recorded) else {
-        return false;
-    };
-    meta.is_dir()
-        && batch
-            .created_directories
-            .iter()
-            .filter(|made| made.path == recorded)
-            .all(|made| made.device == meta.dev() && made.inode == meta.ino())
+    match std::fs::symlink_metadata(&recorded) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let home = batch
+                .entries
+                .iter()
+                .filter(|entry| entry.is_moved())
+                .all(|entry| std::fs::symlink_metadata(&entry.from).is_ok());
+            if home { Place::Home } else { Place::Gone }
+        }
+        Err(_) => Place::HoldingReplaced,
+        Ok(_) => {
+            let made = batch
+                .created_directories
+                .iter()
+                .find(|made| made.path == recorded);
+            match (made, dir_identity(&recorded)) {
+                (None, Some(_)) => Place::Here,
+                (Some(made), Some(identity)) if (made.device, made.inode) == identity => {
+                    Place::Here
+                }
+                _ => Place::HoldingReplaced,
+            }
+        }
+    }
+}
+
+/// Whether `stash pop` can restore `batch` from where its record says.
+fn pop_can_restore(batch: &etude_core::Journal) -> bool {
+    place(batch).why_not().is_none()
 }
 
 /// The first line of `status` for a folder that records name. `counts[i]` is
@@ -3288,13 +3437,13 @@ fn status_headline(counts: &[usize], in_place: &[bool]) -> String {
         ));
     }
     if away > 0 {
-        let (name, its) = if away == 1 {
-            ("operation names", "its")
+        let (name, hold) = if away == 1 {
+            ("operation names", "holds")
         } else {
-            ("operations name", "their")
+            ("operations name", "hold")
         };
         lines.push(format!(
-            "{away} {name} this folder, but {its} items are not here."
+            "{away} {name} this folder but {hold} nothing here."
         ));
     }
     lines.join("\n")
@@ -3349,10 +3498,17 @@ fn unrecorded_here(
     );
     let moved = match found {
         Found::Moved(moved) => moved,
+        Found::HoldingOnly(record) => {
+            return format!(
+                "{head}This stash was made in {}, and only its holding folder is here, so stash pop cannot restore it.\nThe items are in: {}\nMove them back by hand.",
+                quoted_path(&record.from),
+                quoted_path(holding)
+            );
+        }
         Found::Nothing | Found::NotThisOne(_) => {
             let named = match found {
                 Found::NotThisOne(from) => format!(
-                    "\nAn undo record names {}, but this folder is not the one it recorded.",
+                    "\nAn undo record names {}, but this holding folder is not the one it recorded.",
                     quoted_path(from)
                 ),
                 _ => String::new(),
@@ -3490,7 +3646,7 @@ mod tests {
             progress_tail_damaged: false,
             ..Default::default()
         };
-        let payload = status_id_payload(&journal);
+        let payload = status_id_payload(&journal, true);
         // A record with no entries moved nothing: `refused`, not `completed`.
         assert!(payload.contains("\"state\":\"refused\""));
         assert!(payload.contains("\"planned\":0"));
@@ -3740,6 +3896,22 @@ mod tests {
         unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
     }
 
+    /// A stash elsewhere as `restorable_elsewhere` gives it for `n` stashes,
+    /// when every live record there is one pop can restore.
+    fn at(root: &Path, n: usize) -> Elsewhere {
+        let quoted = etude_cli_support::quoted_path(root);
+        let step = if n == 1 {
+            format!("stash pop {quoted}")
+        } else {
+            format!("stash pop {quoted} --latest")
+        };
+        Elsewhere {
+            root: root.to_path_buf(),
+            n,
+            step,
+        }
+    }
+
     #[test]
     fn status_points_at_a_stash_in_another_folder_instead_of_denying_it() {
         // The bug: stash a folder, ask for status somewhere else, and status
@@ -3753,7 +3925,7 @@ mod tests {
             "offered pop with nothing to pop"
         );
 
-        let told = nothing_here(here, Some((Path::new("/tmp/there"), 1)));
+        let told = nothing_here(here, Some(&at(Path::new("/tmp/there"), 1)));
         assert!(told.starts_with("Nothing stashed in /tmp/here."));
         assert!(
             told.contains("/tmp/there"),
@@ -3766,13 +3938,16 @@ mod tests {
     fn status_steps_for_another_folder_paste_as_one_word() {
         // A space split the printed step into two arguments, and pop refused it.
         // A control character went to the terminal raw.
-        let told = nothing_here(Path::new("/tmp/here"), Some((Path::new("/tmp/my desk"), 1)));
+        let told = nothing_here(
+            Path::new("/tmp/here"),
+            Some(&at(Path::new("/tmp/my desk"), 1)),
+        );
         assert!(told.contains("  See it with: stash status '/tmp/my desk'\n"));
         assert!(told.ends_with("  Restore it with: stash pop '/tmp/my desk'"));
 
         let told = nothing_here(
             Path::new("/tmp/h\u{1b}ere"),
-            Some((Path::new("/tmp/bad\u{1b}[31mname"), 1)),
+            Some(&at(Path::new("/tmp/bad\u{1b}[31mname"), 1)),
         );
         assert!(
             !told.contains('\u{1b}'),
@@ -3828,7 +4003,7 @@ mod tests {
             None,
             &Found::NotThisOne(PathBuf::from("/tmp/old place")),
         );
-        assert!(told.contains("No undo record matches this stash, so stash pop cannot restore it.\nAn undo record names '/tmp/old place', but this folder is not the one it recorded.\nThe items are in: '/tmp/d/.stash-0-x'\nMove them back by hand."));
+        assert!(told.contains("No undo record matches this stash, so stash pop cannot restore it.\nAn undo record names '/tmp/old place', but this holding folder is not the one it recorded.\nThe items are in: '/tmp/d/.stash-0-x'\nMove them back by hand."));
         assert!(
             !told
                 .replace("so stash pop cannot", "")
@@ -3881,11 +4056,11 @@ mod tests {
     fn status_headline_does_not_count_a_record_whose_items_are_not_here() {
         assert_eq!(
             status_headline(&[0], &[false]),
-            "1 operation names this folder, but its items are not here."
+            "1 operation names this folder but holds nothing here."
         );
         assert_eq!(
             status_headline(&[2, 0, 0], &[true, false, false]),
-            "2 items in 1 operation stashed from the selected folder.\n2 operations name this folder, but their items are not here."
+            "2 items in 1 operation stashed from the selected folder.\n2 operations name this folder but hold nothing here."
         );
         assert_eq!(
             status_headline(&[1, 2], &[true, true]),
@@ -3894,10 +4069,53 @@ mod tests {
     }
 
     #[test]
+    fn status_on_a_holding_folder_moved_alone_offers_no_move_and_no_pop() {
+        // The holding folder was moved into an unrelated folder: moving that
+        // folder to the old place would not restore anything.
+        let record = MovedHere {
+            from: PathBuf::from("/tmp/my desk's"),
+            id: "1-2-0-ab".to_owned(),
+            way_back: WayBack::Clear,
+        };
+        let told = unrecorded_here(
+            Path::new("/tmp/other"),
+            Path::new("/tmp/other/.stash-0-x"),
+            2,
+            None,
+            &Found::HoldingOnly(record),
+        );
+        assert!(told.contains(
+            "This stash was made in '/tmp/my desk'\\''s', and only its holding folder is here, so stash pop cannot restore it.\nThe items are in: '/tmp/other/.stash-0-x'\nMove them back by hand."
+        ));
+        assert!(!told.contains("mv "));
+        assert!(
+            !told
+                .replace("so stash pop cannot", "")
+                .contains("stash pop")
+        );
+    }
+
+    #[test]
+    fn a_record_whose_items_cannot_be_restored_says_why_and_offers_no_step() {
+        for place in [Place::Gone, Place::HoldingReplaced, Place::Away] {
+            let why = place.why_not().expect("a reason");
+            assert!(
+                why.ends_with("so stash pop cannot restore it.")
+                    || why.ends_with("so stash pop cannot restore it here.")
+            );
+        }
+        assert_eq!(Place::Here.why_not(), None);
+        assert_eq!(Place::Home.why_not(), None);
+    }
+
+    #[test]
     fn status_restores_the_newest_when_another_folder_holds_two_stashes() {
         // A bare `stash pop FOLDER` refuses when FOLDER holds two stashes, so
         // the step it prints must not be that one.
-        let told = nothing_here(Path::new("/tmp/here"), Some((Path::new("/tmp/my desk"), 2)));
+        let told = nothing_here(
+            Path::new("/tmp/here"),
+            Some(&at(Path::new("/tmp/my desk"), 2)),
+        );
         assert!(told.contains("  There are 2 stashes in /tmp/my desk.\n"));
         assert!(told.contains("  See them with: stash status '/tmp/my desk'\n"));
         assert!(told.ends_with("  Restore the newest with: stash pop '/tmp/my desk' --latest"));
