@@ -76,6 +76,10 @@ the command again), and `journal_write_failed` means one cannot be saved.
 the same time, so the tool cannot tell which one is newer and guesses nothing;
 `details.same_time_records` lists each tied id with the `--id` step that opens
 only that record. See [records with the same time](undo-and-journals.md#records-with-the-same-time).
+`sweep status` reports a record's state as `refused`, `completed`, `interrupted`,
+`reversed`, `partly_reversed` or, while an apply is still running on it,
+`in_progress` (with `damaged` false and `command` null); sweep declaration 18
+lists these states.
 `plan_stale` (exit 2) means the folder changed under the plan. A `sweep apply
 FOLDER --yes` or `stash FOLDER` that loses a race with another run of the same
 folder, before it moved anything, also gets `plan_stale`; scan and run again.

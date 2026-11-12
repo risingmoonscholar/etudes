@@ -46,7 +46,15 @@ says a `stash` or `stash pop` is running on this stash, waits for it to finish,
 then restores only what is still held. Where the volume has no such locks, they
 are not kept apart. `stash` holds its undo record from its first recorded move
 until it returns. A `stash status` or `stash pop` that finds a record changing
-while it reads it reads it again instead of calling it damaged.
+while it reads it reads it again instead of calling it damaged. `stash status`
+of a stash that is still moving says "a `stash` or `stash pop` is running on it
+now; so far N of M are in its holding folder" and gives the step to see it
+again; with `--id ID --json` it waits for that run. When pop only reads a
+record to choose a stash, as `stash pop --latest` does, and a run is writing it,
+pop says "a `stash` or `stash pop` is writing an undo record that this pop
+reads to choose a stash. Waiting for it to finish." A pop that waited never
+restores a stash made after it started: it says "the stash this pop would
+restore now was made after this pop started, so nothing was restored."
 
 When a stash's holding folder is gone and files with its items' names, sizes
 and times are back in the folder, `stash status` says so and gives `stash pop

@@ -134,9 +134,20 @@ A `sweep status` that runs while an apply or undo is writing the record it
 reads tries again for about a second. If the record is still changing, it says
 an apply or undo is writing that record at this moment, that it is not damaged
 and nothing was changed, and to run the same command again when that finishes.
-It still exits 3 with `journal_unreadable`, retry `after_change`. `stash status`
-reads again for up to 10 seconds, then says a `stash` or `stash pop` is
-writing the record now. Neither calls such a record damaged.
+It still exits 3 with `journal_unreadable`, retry `after_change`. A record that
+a running `sweep apply` holds is listed as `in_progress`, with the line "sweep
+is working on this record now. These counts are what it has recorded so far."
+and no undo step. `stash status` of a stash that a running `stash` or `stash
+pop` holds says "a `stash` or `stash pop` is running on it now; so far N of M
+are in its holding folder" and gives `stash status --id ID` to see it again
+when that finishes; `stash status --id ID --json` waits for that run instead.
+A record that changes while `stash status` reads it is read again for up to 10
+seconds. Neither tool calls such a record damaged.
+
+A `sweep undo` or `stash pop` that waited for another run never acts on an
+apply or stash made after it started, such as one that finished while it
+waited. pop then says "the stash this pop would restore now was made
+after this pop started, so nothing was restored."
 
 ## Where journals live
 
