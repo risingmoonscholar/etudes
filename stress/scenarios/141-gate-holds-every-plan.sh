@@ -3,9 +3,8 @@
 # a tag. A folder plan and a tag plan of the same folder hold the same files
 # for the same reasons, and applying the folder plan moves none of them.
 #
-# A tag plan still leaves out a file that is already inside the built-in folder
-# its folder group would use, and reports it as in place (issue #221 changes
-# that on purpose; this pins it until then).
+# A tag moves nothing, so a file already inside a folder sweep made is tagged
+# like any other, and a tag plan calls nothing in place (issue #221).
 #
 # etude-core is shared by all three tools: stash still clears and restores the
 # same folder byte for byte, and unpack still extracts a synthetic archive to
@@ -75,10 +74,10 @@ done
 touch -t "$OLD" "$E"/*.png "$E"/Screenshots/*.png
 "$SWEEP" "$E" --scheme tags --map png=Work --depth 2 --json >"$W/shots.json" 2>/dev/null; CODE=$?
 assert_eq 0 "$CODE" "a depth-2 tag plan exits 0"
-assert_eq 6 "$(json_get "$W/shots.json" "sum(g['count'] for g in d['groups'])")" \
-  "6 pngs get the tag: 3 loose screenshots and 3 other pngs"
-assert_eq 3 "$(json_get "$W/shots.json" "d['left_alone']['in_place']")" \
-  "the 3 screenshots inside Screenshots/ are reported in place, as before (issue #221)"
+assert_eq 9 "$(json_get "$W/shots.json" "sum(g['count'] for g in d['groups'])")" \
+  "all 9 pngs get the tag, the 3 inside Screenshots/ included"
+assert_eq 0 "$(json_get "$W/shots.json" "d['left_alone']['in_place']")" \
+  "a tag plan reports no file in place (issue #221)"
 
 # --- stash and unpack, which share etude-core ---------------------------------
 # stash moves files sweep holds as personal or in flight: clearing a folder for

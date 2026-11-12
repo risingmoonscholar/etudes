@@ -781,60 +781,151 @@ fn older_tag_journals_with_zero_identity_restore_unchanged_tags() {
     assert_eq!(raw(&s.file("a.pdf")), None);
 }
 
-/// Today a tag plan leaves out a file that is already inside the built-in
-/// folder its folder group would move it to, and reports it as in place. The
-/// tag plan used to learn this by running the whole folder planner; nobody
-/// chose it, and "in place" means nothing for a tag. This pins the behaviour
-/// so the planner split cannot change it by accident. Issue #221 changes it
-/// on purpose and updates this test.
-#[test]
-fn a_file_inside_a_built_in_folder_is_left_out_of_a_tag_plan_for_now() {
-    let _g = lock();
-    let shots = [
-        "Screenshot 2026-01-01 at 10.00.00.png",
-        "Screenshot 2026-01-01 at 10.00.01.png",
-        "Screenshot 2026-01-01 at 10.00.02.png",
-    ];
-    let mut names: Vec<String> = shots.iter().map(|s| (*s).to_owned()).collect();
-    names.extend(["a.png", "b.png", "c.png"].map(String::from));
-    let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    let s = scene("in_builtin_folder", &names);
-    fs::create_dir(s.root.join("Screenshots")).unwrap();
-    for shot in shots {
-        let inside = s
-            .root
-            .join("Screenshots")
-            .join(shot.replace("10.00", "11.00"));
-        fs::write(inside, "a screenshot already filed").unwrap();
-    }
+unsafe extern "C" {
+    fn chflags(path: *const std::ffi::c_char, flags: u32) -> i32;
+}
 
+/// Set or clear the immutable flag on one path. Returns whether it worked.
+fn set_immutable(path: &Path, on: bool) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a valid C string; chflags reads it and nothing else.
+    unsafe { chflags(c.as_ptr(), if on { 0x0000_0002 } else { 0 }) == 0 }
+}
+
+/// Clears the immutable flag on drop, so a failed assertion cannot leave a
+/// locked folder the scene cannot remove.
+struct Unlock(PathBuf);
+impl Drop for Unlock {
+    fn drop(&mut self) {
+        set_immutable(&self.0, false);
+    }
+}
+
+/// Three screenshots at the top of the scene, which the built-in rules would
+/// move into `Screenshots/`.
+const SHOTS: [&str; 3] = [
+    "Screenshot 2026-01-01 at 10.00.00.png",
+    "Screenshot 2026-01-01 at 10.00.01.png",
+    "Screenshot 2026-01-01 at 10.00.02.png",
+];
+
+fn scan_depth_2(s: &Scene) -> scan::ScanOutcome {
     let config = ScanConfig {
         depth: 2,
         ..scan_config()
     };
-    let outcome = scan::scan(&s.root, &config).expect("scan");
-    let plan = plan::build_tags(&outcome, &[spec("png", "Work")], None);
+    scan::scan(&s.root, &config).expect("scan")
+}
 
-    let tagged: usize = plan.groups.iter().map(|g| g.members.len()).sum();
-    assert_eq!(tagged, 6, "the 3 loose screenshots and the 3 other pngs");
-    assert_eq!(plan.already_in_destination(), 3);
-    let in_place: Vec<&PathBuf> = plan
+/// A tag moves nothing, so a file's folder has no bearing on whether it can
+/// be tagged. A file already inside a folder sweep made is tagged like any
+/// other, and nothing in a tag plan is called "in place" (issue #221).
+#[test]
+fn a_file_inside_a_built_in_folder_is_tagged_like_any_other() {
+    let _g = lock();
+    let mut names: Vec<&str> = SHOTS.to_vec();
+    names.extend(["a.png", "b.png", "c.png"]);
+    let s = scene("in_builtin_folder", &names);
+    fs::create_dir(s.root.join("Screenshots")).unwrap();
+    let mut inside = Vec::new();
+    for shot in SHOTS {
+        let path = s
+            .root
+            .join("Screenshots")
+            .join(shot.replace("10.00", "11.00"));
+        fs::write(&path, "a screenshot already filed").unwrap();
+        inside.push(path);
+    }
+
+    let outcome = scan_depth_2(&s);
+    // The folder plan of the same scan still calls the filed ones in place,
+    // so this case is one the old tag plan got wrong.
+    assert_eq!(plan::build(&outcome).already_in_destination(), 3);
+
+    let plan = plan::build_tags(&outcome, &[spec("png", "Work")], None);
+    let tagged: Vec<&PathBuf> = plan.groups.iter().flat_map(|g| &g.members).collect();
+    assert_eq!(tagged.len(), 9, "every png gets the tag: {tagged:?}");
+    for path in &inside {
+        assert!(tagged.contains(&path), "{} is tagged", path.display());
+    }
+    assert_eq!(plan.already_in_destination(), 0, "nothing is in place");
+    assert!(
+        plan.untouched
+            .iter()
+            .all(|(_, why)| *why != Untouched::AlreadyInDestination)
+    );
+}
+
+/// A file that no tag takes is reported as matching no group, whether or not
+/// a built-in folder group would have taken it (issue #221).
+#[test]
+fn a_file_no_tag_takes_is_reported_the_same_way_whatever_its_built_in_group() {
+    let _g = lock();
+    let mut names: Vec<&str> = SHOTS.to_vec();
+    names.extend(["notes.pdf", "a.txt"]);
+    let s = scene("untagged_builtin", &names);
+    fs::create_dir(s.root.join("Screenshots")).unwrap();
+
+    let outcome = scan_depth_2(&s);
+    // The folder plan of the same scan groups the screenshots, so this case
+    // is one the old tag plan got wrong.
+    let folders = plan::build(&outcome);
+    assert!(
+        folders
+            .groups
+            .iter()
+            .any(|g| SHOTS.iter().all(|shot| g.members.contains(&s.file(shot)))),
+        "a built-in group takes the screenshots in a folder plan"
+    );
+
+    let plan = plan::build_tags(&outcome, &[spec("pdf", "Work")], None);
+    assert_eq!(plan.groups.len(), 1);
+    assert_eq!(plan.groups[0].members, vec![s.file("notes.pdf")]);
+    let mut unclaimed: Vec<&PathBuf> = plan
         .untouched
         .iter()
-        .filter(|(_, why)| *why == Untouched::AlreadyInDestination)
+        .filter(|(_, why)| *why == Untouched::NoClearGroup)
         .map(|(path, _)| path)
         .collect();
-    assert!(
-        in_place
-            .iter()
-            .all(|path| path.parent() == Some(s.root.join("Screenshots").as_path())),
-        "only the files inside Screenshots/ are in place: {in_place:?}"
+    unclaimed.retain(|path| path.is_file());
+    let mut expected: Vec<PathBuf> = SHOTS.iter().map(|shot| s.file(shot)).collect();
+    expected.push(s.file("a.txt"));
+    expected.sort();
+    assert_eq!(
+        unclaimed,
+        expected.iter().collect::<Vec<_>>(),
+        "the screenshots match no group, the same as a.txt"
     );
-    assert!(
-        plan.groups
-            .iter()
-            .flat_map(|g| &g.members)
-            .all(|path| path.parent() == Some(s.root.as_path())),
-        "no file inside Screenshots/ is tagged"
+}
+
+/// A locked folder can receive no file, but a tag puts nothing in a folder.
+/// Files a built-in group would move into a locked folder are tagged, and the
+/// tag plan does not count them as locked (issue #221).
+#[test]
+fn a_locked_built_in_folder_does_not_hold_files_from_a_tag() {
+    let _g = lock();
+    let s = scene("locked_builtin", &SHOTS);
+    let folder = s.root.join("Screenshots");
+    fs::create_dir(&folder).unwrap();
+    assert!(set_immutable(&folder, true), "could not lock the folder");
+    let _unlock = Unlock(folder);
+
+    let outcome = scan_depth_2(&s);
+    // The scan holds the locked folder itself. The folder plan of the same
+    // scan also holds the screenshots as locked, so this case is one the old
+    // tag plan got wrong.
+    assert_eq!(
+        plan::build(&outcome).locked_skipped,
+        outcome.locked_skipped + 3
     );
+
+    let plan = plan::build_tags(&outcome, &[spec("png", "Work")], None);
+    let tagged: usize = plan.groups.iter().map(|g| g.members.len()).sum();
+    assert_eq!(tagged, 3, "every screenshot gets the tag");
+    assert_eq!(
+        plan.locked_skipped, outcome.locked_skipped,
+        "only what the scan itself held counts as locked"
+    );
+    assert_eq!(plan.locked_system, outcome.locked_system);
 }

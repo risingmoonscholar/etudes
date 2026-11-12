@@ -21,7 +21,8 @@
     "by_category": [],
     "too_recent": 0,
     "unknown_extensions": {
-      "mov": 1
+      "heic": 1,
+      "mov": 2
     },
     "project_documents": 0,
     "held_near_document": 0,
@@ -32,9 +33,11 @@
     "in_flight": 0,
     "in_place": 0,
     "in_place_paths": [],
-    "no_clear_group": 1,
+    "no_clear_group": 3,
     "no_clear_group_paths": [
-      "$ROOT/MVI_0005.MOV"
+      "$ROOT/DJI_0006.MOV",
+      "$ROOT/MVI_0005.MOV",
+      "$ROOT/PXL_0004.HEIC"
     ]
   },
   "skipped": {

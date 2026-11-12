@@ -1486,29 +1486,13 @@ fn tag_entries(
         },
     );
 
-    // Issue #221: the tag plan keeps three effects of the folder plan it was
-    // once built from. Nobody chose them, and the built-in folder rules run
-    // here only to reproduce them; they decide no tag.
-    // - A file already inside the built-in folder its group would move it to
-    //   is left out, and reported as in place.
-    // - A file a built-in folder group would take, and no tag takes, is not
-    //   listed as matching no group.
-    // - Files a built-in group would move into a locked folder count as
-    //   locked.
-    // When #221 lands this block goes, and every file the gate lets through
-    // can be tagged.
-    let mut folder_claimed = ClaimSet::default();
-    let mut folder_groups = built_in_groups(scan, &passed, &mut folder_claimed, &mut untouched);
-    let locked = hold_locked_destinations(scan, &mut folder_groups);
-    let in_place: HashSet<&PathBuf> = untouched
-        .iter()
-        .filter(|(_, reason)| *reason == Untouched::AlreadyInDestination)
-        .map(|(path, _)| path)
-        .collect();
+    // A tag moves nothing, so where a file sits has no bearing on whether it
+    // can be tagged: no folder rule runs here. Every file the gate lets
+    // through can be tagged, and nothing in a tag plan is "in place".
     let mut candidates: Vec<&Entry> = passed
         .iter()
         .map(|f| f.entry)
-        .filter(|entry| !entry.is_dir && !in_place.contains(&entry.path))
+        .filter(|entry| !entry.is_dir)
         .collect();
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -1573,15 +1557,18 @@ fn tag_entries(
             accepted: false,
         });
     }
-    // What no tag and no rule claimed matched no group. Folders included: a
-    // folder is never tagged, and is still reported as left alone.
+    // What no tag claimed matched no group. Folders included: a folder is
+    // never tagged, and is still reported as left alone.
     for entry in passed
         .iter()
         .map(|f| f.entry)
-        .filter(|e| !folder_claimed.contains(&e.path) && !claimed.contains(&e.path))
+        .filter(|e| !claimed.contains(&e.path))
     {
         untouched.push((entry.path.clone(), Untouched::NoClearGroup));
     }
+    // A tag puts nothing in a folder, so a locked folder holds nothing back:
+    // only what the scan itself held counts as locked.
+    let locked = (scan.locked_skipped, scan.locked_system);
     let mut plan = assemble(scan, groups, untouched, locked);
     plan.adds_tags = true;
     plan.include_tagged = false;
