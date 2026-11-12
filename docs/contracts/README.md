@@ -537,3 +537,11 @@ proves the code for sweep by tying two records' times; for stash it is
 unproven there, because stash reaches it only through legacy or rewritten ids,
 which stash-cli's tests write. `v18/sweep.json` and `v15/stash.json` pin these
 declarations and `v1/` mirrors them; earlier pins remain unchanged.
+
+Sweep declaration 18 also adds a sixth status state, `in_progress`, in
+`status_lookup.states`, described by `status_lookup.in_progress`. A `sweep
+apply` holds an advisory lock on its own record from its first recorded move
+until it returns. `sweep status` tests that lock without waiting; a held record
+is `in_progress`, with the counts recorded so far, `damaged` false and
+`command` null, never `interrupted` or damaged. Without advisory locks the
+state is read from the record as before.

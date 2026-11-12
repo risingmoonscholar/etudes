@@ -17,6 +17,13 @@ set -u
 #     their records
 #   - one `sweep undo` puts every file back, and a second has nothing to undo
 #
+# While an apply is still running, its record is not interrupted or damaged.
+# The apply is stopped after recorded moves with journal-dump --watch-apply,
+# and its hold on its record is confirmed with a shared-lock test that does
+# not wait. `sweep status`, by folder, by id and in --json, must then say the
+# record is in progress, with no undo step, and never interrupted or damaged.
+# After the apply finishes, the same record reads completed.
+#
 # stash runs the same apply code, so the same race is run with two `stash
 # FOLDER`. The loser is refused as a stale plan with nothing moved and the
 # words "FOLDER changed just now, perhaps by another run. Nothing was moved.
@@ -244,4 +251,83 @@ assert_eq 1 "$CODE" "stash: a second pop has nothing to restore"
 grep -qF "no stash from" <<<"$OUT" \
   && pass "stash: a second pop says there is no stash" \
   || fail "stash: a second pop said: $OUT"
+fi
+
+# --- sweep status while an apply is running ---------------------------------
+record_held() {  # FILE: exit 0 when another process holds an advisory lock on it
+  python3 -I - "$1" <<'PY'
+import errno, fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+try:
+    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+except OSError as error:
+    sys.exit(0 if error.errno in (errno.EWOULDBLOCK, errno.EAGAIN) else 2)
+sys.exit(1)
+PY
+}
+RECORD=""
+for attempt in 1 2 3 4 5; do
+  R="$W/running-$attempt/Desktop"; RSTATE="$W/running-$attempt/state"
+  mkdir -p "$RSTATE"
+  build_tree "$R"
+  TARGET="$R/Screenshot 2026-01-01 at 10.00.00 AM ($((N - 1))).png"
+  ETUDE_STATE_DIR="$RSTATE" "$SWEEP" apply "$R" --yes >"$W/running.out" 2>&1 &
+  PID=$!
+  if WITNESS=$("$DUMP" --watch-apply "$RSTATE" "$R" "$TARGET" "$PID" 2>"$W/running-watch.err"); then
+    RECORD=$(find "$RSTATE" -maxdepth 1 -name 'sweep-*.journal')
+    break
+  fi
+  wait "$PID" 2>/dev/null
+  PID=""
+done
+if [ -z "$RECORD" ]; then
+  unproven "status during a running apply" "the apply was not stopped after recorded moves: $(cat "$W/running-watch.err")"
+else
+export ETUDE_STATE_DIR="$RSTATE"
+RID=$(basename "$RECORD" .journal); RID=${RID#sweep-}
+# The stop can land between the first recorded move and the hold. Let the
+# apply run on a little, a stop at a time, until it holds its record; a build
+# that never takes the hold fails the hold check below.
+for step in 1 2 3 4 5; do
+  record_held "$RECORD" && break
+  kill -CONT "$PID"
+  stop_confirmed "$PID" || break
+done
+[[ "$(ps -o state= -p "$PID")" == *T* ]] && [ -e "$TARGET" ] \
+  && pass "running: the apply is stopped after recorded moves, with files still to move ($WITNESS)" \
+  || fail "running: the apply is not stopped part-way any more"
+record_held "$RECORD" \
+  && pass "running: the apply holds an advisory lock on its own record" \
+  || fail "running: the apply holds no lock on its own record"
+TEXT=$("$SWEEP" status "$R" 2>&1); CODE=$?
+assert_eq 0 "$CODE" "running: sweep status FOLDER answers"
+grep -qE "^$RID in_progress planned=[0-9]+ moved=[1-9][0-9]* reversed=0\$" <<<"$TEXT" \
+  && pass "running: sweep status FOLDER says the record is in progress, with no undo step" \
+  || fail "running: sweep status FOLDER did not say in progress: $TEXT"
+grep -qxF "  sweep is working on this record now. These counts are what it has recorded so far." <<<"$TEXT" \
+  && pass "running: sweep status FOLDER says sweep is working on the record now" \
+  || fail "running: sweep status FOLDER gave no in-progress line: $TEXT"
+if grep -qE "^[^ ]+ interrupted planned=|This undo record is damaged" <<<"$TEXT"; then
+  fail "running: sweep status FOLDER calls a running apply interrupted or damaged: $TEXT"
+else
+  pass "running: sweep status FOLDER calls nothing interrupted or damaged"
+fi
+TEXT=$("$SWEEP" status --id "$RID" 2>&1)
+if grep -qE "^$RID in_progress " <<<"$TEXT" && ! grep -qE "interrupted planned=|This undo record is damaged" <<<"$TEXT"; then
+  pass "running: sweep status --id says in progress, not interrupted or damaged"
+else
+  fail "running: sweep status --id: $TEXT"
+fi
+"$SWEEP" status --id "$RID" --json >"$W/running.json" 2>/dev/null
+assert_eq "in_progress damaged=False command=None" \
+  "$(python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1]))["details"]; d = d[0] if isinstance(d, list) else d; print(d["state"], "damaged=%s" % d["damaged"], "command=%s" % d["command"])' "$W/running.json" 2>&1)" \
+  "running: sweep status --json says in_progress, not damaged, no command"
+kill -CONT "$PID"
+wait "$PID"; CODE=$?
+PID=""
+assert_eq 0 "$CODE" "running: the apply finishes after it resumes"
+TEXT=$("$SWEEP" status --id "$RID" 2>&1)
+grep -qE "^$RID completed planned=0 moved=$N reversed=0; sweep undo --id $RID\$" <<<"$TEXT" \
+  && pass "running: once the apply returns, its record reads completed with its undo step" \
+  || fail "running: after the apply, sweep status --id said: $TEXT"
 fi
