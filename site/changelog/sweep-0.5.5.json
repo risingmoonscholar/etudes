@@ -98,9 +98,9 @@
       "sha256": "ddacbde47cb8c6397d50b4352a356982b9e41e4790cfae7f578a38b7e7d9521b"
     },
     "after": {
-      "commit": "bda6de3",
-      "rev": "bda6de3553f8f802840258706bca6e4424ccd167",
-      "sha256": "e61b096b4ecf68accd93245190b873f2bd2f41e594d39494757e52e432a2cd10"
+      "commit": "dd3b0f6",
+      "rev": "dd3b0f67e29a19dc59760c6a927cdf51599a2825",
+      "sha256": "c2e76b0e726d1022e78b39c9fdec1ba07947f9b938ece25d8ea792671cb8f87b"
     }
   },
   "runs_note": "Each ran the same commands on a fresh copy of one synthetic folder, inbox: a Documents folder with 3 PDFs, and 2 new PDFs loose next to it. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."

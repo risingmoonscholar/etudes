@@ -2,5 +2,5 @@
 Stashed 3 items.
 The selected folder is clear.
 
-  Operation id: 1794490601550489000-30000-0-fc537b9b8a8c9ffd. Restore with: stash pop --id 1794490601550489000-30000-0-fc537b9b8a8c9ffd
+  Operation id: 1794492839600152000-36652-0-af56f2c2e6b57d36. Restore with: stash pop --id 1794492839600152000-36652-0-af56f2c2e6b57d36
   No deadline.

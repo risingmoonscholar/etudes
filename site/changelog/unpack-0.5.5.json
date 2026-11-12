@@ -82,9 +82,9 @@
       "sha256": "6956e6258ea1c2a12287ebd20c9a10375d50b0f9bbc8254137ade3e9fa96a400"
     },
     "after": {
-      "commit": "bda6de3",
-      "rev": "bda6de3553f8f802840258706bca6e4424ccd167",
-      "sha256": "9edbc00a0e6fa171c7249b6592e865c387d6c764331387a7626e150a3a2e4d31"
+      "commit": "dd3b0f6",
+      "rev": "dd3b0f67e29a19dc59760c6a927cdf51599a2825",
+      "sha256": "53f33cd30f599610b43a84d2aa2c8b505be633b998952c1a5a57c66df8bf6c49"
     }
   },
   "runs_note": "Each ran the same commands on a fresh copy of one synthetic archive, photos.zip: a zip archive of 3 photos, and beside it the hidden folder that an extraction stopped part way leaves behind. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."

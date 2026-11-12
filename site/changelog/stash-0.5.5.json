@@ -107,9 +107,9 @@
       "sha256": "4da97b041eaec523edb8a04622b8e8bac911b62cf217b296a07acc00cd2b107a"
     },
     "after": {
-      "commit": "bda6de3",
-      "rev": "bda6de3553f8f802840258706bca6e4424ccd167",
-      "sha256": "72176adecb8f61141b7842033268c2b2cbf6b805c0a1cdb3224925ebe86ec966"
+      "commit": "dd3b0f6",
+      "rev": "dd3b0f67e29a19dc59760c6a927cdf51599a2825",
+      "sha256": "7161c0519e267e7be95610b662fbbb93b72a13788d00f4682574b2238e2821c7"
     }
   },
   "runs_note": "Each ran the same commands on a fresh copy of one synthetic folder, my desk: a folder named my desk, with a space in its name, holding 3 small text files. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."

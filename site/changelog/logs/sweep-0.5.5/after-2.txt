@@ -1,7 +1,7 @@
 
 Moved 2 files.
 Undo with: sweep undo '<scratch>/work/inbox'
-Undo record id: 1794490598228823000-28304-0-34084900bbe295ea
-Encrypted journal: <scratch>/state/sweep-1794490598228823000-28304-0-34084900bbe295ea.journal
+Undo record id: 1794492835873180000-33851-0-aff5d3e7ed1550b
+Encrypted journal: <scratch>/state/sweep-1794492835873180000-33851-0-aff5d3e7ed1550b.journal
 
 Nothing left this machine.
