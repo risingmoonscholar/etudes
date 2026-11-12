@@ -1555,6 +1555,7 @@ fn journal_is_fully_undone(j: &etude_core::Journal) -> bool {
 /// Load an enumerated journal, warning on every failure. Even NotFound is
 /// a barrier here: a journal that disappeared after discovery may describe
 /// a newer operation on the same files. It cannot authorize skipping ahead.
+#[cfg(test)]
 fn load_or_warn(
     tool: &str,
     candidate: &etude_core::journal::JournalCandidate,
@@ -1610,17 +1611,6 @@ fn journal_for_root(
         }
     }
     (None, false)
-}
-
-fn journal_roots(tool: &str, sealer: &dyn etude_core::journal::Sealer) -> Vec<PathBuf> {
-    let mut damaged = false;
-    etude_core::journal::candidates_by_recency(tool)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|id| load_or_warn(tool, &id, sealer, &mut damaged))
-        .filter_map(|j| j.root.canonicalize().ok())
-        .filter(|root| find_holding(root).is_some())
-        .collect()
 }
 
 /// What pop says when it finds nothing to restore. It names what was looked for.
@@ -2794,15 +2784,21 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         (
                             "elsewhere",
                             other
-                                .as_deref()
-                                .map(j::path)
+                                .as_ref()
+                                .map(|(there, _)| j::path(there))
                                 .unwrap_or_else(|| "null".into())
                         ),
                     ])
                 );
                 return ExitCode::from(1);
             }
-            println!("{}", nothing_here(&root, other.as_deref()));
+            println!(
+                "{}",
+                nothing_here(
+                    &root,
+                    other.as_ref().map(|(there, n)| (there.as_path(), *n))
+                )
+            );
             ExitCode::from(1)
         }
         Some(dir) => {
@@ -2837,20 +2833,20 @@ fn cmd_status(args: &[String]) -> ExitCode {
             println!(
                 "\n{} stashed from {}.",
                 etude_cli_support::counted(n, "item", "items"),
-                root.display()
+                etude_cli_support::shown(&root)
             );
+            // No undo record matches this holding folder, so `stash pop` cannot
+            // restore it. The wording of this step is not settled; it is kept in
+            // one place so both lines below change together.
+            let pop_step = format!("stash pop {}", root.display());
             match deadline_of(name) {
                 Some(t) if t <= now_secs() => {
-                    println!(
-                        "  OVERDUE since {}. run `stash pop {}`",
-                        human_time(t),
-                        root.display()
-                    );
+                    println!("  OVERDUE since {}. run `{pop_step}`", human_time(t));
                 }
                 Some(t) => println!("  Due back {}", human_time(t)),
                 None => println!("  No deadline set."),
             }
-            println!("\nRestore with: stash pop {}", root.display());
+            println!("\nRestore with: {pop_step}");
             ExitCode::SUCCESS
         }
     }
@@ -3045,25 +3041,57 @@ fn iso_utc(epoch: u64) -> String {
     format!("{y:04}-{mth:02}-{d:02}T{h:02}:{m:02}:{sec:02}Z")
 }
 
-fn stash_elsewhere(here: &Path) -> Option<PathBuf> {
-    // Quietly: a missing key means status cannot look, which is not worth an
-    // error on a read-only command.
+/// The folder of the newest stash that `stash pop` can restore, other than
+/// `here`, and how many live stashes that folder holds. A folder counts only
+/// through a live undo record whose holding folder is still there: a holding
+/// folder with no record (a `--no-journal` stash) is one pop cannot restore.
+fn stash_elsewhere(here: &Path) -> Option<(PathBuf, usize)> {
+    // Quietly: a missing key or a record that will not open means status
+    // cannot look, which is not worth an error on a read-only command.
     let sl = KeychainSeal {
         key: etude_keep::key().ok()?,
     };
-    journal_roots("stash", &sl)
-        .into_iter()
-        .find(|there| there != here && find_holding(there).is_some())
+    restorable_elsewhere(here, &sl)
+}
+
+fn restorable_elsewhere(
+    here: &Path,
+    sealer: &dyn etude_core::journal::Sealer,
+) -> Option<(PathBuf, usize)> {
+    let (batches, _) = batches::survey(sealer).ok()?;
+    let mut restorable: Vec<_> = batches
+        .iter()
+        .filter(|batch| batches::holding(batch).is_ok_and(|holding| holding.is_dir()))
+        .filter_map(|batch| Some((batch.root.canonicalize().ok()?, &batch.id)))
+        .filter(|(there, _)| there != here)
+        .collect();
+    restorable.sort_by_key(|(_, id)| std::cmp::Reverse(batches::creation(id)));
+    let there = restorable.first()?.0.clone();
+    // Counted as pop counts them, so the step below matches what pop does.
+    let n = batches
+        .iter()
+        .filter(|batch| batches::matches_root(batch, &there))
+        .count();
+    Some((there, n))
 }
 
 /// What `status` says when this folder is clear. Split out so both wordings are
 /// covered by a test without reaching for the keychain.
-fn nothing_here(here: &Path, elsewhere: Option<&Path>) -> String {
+/// With two or more stashes in that folder, a bare `stash pop FOLDER` refuses,
+/// so the step restores the newest, as that refusal itself suggests.
+fn nothing_here(here: &Path, elsewhere: Option<(&Path, usize)>) -> String {
     use etude_cli_support::{quoted_path, shown};
     match elsewhere {
         None => format!("Nothing stashed in {}.", shown(here)),
-        Some(there) => format!(
+        Some((there, 1)) => format!(
             "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: stash pop {}",
+            shown(here),
+            shown(there),
+            quoted_path(there),
+            quoted_path(there)
+        ),
+        Some((there, n)) => format!(
+            "Nothing stashed in {}.\n\n  There are {n} stashes in {}.\n  See them with: stash status {}\n  Restore the newest with: stash pop {} --latest",
             shown(here),
             shown(there),
             quoted_path(there),
@@ -3409,9 +3437,22 @@ mod tests {
             journal_for_root("stash", &TestSeal, &target).0.is_none(),
             "restored journal remained selectable"
         );
-        assert!(
-            !journal_roots("stash", &TestSeal).contains(&target),
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("other folder");
+        let elsewhere = elsewhere.canonicalize().expect("canonical other folder");
+        assert_eq!(
+            restorable_elsewhere(&elsewhere, &TestSeal),
+            None,
             "restored root was still reported as live"
+        );
+        // A holding folder with no live record, as `--no-journal` leaves, is not
+        // a stash pop can restore, so status must not point at it.
+        std::fs::create_dir(root.join(".stash-0-unrecorded")).expect("holding");
+        assert!(find_holding(&root).is_some());
+        assert_eq!(
+            restorable_elsewhere(&elsewhere, &TestSeal),
+            None,
+            "a folder pop cannot restore was offered"
         );
 
         let _ = std::fs::remove_dir_all(&base);
@@ -3431,7 +3472,7 @@ mod tests {
             "offered pop with nothing to pop"
         );
 
-        let told = nothing_here(here, Some(Path::new("/tmp/there")));
+        let told = nothing_here(here, Some((Path::new("/tmp/there"), 1)));
         assert!(told.starts_with("Nothing stashed in /tmp/here."));
         assert!(
             told.contains("/tmp/there"),
@@ -3444,13 +3485,13 @@ mod tests {
     fn status_steps_for_another_folder_paste_as_one_word() {
         // A space split the printed step into two arguments, and pop refused it.
         // A control character went to the terminal raw.
-        let told = nothing_here(Path::new("/tmp/here"), Some(Path::new("/tmp/my desk")));
+        let told = nothing_here(Path::new("/tmp/here"), Some((Path::new("/tmp/my desk"), 1)));
         assert!(told.contains("  See it with: stash status '/tmp/my desk'\n"));
         assert!(told.ends_with("  Restore it with: stash pop '/tmp/my desk'"));
 
         let told = nothing_here(
             Path::new("/tmp/h\u{1b}ere"),
-            Some(Path::new("/tmp/bad\u{1b}[31mname")),
+            Some((Path::new("/tmp/bad\u{1b}[31mname"), 1)),
         );
         assert!(
             !told.contains('\u{1b}'),
@@ -3459,6 +3500,16 @@ mod tests {
         assert!(told.starts_with("Nothing stashed in /tmp/h?ere."));
         assert!(told.contains("There is a stash in /tmp/bad?[31mname."));
         assert!(told.ends_with(r"Restore it with: stash pop $'/tmp/bad\x1b[31mname'"));
+    }
+
+    #[test]
+    fn status_restores_the_newest_when_another_folder_holds_two_stashes() {
+        // A bare `stash pop FOLDER` refuses when FOLDER holds two stashes, so
+        // the step it prints must not be that one.
+        let told = nothing_here(Path::new("/tmp/here"), Some((Path::new("/tmp/my desk"), 2)));
+        assert!(told.contains("  There are 2 stashes in /tmp/my desk.\n"));
+        assert!(told.contains("  See them with: stash status '/tmp/my desk'\n"));
+        assert!(told.ends_with("  Restore the newest with: stash pop '/tmp/my desk' --latest"));
     }
 
     #[test]
