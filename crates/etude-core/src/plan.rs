@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::classify;
+use crate::gate::{GatePolicy, Gated, gate};
 use crate::scan::{Entry, ScanOutcome};
 use crate::{Category, Untouched};
 
@@ -979,7 +980,7 @@ pub fn build_existing_with(
 
 /// Build a plan, optionally inspecting contents to refuse more files.
 ///
-/// The inspector runs in pass 1 only, alongside the filename check, and its
+/// The inspector runs in the gate only, alongside the filename check, and its
 /// result can do exactly one thing: move a file into the untouched set.
 pub fn build_with(scan: &ScanOutcome, inspector: Option<&mut dyn Inspector>) -> Plan {
     build_with_maps(scan, inspector, &[])
@@ -1015,123 +1016,29 @@ fn would_group(unwindowed: &Plan) -> bool {
 
 fn group_entries(
     scan: &ScanOutcome,
-    mut inspector: Option<&mut dyn Inspector>,
+    inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
     profile_routes: bool,
     ignore_window: bool,
 ) -> Plan {
-    let mut untouched: Vec<(PathBuf, Untouched)> = scan.project_holds.clone();
-    let mut remaining: Vec<&Entry> = Vec::new();
-
-    // Pass 1: the refusal detectors. Run first, remove from all others.
-    // Loose project documents at the top level, before anything else. A .flp
-    // sitting in Downloads used to refuse the ENTIRE sweep (it went through
-    // the same check as Cargo.toml, which genuinely does mark a project
-    // root). Now the document stays put, and so does its reference surface:
-    // a .flp's samples are Media, a .blend's textures are Images, so holding
-    // the families the document could point at protects a flat project
-    // folder while the PDFs and installers beside it still sort.
-    //
-    // Screenshot-named files are exempt from the hold. On macOS screenshots
-    // land on the Desktop -- the folder most likely to also hold a stray
-    // project file -- and a project referencing a file named
-    // "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a real layout. The
-    // name pattern is the same one the Screenshots detector uses.
-    let loose_documents: Vec<&Entry> = scan
-        .entries
-        .iter()
-        .filter(|e| !e.is_dir && crate::scan::is_document_marker(&e.name))
-        .collect();
-    const HELD_FAMILIES: &[&str] = &["Media", "Images", "Scripts", "Data"];
-    let held_near_document = |e: &Entry| -> Option<String> {
-        let first = loose_documents.first()?;
-        if classify::is_screenshot(e) {
-            return None;
-        }
-        let fam = classify::type_family(&e.ext)?;
-        HELD_FAMILIES.contains(&fam).then(|| first.name.clone())
-    };
-
-    for e in &scan.entries {
-        if !e.is_dir && crate::scan::is_document_marker(&e.name) {
-            untouched.push((e.path.clone(), Untouched::ProjectDocument));
-            continue;
-        }
-        if let Some(marker) = held_near_document(e) {
-            untouched.push((e.path.clone(), Untouched::NearProjectDocument(marker)));
-            continue;
-        }
-        // Filename first: it is free, and a file already refused by name is
-        // never opened. Reading it could only confirm what we already decided.
-        if let Some(cat) = crate::sensitive::looks_personal(e) {
-            untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
-            continue;
-        }
-        if let Some(insp) = inspector.as_deref_mut()
-            && let Some(cat) = insp.inspect(&e.path, &e.ext)
-        {
-            untouched.push((e.path.clone(), Untouched::LooksPersonal(cat)));
-            continue;
-        }
-        // A download still running. Moving one leaves a partial file at a
-        // destination the downloader is not writing to, and it never
-        // finishes. Checked before the grace window because it is true
-        // regardless of age -- a stalled download from last week is still in
-        // flight.
-        let lower = e.name.to_ascii_lowercase();
-        if crate::scan::IN_FLIGHT_SUFFIXES
-            .iter()
-            .any(|s| lower.ends_with(s))
-        {
-            untouched.push((e.path.clone(), Untouched::InFlight));
-            continue;
-        }
-        // Too recent to judge. See ScanConfig::grace for why this is mtime
-        // and never atime.
-        // `--since 0` means no window, and it has to mean that for every
-        // file. elapsed() returns Err for a timestamp in the future, and
-        // unwrap_or(true) turned that error into "too recent" even when the
-        // window was zero -- so three PDFs dated 2030 were held back by a
-        // scan that had been told to hold nothing back. Future mtimes are
-        // ordinary: clock skew, restored backups, unpacked archives, network
-        // volumes.
-        //
-        // With a real window a future mtime still counts as too recent. That
-        // is the conservative reading of a file whose clock disagrees with
-        // this one, and it is now a decision rather than the fallback of an
-        // unwrap.
-        // A file whose mtime could not be read, with a window in force. The
-        // window's question is "was this changed recently", and the honest
-        // answer here is that sweep does not know -- so it holds the file
-        // back rather than treating unknown as old. Bypassing the check meant
-        // an unreadable timestamp was silently the most permissive case.
-        if let Some(window) = scan.grace
-            && !window.is_zero()
-            && e.modified.is_none()
-        {
-            untouched.push((e.path.clone(), Untouched::TooRecent));
-            continue;
-        }
-        if !ignore_window
-            && let Some(window) = scan.grace
-            && !window.is_zero()
-            && let Some(modified) = e.modified
-            && modified
-                .elapsed()
-                .map(|since| since < window)
-                .unwrap_or(true)
-        {
-            untouched.push((e.path.clone(), Untouched::TooRecent));
-            continue;
-        }
-        remaining.push(e);
-    }
+    // The gate first: whatever it holds, no rule below ever sees.
+    let Gated {
+        held: mut untouched,
+        candidates: remaining,
+    } = gate(
+        scan,
+        GatePolicy {
+            grace: scan.grace,
+            ignore_window,
+            inspector,
+        },
+    );
 
     let mut groups: Vec<Group> = Vec::new();
     let mut claimed: Vec<PathBuf> = Vec::new();
 
     // A saved profile is an explicit user taxonomy. It may claim files that
-    // a built-in grouping would otherwise take, but only after pass 1 has
+    // a built-in grouping would otherwise take, but only after the gate has
     // removed every personal, project, in-flight, and too-recent refusal.
     // The CLI checked each destination: an existing direct folder keeps
     // `created: false`, which tells apply never to create it if it
