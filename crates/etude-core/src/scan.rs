@@ -3,8 +3,10 @@
 //! No content reads to decide. Regular document markers are opened only to
 //! check access. The one Finder attribute consulted is whether a tag is
 //! present; its value (the tag names) is never read, and Finder comments are
-//! never queried.
+//! never queried. For a file with a still-capture extension the walk also asks
+//! whether macOS marked it as a screen capture, again by presence only.
 
+use crate::evidence::capture::{self, Capture};
 use crate::xattr;
 use std::collections::HashSet;
 use std::fs;
@@ -686,6 +688,12 @@ struct DocumentScope {
 }
 
 impl DocumentScope {
+    /// Whether this scope holds what is in it: a project document was found,
+    /// or a folder that could hold one could not be read.
+    fn holds(&self) -> bool {
+        self.marker.is_some() || self.unreadable
+    }
+
     fn merge(&mut self, other: Self) {
         self.unreadable |= other.unreadable;
         if let Some(marker) = other.marker
@@ -798,7 +806,8 @@ fn member_document_scope(root: &Path, dir: &Path) -> DocumentScope {
 /// with the document. Screen captures are exempt, as in the gate's
 /// near-document hold: a project does not reference a file named
 /// "Screenshot 2026-08-12 at 9.15.11 AM.png". The walk decides this before
-/// the plan's evidence exists, so it reads the same facts from the entry.
+/// the plan's evidence exists, so it reads the same facts from the entry,
+/// whose capture the walk has already recognised.
 fn reference_file(e: &Entry) -> bool {
     let facts = crate::evidence::Facts::of(e);
     facts.capture.is_none()
@@ -807,18 +816,43 @@ fn reference_file(e: &Entry) -> bool {
             .is_some_and(crate::evidence::Family::can_be_referenced)
 }
 
-fn hold_scope(out: &mut ScanOutcome, start: usize, dir: &Path, scope: &DocumentScope) {
-    if scope.marker.is_none() && !scope.unreadable {
-        return;
-    }
+/// Recognise an entry as a screen capture. `ask_os` false answers the
+/// attribute question "absent" without asking, so only the name counts.
+fn recognise_capture(e: &Entry, ask_os: bool) -> Option<Capture> {
+    capture::recognise(e, |path| ask_os && has_screen_capture_mark(path))
+}
+
+/// Settle the entries this directory's walk added: recognise the screen
+/// captures among its own entries, then hold what its project scope holds.
+///
+/// Each entry is recognised once, here, by the walk of the folder it is in.
+/// An entry from a folder below was recognised by that folder's walk. An
+/// entry the scope holds whatever it is (a document, a folder, a link, or
+/// anything in a folder below) is never asked about. `ask_os` is false when
+/// a folder above already holds this whole folder: every entry here will be
+/// held as nested there, so the attribute could decide nothing and is not
+/// asked.
+fn hold_scope(
+    out: &mut ScanOutcome,
+    start: usize,
+    dir: &Path,
+    scope: &DocumentScope,
+    ask_os: bool,
+) {
+    let holds = scope.holds();
     let candidates = out.entries.split_off(start);
-    for e in candidates {
+    for mut e in candidates {
         let document = !e.is_dir && is_document_marker(&e.name);
         let nested = e.path.parent() != Some(dir);
-        let link = observe_read("metadata", fs::symlink_metadata(&e.path))
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(true);
-        if document || nested || e.is_dir || link || reference_file(&e) {
+        let link = holds
+            && observe_read("metadata", fs::symlink_metadata(&e.path))
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(true);
+        let held_whatever_it_is = holds && (document || nested || e.is_dir || link);
+        if !nested && !held_whatever_it_is {
+            e.capture = recognise_capture(&e, ask_os);
+        }
+        if held_whatever_it_is || (holds && reference_file(&e)) {
             if scope.unreadable {
                 out.skipped_unreadable += 1;
             } else {
@@ -881,6 +915,12 @@ pub struct ScanConfig {
     /// stash is the one caller whose contract is to clear a folder, and it
     /// sets this to `true` explicitly.
     pub include_tagged: bool,
+    /// Ask macOS whether each file with a still extension is marked as a
+    /// screen capture (`has_screen_capture_mark`). On by default, for sweep,
+    /// whose screen-capture groups read the answer. stash makes no such
+    /// groups and its declaration does not include the read, so it turns
+    /// this off; its scan then knows captures by name alone.
+    pub probe_screen_captures: bool,
 }
 
 impl Default for ScanConfig {
@@ -895,6 +935,7 @@ impl Default for ScanConfig {
             max_entries: 20_000,
             whole_units: false,
             include_tagged: false,
+            probe_screen_captures: true,
         }
     }
 }
@@ -913,6 +954,13 @@ pub struct Entry {
     pub is_dir: bool,
     /// True when this is an opaque package directory.
     pub is_package: bool,
+    /// Recognised as a screen capture, and how (`capture::recognise`).
+    ///
+    /// The scan fills this once for every entry it returns, so the walk's
+    /// project-document hold and the plan's evidence read the same answer
+    /// and no file is asked about twice. An entry built outside a scan
+    /// (`eligible_member`) has not been asked, and holds `None`.
+    pub capture: Option<Capture>,
 }
 
 #[derive(Debug)]
@@ -1194,6 +1242,9 @@ pub(crate) fn eligible_member(path: &Path) -> io::Result<Entry> {
         modified: meta.modified().ok(),
         is_dir: meta.is_dir(),
         is_package: meta.is_dir() && is_package(&path.file_name().unwrap().to_string_lossy()),
+        // Asked only where a project document makes it matter
+        // (`MemberEligibility::check`).
+        capture: None,
     };
     if is_hidden(&e.name)
         || never_enter(&e.name)
@@ -1219,7 +1270,7 @@ pub(crate) struct MemberEligibility {
 }
 impl MemberEligibility {
     pub(crate) fn check(&mut self, root: &Path, path: &Path) -> io::Result<()> {
-        let e = eligible_member(path)?;
+        let mut e = eligible_member(path)?;
         // Explicit selections can originate outside the holding root.
         let boundary = if path.starts_with(root) {
             root
@@ -1253,11 +1304,15 @@ impl MemberEligibility {
                 .scopes
                 .entry(dir.to_path_buf())
                 .or_insert_with(|| member_document_scope(boundary, dir));
-            if (scope.marker.is_some() || scope.unreadable)
-                && (path.parent() != Some(dir)
-                    || e.is_dir
-                    || reference_file(&e)
-                    || is_document_marker(&e.name))
+            // The scan's own decision, made again with what is there now. A
+            // reference file is held unless it is a screen capture, so the
+            // capture is recognised here, once, the way the scan did; only
+            // the folder the member is in can make it matter.
+            if scope.holds()
+                && (path.parent() != Some(dir) || e.is_dir || is_document_marker(&e.name) || {
+                    e.capture = recognise_capture(&e, true);
+                    reference_file(&e)
+                })
             {
                 return Err(io::Error::other(
                     "plan member is held by a project document; replan required",
@@ -1608,7 +1663,7 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
 
     // Visited device+inode pairs close the symlink-cycle case.
     let mut visited: HashSet<(u64, u64)> = HashSet::new();
-    walk(&root, &root, 0, cfg, &mut out, &mut visited)?;
+    walk(&root, &root, 0, cfg, &mut out, &mut visited, false)?;
     if out.snapshot.as_ref().is_some_and(|snapshot| {
         if live {
             snapshot.validate_live().is_err()
@@ -1630,6 +1685,8 @@ fn scan_inner(root: &Path, cfg: &ScanConfig, live: bool) -> Result<ScanOutcome, 
     Ok(out)
 }
 
+/// `held_above` is true when the project scope of a folder above already
+/// holds everything in this one.
 fn walk(
     root: &Path,
     dir: &Path,
@@ -1637,6 +1694,7 @@ fn walk(
     cfg: &ScanConfig,
     out: &mut ScanOutcome,
     visited: &mut HashSet<(u64, u64)>,
+    held_above: bool,
 ) -> Result<(), ScanError> {
     if depth >= cfg.depth.min(8) {
         return Ok(());
@@ -1700,6 +1758,9 @@ fn walk(
             hook(dir);
         }
     });
+    // A scope only grows (`merge`), so a folder below one this scope already
+    // holds is held as nested whatever the rest of the walk finds.
+    let held_below = held_above || scope.holds();
     for item in items {
         let path = item.path();
         let name = item.file_name().to_string_lossy().into_owned();
@@ -1722,6 +1783,7 @@ fn walk(
                     modified: meta.modified().ok(),
                     is_dir: false,
                     is_package: false,
+                    capture: None,
                 });
                 continue;
             }
@@ -1843,7 +1905,7 @@ fn walk(
                     continue; // already seen: cycle
                 }
             }
-            walk(root, &path, depth + 1, cfg, out, visited)?;
+            walk(root, &path, depth + 1, cfg, out, visited, held_below)?;
             continue;
         }
 
@@ -1866,6 +1928,7 @@ fn walk(
             modified: meta.modified().ok(),
             is_dir,
             is_package: pkg,
+            capture: None,
         });
     }
     // Repeat every pre-scan path, including one that disappeared and returned.
@@ -1874,7 +1937,13 @@ fn walk(
     for child in children {
         scope.merge(document_scope(root, &child));
     }
-    hold_scope(out, start, dir, &scope);
+    hold_scope(
+        out,
+        start,
+        dir,
+        &scope,
+        cfg.probe_screen_captures && !held_above,
+    );
     Ok(())
 }
 
@@ -2000,6 +2069,31 @@ pub fn has_finder_tag(path: &Path) -> io::Result<bool> {
         outcome => outcome,
     };
     observe_read("finder_tag_presence", outcome)
+}
+
+/// Whether macOS marked this file as a screen capture: the attribute
+/// `com.apple.metadata:kMDItemIsScreenCapture` is present.
+///
+/// Asks for the attribute's length only, through a zero-length buffer, so its
+/// value is never copied into this process, and the file is never opened.
+/// The probe does not follow symlinks. Every probe is counted in the
+/// `screen_capture_presence` observation category; a volume that cannot hold
+/// attributes (`ENOTSUP`) has no mark and counts as observed, the same as the
+/// tag probe.
+///
+/// Any other failure also answers "absent", and is counted as failed. The
+/// mark can only add evidence, so a probe that fails leaves the file to be
+/// judged by its name alone, as before sweep asked: the failure puts it in no
+/// group and lifts no hold. Elsewhere than macOS nothing is read or counted.
+pub fn has_screen_capture_mark(path: &Path) -> bool {
+    if !xattr::SUPPORTED {
+        return false;
+    }
+    let outcome = match xattr::presence(path, capture::ATTRIBUTE) {
+        Err(error) if xattr::is_unsupported(&error) => Ok(false),
+        outcome => outcome,
+    };
+    observe_read("screen_capture_presence", outcome).unwrap_or(false)
 }
 
 #[cfg(unix)]

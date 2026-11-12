@@ -1,4 +1,5 @@
 use super::{BindingContext, Group, Plan, Signal};
+use crate::evidence::{CaptureBasis, CaptureKind};
 use crate::scan::{SnapshotEntry, SnapshotIdentity, TreeSnapshot};
 use crate::{Category, Untouched};
 use std::{
@@ -207,6 +208,19 @@ pub(super) fn encode(
         w.text(&group.name)?;
         match &group.signal {
             Signal::Screenshot => w.byte(0),
+            // Its own tag, so a plan written before it still reads as it did.
+            Signal::ScreenCapture { kind, basis } => {
+                w.byte(9);
+                w.byte(match kind {
+                    CaptureKind::Still => 0,
+                    CaptureKind::Recording => 1,
+                });
+                w.byte(match basis {
+                    CaptureBasis::OsAttribute => 0,
+                    CaptureBasis::OsName => 1,
+                    CaptureBasis::KnownName => 2,
+                });
+            }
             Signal::CameraBurst { days } => {
                 w.byte(1);
                 w.n(u64::from(*days));
@@ -380,6 +394,19 @@ pub(super) fn decode(data: &[u8]) -> io::Result<(Plan, TreeSnapshot, BindingCont
         let name = r.text()?;
         let signal = match r.byte()? {
             0 => Signal::Screenshot,
+            9 => Signal::ScreenCapture {
+                kind: match r.byte()? {
+                    0 => CaptureKind::Still,
+                    1 => CaptureKind::Recording,
+                    _ => return Err(invalid()),
+                },
+                basis: match r.byte()? {
+                    0 => CaptureBasis::OsAttribute,
+                    1 => CaptureBasis::OsName,
+                    2 => CaptureBasis::KnownName,
+                    _ => return Err(invalid()),
+                },
+            },
             1 => Signal::CameraBurst {
                 days: u32::try_from(r.n()?).map_err(|_| invalid())?,
             },
@@ -783,6 +810,36 @@ mod tests {
             old.groups[index].signal,
             Signal::Mapped { saved: false, .. }
         ));
+    }
+
+    /// A screen-capture group keeps its kind and basis under tag 9, and a
+    /// plan written before it existed still reads its tag-0 group.
+    #[test]
+    fn a_screen_capture_group_round_trips_and_tag_0_still_reads() {
+        let (mut plan, snapshot, context) = fixture();
+        let old = encode(&plan, &snapshot, &context).unwrap();
+        let decoded = decode(&old).unwrap().0;
+        assert_eq!(decoded.groups[0].signal, Signal::Screenshot);
+        assert_eq!(
+            decoded.groups[0].signal.describe(),
+            "named \"Screenshot ...\""
+        );
+
+        let mut seen = std::collections::HashSet::new();
+        for kind in [CaptureKind::Still, CaptureKind::Recording] {
+            for basis in [
+                CaptureBasis::OsAttribute,
+                CaptureBasis::OsName,
+                CaptureBasis::KnownName,
+            ] {
+                plan.groups[0].signal = Signal::ScreenCapture { kind, basis };
+                let bytes = encode(&plan, &snapshot, &context).unwrap();
+                assert!(seen.insert(bytes.clone()), "{kind:?} {basis:?}");
+                let decoded = decode(&bytes).unwrap().0;
+                assert_eq!(decoded.groups[0].signal, plan.groups[0].signal);
+                assert_eq!(encode(&decoded, &snapshot, &context).unwrap(), bytes);
+            }
+        }
     }
 
     #[test]

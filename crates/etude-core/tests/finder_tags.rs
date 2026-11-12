@@ -629,6 +629,11 @@ fn the_default_holds_tagged_items_and_only_stash_overrides_it() {
         production.matches("include_tagged: true,").count(),
         "every stash scan must set include_tagged explicitly"
     );
+    assert_eq!(
+        production.matches("ScanConfig {").count(),
+        production.matches("probe_screen_captures: false,").count(),
+        "no stash scan asks for the screen-capture attribute"
+    );
 }
 
 #[test]

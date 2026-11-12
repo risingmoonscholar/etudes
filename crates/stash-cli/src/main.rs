@@ -730,6 +730,9 @@ fn cmd_stash(path: &Path, args: &[String]) -> ExitCode {
         // folder, so it asks for them and says so here rather than inheriting
         // the default.
         include_tagged: true,
+        // stash makes no screen-capture groups, and its declaration does not
+        // include the screen-capture attribute read.
+        probe_screen_captures: false,
         ..Default::default()
     };
     let outcome = match scan::scan(path, &cfg) {
@@ -3229,6 +3232,7 @@ mod tests {
                 allow_sync: true,
                 whole_units: true,
                 include_tagged: true,
+                probe_screen_captures: false,
                 ..Default::default()
             },
         )

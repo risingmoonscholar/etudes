@@ -9,7 +9,9 @@
 //! grouping rules read it to pick folders; both get it from one `observe`
 //! call, so each detector runs once per file. Nothing here writes, and
 //! nothing here reads a file's contents: every fact comes from the scan's
-//! entry alone.
+//! entry alone. The one fact that needs the filesystem, whether macOS marked
+//! a file as a screen capture, is asked by the scan, which records the
+//! result on the entry (`Entry::capture`).
 
 pub mod capture;
 pub mod capture_names;
@@ -27,7 +29,8 @@ pub struct Facts<'a> {
     pub entry: &'a Entry,
     /// The built-in folder its extension files it under, if any.
     pub family: Option<Family>,
-    /// Recognised as a screen capture, and how.
+    /// Recognised as a screen capture, and how: the scan's answer
+    /// (`Entry::capture`), so the walk's holds and the plan agree.
     pub capture: Option<Capture>,
     /// Named the way a camera or phone names what it records.
     pub camera: bool,
@@ -42,7 +45,7 @@ impl<'a> Facts<'a> {
         Facts {
             entry,
             family: Family::of_extension(&entry.ext),
-            capture: capture::recognise_by_name(&entry.name),
+            capture: entry.capture,
             camera: device::is_camera(&entry.name, &entry.ext),
             installer: device::is_installer(&entry.ext),
         }
@@ -72,6 +75,7 @@ mod tests {
             modified: None,
             is_dir: false,
             is_package: false,
+            capture: capture::recognise_by_name(name),
         }
     }
 

@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::evidence::{self, Facts, Family};
+use crate::evidence::{self, CaptureBasis, CaptureKind, Facts, Family};
 use crate::gate::{GatePolicy, Gated, gate};
 use crate::mode::{Claimed, Mode};
 use crate::scan::ScanOutcome;
@@ -62,7 +62,16 @@ pub const SCAN_STATE_ACCOUNTING: &[(&str, &str)] = &[
 /// Why a group exists, in words the user can check by eye.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signal {
+    /// Screenshots, as plans written before `ScreenCapture` existed name
+    /// them. Read from those plans only; a new plan never makes it.
     Screenshot,
+    /// Screen captures of one kind. `basis` is the weakest evidence among
+    /// the files that move, so the line printed never claims more than its
+    /// weakest file supports.
+    ScreenCapture {
+        kind: CaptureKind,
+        basis: CaptureBasis,
+    },
     CameraBurst {
         days: u32,
     },
@@ -115,6 +124,17 @@ impl Signal {
     pub fn describe(&self) -> String {
         match self {
             Signal::Screenshot => "named \"Screenshot ...\"".to_string(),
+            Signal::ScreenCapture { kind, basis } => {
+                let (what, word) = match kind {
+                    CaptureKind::Still => ("screen captures", "Screenshot"),
+                    CaptureKind::Recording => ("screen recordings", "Screen Recording"),
+                };
+                match basis {
+                    CaptureBasis::OsAttribute => format!("marked by macOS as {what}"),
+                    CaptureBasis::OsName => format!("named by macOS as {what}"),
+                    CaptureBasis::KnownName => format!("named \"{word} ...\""),
+                }
+            }
             Signal::Mapped {
                 ext,
                 created,
@@ -582,13 +602,22 @@ impl Plan {
         use crate::json as j;
 
         let groups = j::arr(self.groups.iter().map(|g| {
-            j::obj(&[
+            let mut fields = vec![
                 ("name", j::str(&g.name)),
                 ("signal", j::str(&g.signal.describe())),
+            ];
+            // A screen-capture group also says what it holds and the weakest
+            // evidence among its files, as values an agent can compare.
+            if let Signal::ScreenCapture { kind, basis } = &g.signal {
+                fields.push(("capture_kind", j::str(kind.key())));
+                fields.push(("capture_basis", j::str(basis.key())));
+            }
+            fields.extend([
                 ("accepted", j::bool(g.accepted)),
                 ("count", j::num(g.members.len())),
                 ("members", j::arr(g.members.iter().map(|m| j::path(m)))),
-            ])
+            ]);
+            j::obj(&fields)
         }));
 
         let personal: usize = self.sensitive_counts().values().sum();
@@ -700,7 +729,7 @@ pub struct MapSpec {
 /// its files into a built-in group's folder and make the count a lie. The
 /// type-family folders come from `Family`, so a new family is reserved the
 /// day it exists; these are the built-in folders that are not families.
-const RESERVED_DESTINATIONS: &[&str] = &["Installers", "Screenshots"];
+const RESERVED_DESTINATIONS: &[&str] = &["Installers", "Screenshots", "Screen Recordings"];
 
 fn is_reserved_destination(folder: &str) -> bool {
     Family::ALL
@@ -1121,6 +1150,35 @@ mod tests {
     use crate::scan::Entry;
     use std::time::{Duration, SystemTime};
 
+    /// The plan line names the evidence, and for recordings says so.
+    #[test]
+    fn a_screen_capture_group_describes_its_evidence() {
+        let describe = |kind, basis| Signal::ScreenCapture { kind, basis }.describe();
+        for (kind, word) in [
+            (CaptureKind::Still, "screen captures"),
+            (CaptureKind::Recording, "screen recordings"),
+        ] {
+            assert_eq!(
+                describe(kind, CaptureBasis::OsAttribute),
+                format!("marked by macOS as {word}")
+            );
+            assert_eq!(
+                describe(kind, CaptureBasis::OsName),
+                format!("named by macOS as {word}")
+            );
+        }
+        assert_eq!(
+            describe(CaptureKind::Still, CaptureBasis::KnownName),
+            "named \"Screenshot ...\""
+        );
+        assert_eq!(
+            describe(CaptureKind::Recording, CaptureBasis::KnownName),
+            "named \"Screen Recording ...\""
+        );
+        // Plans written before screen recordings existed read as before.
+        assert_eq!(Signal::Screenshot.describe(), "named \"Screenshot ...\"");
+    }
+
     #[test]
     fn map_messages_show_names_as_typed_without_debug_quotes() {
         let root = std::env::temp_dir();
@@ -1213,6 +1271,7 @@ mod tests {
             modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(modified_secs)),
             is_dir: false,
             is_package: false,
+            capture: crate::evidence::capture::recognise_by_name(name),
         }
     }
 
@@ -1338,6 +1397,7 @@ mod tests {
             ("bpy", ".hidden", "leading dot"),
             ("bpy", "Documents", "reserved family name"),
             ("bpy", "screenshots", "reserved, case-folded"),
+            ("bpy", "Screen Recordings", "reserved recordings folder"),
             ("bpy", "Photos, Jan", "photos namespace"),
             ("bpy", "notafolder", "exists but is a file"),
         ];

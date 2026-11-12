@@ -4,7 +4,9 @@
   "groups": [
     {
       "name": "Screenshots",
-      "signal": "named \"Screenshot ...\"",
+      "signal": "named by macOS as screen captures",
+      "capture_kind": "still",
+      "capture_basis": "os_name",
       "accepted": false,
       "count": 3,
       "members": [

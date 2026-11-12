@@ -166,6 +166,7 @@ mod tests {
             modified: None,
             is_dir: false,
             is_package: false,
+            capture: crate::evidence::capture::recognise_by_name(name),
         }
     }
 

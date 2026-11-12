@@ -1,7 +1,31 @@
 //! Screen-capture recognition, and how sure sweep is about it.
 //!
+//! `recognise` checks three kinds of evidence, strongest first, and the first
+//! that matches decides:
+//!
+//! 1. `OsAttribute`: macOS marked the file with the attribute
+//!    `com.apple.metadata:kMDItemIsScreenCapture`. Stills only.
+//! 2. `OsName`: the name starts with the exact text macOS writes before the
+//!    date, in one of the languages it ships, then a digit.
+//! 3. `KnownName`: the English rule sweep has always used.
+//!
+//! The attribute does not depend on language, and it is stored on the file,
+//! so a rename keeps it. A copy by a tool that drops attributes loses it,
+//! which is what the names cover. The known names keep CleanShot and older
+//! Macs, which wrote "Screen Shot", working.
+//!
 //! Sources (CONTRIBUTING.md requires them for platform claims):
 //!
+//! - The attribute on stills: observed on a GitHub `macos-15` runner
+//!   (macOS 15.8.2, 24H232). `screencapture -x` wrote
+//!   `com.apple.metadata:kMDItemIsScreenCapture` as a binary plist `true`,
+//!   beside `kMDItemScreenCaptureType` = `display`. Primary, observed:
+//!   <https://github.com/risingmoonscholar/etudes/actions/runs/43233341758>.
+//! - No attribute on recordings: in the same run, a `screencapture -v -V 2`
+//!   recording had no extended attributes at all. Recordings saved with
+//!   Cmd-Shift-5 were not tested. So the attribute is asked of stills only,
+//!   and recordings are known by name. `kMDItemIsScreenRecording` is never
+//!   asked: nobody has seen it on a file.
 //! - The text macOS starts a capture file name with, in every language it
 //!   ships: `/System/Library/CoreServices/screencaptureui.app/Contents/
 //!   Resources/Localizable.loctable`, keys `Screenshot` and
@@ -15,11 +39,19 @@
 //!   default), `pdf`, `jpg`, `tiff` "and other formats", and `-v` for video.
 //!   Primary. `heic` comes from the English rule sweep already shipped.
 //!
-//! Nothing here touches the filesystem. Recognition is a pure function of
-//! the file name, so it reads no attributes and no contents.
+//! Nothing here touches the filesystem. The attribute question is asked
+//! through the probe the caller passes, so this module reads no attributes
+//! and no contents itself; the scan owns the one probe that does
+//! (`scan::has_screen_capture_mark`).
 
 use super::capture_names::{RECORDING_PREFIXES, STILL_PREFIXES};
+use crate::scan::Entry;
+use std::ffi::CStr;
 use std::path::Path;
+
+/// The attribute macOS writes on a screenshot it saves. Only its presence is
+/// ever asked; its value is never read.
+pub const ATTRIBUTE: &CStr = c"com.apple.metadata:kMDItemIsScreenCapture";
 
 /// What a screen capture holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,6 +60,16 @@ pub enum CaptureKind {
     Still,
     /// A screen recording.
     Recording,
+}
+
+impl CaptureKind {
+    /// The kind's name in `--json` output and the capability declaration.
+    pub fn key(self) -> &'static str {
+        match self {
+            CaptureKind::Still => "still",
+            CaptureKind::Recording => "recording",
+        }
+    }
 }
 
 /// Why sweep believes a file is a screen capture.
@@ -45,6 +87,17 @@ pub enum CaptureBasis {
     /// The name matches the English rule sweep used before it knew the OS
     /// words. It also covers CleanShot, which is not part of macOS.
     KnownName,
+}
+
+impl CaptureBasis {
+    /// The basis's name in `--json` output and the capability declaration.
+    pub fn key(self) -> &'static str {
+        match self {
+            CaptureBasis::OsAttribute => "os_attribute",
+            CaptureBasis::OsName => "os_name",
+            CaptureBasis::KnownName => "known_name",
+        }
+    }
 }
 
 /// A file recognised as a screen capture.
@@ -71,6 +124,26 @@ pub fn capture_kind_for_extension(ext: &str) -> Option<CaptureKind> {
     }
 }
 
+/// Recognise a screen capture, strongest evidence first.
+///
+/// `probe` answers whether macOS marked the file at this path with
+/// `ATTRIBUTE`. It is called at most once, and only for a file with a still
+/// extension: never for a folder, a recording or any other extension. The
+/// caller decides what a failed probe means; the scan's probe treats it as
+/// "absent", so the file is judged by its name.
+pub fn recognise(entry: &Entry, probe: impl FnOnce(&Path) -> bool) -> Option<Capture> {
+    if entry.is_dir {
+        return None;
+    }
+    if capture_kind_for_extension(&entry.ext) == Some(CaptureKind::Still) && probe(&entry.path) {
+        return Some(Capture {
+            kind: CaptureKind::Still,
+            basis: CaptureBasis::OsAttribute,
+        });
+    }
+    recognise_by_name(&entry.name)
+}
+
 /// Recognise a screen capture from its file name alone.
 ///
 /// The OS prefixes are compared as exact code points and exact case, the
@@ -78,6 +151,9 @@ pub fn capture_kind_for_extension(ext: &str) -> Option<CaptureKind> {
 /// carries a soft hyphen (U+00AD), the French word a typographic apostrophe
 /// (U+2019), Russian a no-break space (U+00A0) and Arabic right-to-left
 /// marks (U+200F), and a name typed without them was not written by macOS.
+///
+/// The table is compiled in, so this matches the same names on every
+/// platform.
 pub fn recognise_by_name(file_name: &str) -> Option<Capture> {
     // The same split the scan uses, so `.png` alone has no extension here
     // either.
@@ -85,10 +161,6 @@ pub fn recognise_by_name(file_name: &str) -> Option<Capture> {
     let ext = path.extension()?.to_str()?;
     let kind = capture_kind_for_extension(ext)?;
     let stem = path.file_stem()?.to_str()?;
-
-    // The attribute check (`CaptureBasis::OsAttribute`) belongs before this
-    // one, because it is stronger. It needs a filesystem probe, so it lives
-    // with the caller that has the path, not in this pure name check.
 
     let prefixes = match kind {
         CaptureKind::Still => STILL_PREFIXES,
@@ -120,13 +192,13 @@ fn starts_os_name(stem: &str, prefix: &str) -> bool {
         .is_some_and(u8::is_ascii_digit)
 }
 
-/// The English rule sweep shipped before P5, reproduced exactly so no file
-/// it grouped changes group: the name starts with `screenshot`,
-/// `screen shot` or `cleanshot` in any ASCII case.
+/// The English rule sweep shipped before it knew the OS words, reproduced
+/// exactly so no file it grouped changes group: the name starts with
+/// `screenshot`, `screen shot` or `cleanshot` in any ASCII case.
 ///
 /// It keeps its own narrower extension list (png, jpg, jpeg, heic), not the
-/// whole capture set. Widening it would change which files today's builds
-/// group, and that is not this rule's job; the OS prefixes cover the other
+/// whole capture set. Widening it would change which files earlier builds
+/// grouped, and that is not this rule's job; the OS prefixes cover the other
 /// formats.
 fn is_known_name(file_name: &str, ext: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
@@ -271,6 +343,97 @@ mod tests {
     fn the_weakest_basis_is_the_greatest() {
         assert!(CaptureBasis::OsAttribute < CaptureBasis::OsName);
         assert!(CaptureBasis::OsName < CaptureBasis::KnownName);
+    }
+
+    fn entry(name: &str, is_dir: bool) -> Entry {
+        Entry {
+            path: Path::new("/fixture").join(name),
+            name: name.to_string(),
+            ext: Path::new(name)
+                .extension()
+                .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default(),
+            size: 1,
+            modified: None,
+            is_dir,
+            is_package: is_dir,
+            capture: None,
+        }
+    }
+
+    /// Recognise `name` with a probe that says "marked", and report whether
+    /// the probe was asked.
+    fn with_marked_probe(name: &str, is_dir: bool) -> (Option<Capture>, bool) {
+        let mut asked = false;
+        let capture = recognise(&entry(name, is_dir), |path| {
+            assert_eq!(path, Path::new("/fixture").join(name));
+            asked = true;
+            true
+        });
+        (capture, asked)
+    }
+
+    #[test]
+    fn a_marked_still_with_an_unrelated_name_is_an_os_attribute_capture() {
+        assert_eq!(
+            with_marked_probe("notes.png", false),
+            (capture(CaptureKind::Still, CaptureBasis::OsAttribute), true)
+        );
+        // The attribute is stronger than a name macOS wrote.
+        assert_eq!(
+            with_marked_probe("Bildschirmfoto 2026-11-12 um 09.41.12.pdf", false),
+            (capture(CaptureKind::Still, CaptureBasis::OsAttribute), true)
+        );
+    }
+
+    #[test]
+    fn the_probe_is_asked_for_still_extensions_only() {
+        // Any other extension is never a capture and is never probed.
+        assert_eq!(with_marked_probe("notes.txt", false), (None, false));
+        assert_eq!(with_marked_probe("notes", false), (None, false));
+        // A folder is never probed, whatever it is called.
+        assert_eq!(with_marked_probe("shots.png", true), (None, false));
+        // Recordings are known by name only: nobody has seen the attribute
+        // on a recording, so it is not asked.
+        assert_eq!(with_marked_probe("clip.mov", false), (None, false));
+        assert_eq!(
+            with_marked_probe("Screen Recording 2026-11-12 at 09.41.12.mov", false),
+            (capture(CaptureKind::Recording, CaptureBasis::OsName), false)
+        );
+    }
+
+    #[test]
+    fn an_unmarked_still_falls_back_to_its_name() {
+        let unmarked = |name: &str| recognise(&entry(name, false), |_| false);
+        assert_eq!(unmarked("notes.png"), None);
+        assert_eq!(
+            unmarked("Bildschirmfoto 2026-11-12 um 09.41.12.png"),
+            capture(CaptureKind::Still, CaptureBasis::OsName)
+        );
+        assert_eq!(
+            unmarked("CleanShot 2026-11-12 at 09.41.12.png"),
+            capture(CaptureKind::Still, CaptureBasis::KnownName)
+        );
+    }
+
+    #[test]
+    fn the_dutch_soft_hyphen_and_the_french_apostrophe_are_kept() {
+        assert_eq!(
+            recognise_by_name("Scherm\u{ad}afbeelding 2026-11-12 om 09.41.12.png"),
+            capture(CaptureKind::Still, CaptureBasis::OsName)
+        );
+        assert_eq!(
+            recognise_by_name("Schermafbeelding 2026-11-12 om 09.41.12.png"),
+            None
+        );
+        assert_eq!(
+            recognise_by_name("Capture d\u{2019}\u{e9}cran 2026-11-12 \u{e0} 09.41.12.png"),
+            capture(CaptureKind::Still, CaptureBasis::OsName)
+        );
+        assert_eq!(
+            recognise_by_name("Capture d'\u{e9}cran 2026-11-12 \u{e0} 09.41.12.png"),
+            None
+        );
     }
 
     /// The committed table must hold every prefix the running OS writes. A
