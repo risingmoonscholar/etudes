@@ -1,10 +1,10 @@
 //! Plan construction. Nothing here writes to the filesystem.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::classify;
+use crate::evidence::{self, Facts, Family};
 use crate::gate::{GatePolicy, Gated, gate};
 use crate::scan::{Entry, ScanOutcome};
 use crate::{Category, Untouched};
@@ -417,7 +417,8 @@ impl Plan {
                 && let Some(family) = path
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .and_then(classify::type_family)
+                    .and_then(Family::of_extension)
+                    .map(Family::folder_name)
             {
                 *by_family.entry(family).or_default() += 1;
             }
@@ -679,6 +680,30 @@ fn folder_observed(scan: &ScanOutcome, name: &str) -> bool {
         .any(|entry| entry.path == committed && entry.identity.kind == 2)
 }
 
+/// The files a rule has already taken. A later rule never takes one of them:
+/// the first rule to claim a file wins, which is what makes the rule order
+/// mean something.
+///
+/// A set, not a list: every rule asks it once per remaining file, and a list
+/// made that cost grow with the files times the files already claimed. The
+/// claim loop moves into its own module later, and this type goes with it.
+#[derive(Debug, Default)]
+struct ClaimSet(HashSet<PathBuf>);
+
+impl ClaimSet {
+    fn contains(&self, path: &Path) -> bool {
+        self.0.contains(path)
+    }
+
+    fn claim(&mut self, path: &Path) {
+        self.0.insert(path.to_path_buf());
+    }
+
+    fn claim_all<'e>(&mut self, entries: impl IntoIterator<Item = &'e Entry>) {
+        self.0.extend(entries.into_iter().map(|e| e.path.clone()));
+    }
+}
+
 /// Settle one group whose folder is `name`. When that folder is already here,
 /// files directly inside it stay where they are (they are already home) and
 /// any number of the rest moves in. When sweep would have to make the folder,
@@ -688,14 +713,14 @@ fn settle<'a>(
     scan: &ScanOutcome,
     name: &str,
     candidates: Vec<&'a Entry>,
-    claimed: &mut Vec<PathBuf>,
+    claimed: &mut ClaimSet,
     untouched: &mut Vec<(PathBuf, Untouched)>,
 ) -> Option<Vec<&'a Entry>> {
     if !folder_observed(scan, name) {
         if candidates.len() < MIN_STRUCTURAL_GROUP {
             return None;
         }
-        claimed.extend(candidates.iter().map(|e| e.path.clone()));
+        claimed.claim_all(candidates.iter().copied());
         return Some(candidates);
     }
     let destination = scan.root.join(name);
@@ -703,13 +728,13 @@ fn settle<'a>(
         .into_iter()
         .partition(|e| e.path.parent() == Some(destination.as_path()));
     for entry in in_place {
-        claimed.push(entry.path.clone());
+        claimed.claim(&entry.path);
         untouched.push((entry.path.clone(), Untouched::AlreadyInDestination));
     }
     if members.is_empty() {
         return None;
     }
-    claimed.extend(members.iter().map(|e| e.path.clone()));
+    claimed.claim_all(members.iter().copied());
     Some(members)
 }
 /// Window within which camera files count as one burst.
@@ -727,17 +752,18 @@ pub struct MapSpec {
 
 /// Names no mapping may target, case-insensitively: the vocabulary sweep
 /// itself uses. An agent routing .bpy into "documents" would silently merge
-/// its files into a built-in group's folder and make the count a lie.
-const RESERVED_DESTINATIONS: &[&str] = &[
-    "Images",
-    "Documents",
-    "Scripts",
-    "Installers",
-    "Archives",
-    "Media",
-    "Data",
-    "Screenshots",
-];
+/// its files into a built-in group's folder and make the count a lie. The
+/// type-family folders come from `Family`, so a new family is reserved the
+/// day it exists; these are the built-in folders that are not families.
+const RESERVED_DESTINATIONS: &[&str] = &["Installers", "Screenshots"];
+
+fn is_reserved_destination(folder: &str) -> bool {
+    Family::ALL
+        .iter()
+        .map(|family| family.folder_name())
+        .chain(RESERVED_DESTINATIONS.iter().copied())
+        .any(|reserved| reserved.eq_ignore_ascii_case(folder))
+}
 
 /// Validate agent mappings against the root. All-or-nothing: the first
 /// invalid mapping fails the whole set, because an agent loop that gets a
@@ -847,7 +873,7 @@ fn validate_maps_impl(
             ));
         }
         if !allow_built_in_extensions
-            && (classify::type_family(&ext).is_some() || ext == "dmg" || ext == "pkg")
+            && (Family::of_extension(&ext).is_some() || ext == "dmg" || ext == "pkg")
         {
             return Err(format!(
                 "--map: .{ext} already belongs to a built-in group; a mapping may \
@@ -879,11 +905,7 @@ fn validate_maps_impl(
                 "--map: {folder_shown} is not a plain visible folder name"
             ));
         }
-        if RESERVED_DESTINATIONS
-            .iter()
-            .any(|r| r.eq_ignore_ascii_case(folder))
-            || folder.to_ascii_lowercase().starts_with("photos")
-        {
+        if is_reserved_destination(folder) || folder.to_ascii_lowercase().starts_with("photos") {
             return Err(format!(
                 "--map: {folder_shown} is a name sweep itself uses; routing files \
                  there would fold them into a built-in group's count"
@@ -1000,9 +1022,11 @@ fn build_with_policy(
     maps: &[MapSpec],
     profile_routes: bool,
 ) -> Plan {
-    let mut plan = group_entries(scan, inspector, maps, profile_routes, false);
+    // The evidence once, for both runs: waiting changes nothing it reads.
+    let facts = evidence::observe(scan);
+    let mut plan = group_entries(scan, &facts, inspector, maps, profile_routes, false);
     if plan.groups.is_empty() && plan.too_recent() > 0 {
-        let unwindowed = group_entries(scan, None, maps, profile_routes, true);
+        let unwindowed = group_entries(scan, &facts, None, maps, profile_routes, true);
         plan.recent_would_group = would_group(&unwindowed);
     }
     plan
@@ -1016,6 +1040,7 @@ fn would_group(unwindowed: &Plan) -> bool {
 
 fn group_entries(
     scan: &ScanOutcome,
+    facts: &[Facts],
     inspector: Option<&mut dyn Inspector>,
     maps: &[MapSpec],
     profile_routes: bool,
@@ -1027,6 +1052,7 @@ fn group_entries(
         candidates: remaining,
     } = gate(
         scan,
+        facts,
         GatePolicy {
             grace: scan.grace,
             ignore_window,
@@ -1035,7 +1061,7 @@ fn group_entries(
     );
 
     let mut groups: Vec<Group> = Vec::new();
-    let mut claimed: Vec<PathBuf> = Vec::new();
+    let mut claimed = ClaimSet::default();
 
     // A saved profile is an explicit user taxonomy. It may claim files that
     // a built-in grouping would otherwise take, but only after the gate has
@@ -1052,25 +1078,25 @@ fn group_entries(
             let destination = scan.root.join(&m.folder);
             let in_place: Vec<&Entry> = remaining
                 .iter()
+                .map(|f| f.entry)
                 .filter(|e| !claimed.contains(&e.path))
                 .filter(|e| e.path.parent().is_some_and(|parent| parent == destination))
                 .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-                .copied()
                 .collect();
             for entry in in_place {
-                claimed.push(entry.path.clone());
+                claimed.claim(&entry.path);
                 untouched.push((entry.path.clone(), Untouched::AlreadyInDestination));
             }
             let members: Vec<&Entry> = remaining
                 .iter()
+                .map(|f| f.entry)
                 .filter(|e| !claimed.contains(&e.path))
                 .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-                .copied()
                 .collect();
             if members.is_empty() {
                 continue;
             }
-            claimed.extend(members.iter().map(|e| e.path.clone()));
+            claimed.claim_all(members.iter().copied());
             groups.push(Group {
                 name: m.folder.clone(),
                 signal: Signal::Mapped {
@@ -1103,9 +1129,9 @@ fn group_entries(
     for m in maps.iter().filter(|_| !profile_routes) {
         let members: Vec<&Entry> = remaining
             .iter()
+            .map(|f| f.entry)
             .filter(|e| !claimed.contains(&e.path))
             .filter(|e| e.ext.eq_ignore_ascii_case(&m.ext))
-            .copied()
             .collect();
         let Some(members) = settle(scan, &m.folder, members, &mut claimed, &mut untouched) else {
             continue;
@@ -1123,7 +1149,11 @@ fn group_entries(
     }
 
     // Everything still unclaimed is honestly reported as ungrouped.
-    for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
+    for e in remaining
+        .iter()
+        .map(|f| f.entry)
+        .filter(|e| !claimed.contains(&e.path))
+    {
         untouched.push((e.path.clone(), Untouched::NoClearGroup));
     }
 
@@ -1136,8 +1166,8 @@ fn group_entries(
 /// claimed, and a file already inside its group's folder is left in place.
 fn built_in_groups(
     scan: &ScanOutcome,
-    remaining: &[&Entry],
-    claimed: &mut Vec<PathBuf>,
+    remaining: &[&Facts],
+    claimed: &mut ClaimSet,
     untouched: &mut Vec<(PathBuf, Untouched)>,
 ) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
@@ -1145,8 +1175,8 @@ fn built_in_groups(
     // Pass 2: structural detectors, highest precision first.
     let shots: Vec<&Entry> = remaining
         .iter()
-        .copied()
-        .filter(|e| classify::is_screenshot(e) && !claimed.contains(&e.path))
+        .filter(|f| f.capture.is_some() && !claimed.contains(&f.entry.path))
+        .map(|f| f.entry)
         .collect();
     if let Some(shots) = settle(scan, "Screenshots", shots, claimed, untouched) {
         groups.push(Group {
@@ -1159,8 +1189,9 @@ fn built_in_groups(
 
     let mut camera_candidates: Vec<&Entry> = remaining
         .iter()
-        .copied()
-        .filter(|e| classify::is_camera(e) && !claimed.contains(&e.path) && e.modified.is_some())
+        .filter(|f| f.camera)
+        .map(|f| f.entry)
+        .filter(|e| !claimed.contains(&e.path) && e.modified.is_some())
         .collect();
     camera_candidates.sort_by_key(|e| e.modified);
     let burst_window = Duration::from_secs(u64::from(BURST_DAYS) * 86_400);
@@ -1201,8 +1232,8 @@ fn built_in_groups(
 
     let inst: Vec<&Entry> = remaining
         .iter()
-        .copied()
-        .filter(|e| classify::is_installer(e) && !claimed.contains(&e.path))
+        .filter(|f| f.installer && !claimed.contains(&f.entry.path))
+        .map(|f| f.entry)
         .collect();
     if let Some(inst) = settle(scan, "Installers", inst, claimed, untouched) {
         groups.push(Group {
@@ -1237,11 +1268,20 @@ fn built_in_groups(
     // is the whole mechanism -- the OS is not consulted -- and unknown means
     // untouched, because filing formats sweep cannot name would mean
     // maintaining a list of every app's private extension forever.
+    //
+    // Keyed by folder name, so the groups come out in that name's order, as
+    // they always have.
     {
         let mut by_family: BTreeMap<&'static str, Vec<&Entry>> = BTreeMap::new();
-        for e in remaining.iter().filter(|e| !claimed.contains(&e.path)) {
-            if let Some(fam) = classify::type_family(&e.ext) {
-                by_family.entry(fam).or_default().push(e);
+        for f in remaining
+            .iter()
+            .filter(|f| !claimed.contains(&f.entry.path))
+        {
+            if let Some(family) = f.family {
+                by_family
+                    .entry(family.folder_name())
+                    .or_default()
+                    .push(f.entry);
             }
         }
         for (family, members) in by_family {
@@ -1415,26 +1455,30 @@ pub fn build_tags(
     specs: &[TagSpec],
     inspector: Option<&mut dyn Inspector>,
 ) -> Plan {
-    let mut plan = tag_entries(scan, specs, inspector, false);
+    // The evidence once, for both runs, as for a folder plan.
+    let facts = evidence::observe(scan);
+    let mut plan = tag_entries(scan, &facts, specs, inspector, false);
     if plan.groups.is_empty() && plan.too_recent() > 0 {
-        plan.recent_would_group = would_group(&tag_entries(scan, specs, None, true));
+        plan.recent_would_group = would_group(&tag_entries(scan, &facts, specs, None, true));
     }
     plan
 }
 
 fn tag_entries(
     scan: &ScanOutcome,
+    facts: &[Facts],
     specs: &[TagSpec],
     inspector: Option<&mut dyn Inspector>,
     ignore_window: bool,
 ) -> Plan {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
     // The gate decides what a tag may touch, the same as for a move.
     let Gated {
         held: mut untouched,
         candidates: passed,
     } = gate(
         scan,
+        facts,
         GatePolicy {
             grace: scan.grace,
             ignore_window,
@@ -1453,10 +1497,9 @@ fn tag_entries(
     //   locked.
     // When #221 lands this block goes, and every file the gate lets through
     // can be tagged.
-    let mut folder_claimed: Vec<PathBuf> = Vec::new();
+    let mut folder_claimed = ClaimSet::default();
     let mut folder_groups = built_in_groups(scan, &passed, &mut folder_claimed, &mut untouched);
     let locked = hold_locked_destinations(scan, &mut folder_groups);
-    let folder_claimed: HashSet<PathBuf> = folder_claimed.into_iter().collect();
     let in_place: HashSet<&PathBuf> = untouched
         .iter()
         .filter(|(_, reason)| *reason == Untouched::AlreadyInDestination)
@@ -1464,7 +1507,7 @@ fn tag_entries(
         .collect();
     let mut candidates: Vec<&Entry> = passed
         .iter()
-        .copied()
+        .map(|f| f.entry)
         .filter(|entry| !entry.is_dir && !in_place.contains(&entry.path))
         .collect();
     candidates.sort_by(|a, b| a.path.cmp(&b.path));
@@ -1488,7 +1531,7 @@ fn tag_entries(
     }
 
     let mut groups = Vec::new();
-    let mut claimed: HashSet<PathBuf> = HashSet::new();
+    let mut claimed = ClaimSet::default();
     for spec in specs {
         let (entry, new) = match known.get(&spec.name.to_lowercase()) {
             Some(existing) => (existing.clone(), false),
@@ -1503,7 +1546,7 @@ fn tag_entries(
             if !candidate.ext.eq_ignore_ascii_case(&spec.ext) {
                 continue;
             }
-            claimed.insert(candidate.path.clone());
+            claimed.claim(&candidate.path);
             match state {
                 None => untouched.push((candidate.path.clone(), Untouched::TagStateUnreadable)),
                 Some(tags)
@@ -1534,6 +1577,7 @@ fn tag_entries(
     // folder is never tagged, and is still reported as left alone.
     for entry in passed
         .iter()
+        .map(|f| f.entry)
         .filter(|e| !folder_claimed.contains(&e.path) && !claimed.contains(&e.path))
     {
         untouched.push((entry.path.clone(), Untouched::NoClearGroup));
