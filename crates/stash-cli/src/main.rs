@@ -2826,27 +2826,17 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         ),
                         ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
                         ("elsewhere", "null".into()),
+                        ("holding", j::path(&dir)),
+                        ("undo_record", j::bool(false)),
                     ])
                 );
                 return ExitCode::SUCCESS;
             }
+            let due = deadline_of(name).map(|t| (t, t <= now_secs()));
             println!(
-                "\n{} stashed from {}.",
-                etude_cli_support::counted(n, "item", "items"),
-                etude_cli_support::shown(&root)
+                "{}",
+                unrecorded_here(&root, &dir, n, due.map(|(t, over)| (human_time(t), over)))
             );
-            // No undo record matches this holding folder, so `stash pop` cannot
-            // restore it. The wording of this step is not settled; it is kept in
-            // one place so both lines below change together.
-            let pop_step = format!("stash pop {}", root.display());
-            match deadline_of(name) {
-                Some(t) if t <= now_secs() => {
-                    println!("  OVERDUE since {}. run `{pop_step}`", human_time(t));
-                }
-                Some(t) => println!("  Due back {}", human_time(t)),
-                None => println!("  No deadline set."),
-            }
-            println!("\nRestore with: {pop_step}");
             ExitCode::SUCCESS
         }
     }
@@ -3098,6 +3088,25 @@ fn nothing_here(here: &Path, elsewhere: Option<(&Path, usize)>) -> String {
             quoted_path(there)
         ),
     }
+}
+
+/// What `status` says about a holding folder that no undo record matches. stash
+/// made it, but without a record (made with --no-journal, or the record is gone)
+/// pop cannot restore it, so no pop step is printed: only where the items are.
+/// `due` is the readable deadline and whether it has passed.
+fn unrecorded_here(root: &Path, holding: &Path, n: usize, due: Option<(String, bool)>) -> String {
+    use etude_cli_support::{counted, quoted_path, shown};
+    let when = match due {
+        Some((time, true)) => format!("OVERDUE since {time}."),
+        Some((time, false)) => format!("Due back {time}"),
+        None => "No deadline set.".to_owned(),
+    };
+    format!(
+        "\n{} stashed from {}.\n  {when}\n\nThere is no undo record for this stash, so stash pop cannot restore it.\nThe items are in: {}\nMove them back by hand.",
+        counted(n, "item", "items"),
+        shown(root),
+        quoted_path(holding)
+    )
 }
 
 /// Epoch seconds to a readable local-ish stamp, without a date dependency.
@@ -3500,6 +3509,36 @@ mod tests {
         assert!(told.starts_with("Nothing stashed in /tmp/h?ere."));
         assert!(told.contains("There is a stash in /tmp/bad?[31mname."));
         assert!(told.ends_with(r"Restore it with: stash pop $'/tmp/bad\x1b[31mname'"));
+    }
+
+    #[test]
+    fn status_without_an_undo_record_says_where_the_items_are_and_offers_no_pop() {
+        let told = unrecorded_here(
+            Path::new("/tmp/bad\u{1b}[31mname"),
+            Path::new("/tmp/bad\u{1b}[31mname/.stash-0-x"),
+            2,
+            Some(("2 hours ago".to_owned(), true)),
+        );
+        assert!(
+            !told.contains('\u{1b}'),
+            "a raw escape reached the terminal"
+        );
+        assert!(
+            !told
+                .replace("so stash pop cannot", "")
+                .contains("stash pop"),
+            "offered a pop that cannot work"
+        );
+        assert!(told.starts_with(
+            "\n2 items stashed from /tmp/bad?[31mname.\n  OVERDUE since 2 hours ago.\n"
+        ));
+        assert!(told.contains("so stash pop cannot restore it.\n"));
+        assert!(told.ends_with(
+            "The items are in: $'/tmp/bad\\x1b[31mname/.stash-0-x'\nMove them back by hand."
+        ));
+        let told = unrecorded_here(Path::new("/tmp/d"), Path::new("/tmp/d/.stash-0-x"), 1, None);
+        assert!(told.contains("1 item stashed from /tmp/d.\n  No deadline set.\n"));
+        assert!(told.contains("The items are in: '/tmp/d/.stash-0-x'\n"));
     }
 
     #[test]

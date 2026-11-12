@@ -6,7 +6,8 @@
 # folder, pop refuses and prints how to restore the newest. Each step is run
 # exactly as printed. A folder whose only stash has no undo record (made with
 # --no-journal) is not one pop can restore, so status from elsewhere does not
-# offer it.
+# offer it, and status in that folder prints no pop step, only where the items
+# are and that they move back by hand.
 #
 # The folder names hold a space and a single quote, or an escape character. No
 # raw escape byte may reach the terminal, and --json carries the real path.
@@ -44,6 +45,7 @@ run_step() {
   if [ "$code" = 0 ]; then pass "$1: step runs as printed"; else fail "$1: '$STEP' exit $code: $out"; fi
   no_escape "$1: step output" "$out"
 }
+has() { case "$2" in *"$3"*) pass "$1" ;; *) fail "$1: wanted '$3' in: $2" ;; esac; }
 hasnt() { case "$2" in *"$3"*) fail "$1: found '$3' in: $2" ;; *) pass "$1" ;; esac; }
 no_escape() {
   case "$2" in *"$ESC"*) fail "$1: a raw escape byte reached the terminal" ;; *) pass "$1: no raw escape" ;; esac
@@ -109,4 +111,22 @@ for case in quote escape; do
   assert_no_panic "$case: status with only an unrecorded stash" "$OUT"
   no_escape "$case: status with only an unrecorded stash" "$OUT"
   hasnt "$case: no step pop cannot follow" "$OUT" "stash pop"
+
+  # From that folder, status says pop cannot restore it and where the items
+  # are, as a path that names the real holding folder when pasted.
+  real=$(find "$dir" -mindepth 1 -maxdepth 1 -name '.stash-*' -type d)
+  OUT=$(cd "$dir" && "$STASH" status 2>&1 </dev/null)
+  assert_no_panic "$case: status on an unrecorded stash" "$OUT"
+  no_escape "$case: status on an unrecorded stash" "$OUT"
+  has "$case: says pop cannot restore it" "$OUT" "so stash pop cannot restore it."
+  hasnt "$case: no pop step on an unrecorded stash" "${OUT//so stash pop cannot/}" "stash pop"
+  hasnt "$case: no restore step on an unrecorded stash" "$OUT" "Restore with"
+  step "$case: items are in" "$OUT" "The items are in: "
+  shown_path=$(eval "printf '%s' $STEP")
+  assert_eq "$real" "$shown_path" "$case: the printed holding path is the real one"
+  has "$case: says to move them back" "$OUT" "Move them back by hand."
+  JSON=$(cd "$dir" && "$STASH" status --json 2>/dev/null </dev/null)
+  GOT=$(printf '%s' "$JSON" | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["details"]; print(d["holding"]); print(d["undo_record"])')
+  assert_eq "$real"$'\n'"False" "$GOT" "$case: --json gives the real holding path and no undo record"
+  hasnt "$case: --json has no pop step" "$JSON" "stash pop"
 done
