@@ -48,6 +48,11 @@ in one of two ways, and timing decides which:
   one file and then collided. `recovery.operation` is an id that `sweep status --id` reports
   as `interrupted`. Run `sweep undo` on the folder before planning again.
 
+The refused one says "FOLDER changed just now, perhaps by another run. Nothing
+was moved. Scan and apply again." A `stash FOLDER` that loses the same race
+before it moves anything also exits 2 with `plan_stale`, and says "Run it
+again."
+
 After the part-way ending, run `sweep undo` on the folder until it says there
 is nothing left to undo. It reverses the apply that recorded the remaining
 moves first, then the stopped apply, restoring every original path and byte.
@@ -71,7 +76,13 @@ Each apply is undone separately. One `sweep undo FOLDER` reverses one apply of
 that folder: of the applies that still have something to undo, the one whose
 undo record was written last. Every undo writes its record again, so after an
 undo that stops part way, by folder or by `--id`, `sweep undo FOLDER` goes back
-to that same apply. After an undo, sweep looks at what the next `sweep undo FOLDER` will
+to that same apply. Two undos of one apply at the same time do not both move
+the files: where the state folder's volume supports advisory locks, the second
+says another `sweep undo` is restoring these files and waits. If the first
+restored every file, the second says "Nothing to undo. Another `sweep undo`
+restored these files." and exits 1 with `nothing_to_do`; if the first stopped
+part way, the second restores the rest. `stash pop` does the same for two pops
+of one stash. After an undo, sweep looks at what the next `sweep undo FOLDER` will
 reach, and says so after the "Restored" line:
 
 ```console

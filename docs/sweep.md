@@ -5,9 +5,12 @@ Sweep sorts a messy folder into groups. It shows a plan and moves nothing until 
 ## A plan, before anything moves
 
 ```console
-$ sweep --scheme folders ~/Desktop
+$ sweep ~/Desktop
+3 files had no group.
+To choose a folder for each of the .fig, .psd, .sketch files in ~/Desktop, read:
+  sweep propose --help
 
-Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no contents read to decide
+Scanned 108 items  ·  filesystem and Finder organization metadata  ·  no contents read to decide  ·  sweep 0.5.5
 
   Screenshots      34 files   named "Screenshot ..."
   Photos, Jan 15   27 files   camera names, taken within 3 days
@@ -37,25 +40,39 @@ Applying reads the first and last 4 KiB of each file it moves, so undo can tell 
 
 Nothing moved, because nothing has been confirmed yet. The tax documents, the
 medical records and the driver's licence are the files reported as personal
-records, and no flag moves them.
+records, and no flag moves them. The 3 files with no group are counted first,
+with a step that runs as printed.
 
-`sweep apply ~/Desktop --yes` does not apply the plan on screen. It scans the
-folder again and makes a new plan. If files changed after the preview, it can
-move different files. To move only a plan you have seen, save it with
-`--export-plan FILE`, where FILE is a new file outside the folder. The Save
-step gives one: `~/sweep.plan`, or `/tmp/sweep.plan` when you scan your home
-folder or a folder that holds it. When that name is taken, it gives
-`sweep-2.plan`, then `sweep-3.plan`, and so on. Then run the `sweep apply --plan FILE --plan-digest SHA --yes` command
-that the export prints, with the real digest. That apply refuses if anything
-the scan looked at has changed. `sweep review` also scans again, but it shows
-each group before anything moves. When a scan with `--inspect-content` read file
-contents, the footer says that apply and review do not read them, so only the
-Save step keeps that check.
+## Two limits to know before you apply
+
+**`sweep apply FOLDER --yes` does not apply the plan you saw.** It scans the
+folder again, makes a new plan and moves what that plan says. If files changed
+after the preview, it can move different files. `sweep review` also scans
+again, but it shows each group before anything moves.
+
+To apply exactly the plan you preview, save it and apply the saved plan:
+
+1. Run `sweep ~/Desktop --export-plan ~/sweep.plan`. It shows the plan and
+   saves it to `~/sweep.plan`, a new file outside the folder. The Save step
+   above gives you that line. It gives `/tmp/sweep.plan` when you scan your
+   home folder or a folder that holds it. When the name is taken, it gives
+   `sweep-2.plan`, then `sweep-3.plan`, and so on.
+2. Check that plan.
+3. Run the line it prints:
+   `sweep apply --plan ~/sweep.plan --plan-digest SHA --yes`, with the real
+   digest. That apply moves only the saved plan. It refuses if anything the
+   scan looked at has changed.
+
+When a scan with `--inspect-content` read file contents, the footer says that
+apply and review do not read them, so only the saved plan keeps that check.
 See [Applying an observed plan](plan-binding.md).
 
-The grace window (`--since`) leaves alone files that changed in the last day.
-An older file can still be in use by a program, such as a log that is still
-being written. Sweep cannot tell. Check the plan before you apply it.
+**A file's age does not prove that no program is using it.** The one-day
+guard (`--since`, default `1d`) only skips files changed in the last day. A
+file that has not changed for longer can still be open in a program, for
+example a document an app holds open, or a file a running program reads.
+Sweep cannot tell, and it moves such a file like any other. Check the plan
+before you apply it, and quit programs that use files in the folder.
 
 ## What sweep refuses to touch
 
@@ -224,10 +241,11 @@ default.
 ```console
 $ sweep ~/Downloads
 
-  Documents       12 files   .pdf
-  1 folder was left alone because it holds a project file
+  Documents      12 files   .pdf
+
   2 files changed too recently to judge and were left alone
   1 download is still in progress and was left alone
+  1 folder was left alone because it holds a project file
 ```
 
 ### What it does not protect
