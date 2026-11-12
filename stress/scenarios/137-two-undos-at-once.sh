@@ -76,6 +76,15 @@ pause_part_way() {
   return 1
 }
 
+# fresh LABEL DIR: the second undo's output files do not exist yet in DIR.
+fresh() {
+  if [ ! -e "$2/b.out" ] && [ ! -e "$2/b.err" ]; then
+    pass "$1: the second undo's output starts in a new file"
+  else
+    fail "$1: an earlier b.out or b.err is in $2"
+  fi
+}
+
 # no_false_claim LABEL TEXT: nothing in TEXT says the restore failed or stopped.
 no_false_claim() {
   local bad
@@ -106,10 +115,13 @@ record_id() {
 }
 
 trial() {  # trial MODE: folder, json, newest or id
-  local mode="$1" attempt D restored said code_a code_b out_a out_b id start
+  local mode="$1" attempt O D restored said code_a code_b out_a out_b id start
   local -a undo=()
   for attempt in 1 2 3 4; do
-    D="$W/$mode-$attempt/Notes"
+    # Each attempt writes its output in its own new folder, so no check can
+    # read a file left by an earlier trial.
+    O="$W/$mode-$attempt"
+    D="$O/Notes"
     export ETUDE_STATE_DIR="$W/$mode-$attempt/state"
     mkdir -p "$ETUDE_STATE_DIR"
     make_tree "$D"
@@ -126,7 +138,7 @@ trial() {  # trial MODE: folder, json, newest or id
       id) undo=(undo --id "$id") ;;
     esac
 
-    "$SWEEP" "${undo[@]}" >"$W/a.out" 2>"$W/a.err" </dev/null &
+    "$SWEEP" "${undo[@]}" >"$O/a.out" 2>"$O/a.err" </dev/null &
     A=$!
     if restored=$(pause_part_way "$D" "$A" "$start"); then
       break
@@ -148,22 +160,23 @@ trial() {  # trial MODE: folder, json, newest or id
 
   # The second undo starts while the first is held. Wait until it has exited
   # or said it is waiting; both are states, not times.
+  fresh "$mode" "$O"
   if [ "$mode" = json ]; then
-    "$SWEEP" undo --json "$D" >"$W/b.out" 2>"$W/b.err" </dev/null &
+    "$SWEEP" undo --json "$D" >"$O/b.out" 2>"$O/b.err" </dev/null &
   else
-    "$SWEEP" "${undo[@]}" >"$W/b.out" 2>"$W/b.err" </dev/null &
+    "$SWEEP" "${undo[@]}" >"$O/b.out" 2>"$O/b.err" </dev/null &
   fi
   B=$!
   said=""
   for _ in $(seq 1 600); do
-    if grep -q 'Waiting for it to finish' "$W/b.err" 2>/dev/null; then said=1; break; fi
+    if grep -q 'Waiting for it to finish' "$O/b.err" 2>/dev/null; then said=1; break; fi
     kill -0 "$B" 2>/dev/null || break
     sleep 0.05
   done
   if [ -n "$said" ] && kill -0 "$B" 2>/dev/null; then
     pass "$mode: second undo waits for the first while it is stopped, and says so"
   else
-    fail "$mode: second undo did not wait for the first (still running: $(kill -0 "$B" 2>/dev/null && echo yes || echo no)): $(cat "$W/b.out" "$W/b.err" | grep -v -e 'items$' -e '^{' | head -5)"
+    fail "$mode: second undo did not wait for the first (still running: $(kill -0 "$B" 2>/dev/null && echo yes || echo no)): $(cat "$O/b.out" "$O/b.err" | grep -v -e 'items$' -e '^{' | head -5)"
   fi
   # Nothing moves while the first undo is stopped and the second waits.
   if [ "$(home "$D")" = "$restored" ]; then
@@ -171,21 +184,21 @@ trial() {  # trial MODE: folder, json, newest or id
   else
     fail "$mode: files moved while the first undo was stopped: $(home "$D") home, $restored when it stopped"
   fi
-  if grep -q 'another `sweep undo` is restoring these files now' "$W/b.err" \
-    && grep -q 'Press Ctrl-C to stop waiting; that changes nothing.' "$W/b.err"; then
+  if grep -q 'another `sweep undo` is restoring these files now' "$O/b.err" \
+    && grep -q 'Press Ctrl-C to stop waiting; that changes nothing.' "$O/b.err"; then
     pass "$mode: second undo names the other undo and says how to stop waiting"
   else
-    fail "$mode: second undo does not say another undo is restoring these files: $(head -3 "$W/b.err")"
+    fail "$mode: second undo does not say another undo is restoring these files: $(head -3 "$O/b.err")"
   fi
 
   kill -CONT "$A"
   wait "$A"; code_a=$?; A=""
   wait "$B"; code_b=$?; B=""
-  out_a=$(cat "$W/a.out" "$W/a.err")
-  out_b=$(cat "$W/b.out" "$W/b.err")
+  out_a=$(cat "$O/a.out" "$O/a.err")
+  out_b=$(cat "$O/b.out" "$O/b.err")
 
   assert_eq 0 "$code_a" "$mode: first undo exits 0 (exit $code_a)"
-  if grep -qx "Restored $((TOTAL - start)) files." "$W/a.out"; then
+  if grep -qx "Restored $((TOTAL - start)) files." "$O/a.out"; then
     pass "$mode: first undo says it restored all $((TOTAL - start)) files it moved"
   else
     fail "$mode: first undo does not say Restored $((TOTAL - start)) files: $(grep -v 'items$' <<<"$out_a" | head -4)"
@@ -199,7 +212,7 @@ trial() {  # trial MODE: folder, json, newest or id
   no_false_claim "$mode: first undo" "$out_a"
   no_false_claim "$mode: second undo" "$out_b"
   if [ "$mode" = json ]; then
-    if python3 -I - "$W/b.out" <<'PY_JSON'
+    if python3 -I - "$O/b.out" <<'PY_JSON'
 import json, sys
 line = [l for l in open(sys.argv[1]) if l.startswith("{")][-1]
 doc = json.loads(line)
@@ -212,7 +225,7 @@ PY_JSON
     then
       pass "json: second undo --json gives status nothing_to_do, reason nothing_to_do, nothing restored, nothing remaining"
     else
-      fail "json: second undo --json does not agree with its text: $(tail -c 400 "$W/b.out")"
+      fail "json: second undo --json does not agree with its text: $(tail -c 400 "$O/b.out")"
     fi
   fi
 
@@ -248,9 +261,10 @@ trial id
 # The second waits, and after the first restores that apply it must say so and
 # stop. Going on would undo the older apply, which nobody asked this run to do.
 two_applies() {
-  local OLDER=300 attempt D restored said code_a code_b out_b start mid row before newer
+  local OLDER=300 attempt O D restored said code_a code_b out_b start mid row before newer
   for attempt in 1 2 3 4; do
-    D="$W/two-$attempt/Notes"
+    O="$W/two-$attempt"
+    D="$O/Notes"
     export ETUDE_STATE_DIR="$W/two-$attempt/state"
     mkdir -p "$ETUDE_STATE_DIR"
     # The original: both kinds of file, built once more beside it.
@@ -279,7 +293,7 @@ PY_OLDER
     start=$(home "$D")
     newer=$((before - start))
     mid=$(find "$W/two-$attempt" -name 'old *.txt' -path '*/Notes/*/*' | wc -l | tr -d ' ')
-    "$SWEEP" undo "$D" >"$W/a.out" 2>"$W/a.err" </dev/null &
+    "$SWEEP" undo "$D" >"$O/a.out" 2>"$O/a.err" </dev/null &
     A=$!
     if restored=$(pause_part_way "$D" "$A" "$start" "$before"); then
       break
@@ -298,23 +312,24 @@ PY_OLDER
   else
     fail "two applies: first undo is not confirmed stopped part way ($restored home, $mid older files moved)"
   fi
-  "$SWEEP" undo "$D" >"$W/b.out" 2>"$W/b.err" </dev/null &
+  fresh "two applies" "$O"
+  "$SWEEP" undo "$D" >"$O/b.out" 2>"$O/b.err" </dev/null &
   B=$!
   said=""
   for _ in $(seq 1 600); do
-    if grep -q 'Waiting for it to finish' "$W/b.err" 2>/dev/null; then said=1; break; fi
+    if grep -q 'Waiting for it to finish' "$O/b.err" 2>/dev/null; then said=1; break; fi
     kill -0 "$B" 2>/dev/null || break
     sleep 0.05
   done
   if [ -n "$said" ] && kill -0 "$B" 2>/dev/null && [ "$(home "$D")" = "$restored" ]; then
     pass "two applies: second undo waits and restores nothing while the first is stopped"
   else
-    fail "two applies: second undo did not wait ($(home "$D") home, $restored when stopped): $(cat "$W/b.out" "$W/b.err" | grep -v 'items$' | head -4)"
+    fail "two applies: second undo did not wait ($(home "$D") home, $restored when stopped): $(cat "$O/b.out" "$O/b.err" | grep -v 'items$' | head -4)"
   fi
   kill -CONT "$A"
   wait "$A"; code_a=$?; A=""
   wait "$B"; code_b=$?; B=""
-  out_b=$(cat "$W/b.out" "$W/b.err")
+  out_b=$(cat "$O/b.out" "$O/b.err")
   assert_eq 0 "$code_a" "two applies: first undo exits 0 (exit $code_a)"
   assert_eq 1 "$code_b" "two applies: second undo exits 1, nothing to do (exit $code_b)"
   if grep -q '^Restored' <<<"$out_b"; then
@@ -355,4 +370,29 @@ PY_SAME
   fi
 }
 
+
+# Files put back by hand are not an interrupted restore. The record cannot tell
+# a restore that stopped from a person who moved them, so undo says only that
+# they were back in place.
+by_hand() {
+  local D="$W/hand/Notes" out code
+  export ETUDE_STATE_DIR="$W/hand/state"
+  mkdir -p "$ETUDE_STATE_DIR"
+  make_tree "$D" 4 note
+  snapshot_tree "$D" "$W/hand-before.json"
+  "$SWEEP" apply "$D" --since 0 --yes >/dev/null 2>&1 </dev/null
+  mv "$D"/*/"note 0000.txt" "$D"/*/"note 0001.txt" "$D/"
+  out=$("$SWEEP" undo "$D" 2>&1 </dev/null); code=$?
+  assert_eq 0 "$code" "by hand: undo exits 0 (exit $code)"
+  if grep -qx '  2 files were already back in place; the undo record now says so.' <<<"$out" \
+    && ! grep -q -i 'interrupted' <<<"$out"; then
+    pass "by hand: undo says 2 files were already back in place, not that a restore was interrupted"
+  else
+    fail "by hand: undo does not say the files were back in place: $(head -4 <<<"$out")"
+  fi
+  snapshot_tree "$D" "$W/hand-after.json"
+  assert_snapshot_eq "$W/hand-before.json" "$W/hand-after.json" "by hand: the folder equals its original"
+}
+
 two_applies
+by_hand

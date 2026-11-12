@@ -919,12 +919,17 @@ fn execute_stash(
     }
     let downloads = downloads_in_plan(&bound.plan);
     let mut progress = etude_cli_support::progress::Reporter::for_operation("stash", "stash");
+    // Held until this command returns.
+    let mut hold = StashHold::new();
     let result = etude_core::apply::apply_bound_with_structured_progress_outcome(
         &bound,
         &context,
         sl.as_ref().map(|s| s as &dyn etude_core::journal::Sealer),
         None,
-        |event| progress.update(event),
+        |event| {
+            hold.update(&event);
+            progress.update(event)
+        },
     );
     progress.settle();
     let code = (|| match result {
@@ -1234,12 +1239,17 @@ fn cmd_select(args: &[String]) -> ExitCode {
     let plan = selection::plan(&prepared, root.clone(), &holding_name(deadline));
     let downloads = downloads_in_plan(&plan);
     let mut progress = etude_cli_support::progress::Reporter::for_operation("stash", "stash");
+    // Held until this command returns.
+    let mut hold = StashHold::new();
     let result = etude_core::apply::apply_with_structured_progress_outcome(
         &plan,
         "stash",
         Some(&sealer),
         None,
-        |event| progress.update(event),
+        |event| {
+            hold.update(&event);
+            progress.update(event)
+        },
     );
     progress.settle();
     let code = (|| match result {
@@ -1637,10 +1647,7 @@ fn no_stash_text(selector: &batches::Selector) -> String {
 /// The records that would not open, up to three, each with what it needs.
 fn print_unreadable(unreadable: &[batches::Unreadable]) {
     for record in unreadable.iter().take(3) {
-        eprintln!(
-            "stash: {}",
-            etude_cli_support::problems::record_open_problem("stash", &record.id, &record.error)
-        );
+        eprintln!("stash: {}", record_problem(&record.id, &record.error));
     }
     if unreadable.len() > 3 {
         eprintln!(
@@ -1652,16 +1659,27 @@ fn print_unreadable(unreadable: &[batches::Unreadable]) {
 
 /// One record that would not open blocks a pop by folder, because it may be the
 /// one that belongs to that folder. An id still reaches a record that opens.
+/// Why a record did not open. One being written now is not damaged.
+fn record_problem(id: &str, error: &etude_core::journal::JournalError) -> String {
+    if batches::being_written(id, error) {
+        return format!(
+            "the undo record {} is being written now: a `stash` or `stash pop` is running on it. Run this again when it finishes.",
+            etude_cli_support::shown(&batches::record_path(id))
+        );
+    }
+    etude_cli_support::problems::record_open_problem("stash", id, error)
+}
+
+/// How long status reads again while a record is being written.
+const STATUS_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn refuse_unopened_pop(
     asked_id: Option<&str>,
     error: &etude_core::journal::JournalError,
     sealer: &dyn etude_core::journal::Sealer,
 ) -> ExitCode {
     if let Some(id) = asked_id {
-        eprintln!(
-            "stash: {} Nothing was restored.",
-            etude_cli_support::problems::record_open_problem("stash", id, error)
-        );
+        eprintln!("stash: {} Nothing was restored.", record_problem(id, error));
         return fail(journal_reason(error));
     }
     match batches::survey(sealer) {
@@ -1926,6 +1944,94 @@ fn refuse_empty_folder_word() -> ExitCode {
 /// No hold (a volume without advisory locks, or a record that cannot be
 /// opened) leaves pop as it was; the record is read again either way.
 fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
+    hold_record(&journal.id).0
+}
+
+/// Records this run waited on another run for.
+static WAITED_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static SAID_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Said once, by whichever wait comes first. The run holding the record may be
+/// a pop or the stash that is still moving items into it.
+fn say_waiting() {
+    eprintln!(
+        "stash: a `stash` or `stash pop` is running on this stash now. Waiting for it to finish.\n\
+         \x20      Press Ctrl-C to stop waiting; that changes nothing."
+    );
+}
+
+/// A stash's hold on its own record while it moves items, so that a pop that
+/// starts meanwhile waits for the stash instead of restoring around it (see
+/// [`hold_for_pop`]). The record does not exist until the stash saves it, so
+/// the hold is taken at the first recorded move. The record is this run's:
+/// its id carries this process's id and a creation time after `started`.
+struct StashHold {
+    started: u128,
+    tried: bool,
+    _file: Option<std::fs::File>,
+}
+
+impl StashHold {
+    fn new() -> Self {
+        Self {
+            started: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+            tried: false,
+            _file: None,
+        }
+    }
+
+    fn update(&mut self, event: &etude_core::apply::StructuredProgress) {
+        if self.tried || event.phase != etude_core::apply::ProgressPhase::Advancing {
+            return;
+        }
+        self.tried = true;
+        let pid = std::process::id().to_string();
+        let Ok(entries) = std::fs::read_dir(etude_core::journal::state_dir()) else {
+            return;
+        };
+        let own = entries
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter_map(|name| {
+                let id = name.strip_prefix("stash-")?.strip_suffix(".journal")?;
+                let created = etude_core::journal::creation_time(id)?;
+                (id.split('-').nth(1) == Some(pid.as_str()) && created >= self.started)
+                    .then(|| (created, id.to_owned()))
+            })
+            .max();
+        if let Some((_, id)) = own {
+            self._file = hold_record_at(&batches::record_path(&id), || {});
+        }
+    }
+}
+
+fn waited_on() -> Vec<String> {
+    WAITED_ON.lock().map(|ids| ids.clone()).unwrap_or_default()
+}
+
+/// The hold of [`hold_for_pop`] on the record `id`, and whether another run
+/// (a pop, or the stash itself) held it, so that this one waited.
+fn hold_record(id: &str) -> (Option<std::fs::File>, bool) {
+    if !etude_core::journal::valid_journal_id(id) {
+        return (None, false);
+    }
+    let path = batches::record_path(id);
+    let mut waited = false;
+    let file = hold_record_at(&path, || {
+        waited = true;
+        if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            say_waiting();
+        }
+        if let Ok(mut ids) = WAITED_ON.lock() {
+            ids.push(id.to_owned());
+        }
+    });
+    (file, waited)
+}
+
+fn hold_record_at(path: &Path, mut on_wait: impl FnMut()) -> Option<std::fs::File> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
     unsafe extern "C" {
@@ -1941,7 +2047,6 @@ fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
             return Err(error);
         }
     };
-    let path = journal.path();
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     // Do not follow a replacement symlink or block on a replacement FIFO.
@@ -1964,26 +2069,19 @@ fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(0x8000 | 0x800);
     }
-    let mut said = false;
     // Each turn follows one save by the other pop, so a few are plenty.
     for _ in 0..100 {
-        let file = scan::observe_read("file_open", options.open(&path)).ok()?;
+        let file = scan::observe_read("file_open", options.open(path)).ok()?;
         match lock(&file, false) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if !said {
-                    eprintln!(
-                        "stash: another `stash pop` is restoring this stash now. Waiting for it to finish.\n\
-                         \x20      Press Ctrl-C to stop waiting; that changes nothing."
-                    );
-                    said = true;
-                }
+                on_wait();
                 lock(&file, true).ok()?;
             }
             Err(_) => return None,
         }
         let held = file.metadata().ok()?;
-        let current = std::fs::symlink_metadata(&path).ok()?;
+        let current = std::fs::symlink_metadata(path).ok()?;
         // Something other than a record file: no hold, and no retry.
         if !held.is_file() || !current.is_file() {
             return None;
@@ -1993,6 +2091,100 @@ fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
         }
     }
     None
+}
+
+/// [`batches::select`], read again when a record changed while it was read.
+/// A stash or a pop writes its record as it goes, so a read made then finds it
+/// changing; that is not a damaged record. A record another run holds is
+/// waited for, through its hold. Before its first recorded move a stash holds
+/// nothing, so its record is read again until it stops changing.
+fn select_waiting(
+    selector: &batches::Selector,
+    sl: &dyn etude_core::journal::Sealer,
+) -> Result<Option<etude_core::Journal>, etude_core::journal::JournalError> {
+    let started = std::time::Instant::now();
+    loop {
+        let error = match batches::select(selector.clone(), sl) {
+            Err(error) if batches::changed_while_read(&error) => error,
+            other => return other,
+        };
+        let writing: Vec<String> = match selector {
+            batches::Selector::Id(id) => vec![id.clone()],
+            _ => batches::survey(sl)
+                .map(|(_, unreadable)| unreadable)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|record| batches::changed_while_read(&record.error))
+                .map(|record| record.id)
+                .collect(),
+        };
+        let writing: Vec<String> = writing
+            .into_iter()
+            .filter(|id| batches::being_written(id, &error))
+            .collect();
+        if matches!(selector, batches::Selector::Id(_)) && writing.is_empty() {
+            return Err(error);
+        }
+        // An hour is past any stash; a record still changing then is not a
+        // run that will finish.
+        if started.elapsed() > std::time::Duration::from_secs(3600) {
+            return Err(error);
+        }
+        let mut a_pop = false;
+        for id in &writing {
+            a_pop |= hold_record(id).1;
+        }
+        if !a_pop && !writing.is_empty() {
+            if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                say_waiting();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
+/// Whether a record this pop waited on is now restored by the pop that held it,
+/// fits what was asked, and is what this pop would have restored: the choice
+/// made after the wait is that record, nothing, or an older stash, which this
+/// pop was never asked to reach.
+fn restored_while_waiting(
+    selector: &batches::Selector,
+    chosen: Option<&etude_core::Journal>,
+    sl: &dyn etude_core::journal::Sealer,
+) -> bool {
+    let root = match selector {
+        batches::Selector::Root(path) | batches::Selector::Latest(Some(path)) => {
+            path.canonicalize().ok()
+        }
+        _ => None,
+    };
+    let fits = |journal: &etude_core::Journal| match selector {
+        batches::Selector::Id(id) => &journal.id == id,
+        batches::Selector::Latest(None) => true,
+        _ => root
+            .as_ref()
+            .is_some_and(|root| batches::matches_root(journal, root)),
+    };
+    let newer = |id: &str, than: &str| {
+        id != than
+            && match (batches::creation(id), batches::creation(than)) {
+                (Some(id), Some(than)) => id > than,
+                _ => true,
+            }
+    };
+    waited_on().iter().any(|id| {
+        chosen.is_none_or(|chosen| !newer(&chosen.id, id))
+            && etude_core::Journal::load_sealed_exact("stash", id, sl)
+                .is_ok_and(|journal| fits(&journal) && journal_is_fully_undone(&journal))
+    })
+}
+
+/// Nothing to restore, because another pop restored this stash while this one
+/// waited for it.
+fn restored_by_another_pop() -> ExitCode {
+    println!("\nNothing to restore. Another `stash pop` restored this stash.");
+    etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
+    ExitCode::from(1)
 }
 
 fn cmd_pop(args: &[String]) -> ExitCode {
@@ -2050,7 +2242,10 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         batches::Selector::Latest(folder) => Some(folder.is_none()),
         _ => None,
     };
-    let mut j = match batches::select(selector, &sl) {
+    let mut j = match select_waiting(&selector, &sl) {
+        Ok(chosen) if restored_while_waiting(&selector, chosen.as_ref(), &sl) => {
+            return restored_by_another_pop();
+        }
         Ok(Some(journal)) => journal,
         Ok(None) => {
             eprintln!("{nothing_found}");
@@ -2071,7 +2266,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     // Held until pop returns. Read the record again under the hold: another
     // pop may have restored items since it was first read.
     let _hold = hold_for_pop(&j);
-    let had_work = !journal_is_fully_undone(&j);
+    let had_work = !journal_is_fully_undone(&j) || waited_on().contains(&j.id);
     j = match etude_core::Journal::load_sealed_exact("stash", &j.id, &sl) {
         Ok(journal) => journal,
         Err(error) => return refuse_unopened_pop(Some(&j.id), &error, &sl),
@@ -2105,7 +2300,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
     }
     if journal_is_fully_undone(&j) {
         if had_work {
-            println!("\nNothing to restore. Another `stash pop` restored this stash.");
+            return restored_by_another_pop();
         } else {
             println!("\nNothing to restore. This stash was already popped.");
         }
@@ -2205,7 +2400,7 @@ fn cmd_pop(args: &[String]) -> ExitCode {
             // earlier undo moved these home and was killed before it could write
             // that down, so this run only had to agree with the disk.
             println!(
-                "  {} already home from an interrupted restore; the undo record now says so.",
+                "  {} already back in place; the undo record now says so.",
                 etude_cli_support::counted(r.reconciled.len(), "item was", "items were")
             );
         }
@@ -2605,7 +2800,7 @@ fn cmd_status_all(args: &[String]) -> ExitCode {
     let Some(sl) = sealer(false) else {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
-    let (stashes, unreadable) = match batches::survey(&sl) {
+    let (stashes, unreadable) = match batches::survey_settled(&sl, STATUS_PATIENCE) {
         Ok(value) => value,
         Err(error) => {
             eprintln!(
@@ -2757,7 +2952,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
         return refuse(etude_cli_support::reason::Code::JournalKeyUnavailable);
     };
     {
-        let batches = match batches::survey(&sealer) {
+        let batches = match batches::survey_settled(&sealer, STATUS_PATIENCE) {
             Ok((batches, unreadable)) => match unreadable.first() {
                 None => batches,
                 Some(first) => {
@@ -2866,7 +3061,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         Place::Here => {}
                         Place::Home => {
                             println!(
-                                "  {}: its items are back in this folder. Clear the record with: stash pop --id {}",
+                                "  {}: its holding folder is gone, and files with its items' names, sizes and times are in this folder. To check them against the record and clear it if they match: stash pop --id {}",
                                 batch.id, batch.id
                             );
                             continue;
@@ -3116,12 +3311,25 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
         }
     };
     let sealer = KeychainSeal { key };
-    match etude_core::Journal::load_sealed_exact("stash", &id, &sealer) {
+    let started = std::time::Instant::now();
+    let read = loop {
+        let read = etude_core::Journal::load_sealed_exact("stash", &id, &sealer);
+        match &read {
+            Err(error)
+                if batches::being_written(&id, error) && started.elapsed() < STATUS_PATIENCE =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => break read,
+        }
+    };
+    match read {
         Ok(journal) => {
-            let why_not = if batches::live(&journal) {
+            let live = batches::live(&journal);
+            let why_not = if live {
                 place(&journal).why_not()
             } else {
-                None
+                Some("nothing of it is left to restore.")
             };
             if flag(args, "--json") {
                 println!("{}", status_id_payload(&journal, why_not.is_none()));
@@ -3156,10 +3364,7 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
         Err(error) => {
-            eprintln!(
-                "stash: {}",
-                etude_cli_support::problems::record_open_problem("stash", &id, &error)
-            );
+            eprintln!("stash: {}", record_problem(&id, &error));
             fail(etude_cli_support::reason::Code::JournalUnreadable)
         }
     }
@@ -3439,12 +3644,17 @@ fn root_identity_matches(batch: &etude_core::Journal, at: &Path) -> Option<bool>
 enum Place {
     /// The folder and its holding folder are the ones stash recorded.
     Here,
-    /// The folder is the one recorded, its holding folder is gone, and every
-    /// moved item is back in its place: pop only clears the record.
+    /// The folder is the one recorded, its holding folder is gone, and a file
+    /// with each moved item's name, size and time is in its place. Pop checks
+    /// their contents too, then clears the record if they match. Status reads
+    /// metadata only, so it cannot say more than that.
     Home,
     /// The folder is the one recorded, its holding folder is gone, and some
     /// item is not back: there is nothing for pop to restore from.
     Gone,
+    /// As Gone, and a file that is not the item has an item's name: its size
+    /// or time differs from the record.
+    NotTheItems,
     /// The holding folder at the recorded place is not the one stash made.
     HoldingReplaced,
     /// The folder at the recorded place is not the one stashed: it was moved
@@ -3459,6 +3669,9 @@ impl Place {
             Place::Here | Place::Home => None,
             Place::Gone => Some(
                 "its holding folder is gone and its items are not back in their folder, so stash pop cannot restore it.",
+            ),
+            Place::NotTheItems => Some(
+                "its holding folder is gone and its items are not back in their folder; other files now have some of their names, so stash pop cannot restore it.",
             ),
             Place::HoldingReplaced => {
                 Some("its holding folder was replaced, so stash pop cannot restore it here.")
@@ -3481,12 +3694,24 @@ fn place(batch: &etude_core::Journal) -> Place {
     };
     match std::fs::symlink_metadata(&recorded) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let home = batch
-                .entries
-                .iter()
-                .filter(|entry| entry.is_moved())
-                .all(|entry| std::fs::symlink_metadata(&entry.from).is_ok());
-            if home { Place::Home } else { Place::Gone }
+            // The size and time pop compares; pop also compares the first and
+            // last bytes, which status does not read.
+            let mut missing = false;
+            let mut other = false;
+            for entry in batch.entries.iter().filter(|entry| entry.is_moved()) {
+                match size_and_time(&entry.from) {
+                    Some((size, mtime)) if size == entry.size && mtime == entry.mtime_secs => {}
+                    Some(_) => other = true,
+                    None => missing = true,
+                }
+            }
+            if other {
+                Place::NotTheItems
+            } else if missing {
+                Place::Gone
+            } else {
+                Place::Home
+            }
         }
         Err(_) => Place::HoldingReplaced,
         Ok(_) => {
@@ -3503,6 +3728,19 @@ fn place(batch: &etude_core::Journal) -> Place {
             }
         }
     }
+}
+
+/// The size and modification time in whole seconds of what is at `path`, read
+/// as the record's fingerprint reads them (the link itself, not its target).
+fn size_and_time(path: &Path) -> Option<(u64, i64)> {
+    let meta = etude_core::scan::observe_read("metadata", std::fs::symlink_metadata(path)).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0);
+    Some((meta.len(), mtime))
 }
 
 /// Whether `stash pop` can restore `batch` from where its record says.
@@ -3731,6 +3969,44 @@ mod tests {
         L.get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn the_error_for_a_record_changed_while_read_is_recognized() {
+        // etude-core reports a record that changed while it was read, or that
+        // is not a regular file, with one error. Read the real one.
+        let _g = lock();
+        let state = std::env::temp_dir().join(format!(
+            "stash-changed-while-read-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let id = "1794483027356464000-64803-0-33f103d5913ee078";
+        std::fs::create_dir_all(state.join(format!("stash-{id}.journal"))).unwrap();
+        unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+        // The read stops before anything is unsealed.
+        let read = etude_core::Journal::load_sealed_exact("stash", id, &TestSeal);
+        let Err(error) = read else {
+            panic!("a folder named like a record loaded");
+        };
+        let recognized = batches::changed_while_read(&error);
+        // A folder is not a record being written: no wait, and the old words.
+        let written = batches::being_written(id, &error);
+        let problem = record_problem(id, &error);
+        unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+        let _ = std::fs::remove_dir_all(&state);
+        assert!(recognized, "pop no longer recognizes {error}");
+        assert!(
+            !written,
+            "a folder named like a record was taken as being written"
+        );
+        assert!(!problem.contains("being written"), "{problem}");
+        assert!(!batches::changed_while_read(
+            &etude_core::journal::JournalError::NotFound
+        ));
     }
 
     #[test]
@@ -4193,7 +4469,12 @@ mod tests {
 
     #[test]
     fn a_record_whose_items_cannot_be_restored_says_why_and_offers_no_step() {
-        for place in [Place::Gone, Place::HoldingReplaced, Place::Away] {
+        for place in [
+            Place::Gone,
+            Place::NotTheItems,
+            Place::HoldingReplaced,
+            Place::Away,
+        ] {
             let why = place.why_not().expect("a reason");
             assert!(
                 why.ends_with("so stash pop cannot restore it.")

@@ -1674,7 +1674,7 @@ fn unpack_checked(
     }
 
     let kept = entries.len() - junk;
-    println!("\n  Extracted to {}/", dest.display());
+    println!("\n  Extracted to {}/", shown(&dest));
     println!("  {}", counted(kept, "entry", "entries"));
     if flattened {
         println!("  Removed a duplicate wrapper folder");

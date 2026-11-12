@@ -66,6 +66,7 @@ run_step() {
   [ -n "$STEP" ] || { fail "$1: no step to run"; return; }
   for sh in $( [ "${2:-}" = both ] && [ -n "$ZSH" ] && echo bash zsh || echo "$RUN_IN"); do
     code=0; out=$(in_shell "$sh") || code=$?
+    LAST_OUT=$out
     if [ "$code" = 0 ]; then pass "$1: step runs as printed in $sh"; else fail "$1: '$STEP' exit $code in $sh: $out"; fi
     no_escape "$1: step output" "$out"
   done
@@ -243,7 +244,8 @@ for case in quote escape newline subst dash; do
   assert_eq "2" "$(held "$from")" "$case: every file is back after moving the folder back"
 
   # Items put back by hand and the empty holding folder removed, in the folder
-  # that was stashed: pop only clears the record, and status says so.
+  # that was stashed: status says files with the items' names, sizes and times
+  # are here and gives the pop that checks them and clears the record.
   fresh_state "$case-home"
   home="$W/$case/home $name"
   files "$home" a b
@@ -253,12 +255,36 @@ for case in quote escape newline subst dash; do
   OUT=$(cd "$home" && "$STASH" status 2>&1 </dev/null)
   no_escape "$case: status with items put back" "$OUT"
   hasnt "$case: items put back are not called moved" "$OUT" "moved or replaced"
-  has "$case: says the items are back" "$OUT" "its items are back in this folder."
-  step "$case: clear the record" "$OUT" "$ID: its items are back in this folder. Clear the record with: "
+  has "$case: says files like the items are here" "$OUT" "its holding folder is gone, and files with its items' names, sizes and times are in this folder."
+  step "$case: clear the record" "$OUT" "$ID: its holding folder is gone, and files with its items' names, sizes and times are in this folder. To check them against the record and clear it if they match: "
   run_step "$case: clear the record"
+  has "$case: pop says the items were already back" "$LAST_OUT" "2 items were already back in place; the undo record now says so."
+  hasnt "$case: pop does not claim an interrupted restore" "$LAST_OUT" "interrupted restore"
   assert_eq "2" "$(held "$home")" "$case: the items stay where they were put back"
   OUT=$(cd "$home" && "$STASH" status 2>&1 </dev/null)
   has "$case: the record is cleared" "$OUT" "Nothing stashed in "
+  OUT=$("$STASH" status --id "$ID" 2>&1 </dev/null)
+  has "$case: status --id on a cleared record says nothing is left" "$OUT" "Nothing of it is left to restore."
+  hasnt "$case: status --id on a cleared record offers no pop" "$OUT" "stash pop"
+  GOT=$("$STASH" status --id "$ID" --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["resume_or_undo"])')
+  assert_eq "None" "$GOT" "$case: status --id --json on a cleared record gives no step"
+
+  # The holding folder deleted and other files made with the items' names:
+  # they are not the items, and nothing offers a pop.
+  fresh_state "$case-others"
+  others="$W/$case/others $name"
+  files "$others" a b
+  ID=$("$STASH" "$others" --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["stash_id"])')
+  hold=$(find "$others" -mindepth 1 -maxdepth 1 -name '.stash-*' -type d)
+  rm -rf "${hold:?}"
+  for n in a b; do printf 'not the stashed %s\n' "$n" >"$others/$n.txt"; done
+  OUT=$("$STASH" status "$others" 2>&1 </dev/null)
+  no_escape "$case: status with other files at the names" "$OUT"
+  has "$case: says other files have the names" "$OUT" "other files now have some of their names, so stash pop cannot restore it."
+  hasnt "$case: no check step for other files" "$OUT" "To check them"
+  hasnt "$case: no pop step for other files" "${OUT//so stash pop cannot/}" "stash pop"
+  GOT=$("$STASH" status "$others" --json 2>/dev/null </dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["details"]["not_restorable_here"])')
+  assert_eq "['$ID']" "$GOT" "$case: --json lists the record as not restorable"
 
   # The stashed folder replaced by a copy of itself: the items are here, in a
   # holding folder no record made, and nothing offers a pop.
