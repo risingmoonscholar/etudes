@@ -1,0 +1,45 @@
+{
+  "root": "$ROOT",
+  "scanned": 3,
+  "groups": [
+    {
+      "name": "Documents",
+      "signal": ".pdf",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/outline.pdf",
+        "$ROOT/report.pdf",
+        "$ROOT/summary.pdf"
+      ]
+    }
+  ],
+  "left_alone": {
+    "looks_personal": 0,
+    "by_category": [],
+    "too_recent": 0,
+    "unknown_extensions": {},
+    "project_documents": 0,
+    "held_near_document": 1,
+    "projects_skipped": 2,
+    "downloads_skipped": 1,
+    "packages_skipped": 1,
+    "tagged_skipped": 2,
+    "in_flight": 0,
+    "in_place": 0,
+    "in_place_paths": [],
+    "no_clear_group": 0,
+    "no_clear_group_paths": []
+  },
+  "skipped": {
+    "hidden": 1,
+    "symlinks": 1,
+    "aliases_skipped": 1,
+    "locked_skipped": 1,
+    "locked_system": 0,
+    "refused_system_location": 1,
+    "unreadable": 0
+  },
+  "root_is_synced": false,
+  "include_tagged": false
+}

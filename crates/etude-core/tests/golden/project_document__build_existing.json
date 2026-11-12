@@ -1,0 +1,71 @@
+{
+  "root": "$ROOT",
+  "scanned": 10,
+  "groups": [
+    {
+      "name": "Screenshots",
+      "signal": "named \"Screenshot ...\"",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/Screenshot 2026-01-01 at 10.00.00.png",
+        "$ROOT/Screenshot 2026-01-01 at 10.00.01.png",
+        "$ROOT/Screenshot 2026-01-01 at 10.00.02.png"
+      ]
+    },
+    {
+      "name": "Installers",
+      "signal": ".dmg and .pkg",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/PluginA.dmg",
+        "$ROOT/PluginB.dmg",
+        "$ROOT/PluginC.dmg"
+      ]
+    },
+    {
+      "name": "Documents",
+      "signal": ".pdf",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/credits.pdf",
+        "$ROOT/lyrics.pdf",
+        "$ROOT/notes.pdf"
+      ]
+    }
+  ],
+  "left_alone": {
+    "looks_personal": 0,
+    "by_category": [],
+    "too_recent": 0,
+    "unknown_extensions": {
+      "zip": 1
+    },
+    "project_documents": 1,
+    "held_near_document": 8,
+    "projects_skipped": 0,
+    "downloads_skipped": 0,
+    "packages_skipped": 0,
+    "tagged_skipped": 0,
+    "in_flight": 0,
+    "in_place": 0,
+    "in_place_paths": [],
+    "no_clear_group": 1,
+    "no_clear_group_paths": [
+      "$ROOT/stems.zip"
+    ]
+  },
+  "skipped": {
+    "hidden": 0,
+    "symlinks": 0,
+    "aliases_skipped": 0,
+    "locked_skipped": 0,
+    "locked_system": 0,
+    "refused_system_location": 0,
+    "unreadable": 0
+  },
+  "root_is_synced": false,
+  "include_tagged": false
+}
