@@ -4340,7 +4340,8 @@ fn read_proposal(path: &Path) -> std::io::Result<Vec<u8>> {
 fn newest_undoable(
     sl: &dyn etude_core::journal::Sealer,
 ) -> Result<Option<etude_core::Journal>, RecordError> {
-    sweep_journal_matching(sl, |_| true)
+    // An apply made after this undo started is not one it was asked to undo.
+    sweep_journal_matching(sl, |j| before_this_undo(&j.id))
 }
 
 /// The newest other folder with an apply left to reverse. A record that will not
@@ -4665,7 +4666,37 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     finish_undo(&mut journal, sl, UndoAsked::Id, &|| Ok(None))
 }
 
+/// When this undo started, in the nanoseconds since 1970 that a record id
+/// starts with. Set before any wait.
+static UNDO_STARTED: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
+/// Whether the apply recorded as `id` started before an undo that started at
+/// `started`. An apply made after the undo was typed is not one it was asked
+/// to undo, even when it lands while the undo waits. A time that cannot be
+/// read does not rule a record out.
+fn applied_before(id: &str, started: Option<u128>) -> bool {
+    match (etude_core::journal::creation_time(id), started) {
+        (Some(applied), Some(started)) => applied <= started,
+        _ => true,
+    }
+}
+
+fn before_this_undo(id: &str) -> bool {
+    applied_before(id, UNDO_STARTED.get().copied())
+}
+
+/// After another undo restored `waited`, whether this undo goes on to `next`:
+/// only to an apply newer than `waited` that started before this undo did.
+fn goes_on_to(next: &str, waited: &str, started: Option<u128>) -> bool {
+    newer_apply(next, waited) && applied_before(next, started)
+}
+
 fn cmd_undo(args: &[String]) -> ExitCode {
+    let _ = UNDO_STARTED.set(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos()),
+    );
     let Some(sl) = sealer(false) else {
         return ExitCode::from(2);
     };
@@ -4710,7 +4741,12 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
                 sl,
                 |j| j.root.canonicalize().is_ok_and(|root| root == target),
                 |j: &Option<etude_core::Journal>| j.as_ref().map(|j| j.id.as_str()),
-                || sweep_journal_for_root(sl, &target),
+                || {
+                    sweep_journal_matching(sl, |j| {
+                        before_this_undo(&j.id)
+                            && j.root.canonicalize().is_ok_and(|root| root == target)
+                    })
+                },
             )
         };
         return match choose() {
@@ -4773,8 +4809,16 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
             );
         }
     };
-    let Some((newest, _)) = candidates.into_iter().next() else {
-        eprintln!("sweep: nothing to undo. No apply is on record.");
+    let any = !candidates.is_empty();
+    let Some((newest, _)) = candidates
+        .into_iter()
+        .find(|(candidate, _)| before_this_undo(&candidate.id))
+    else {
+        if any {
+            eprintln!("sweep: nothing to undo. No apply was on record when this undo started.");
+        } else {
+            eprintln!("sweep: nothing to undo. No apply is on record.");
+        }
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
@@ -5082,10 +5126,11 @@ fn finish_undo(
         // Another undo restored this apply. An undo record is written as it
         // goes, so an older apply being undone can look newest when this
         // undo chose. A newer apply with work left is still what this undo
-        // was asked for; an older one is not.
+        // was asked for; an older one is not, and nor is one made after this
+        // undo started.
         drop(hold);
         return match choose_again() {
-            Ok(Some(mut next)) if newer_apply(&next.id, &j.id) => {
+            Ok(Some(mut next)) if goes_on_to(&next.id, &j.id, UNDO_STARTED.get().copied()) => {
                 finish_undo(&mut next, sl, asked, choose_again)
             }
             Err(record) => refuse_unreadable_record(&record, sl, asked),
@@ -6868,6 +6913,26 @@ mod tests {
             || panic!("no pause"),
         );
         assert!(matches!(read, Err(JournalError::NotFound)));
+    }
+
+    #[test]
+    fn after_a_wait_undo_goes_on_only_to_a_newer_apply_made_before_it_started() {
+        let older = "1794483027356464000-64803-0-33f103d5913ee078";
+        let killed = "1794483027356465000-64804-0-33f103d5913ee078";
+        let started = 1_794_483_027_356_466_000;
+        let later = "1794483027356467000-64805-0-33f103d5913ee078";
+        // A newer apply, killed before this undo started, with work left.
+        assert!(goes_on_to(killed, older, Some(started)));
+        // An apply made while this undo waited.
+        assert!(!goes_on_to(later, older, Some(started)));
+        assert!(!applied_before(later, Some(started)));
+        // An older apply is never gone on to.
+        assert!(!goes_on_to(older, killed, Some(started)));
+        // Made at the moment the undo started counts as before it.
+        assert!(applied_before(
+            "1794483027356466000-64806-0-33f103d5913ee078",
+            Some(started)
+        ));
     }
 
     #[test]
