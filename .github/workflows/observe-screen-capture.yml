@@ -1,0 +1,84 @@
+name: observe-screen-capture
+
+# One-off observation: does macOS put the extended attribute
+# com.apple.metadata:kMDItemIsScreenCapture on files saved by screencapture?
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/sweep-p5-capture-attribute]
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: macOS version
+        run: sw_vers; uname -a
+
+      - name: screencapture man page excerpt
+        continue-on-error: true
+        run: |
+          set +e
+          man screencapture 2>/dev/null | col -b | grep -nE '^\s+-(x|v|V|D|g|k)\b' -A2 || true
+
+      - name: displays
+        continue-on-error: true
+        run: system_profiler SPDisplaysDataType || true
+
+      - name: capture still
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/cap"
+          screencapture -x "$RUNNER_TEMP/cap/still.png"; echo "still exit=$?"
+          if [ ! -s "$RUNNER_TEMP/cap/still.png" ]; then
+            echo "retry with -D 1"
+            screencapture -x -D 1 "$RUNNER_TEMP/cap/still.png"; echo "still -D1 exit=$?"
+          fi
+          true
+
+      - name: capture recording
+        continue-on-error: true
+        run: |
+          set +e
+          mkdir -p "$RUNNER_TEMP/cap"
+          ( perl -e 'alarm 60; exec @ARGV' screencapture -v -V 2 -x "$RUNNER_TEMP/cap/rec.mov" < /dev/null ); echo "rec exit=$?"
+          if [ ! -s "$RUNNER_TEMP/cap/rec.mov" ]; then
+            echo "retry with -D 1"
+            ( perl -e 'alarm 60; exec @ARGV' screencapture -v -V 2 -x -D 1 "$RUNNER_TEMP/cap/rec.mov" < /dev/null ); echo "rec -D1 exit=$?"
+          fi
+          true
+
+      - name: observe
+        if: always()
+        run: |
+          set +e
+          os="${{ matrix.os }} $(sw_vers -productVersion) $(sw_vers -buildVersion)"
+          summary=""
+          for f in still.png rec.mov; do
+            p="$RUNNER_TEMP/cap/$f"
+            echo "===== $f ($os)"
+            if [ ! -e "$p" ]; then
+              echo "file missing"
+              summary="$summary\nRESULT [$os] $f: NO-CAPTURE"
+              continue
+            fi
+            ls -l@ "$p" || true
+            echo "--- xattr -l"; xattr -l "$p" || true
+            echo "--- xattr -lx"; xattr -lx "$p" || true
+            echo "--- xattr -p com.apple.metadata:kMDItemIsScreenCapture"
+            xattr -px com.apple.metadata:kMDItemIsScreenCapture "$p"; rc=$?
+            echo "exit=$rc"
+            echo "--- mdls"
+            mdls -name kMDItemIsScreenCapture -name kMDItemScreenCaptureType -name kMDItemIsScreenRecording "$p" || true
+            if [ "$rc" = 0 ]; then r=PRESENT; else r=ABSENT; fi
+            summary="$summary\nRESULT [$os] $f: $r (names: $(xattr "$p" | tr '\n' ' '))"
+          done
+          printf "$summary\n"
