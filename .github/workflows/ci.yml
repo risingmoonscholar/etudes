@@ -66,6 +66,23 @@ jobs:
           python3 scripts/check-agent-demo.py --base "$base"
       - name: The agent demo check rejects a change it cannot prove
         run: python3 -m unittest discover -s scripts -p 'test_check_agent_demo.py' -v
+      # The plan golden files pin what every plan entry point produces for a
+      # set of synthetic folders. A change that only moves code leaves them
+      # alone; a change that means to alter a plan names each file it
+      # rewrote, and why, in a Golden-Change trailer. Same base as above.
+      - name: Plan golden files change only with a stated reason
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            base="$PR_BASE"
+          else
+            base=$(git describe --tags --abbrev=0 --match 'sweep-v*' HEAD^)
+          fi
+          python3 scripts/check-golden-frozen.py --base "$base"
+      - name: The golden-file check rejects an unexplained change
+        run: python3 -m unittest discover -s scripts -p 'test_check_golden_frozen.py' -v
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

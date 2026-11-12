@@ -1,0 +1,60 @@
+{
+  "root": "$ROOT",
+  "scanned": 7,
+  "groups": [
+    {
+      "name": "Blends",
+      "signal": ".bpy (agent-named, one-shot)",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/a.bpy",
+        "$ROOT/b.bpy",
+        "$ROOT/c.bpy"
+      ]
+    },
+    {
+      "name": "Models",
+      "signal": ".fbx (mapped into an existing folder)",
+      "accepted": false,
+      "count": 2,
+      "members": [
+        "$ROOT/x.fbx",
+        "$ROOT/y.fbx"
+      ]
+    }
+  ],
+  "left_alone": {
+    "looks_personal": 0,
+    "by_category": [],
+    "too_recent": 0,
+    "unknown_extensions": {
+      "stl": 2
+    },
+    "project_documents": 0,
+    "held_near_document": 0,
+    "projects_skipped": 0,
+    "downloads_skipped": 0,
+    "packages_skipped": 0,
+    "tagged_skipped": 0,
+    "in_flight": 0,
+    "in_place": 0,
+    "in_place_paths": [],
+    "no_clear_group": 2,
+    "no_clear_group_paths": [
+      "$ROOT/p.stl",
+      "$ROOT/q.stl"
+    ]
+  },
+  "skipped": {
+    "hidden": 0,
+    "symlinks": 0,
+    "aliases_skipped": 0,
+    "locked_skipped": 0,
+    "locked_system": 0,
+    "refused_system_location": 0,
+    "unreadable": 0
+  },
+  "root_is_synced": false,
+  "include_tagged": false
+}

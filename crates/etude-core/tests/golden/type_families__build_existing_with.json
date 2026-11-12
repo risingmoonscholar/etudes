@@ -1,0 +1,117 @@
+{
+  "root": "$ROOT",
+  "scanned": 21,
+  "groups": [
+    {
+      "name": "Blends",
+      "signal": ".bpy (saved route, new folder sweep creates)",
+      "accepted": false,
+      "count": 1,
+      "members": [
+        "$ROOT/model.bpy"
+      ]
+    },
+    {
+      "name": "Sheets",
+      "signal": ".csv (saved route, new folder sweep creates)",
+      "accepted": false,
+      "count": 1,
+      "members": [
+        "$ROOT/table.csv"
+      ]
+    },
+    {
+      "name": "Archives",
+      "signal": ".7z, .gz, .zip",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/a.zip",
+        "$ROOT/b.tar.gz",
+        "$ROOT/c.7z"
+      ]
+    },
+    {
+      "name": "Documents",
+      "signal": ".docx, .md, .pdf",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/letter.docx",
+        "$ROOT/notes.md",
+        "$ROOT/report.pdf"
+      ]
+    },
+    {
+      "name": "Images",
+      "signal": ".gif, .png, .tiff",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/art.gif",
+        "$ROOT/photo.png",
+        "$ROOT/scan.tiff"
+      ]
+    },
+    {
+      "name": "Media",
+      "signal": ".m4a, .mov, .mp3",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/clip.mov",
+        "$ROOT/song.mp3",
+        "$ROOT/voice.m4a"
+      ]
+    },
+    {
+      "name": "Scripts",
+      "signal": ".js, .py, .sh",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/build.sh",
+        "$ROOT/page.js",
+        "$ROOT/tool.py"
+      ]
+    }
+  ],
+  "left_alone": {
+    "looks_personal": 0,
+    "by_category": [],
+    "too_recent": 0,
+    "unknown_extensions": {
+      "fbx": 1,
+      "json": 1,
+      "tsv": 1,
+      "xlsx": 1
+    },
+    "project_documents": 0,
+    "held_near_document": 0,
+    "projects_skipped": 0,
+    "downloads_skipped": 0,
+    "packages_skipped": 0,
+    "tagged_skipped": 0,
+    "in_flight": 0,
+    "in_place": 0,
+    "in_place_paths": [],
+    "no_clear_group": 4,
+    "no_clear_group_paths": [
+      "$ROOT/config.json",
+      "$ROOT/data.tsv",
+      "$ROOT/scene.fbx",
+      "$ROOT/sheet.xlsx"
+    ]
+  },
+  "skipped": {
+    "hidden": 0,
+    "symlinks": 0,
+    "aliases_skipped": 0,
+    "locked_skipped": 0,
+    "locked_system": 0,
+    "refused_system_location": 0,
+    "unreadable": 0
+  },
+  "root_is_synced": false,
+  "include_tagged": false
+}

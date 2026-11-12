@@ -1,0 +1,50 @@
+{
+  "root": "$ROOT",
+  "scanned": 5,
+  "groups": [
+    {
+      "name": "Screenshots",
+      "signal": "named \"Screenshot ...\"",
+      "accepted": false,
+      "count": 4,
+      "members": [
+        "$ROOT/CleanShot 2026-02-02 at 08.00.00.heic",
+        "$ROOT/Screen Shot 2019-05-05 at 9.00.00 AM.jpg",
+        "$ROOT/Screenshot 2026-01-01 at 10.00.00.png",
+        "$ROOT/Screenshot 2026-01-01 at 10.00.01.png"
+      ]
+    }
+  ],
+  "left_alone": {
+    "looks_personal": 0,
+    "by_category": [],
+    "too_recent": 0,
+    "unknown_extensions": {
+      "txt": 1
+    },
+    "project_documents": 0,
+    "held_near_document": 0,
+    "projects_skipped": 0,
+    "downloads_skipped": 0,
+    "packages_skipped": 0,
+    "tagged_skipped": 0,
+    "in_flight": 0,
+    "in_place": 0,
+    "in_place_paths": [],
+    "no_clear_group": 1,
+    "no_clear_group_paths": [
+      "$ROOT/screenshot-notes.txt"
+    ]
+  },
+  "skipped": {
+    "hidden": 0,
+    "symlinks": 0,
+    "aliases_skipped": 0,
+    "locked_skipped": 0,
+    "locked_system": 0,
+    "refused_system_location": 0,
+    "unreadable": 0
+  },
+  "root_is_synced": false,
+  "include_tagged": false
+}

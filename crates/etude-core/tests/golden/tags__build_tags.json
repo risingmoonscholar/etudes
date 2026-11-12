@@ -1,0 +1,88 @@
+{
+  "root": "$ROOT",
+  "scanned": 8,
+  "groups": [
+    {
+      "name": "Work",
+      "signal": ".pdf (tag already on files in this folder)",
+      "accepted": false,
+      "count": 1,
+      "members": [
+        "$ROOT/report.pdf"
+      ]
+    },
+    {
+      "name": "Red",
+      "signal": ".png (new tag)",
+      "accepted": false,
+      "count": 3,
+      "members": [
+        "$ROOT/photo.png",
+        "$ROOT/picture.png",
+        "$ROOT/shot.png"
+      ]
+    }
+  ],
+  "left_alone": {
+    "looks_personal": 1,
+    "by_category": [
+      {
+        "kind": "identity documents",
+        "count": 1
+      }
+    ],
+    "too_recent": 0,
+    "unknown_extensions": {},
+    "project_documents": 0,
+    "held_near_document": 0,
+    "projects_skipped": 0,
+    "downloads_skipped": 0,
+    "packages_skipped": 0,
+    "tagged_skipped": 0,
+    "in_flight": 0,
+    "in_place": 1,
+    "in_place_paths": [
+      "$ROOT/Documents/old.pdf"
+    ],
+    "no_clear_group": 0,
+    "no_clear_group_paths": []
+  },
+  "skipped": {
+    "hidden": 0,
+    "symlinks": 0,
+    "aliases_skipped": 0,
+    "locked_skipped": 0,
+    "locked_system": 0,
+    "refused_system_location": 0,
+    "unreadable": 0
+  },
+  "root_is_synced": false,
+  "include_tagged": false,
+  "scheme": "tags",
+  "tags": [
+    {
+      "name": "Work",
+      "files": 1,
+      "new": false,
+      "extensions": [
+        "pdf"
+      ]
+    },
+    {
+      "name": "Red",
+      "files": 3,
+      "new": true,
+      "extensions": [
+        "png"
+      ]
+    }
+  ],
+  "new_tags": [
+    "Red"
+  ],
+  "new_tag_basis": "A tag is new when no file in the scanned folder carries it. Finder's own tag list cannot be read, so a tag you use in Finder but not on a file here also shows as new.",
+  "tag_left_alone": {
+    "already_present": 1,
+    "state_unreadable": 1
+  }
+}
