@@ -3,10 +3,12 @@
 # private folder with it. Whatever unpack then says about what was left must
 # be true of the disk: nothing anywhere, or the printed place really holds it
 # and the printed step removes it, or, when the folder cannot be found again,
-# a message that says so instead of claiming nothing was left. Three changes
+# a message that says so instead of claiming nothing was left. Four changes
 # are made: the parent is moved; the parent is moved and a file takes its
-# name; the private folder is moved away and deleted. Each time unpack and the
-# system extractor are stopped, and seen stopped, before the change.
+# name; the private folder is moved away and deleted; the parent loses its
+# permissions, where unpack must say it could not check, not that it moved.
+# Each time unpack and the system extractor are stopped, and seen stopped,
+# before the change.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require zip "the fixture needs zip" || exit 0
 require pgrep "stopping the system extractor needs pgrep" || exit 0
@@ -76,6 +78,7 @@ rm -rf "$W/control"
 #   moved       the parent folder p1 is moved to p2
 #   file        p1 is moved to p2 and a file takes the name p1
 #   removed     the private folder is moved away and deleted
+#   noperm      p1 loses its permissions (restored before the checks)
 run_case() {
   local label="$1" inject="$2" stage n ok kid rc err left step i done_at=""
   local stopped=()
@@ -102,6 +105,7 @@ run_case() {
           moved) mv "$W/p1" "$W/p2" && done_at=$n ;;
           file) mv "$W/p1" "$W/p2" && : > "$W/p1" && done_at=$n ;;
           removed) mv "$stage" "$W/gone" && rm -rf "$W/gone" && done_at=$n ;;
+          noperm) chmod 000 "$W/p1" && done_at=$n ;;
         esac
       fi
       break
@@ -112,6 +116,7 @@ run_case() {
   # Resume the extractor before the supervisor, which then sees what it did.
   for (( i=${#stopped[@]}-1; i>=0; i-- )); do kill -CONT "${stopped[$i]}" 2>/dev/null || true; done
   wait "$pid"; rc=$?
+  [ "$inject" = noperm ] && chmod 700 "$W/p1"
 
   if [ -z "$done_at" ]; then
     unproven "$label" "no confirmed stop of both processes while extraction was partial"
@@ -130,44 +135,60 @@ run_case() {
       || fail "$label: the file at $W/p1 changed" ;;
   esac
 
-  case "$err" in
-    *"Nothing was left behind."*)
-      assert_eq 0 "$(leftovers)" "$label: 'Nothing was left behind' is true of the disk"
-      ;;
-    *"The partial extraction remains at "*)
-      left=$(printf '%s\n' "$err" | sed -n 's/.*The partial extraction remains at \(.*\): could not remove it.*/\1/p' | head -1)
-      if [ -d "$left" ] && [ -n "$(find "$left" -type f -name 'chunk_*.bin' -print -quit)" ]; then
-        pass "$label: the printed place holds what was left"
-      else
-        fail "$label: the printed place holds nothing: $left"
-      fi
-      step=$(step_after 'To delete it: ' "$err")
-      assert_exit 0 "$label: the printed step works" -- bash -c "$step"
-      assert_eq 0 "$(leftovers)" "$label: the printed step removed what was left"
-      ;;
-    *"The partial extraction is no longer at $stage: it was moved or removed while unpack worked"*)
-      [ ! -e "$stage" ] && pass "$label: the private folder is no longer at the printed place" \
-        || fail "$label: something is still at $stage"
+  case "$inject" in
+    moved | file)
+      # Found where it went: removed, or named there with a step that works.
       case "$err" in
-        *"look in the new place for a hidden folder named ${stage##*/} and delete it."*)
-          pass "$label: names the hidden folder to look for" ;;
-        *) fail "$label: does not name the hidden folder: $err" ;;
+        *"Nothing was left behind."*)
+          assert_eq 0 "$(leftovers)" "$label: 'Nothing was left behind' is true of the disk"
+          ;;
+        *"The partial extraction remains at "*)
+          left=$(printf '%s\n' "$err" | sed -n 's/.*The partial extraction remains at \(.*\): could not remove it.*/\1/p' | head -1)
+          if [ -d "$left" ] && [ -n "$(find "$left" -type f -name 'chunk_*.bin' -print -quit)" ]; then
+            pass "$label: the printed place holds what was left"
+          else
+            fail "$label: the printed place holds nothing: $left"
+          fi
+          step=$(step_after 'To delete it: ' "$err")
+          assert_exit 0 "$label: the printed step works" -- bash -c "$step"
+          assert_eq 0 "$(leftovers)" "$label: the printed step removed what was left"
+          ;;
+        *)
+          fail "$label: did not remove or name the folder where it went: $err"
+          ;;
       esac
       ;;
-    *)
-      fail "$label: says nothing true about what was left: $err"
+    removed)
+      # Gone, so it cannot be found again: never called removed.
+      case "$err" in
+        *"The partial extraction is no longer at $stage: it was moved or removed while unpack worked"*"look in the new place for a hidden folder named ${stage##*/} and delete it."*)
+          pass "$label: says it could not find the folder, and names it" ;;
+        *) fail "$label: does not say it could not find the folder: $err" ;;
+      esac
+      [ ! -e "$stage" ] && pass "$label: the private folder is no longer at the printed place" \
+        || fail "$label: something is still at $stage"
+      assert_eq 0 "$(leftovers)" "$label: no private folder is anywhere"
+      ;;
+    noperm)
+      # Still where it was, unreadable: says it could not check, never that it moved.
+      case "$err" in
+        *"Could not remove the partial extraction at $stage ("*"and could not check whether it is still there. Look for it in that folder."*)
+          pass "$label: says it could not remove or check the folder, by its path" ;;
+        *) fail "$label: does not say it could not check the folder at its path: $err" ;;
+      esac
+      case "$err" in
+        *"Nothing was left behind."* | *"no longer at"*) fail "$label: says the folder is gone or moved: $err" ;;
+        *) pass "$label: does not say the folder is gone or moved" ;;
+      esac
+      [ -n "$(find "$stage" -type f -name 'chunk_*.bin' -print -quit)" ] \
+        && pass "$label: the printed place still holds what was left" \
+        || fail "$label: the printed place holds nothing: $stage"
+      rm -rf "$stage"
       ;;
   esac
-  # A folder that is gone cannot be found again, so unpack must not claim to
-  # have removed it.
-  if [ "$inject" = removed ]; then
-    case "$err" in
-      *"Nothing was left behind."*) fail "$label: claims to have removed a folder it could not find" ;;
-      *) pass "$label: does not claim to have removed a folder it could not find" ;;
-    esac
-  fi
 }
 
 run_case "parent moved" moved
 run_case "parent moved, a file took its name" file
 run_case "private folder removed" removed
+run_case "parent lost its permissions" noperm

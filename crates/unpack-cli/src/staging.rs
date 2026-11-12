@@ -79,19 +79,31 @@ impl Staging {
                 std::fs::remove_dir(&path)?;
                 continue;
             }
-            // Set when the name no longer holds the folder just made. What is
-            // there then is not ours, so nothing is removed by that name.
-            let mut replaced = false;
-            let initialized = (|| -> io::Result<(Option<ExclusiveLock>, File)> {
-                let folder = File::open(&path)?;
-                let held = folder.metadata()?;
-                if !held.is_dir() || !path.symlink_metadata().is_ok_and(|md| same(&held, &md)) {
-                    replaced = true;
+            // Hold the folder just made and prove the name still holds it
+            // before anything is written or removed by that name. What is
+            // there otherwise is not proved ours, so nothing there is removed.
+            let opened = File::open(&path).and_then(|folder| {
+                let md = folder.metadata()?;
+                Ok((folder, md))
+            });
+            let (folder, held) = match opened {
+                Ok((folder, md))
+                    if md.is_dir() && path.symlink_metadata().is_ok_and(|now| same(&md, &now)) =>
+                {
+                    (folder, md)
+                }
+                Ok(_) => {
                     return Err(io::Error::other(
                         "the folder unpack had just made there was replaced, and nothing \
                          there was removed",
                     ));
                 }
+                Err(error) => {
+                    left_unproved(&path);
+                    return Err(error);
+                }
+            };
+            let initialized = (|| -> io::Result<Option<ExclusiveLock>> {
                 let file = File::options()
                     .read(true)
                     .write(true)
@@ -109,7 +121,7 @@ impl Staging {
                         // Extraction worked here before locks existed and must
                         // keep working. Only later cleanup is given up.
                         std::fs::remove_file(&lock_path)?;
-                        return Ok((None, folder));
+                        return Ok(None);
                     }
                     Err(error) => return Err(error),
                 };
@@ -117,11 +129,14 @@ impl Staging {
                 // Publish readiness only while already holding the lock.
                 let marker = marker_for(&path.symlink_metadata()?);
                 lock.file().write_all(marker.as_bytes())?;
-                Ok((Some(lock), folder))
+                Ok(Some(lock))
             })();
             return match initialized {
-                Ok((lock, folder)) => Ok(Self { path, lock, folder }),
-                Err(error) if replaced => Err(error),
+                Ok(lock) => Ok(Self { path, lock, folder }),
+                Err(error) if !path.symlink_metadata().is_ok_and(|md| same(&held, &md)) => {
+                    left_unproved(&path);
+                    Err(error)
+                }
                 Err(error) => {
                     if let cleanup @ (super::Cleanup::Remains { .. }
                     | super::Cleanup::Unverified { .. }) = super::cleanup_destination(&path)
@@ -164,16 +179,22 @@ impl Staging {
         // Any failure at the old name, such as a file now holding the old
         // parent's name, can mean the folder moved, so ask where it is.
         match current_path(&self.folder) {
-            Some(now) if now.symlink_metadata().is_ok_and(|md| same(&held, &md)) => {
-                Whereabouts::At(now)
-            }
+            Some(now) => match now.symlink_metadata() {
+                Ok(md) if same(&held, &md) => Whereabouts::At(now),
+                // A name that cannot be checked, such as under a parent that
+                // lost its search permission, may still hold the folder.
+                // Removal will fail the same way and say so for that path.
+                Err(error) if error.kind() != io::ErrorKind::NotFound => Whereabouts::At(now),
+                // A removed folder can still report its last path, so a
+                // missing name there does not prove it is gone.
+                _ => Whereabouts::Unknown,
+            },
             // Only when the system gives no place at all, and the old name
             // could not be checked, may the folder still be there. Removal
             // will fail the same way and say so for that path.
             None if unchecked => Whereabouts::At(self.path.clone()),
-            // A removed folder can still report its last path, so a missing
-            // name there does not prove it is gone.
-            _ => Whereabouts::Unknown,
+            // No place at all, and the old name was missing or held another.
+            None => Whereabouts::Unknown,
         }
     }
 }
@@ -202,6 +223,18 @@ fn current_path(folder: &File) -> Option<PathBuf> {
 #[cfg(not(target_os = "macos"))]
 fn current_path(folder: &File) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/self/fd/{}", folder.as_raw_fd())).ok()
+}
+
+/// Say that a name this run made is left alone because the folder there can
+/// no longer be proved the one it made. A missing name needs no word.
+fn left_unproved(path: &Path) {
+    if path.symlink_metadata().is_ok() {
+        eprintln!(
+            "unpack: left {} in place: unpack could not prove it is the folder it had just \
+             made, so nothing there was removed.",
+            shown(path)
+        );
+    }
 }
 
 fn same(left: &Metadata, right: &Metadata) -> bool {
@@ -600,6 +633,34 @@ mod tests {
         let error = Staging::reserve_with(&dest, &[], |_| Err(io::Error::from_raw_os_error(5)));
         assert!(error.is_err());
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_reserve_removes_nothing_that_took_the_folders_name() {
+        let (root, stray) = new_stage("replaced");
+        std::fs::remove_dir(&stray).unwrap();
+        let dest = root.join("out");
+        let error = Staging::reserve_with(&dest, &[], |_| {
+            // Another program moves the new folder away and puts its own
+            // folder at that name before the lock is taken.
+            let made = std::fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "partial"))
+                .unwrap();
+            std::fs::rename(&made, root.join("moved")).unwrap();
+            std::fs::create_dir(&made).unwrap();
+            std::fs::write(made.join("keep"), b"keep").unwrap();
+            Err(io::Error::from_raw_os_error(5))
+        });
+        assert!(error.is_err());
+        let kept = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "partial"))
+            .expect("the other folder stays");
+        assert_eq!(std::fs::read(kept.join("keep")).unwrap(), b"keep");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

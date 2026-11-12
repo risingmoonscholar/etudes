@@ -3906,6 +3906,33 @@ mod tests {
     }
 
     #[test]
+    fn a_private_folder_under_an_unsearchable_parent_is_not_called_moved() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, staged) = reserved_in("noperm");
+        let parent = root.join("p1");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let cleanup = cleanup_staging(&staged);
+        let message = cleanup.message();
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            // The system may spell the same place differently, as
+            // /private/var for /var.
+            matches!(&cleanup, Cleanup::Unverified { path, .. }
+                if path.file_name() == staged.path.file_name()
+                    && path.ends_with(Path::new("p1").join(staged.path.file_name().unwrap()))),
+            "{message}"
+        );
+        assert!(
+            message.contains("could not check whether it is still there"),
+            "{message}"
+        );
+        assert!(staged.path.join("member").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_private_folder_is_found_when_a_file_took_its_parents_name() {
         let (root, staged) = reserved_in("fileparent");
         std::fs::rename(root.join("p1"), root.join("p2")).expect("move parent");
