@@ -5,6 +5,7 @@
 //! present; its value (the tag names) is never read, and Finder comments are
 //! never queried.
 
+use crate::xattr;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -1957,45 +1958,29 @@ pub fn is_locked_at(path: &Path) -> io::Result<bool> {
 
 /// Read only FinderInfo, never the alias payload or its target. Finder's
 /// kIsAlias is bit 15 of the big-endian flags word at byte offset 8.
-#[cfg(target_os = "macos")]
+///
+/// One read into a 32-byte buffer, without following links. FinderInfo is
+/// always 32 bytes: a shorter value is invalid, and a longer one fails with
+/// `ERANGE`. A volume that cannot hold attributes has no FinderInfo, so it
+/// reads as "not an alias". Elsewhere than macOS nothing is read or counted.
 fn is_finder_alias(path: &Path) -> io::Result<bool> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
+    if !xattr::SUPPORTED {
+        return Ok(false);
+    }
     let mut info = [0u8; 32];
-    // SAFETY: valid C strings and a writable 32-byte buffer; no link following.
-    let result = unsafe {
-        getxattr(
-            path.as_ptr(),
-            c"com.apple.FinderInfo".as_ptr(),
-            info.as_mut_ptr().cast(),
-            info.len(),
-            0,
-            XATTR_NOFOLLOW,
-        )
-    };
-    let outcome = if result == info.len() as isize {
-        Ok(u16::from_be_bytes([info[8], info[9]]) & 0x8000 != 0)
-    } else if result >= 0 {
-        Err(io::Error::new(
+    let outcome = match xattr::read_into(path, c"com.apple.FinderInfo", &mut info) {
+        Ok(Some(length)) if length == info.len() => {
+            Ok(u16::from_be_bytes([info[8], info[9]]) & 0x8000 != 0)
+        }
+        Ok(Some(_)) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "invalid FinderInfo length",
-        ))
-    } else {
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(ENOATTR) | Some(ENOTSUP) => Ok(false),
-            _ => Err(error),
-        }
+        )),
+        Ok(None) => Ok(false),
+        Err(error) if xattr::is_unsupported(&error) => Ok(false),
+        Err(error) => Err(error),
     };
     observe_read("metadata", outcome)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn is_finder_alias(_: &Path) -> io::Result<bool> {
-    Ok(false)
 }
 
 /// Whether Finder attached at least one tag to this directory entry.
@@ -2005,63 +1990,16 @@ fn is_finder_alias(_: &Path) -> io::Result<bool> {
 /// comments live in a different attribute that nothing here names. The probe
 /// does not follow symlinks. A volume that cannot hold attributes (`ENOTSUP`)
 /// has no tags, so it reads as untagged; any other failure is an error and
-/// the caller holds the item.
-#[cfg(target_os = "macos")]
+/// the caller holds the item. Elsewhere than macOS nothing is read or counted.
 pub fn has_finder_tag(path: &Path) -> io::Result<bool> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let path = CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::other("path contains a NUL byte"))?;
-    // SAFETY: both strings are NUL-terminated; the value buffer is null with
-    // length zero, so getxattr cannot write Rust memory.
-    let result = unsafe {
-        getxattr(
-            path.as_ptr(),
-            c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
-            std::ptr::null_mut(),
-            0,
-            0,
-            XATTR_NOFOLLOW,
-        )
-    };
-    let outcome = if result >= 0 {
-        Ok(true)
-    } else {
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(ENOATTR) | Some(ENOTSUP) => Ok(false),
-            _ => Err(error),
-        }
+    if !xattr::SUPPORTED {
+        return Ok(false);
+    }
+    let outcome = match xattr::presence(path, crate::tags::ATTRIBUTE) {
+        Err(error) if xattr::is_unsupported(&error) => Ok(false),
+        outcome => outcome,
     };
     observe_read("finder_tag_presence", outcome)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn has_finder_tag(_: &Path) -> io::Result<bool> {
-    Ok(false)
-}
-
-/// Darwin `XATTR_NOFOLLOW`: inspect the directory entry, never a link target.
-#[cfg(target_os = "macos")]
-const XATTR_NOFOLLOW: i32 = 0x0001;
-/// Darwin `ENOATTR`: the attribute is absent.
-#[cfg(target_os = "macos")]
-const ENOATTR: i32 = 93;
-/// Darwin `ENOTSUP`: the volume cannot hold extended attributes.
-#[cfg(target_os = "macos")]
-const ENOTSUP: i32 = 45;
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" {
-    fn getxattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        value: *mut std::ffi::c_void,
-        size: usize,
-        position: u32,
-        options: i32,
-    ) -> isize;
 }
 
 #[cfg(unix)]

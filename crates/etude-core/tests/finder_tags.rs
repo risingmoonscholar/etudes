@@ -2,13 +2,11 @@
 //! after the rename, and the journal records what happened to each item.
 //!
 //! Tags are the extended attribute com.apple.metadata:_kMDItemUserTags. These
-//! tests set it directly; the value is an opaque byte string, because nothing
-//! in the tools may decode it.
+//! tests set it through etude_core::xattr; the value is an opaque byte string,
+//! because nothing in the tools may decode it.
 #![cfg(target_os = "macos")]
 
-use std::ffi::CString;
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -16,43 +14,13 @@ use etude_core::apply::{self, ApplyFaults};
 use etude_core::journal::{EntryState, Journal, Sealer};
 use etude_core::plan::{Group, Plan, Signal};
 use etude_core::scan::{self, ScanConfig};
-
-unsafe extern "C" {
-    fn setxattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        value: *const std::ffi::c_void,
-        size: usize,
-        position: u32,
-        options: i32,
-    ) -> i32;
-    fn getxattr(
-        path: *const std::ffi::c_char,
-        name: *const std::ffi::c_char,
-        value: *mut std::ffi::c_void,
-        size: usize,
-        position: u32,
-        options: i32,
-    ) -> isize;
-}
+use etude_core::xattr;
 
 const TAG: &std::ffi::CStr = c"com.apple.metadata:_kMDItemUserTags";
 const COMMENT: &std::ffi::CStr = c"com.apple.metadata:kMDItemFinderComment";
 
 fn set_attr(path: &Path, name: &std::ffi::CStr, value: &[u8]) {
-    let path = CString::new(path.as_os_str().as_bytes()).unwrap();
-    // SAFETY: valid C strings and a slice that outlives the call.
-    let rc = unsafe {
-        setxattr(
-            path.as_ptr(),
-            name.as_ptr(),
-            value.as_ptr().cast(),
-            value.len(),
-            0,
-            0,
-        )
-    };
-    assert_eq!(rc, 0, "could not set a test attribute");
+    xattr::write(path, name, value).expect("could not set a test attribute");
 }
 
 fn tag(path: &Path) {
@@ -60,20 +28,7 @@ fn tag(path: &Path) {
 }
 
 fn read_tag(path: &Path) -> Option<Vec<u8>> {
-    let c = CString::new(path.as_os_str().as_bytes()).unwrap();
-    let mut buffer = vec![0u8; 256];
-    // SAFETY: the buffer owns `len` writable bytes.
-    let n = unsafe {
-        getxattr(
-            c.as_ptr(),
-            TAG.as_ptr(),
-            buffer.as_mut_ptr().cast(),
-            buffer.len(),
-            0,
-            0,
-        )
-    };
-    (n >= 0).then(|| buffer[..n as usize].to_vec())
+    xattr::read(path, TAG, 256).ok().flatten()
 }
 
 fn lock() -> MutexGuard<'static, ()> {
@@ -595,21 +550,38 @@ fn collect_sources(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
 
 /// The tag probe asks for the attribute's length through a zero-length
 /// buffer, so the tag names never enter the process.
+/// The probe is `xattr::presence`, which reads only the length.
 #[test]
 fn the_tag_probe_never_requests_the_value() {
-    let source =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/scan.rs")).unwrap();
-    let probe = production(&source)
-        .split("pub fn has_finder_tag(path: &Path)")
-        .nth(1)
-        .unwrap()
-        .split("#[cfg(not(target_os")
-        .next()
-        .unwrap();
-    assert_eq!(probe.matches("getxattr(").count(), 1);
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // The body from `signature` to the brace that closes it at its indent.
+    let function = |file: &str, signature: &str| -> String {
+        let indent = &signature[..signature.len() - signature.trim_start().len()];
+        let source = fs::read_to_string(src.join(file)).unwrap();
+        production(&source)
+            .split(signature)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{file} defines {signature}"))
+            .split(&format!("\n{indent}}}\n"))
+            .next()
+            .unwrap()
+            .to_string()
+    };
+
+    let probe = function("scan.rs", "pub fn has_finder_tag(path: &Path)");
+    assert_eq!(probe.matches("xattr::").count(), 3, "{probe}");
+    assert_eq!(probe.matches("xattr::presence(").count(), 1);
+
+    let presence = function("xattr.rs", "pub fn presence(");
+    assert!(presence.contains("platform::length(path, name)"));
+    assert!(!presence.contains("read"));
+
+    let length = function("xattr.rs", "    pub fn length(");
+    let compact: String = length.split_whitespace().collect();
+    assert_eq!(compact.matches("getxattr(").count(), 1);
     assert!(
-        probe.contains("std::ptr::null_mut(),\n            0,"),
-        "the probe must pass a null buffer of length zero"
+        compact.contains("std::ptr::null_mut(),0,0,XATTR_NOFOLLOW,"),
+        "the probe must pass a null buffer of length zero: {length}"
     );
 }
 

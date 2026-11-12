@@ -3974,31 +3974,8 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     fn set_tag_for_test(path: &Path) {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-        unsafe extern "C" {
-            fn setxattr(
-                path: *const core::ffi::c_char,
-                name: *const core::ffi::c_char,
-                value: *const core::ffi::c_void,
-                size: usize,
-                position: u32,
-                options: i32,
-            ) -> i32;
-        }
-        let path = CString::new(path.as_os_str().as_bytes()).expect("path has no NUL");
-        // SAFETY: valid C strings and a byte slice that outlives the call.
-        let rc = unsafe {
-            setxattr(
-                path.as_ptr(),
-                c"com.apple.metadata:_kMDItemUserTags".as_ptr(),
-                b"opaque".as_ptr().cast(),
-                6,
-                0,
-                0,
-            )
-        };
-        assert_eq!(rc, 0, "could not set the test tag");
+        crate::xattr::write(path, crate::tags::ATTRIBUTE, b"opaque")
+            .expect("could not set the test tag");
     }
 
     /// The cross-volume copy is made into the folder that was opened, not
