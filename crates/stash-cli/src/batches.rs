@@ -335,9 +335,10 @@ pub fn row(journal: &Journal, show_paths: bool) -> Result<String, JournalError> 
             "overdue",
             j::bool(due.is_some_and(|value| value <= super::now_secs())),
         ),
+        // A record still being written is cut short by the write, not damaged.
         (
             "journal_progress_damaged",
-            j::bool(journal.progress_tail_damaged),
+            j::bool(journal.progress_tail_damaged && !super::record_in_use(&journal.id)),
         ),
     ]))
 }

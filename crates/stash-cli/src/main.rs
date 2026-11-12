@@ -1955,13 +1955,26 @@ fn hold_for_pop(journal: &etude_core::Journal) -> Option<std::fs::File> {
 static WAITED_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 static SAID_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Said once, by whichever wait comes first. The run holding the record may be
-/// a pop or the stash that is still moving items into it.
+/// Said once. The run holding the record may be a pop or the stash that is
+/// still moving items into it.
 fn say_waiting() {
     eprintln!(
         "stash: a `stash` or `stash pop` is running on this stash now. Waiting for it to finish.\n\
          \x20      Press Ctrl-C to stop waiting; that changes nothing."
     );
+}
+
+static SAID_CHOOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Said once, while choosing which stash to restore: the record being written
+/// may be another folder's, read only to choose.
+fn say_waiting_to_choose() {
+    if !SAID_CHOOSING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "stash: a `stash` or `stash pop` is writing an undo record that this pop reads to choose a stash. Waiting for it to finish.\n\
+             \x20      Press Ctrl-C to stop waiting; that changes nothing."
+        );
+    }
 }
 
 /// A stash's hold on its own record while it moves items, so that a pop that
@@ -2018,6 +2031,15 @@ fn waited_on() -> Vec<String> {
 /// The hold of [`hold_for_pop`] on the record `id`, and whether another run
 /// (a pop, or the stash itself) held it, so that this one waited.
 fn hold_record(id: &str) -> (Option<std::fs::File>, bool) {
+    hold_record_saying(id, || {
+        if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            say_waiting();
+        }
+    })
+}
+
+/// [`hold_record`], saying `say` if it waits.
+fn hold_record_saying(id: &str, mut say: impl FnMut()) -> (Option<std::fs::File>, bool) {
     if !etude_core::journal::valid_journal_id(id) {
         return (None, false);
     }
@@ -2025,9 +2047,7 @@ fn hold_record(id: &str) -> (Option<std::fs::File>, bool) {
     let mut waited = false;
     let file = hold_record_at(&path, || {
         waited = true;
-        if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            say_waiting();
-        }
+        say();
         if let Ok(mut ids) = WAITED_ON.lock() {
             ids.push(id.to_owned());
         }
@@ -2035,14 +2055,13 @@ fn hold_record(id: &str) -> (Option<std::fs::File>, bool) {
     (file, waited)
 }
 
-fn hold_record_at(path: &Path, mut on_wait: impl FnMut()) -> Option<std::fs::File> {
+/// flock(2) on a record file: LOCK_EX, with LOCK_NB unless waiting.
+fn flock_record(file: &std::fs::File, wait: bool) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::MetadataExt;
     unsafe extern "C" {
         fn flock(fd: i32, operation: i32) -> i32;
     }
-    // flock(2): LOCK_EX, with LOCK_NB unless waiting.
-    let lock = |file: &std::fs::File, wait: bool| loop {
+    loop {
         if unsafe { flock(file.as_raw_fd(), if wait { 2 } else { 2 | 4 }) } == 0 {
             return Ok(());
         }
@@ -2050,7 +2069,11 @@ fn hold_record_at(path: &Path, mut on_wait: impl FnMut()) -> Option<std::fs::Fil
         if error.kind() != std::io::ErrorKind::Interrupted {
             return Err(error);
         }
-    };
+    }
+}
+
+/// Open a record file to hold it, never through a link or into a FIFO.
+fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     // Do not follow a replacement symlink or block on a replacement FIFO.
@@ -2073,14 +2096,44 @@ fn hold_record_at(path: &Path, mut on_wait: impl FnMut()) -> Option<std::fs::Fil
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(0x8000 | 0x800);
     }
+    scan::observe_read("file_open", options.open(path))
+}
+
+/// Whether a `stash` or a `stash pop` holds the record `id` now. The test
+/// takes the hold for an instant; a run that meets it then retries for a
+/// moment before it says it is waiting (see [`hold_record_at`]).
+fn record_in_use(id: &str) -> bool {
+    if !etude_core::journal::valid_journal_id(id) {
+        return false;
+    }
+    open_record(&batches::record_path(id)).is_ok_and(|file| {
+        matches!(flock_record(&file, false),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    })
+}
+
+fn hold_record_at(path: &Path, mut on_wait: impl FnMut()) -> Option<std::fs::File> {
+    use std::os::unix::fs::MetadataExt;
     // Each turn follows one save by the other pop, so a few are plenty.
     for _ in 0..100 {
-        let file = scan::observe_read("file_open", options.open(path)).ok()?;
-        match lock(&file, false) {
+        let file = open_record(path).ok()?;
+        // A status that tests the hold takes it for an instant. Only a hold
+        // that lasts is another run.
+        let mut free = flock_record(&file, false);
+        for _ in 0..20 {
+            match &free {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    free = flock_record(&file, false);
+                }
+                _ => break,
+            }
+        }
+        match free {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 on_wait();
-                lock(&file, true).ok()?;
+                flock_record(&file, true).ok()?;
             }
             Err(_) => return None,
         }
@@ -2134,14 +2187,24 @@ fn select_waiting(
         if started.elapsed() > std::time::Duration::from_secs(3600) {
             return Err(error);
         }
-        let mut a_pop = false;
-        for id in &writing {
-            a_pop |= hold_record(id).1;
-        }
-        if !a_pop && !writing.is_empty() {
-            if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                say_waiting();
+        // An id that was asked for is this stash; any other record is read
+        // only to choose one.
+        let asked = matches!(selector, batches::Selector::Id(_));
+        let say = || {
+            if asked {
+                if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    say_waiting();
+                }
+            } else {
+                say_waiting_to_choose();
             }
+        };
+        let mut held = false;
+        for id in &writing {
+            held |= hold_record_saying(id, say).1;
+        }
+        if !held && !writing.is_empty() {
+            say();
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
@@ -2154,6 +2217,7 @@ fn select_waiting(
 fn restored_while_waiting(
     selector: &batches::Selector,
     chosen: Option<&etude_core::Journal>,
+    started: u128,
     sl: &dyn etude_core::journal::Sealer,
 ) -> bool {
     let root = match selector {
@@ -2177,7 +2241,8 @@ fn restored_while_waiting(
             }
     };
     waited_on().iter().any(|id| {
-        chosen.is_none_or(|chosen| !newer(&chosen.id, id))
+        batches::creation(id).is_none_or(|created| created <= started)
+            && chosen.is_none_or(|chosen| !newer(&chosen.id, id))
             && etude_core::Journal::load_sealed_exact("stash", id, sl)
                 .is_ok_and(|journal| fits(&journal) && journal_is_fully_undone(&journal))
     })
@@ -2192,6 +2257,12 @@ fn restored_by_another_pop() -> ExitCode {
 }
 
 fn cmd_pop(args: &[String]) -> ExitCode {
+    // Before any wait: a stash made after this moment is not one this pop was
+    // asked for.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     if empty_folder_word(args) {
         return refuse_empty_folder_word();
     }
@@ -2246,8 +2317,30 @@ fn cmd_pop(args: &[String]) -> ExitCode {
         batches::Selector::Latest(folder) => Some(folder.is_none()),
         _ => None,
     };
-    let mut j = match select_waiting(&selector, &sl) {
-        Ok(chosen) if restored_while_waiting(&selector, chosen.as_ref(), &sl) => {
+    let chosen = match select_waiting(&selector, &sl) {
+        // A stash made after this pop started is never its choice; one by
+        // --id was named, so it was asked for.
+        Ok(Some(journal))
+            if !matches!(selector, batches::Selector::Id(_))
+                && batches::creation(&journal.id).is_some_and(|created| created > started) =>
+        {
+            if restored_while_waiting(&selector, None, started, &sl) {
+                return restored_by_another_pop();
+            }
+            eprintln!(
+                "stash: the stash this pop would restore now was made after this pop started, so nothing was restored.\n\
+                 To restore it, run: stash pop --id {}",
+                journal.id
+            );
+            refusal_reason(etude_cli_support::reason::Code::MissingInput);
+            etude_cli_support::envelope::status("nothing_to_do");
+            etude_cli_support::progress::finish_without_work("stash pop", "pop", ExitCode::from(1));
+            return ExitCode::from(1);
+        }
+        other => other,
+    };
+    let mut j = match chosen {
+        Ok(chosen) if restored_while_waiting(&selector, chosen.as_ref(), started, &sl) => {
             return restored_by_another_pop();
         }
         Ok(Some(journal)) => journal,
@@ -2863,7 +2956,7 @@ fn cmd_status_all(args: &[String]) -> ExitCode {
                 Some(value) => println!("  {}  {shown}  due {}", batch.id, iso_utc(value)),
                 None => println!("  {}  {shown}  no deadline", batch.id),
             }
-            if let Some(note) = damage_note(batch) {
+            if let Some(note) = run_note(batch).or_else(|| damage_note(batch)) {
                 println!("{note}");
             }
         }
@@ -2884,6 +2977,20 @@ fn cmd_status_all(args: &[String]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// A record a `stash` or `stash pop` holds is being written now. What it says
+/// so far is a count in progress, not damage or an interrupted run.
+fn run_note(batch: &etude_core::Journal) -> Option<String> {
+    record_in_use(&batch.id).then(|| {
+        format!(
+            "  {}: a `stash` or `stash pop` is running on it now; so far {} of {} are in its holding folder. See it again when that finishes: stash status --id {}",
+            batch.id,
+            batches::held(batch).unwrap_or(0),
+            etude_cli_support::counted(batch.entries.len(), "item", "items"),
+            batch.id
+        )
+    })
 }
 
 /// What a damaged undo record means for the step printed beside it.
@@ -3034,6 +3141,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     etude_cli_support::counted(batches.len(), "operation", "operations"),
                 );
                 for batch in &batches {
+                    if let Some(note) = run_note(batch) {
+                        println!("{note}");
+                        continue;
+                    }
                     match damage_note(batch) {
                         Some(note) if etude_core::apply::unrecorded_moves(batch) > 1 => {
                             println!("{note}")
@@ -3236,6 +3347,11 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
         }
     };
     let sealer = KeychainSeal { key };
+    let json = flag(args, "--json");
+    // A record a run holds is still being written. Words can say so; the JSON
+    // states cannot, so --json waits for the run to finish.
+    let running = record_in_use(&id);
+    let _hold = (json && running).then(|| hold_record(&id).0);
     let started = std::time::Instant::now();
     let read = loop {
         let read = etude_core::Journal::load_sealed_exact("stash", &id, &sealer);
@@ -3250,8 +3366,14 @@ fn cmd_status_id(args: &[String]) -> ExitCode {
     };
     match read {
         Ok(journal) => {
-            if flag(args, "--json") {
+            if json {
                 println!("{}", status_id_payload(&journal));
+            } else if running {
+                let summary = journal.summary();
+                println!(
+                    "Operation {}: a `stash` or `stash pop` is running on it now; so far planned {}, moved {}, reversed {}. See it again when that finishes: stash status --id {}",
+                    summary.id, summary.planned, summary.moved, summary.reversed, summary.id
+                );
             } else {
                 let summary = journal.summary();
                 let state = match summary.state {
