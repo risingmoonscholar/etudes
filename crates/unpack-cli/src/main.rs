@@ -2119,8 +2119,13 @@ fn cleanup_staging_with(
     // A folder that keeps moving while it is removed is looked for again,
     // a few times only.
     for _ in 0..3 {
-        let staging::Whereabouts::At(path) = staged.whereabouts() else {
-            break;
+        let path = match staged.whereabouts() {
+            staging::Whereabouts::At(path) => path,
+            // Never removed: the name was not proved to be this folder.
+            staging::Whereabouts::Unchecked { path, error } => {
+                return Cleanup::Unverified { path, error };
+            }
+            staging::Whereabouts::Unknown => break,
         };
         let error = match remove(&path) {
             Ok(()) => return Cleanup::Removed,
@@ -3929,6 +3934,36 @@ mod tests {
             "{message}"
         );
         assert!(staged.path.join("member").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_cannot_be_checked_is_never_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, staged) = reserved_in("uncheckedimpostor");
+        // The folder is deleted and another takes its name. The system can
+        // still give the deleted folder's last path, which is now the other.
+        std::fs::remove_dir_all(&staged.path).unwrap();
+        std::fs::create_dir(&staged.path).unwrap();
+        std::fs::write(staged.path.join("keep"), b"keep").unwrap();
+        let parent = root.join("p1");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut attempted = false;
+        let cleanup = cleanup_staging_with(&staged, |_| {
+            attempted = true;
+            Ok(())
+        });
+        let message = cleanup.message();
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!attempted, "removal was attempted on a name never proved");
+        assert!(matches!(cleanup, Cleanup::Unverified { .. }), "{message}");
+        assert!(
+            message.contains("could not check whether it is still there"),
+            "{message}"
+        );
+        assert_eq!(std::fs::read(staged.path.join("keep")).unwrap(), b"keep");
         std::fs::remove_dir_all(root).unwrap();
     }
 

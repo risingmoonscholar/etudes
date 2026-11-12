@@ -35,7 +35,11 @@ pub struct Staging {
 
 /// Where the private folder is now.
 pub enum Whereabouts {
+    /// The name there was just proved to be this folder.
     At(PathBuf),
+    /// The folder may be at this name, but the name could not be checked, so
+    /// it is never removed: something else may be there.
+    Unchecked { path: PathBuf, error: io::Error },
     /// Not at its path, and its new place could not be read or did not prove
     /// to be this folder. It may be gone, or anywhere.
     Unknown,
@@ -92,11 +96,25 @@ impl Staging {
                 {
                     (folder, md)
                 }
-                Ok(_) => {
-                    return Err(io::Error::other(
-                        "the folder unpack had just made there was replaced, and nothing \
-                         there was removed",
-                    ));
+                Ok((_, md)) => {
+                    return Err(match path.symlink_metadata() {
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            io::Error::other("the folder unpack had just made there is gone")
+                        }
+                        Err(error) => io::Error::other(format!(
+                            "the folder unpack had just made there could not be checked ({}), \
+                             and nothing there was removed",
+                            plain_io_error(&error)
+                        )),
+                        Ok(now) if md.is_dir() && same(&md, &now) => io::Error::other(
+                            "the folder unpack had just made there changed while it was \
+                             checked, and nothing there was removed",
+                        ),
+                        Ok(_) => io::Error::other(
+                            "the folder unpack had just made there was replaced, and nothing \
+                             there was removed",
+                        ),
+                    });
                 }
                 Err(error) => {
                     left_unproved(&path);
@@ -173,8 +191,9 @@ impl Staging {
         let unchecked = match self.path.symlink_metadata() {
             Ok(md) if same(&held, &md) => return Whereabouts::At(self.path.clone()),
             // Something else has this name now. It is not ours to remove.
-            Ok(_) => false,
-            Err(error) => error.kind() != io::ErrorKind::NotFound,
+            Ok(_) => None,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => Some(error),
         };
         // Any failure at the old name, such as a file now holding the old
         // parent's name, can mean the folder moved, so ask where it is.
@@ -182,19 +201,26 @@ impl Staging {
             Some(now) => match now.symlink_metadata() {
                 Ok(md) if same(&held, &md) => Whereabouts::At(now),
                 // A name that cannot be checked, such as under a parent that
-                // lost its search permission, may still hold the folder.
-                // Removal will fail the same way and say so for that path.
-                Err(error) if error.kind() != io::ErrorKind::NotFound => Whereabouts::At(now),
+                // lost its search permission, may still hold the folder. The
+                // system can also give a removed folder's last path, where
+                // another folder may sit now, so it is not removed.
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    Whereabouts::Unchecked { path: now, error }
+                }
                 // A removed folder can still report its last path, so a
                 // missing name there does not prove it is gone.
                 _ => Whereabouts::Unknown,
             },
             // Only when the system gives no place at all, and the old name
-            // could not be checked, may the folder still be there. Removal
-            // will fail the same way and say so for that path.
-            None if unchecked => Whereabouts::At(self.path.clone()),
-            // No place at all, and the old name was missing or held another.
-            None => Whereabouts::Unknown,
+            // could not be checked, may the folder still be there.
+            None => match unchecked {
+                Some(error) => Whereabouts::Unchecked {
+                    path: self.path.clone(),
+                    error,
+                },
+                // The old name was missing or held another folder.
+                None => Whereabouts::Unknown,
+            },
         }
     }
 }
