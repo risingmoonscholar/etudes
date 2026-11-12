@@ -123,6 +123,19 @@ unreadable history also keeps the folder. Undo reports how many empty folders
 it retained for journals. A folder with anything inside it, or one that was
 replaced, is left alone. Undo never deletes or overwrites a file.
 
+If you moved files back by hand before running `sweep undo`, undo finds them
+in place and says "N files were already back in place; the undo record now says
+so." `stash pop` says the same for items. The record cannot tell a hand move
+from an interrupted restore, so neither tool claims which one happened.
+
+A `sweep status` that runs while an apply or undo is writing the record it
+reads tries again for about a second. If the record is still changing, it says
+an apply or undo is writing that record at this moment, that it is not damaged
+and nothing was changed, and to run the same command again when that finishes.
+It still exits 3 with `journal_unreadable`, retry `after_change`. `stash status`
+reads again for up to 10 seconds, then says a `stash` or `stash pop` is
+writing the record now. Neither calls such a record damaged.
+
 ## Where journals live
 
 Journals are namespaced per tool and share `~/Library/Application

@@ -44,7 +44,16 @@ state folder's volume supports advisory locks, one pop of a stash runs at a
 time, and not while the stash is still moving items: a pop that starts then
 says a `stash` or `stash pop` is running on this stash, waits for it to finish,
 then restores only what is still held. Where the volume has no such locks, they
-are not kept apart. Pop uses the original absolute parents
+are not kept apart. `stash` holds its undo record from its first recorded move
+until it returns. A `stash status` or `stash pop` that finds a record changing
+while it reads it reads it again instead of calling it damaged.
+
+When a stash's holding folder is gone and files with its items' names, sizes
+and times are back in the folder, `stash status` says so and gives `stash pop
+--id ID` to check them against the record and clear it; pop then says the items
+were "already back in place; the undo record now says so." Files that only
+share the names are not taken for the items, and status says stash pop cannot
+restore that stash. Pop uses the original absolute parents
 stored in the encrypted journal, and removes only empty holding directories
 authenticated by that journal. Selected directories retain the existing opaque
 directory fingerprint behavior; this is not a recursive content-integrity

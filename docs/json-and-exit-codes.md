@@ -69,7 +69,9 @@ message text:
   you are waiting for.
 
 Codes worth knowing by name: `journal_unreadable` means a saved undo record
-cannot be opened, and `journal_write_failed` means one cannot be saved.
+cannot be opened (`sweep status` also gives it, with a message that says the
+record is not damaged, while an apply or undo is still writing that record; run
+the command again), and `journal_write_failed` means one cannot be saved.
 `journal_times_tied` (`sweep undo`, `stash pop`) means two or more records have
 the same time, so the tool cannot tell which one is newer and guesses nothing;
 `details.same_time_records` lists each tied id with the `--id` step that opens

@@ -43,6 +43,13 @@ medical records and the driver's licence are the files reported as personal
 records, and no flag moves them. The 3 files with no group are counted first,
 with a step that runs as printed.
 
+Every step prints the folder so that it works when pasted into bash or zsh. A
+name with a space or a quote is put in single quotes. A name with a tab, a
+newline, an escape or another control character is printed in the `$'…'` form,
+for example `sweep apply $'in\x09box' --yes`. `--quiet` prints `<path>` in
+place of the folder instead, because it promises not to print names; type the
+folder yourself there.
+
 ## Two limits to know before you apply
 
 **`sweep apply FOLDER --yes` does not apply the plan you saw.** It scans the
