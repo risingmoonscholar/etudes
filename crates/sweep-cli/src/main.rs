@@ -7242,11 +7242,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let record = dir.join("sweep-a.journal");
         std::fs::write(&record, b"r").unwrap();
-        let held = hold_record(&record, "a", "test");
+        let held = hold_record(&record, "hold-test-a", "test");
         assert!(held.is_some(), "a record file is held");
         drop(held);
         assert!(
-            hold_record(&record, "a", "test").is_some(),
+            hold_record(&record, "hold-test-a", "test").is_some(),
             "the hold is let go on drop"
         );
         // A folder, a link and a missing name are not held, and return at once.
@@ -7257,7 +7257,7 @@ mod tests {
         std::os::unix::fs::symlink(&record, &link).unwrap();
         assert!(hold_record(&link, "c", "test").is_none());
         assert!(hold_record(&dir.join("sweep-d.journal"), "d", "test").is_none());
-        assert!(!waited_on("a"), "a free record is not waited on");
+        assert!(!waited_on("hold-test-a"), "a free record is not waited on");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
