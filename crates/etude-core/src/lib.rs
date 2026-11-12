@@ -14,6 +14,7 @@
 
 pub mod apply;
 pub mod classify;
+pub mod evidence;
 pub mod journal;
 pub mod json;
 pub mod plan;
