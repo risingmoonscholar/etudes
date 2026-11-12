@@ -270,7 +270,11 @@ it. When an undo restored every file and says nothing about another apply, no
 apply of that folder is left to undo. When an undo record does not open, sweep
 says it cannot tell. When two undo records that undo could choose have the same
 time, sweep cannot tell which one is newer, so it moves nothing and prints
-`sweep undo --id ID` for each one. See [undo, status and journals](undo-and-journals.md).
+`sweep undo --id ID` for each one. Where the state folder's volume supports
+advisory locks, one undo of an apply runs at a time: a second undo of the same
+apply says another `sweep undo` is restoring these files, waits for it to
+finish, then restores only what is still moved. Where it does not, two undos of
+one apply are not kept apart. See [undo, status and journals](undo-and-journals.md).
 
 ## Rules the tools share
 

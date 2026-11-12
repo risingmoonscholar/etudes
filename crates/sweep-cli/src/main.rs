@@ -4567,9 +4567,18 @@ fn sweep_journal_for_root(
 /// one that will not open cannot stand in the way.
 fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     use etude_core::journal::{Journal, JournalError};
-    let mut journal = match Journal::load_sealed_exact("sweep", id, sl) {
+    let read = choose_waiting(|| {
+        Journal::load_sealed_exact("sweep", id, sl).map_err(|error| RecordError {
+            id: Some(id.to_owned()),
+            error,
+        })
+    });
+    let mut journal = match read {
         Ok(journal) => journal,
-        Err(JournalError::NotFound) => {
+        Err(RecordError {
+            error: JournalError::NotFound,
+            ..
+        }) => {
             let code = status_unknown(id);
             eprintln!("Nothing was moved. `sweep status FOLDER` lists the ids for a folder.");
             etude_cli_support::progress::finish_without_work(
@@ -4579,18 +4588,12 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
             );
             return code;
         }
-        Err(error) => {
-            return refuse_unreadable_record(
-                &RecordError {
-                    id: Some(id.to_owned()),
-                    error,
-                },
-                sl,
-                UndoAsked::Id,
-            );
-        }
+        Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Id),
     };
     etude_cli_support::envelope::recovery_operation(&journal.id);
+    if journal_is_fully_undone(&journal, sl) && waited_on(&journal.id) {
+        return restored_by_another(&journal, sl);
+    }
     if journal_is_fully_undone(&journal, sl) {
         println!("\nNothing to undo. That apply was already restored, or moved nothing.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
@@ -4641,10 +4644,15 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
                     .report();
             }
         };
-        return match sweep_journal_for_root(sl, &target) {
+        return match choose_waiting(|| sweep_journal_for_root(sl, &target)) {
             Err(record) => refuse_unreadable_record(&record, sl, UndoAsked::Folder),
             Ok(Some(mut j)) => finish_undo(&mut j, sl, UndoAsked::Folder),
             Ok(None) => {
+                if let Some(j) = waited_and_restored(sl, |j| {
+                    j.root.canonicalize().is_ok_and(|root| root == target)
+                }) {
+                    return restored_by_another(&j, sl);
+                }
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
                     etude_cli_support::shown(&target)
@@ -4665,7 +4673,7 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    match newest_undoable(sl) {
+    match choose_waiting(|| newest_undoable(sl)) {
         Ok(Some(mut j)) => return finish_undo(&mut j, sl, UndoAsked::Newest),
         Ok(None) => {}
         Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
@@ -4691,19 +4699,21 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
-    let mut j = match newest.load("sweep", sl) {
+    let read = choose_waiting(|| {
+        etude_core::Journal::load_sealed_exact("sweep", &newest.id, sl).map_err(|error| {
+            RecordError {
+                id: Some(newest.id.clone()),
+                error,
+            }
+        })
+    });
+    let mut j = match read {
         Ok(j) => j,
-        Err(error) => {
-            return refuse_unreadable_record(
-                &RecordError {
-                    id: Some(newest.id.clone()),
-                    error,
-                },
-                sl,
-                UndoAsked::Newest,
-            );
-        }
+        Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     };
+    if journal_is_fully_undone(&j, sl) && waited_on(&j.id) {
+        return restored_by_another(&j, sl);
+    }
     if journal_is_fully_undone(&j, sl) {
         // Say which operation this is about. The newest journal being already
         // restored is a fact about an earlier run, and a user who just applied
@@ -4729,12 +4739,186 @@ enum UndoAsked {
     Id,
 }
 
+/// Whether this run has said it is waiting for another undo. Said once.
+static SAID_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The records this run waited on while another undo held them.
+static WAITED_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn waited_on(id: &str) -> bool {
+    WAITED_ON
+        .lock()
+        .is_ok_and(|ids| ids.iter().any(|waited| waited == id))
+}
+
+/// One undo at a time for each undo record. Two undos that both read the record
+/// and then move the same files back race each other: the slower one finds the
+/// files already home, or its own record rewritten under it, and reports a
+/// failed or interrupted restore for files that are back. The hold is an
+/// advisory lock on the record file, released when the returned file closes.
+/// An undo that finds it held says so, with what the other undo is `doing`,
+/// and waits for it to finish.
+/// Saving the record replaces the file, so a hold on a file that is no longer
+/// the record is let go and taken again on the current one.
+///
+/// No hold (a volume without advisory locks, or a record that cannot be
+/// opened) leaves undo as it was; the record is read again either way.
+fn hold_for_undo(id: &str, doing: &str) -> Option<std::fs::File> {
+    if !etude_core::journal::valid_journal_id(id) {
+        return None;
+    }
+    let path = etude_core::journal::state_dir().join(format!("sweep-{id}.journal"));
+    hold_record(&path, id, doing)
+}
+
+/// The hold of [`hold_for_undo`] on the record file at `path`.
+fn hold_record(path: &Path, id: &str, doing: &str) -> Option<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    // flock(2): LOCK_EX, with LOCK_NB unless waiting.
+    let lock = |file: &std::fs::File, wait: bool| loop {
+        if unsafe { flock(file.as_raw_fd(), if wait { 2 } else { 2 | 4 }) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Do not follow a replacement symlink or block on a replacement FIFO.
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Darwin SDK sys/fcntl.h: O_NOFOLLOW | O_NONBLOCK.
+        options.custom_flags(0x100 | 0x4);
+    }
+    // Linux asm-generic/fcntl.h: O_NONBLOCK, and O_NOFOLLOW, whose value
+    // differs by architecture. Elsewhere the regular-file check below still
+    // refuses a link.
+    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x20000 | 0x800);
+    }
+    #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(0x8000 | 0x800);
+    }
+    // Each turn follows one save by the other undo, so a few are plenty.
+    for _ in 0..100 {
+        let file = scan::observe_read("file_open", options.open(path)).ok()?;
+        match lock(&file, false) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!(
+                        "sweep: another `sweep undo` {doing} now. Waiting for it to finish.\n\
+                         \x20      Press Ctrl-C to stop waiting; that changes nothing."
+                    );
+                }
+                if let Ok(mut ids) = WAITED_ON.lock() {
+                    ids.push(id.to_owned());
+                }
+                lock(&file, true).ok()?;
+            }
+            Err(_) => return None,
+        }
+        let held = file.metadata().ok()?;
+        let current = std::fs::symlink_metadata(path).ok()?;
+        // Something other than a record file: no hold, and no retry.
+        if !held.is_file() || !current.is_file() {
+            return None;
+        }
+        if (held.dev(), held.ino()) == (current.dev(), current.ino()) {
+            return Some(file);
+        }
+    }
+    None
+}
+
+/// Choose a record, and choose again after waiting when a record changed while
+/// it was being read. Another undo writes its record as it goes, so a read
+/// made then finds it changed; that is not a record that will not open. The
+/// wait ends when that undo does, and the next read sees what it did.
+fn choose_waiting<T>(mut choose: impl FnMut() -> Result<T, RecordError>) -> Result<T, RecordError> {
+    for _ in 0..8 {
+        match choose() {
+            Err(RecordError {
+                id: Some(id),
+                error:
+                    etude_core::journal::JournalError::Malformed("journal changed after discovery"),
+            }) => drop(hold_for_undo(
+                &id,
+                "is writing an undo record that this one reads",
+            )),
+            other => return other,
+        }
+    }
+    choose()
+}
+
+/// Nothing to undo, because another undo restored this record's files while
+/// this one waited for it.
+fn restored_by_another(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
+    etude_cli_support::envelope::recovery_operation(&j.id);
+    println!("\nNothing to undo. Another `sweep undo` restored these files.");
+    // What the next undo of this folder reaches, as after any undo.
+    let after = after_undo(j, sl);
+    for line in &after.lines {
+        println!("{line}");
+    }
+    let maybe = |n: Option<usize>| n.map_or_else(|| "null".to_owned(), etude_core::json::num);
+    etude_cli_support::envelope::detail_field("remaining_reversible", maybe(after.remaining));
+    etude_cli_support::envelope::detail_field("records_not_opened", maybe(after.not_opened));
+    etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
+    etude_cli_support::envelope::status("nothing_to_do");
+    etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
+    ExitCode::from(1)
+}
+
+/// A record this run waited on, now with nothing left to undo, that `fits`
+/// what was asked. Its files were restored by the undo that held it.
+fn waited_and_restored(
+    sl: &dyn etude_core::journal::Sealer,
+    fits: impl Fn(&etude_core::Journal) -> bool,
+) -> Option<etude_core::Journal> {
+    let ids = WAITED_ON.lock().ok()?.clone();
+    ids.iter()
+        .filter_map(|id| etude_core::Journal::load_sealed_exact("sweep", id, sl).ok())
+        .find(|j| fits(j) && journal_is_fully_undone(j, sl))
+}
+
 /// The part of undo that is the same whether a path was named or not.
 fn finish_undo(
     j: &mut etude_core::Journal,
     sl: &dyn etude_core::journal::Sealer,
     asked: UndoAsked,
 ) -> ExitCode {
+    // Held until undo returns. Read the record again under the hold: another
+    // undo may have restored files since it was first read. Every caller
+    // passes a record with work left.
+    let _hold = hold_for_undo(&j.id, "is restoring these files");
+    // Not through choose_waiting: this run holds the record, and a second
+    // hold on it from this run would wait for itself.
+    *j = match etude_core::Journal::load_sealed_exact("sweep", &j.id, sl) {
+        Ok(journal) => journal,
+        Err(error) => {
+            let record = RecordError {
+                id: Some(j.id.clone()),
+                error,
+            };
+            return refuse_unreadable_record(&record, sl, asked);
+        }
+    };
+    if journal_is_fully_undone(j, sl) {
+        return restored_by_another(j, sl);
+    }
     let mut progress = etude_cli_support::progress::Reporter::for_operation("sweep undo", "undo");
     let code = run_undo(j, sl, asked, &mut progress);
     progress.finish(code);
@@ -6342,6 +6526,38 @@ mod tests {
             ForgetKeyGate::Proceed,
             "no stash still gated the key"
         );
+    }
+
+    #[test]
+    fn an_undo_hold_is_taken_only_on_a_record_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "sweep-undo-hold-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("sweep-a.journal");
+        std::fs::write(&record, b"r").unwrap();
+        let held = hold_record(&record, "a", "test");
+        assert!(held.is_some(), "a record file is held");
+        drop(held);
+        assert!(
+            hold_record(&record, "a", "test").is_some(),
+            "the hold is let go on drop"
+        );
+        // A folder, a link and a missing name are not held, and return at once.
+        let folder = dir.join("sweep-b.journal");
+        std::fs::create_dir(&folder).unwrap();
+        assert!(hold_record(&folder, "b", "test").is_none());
+        let link = dir.join("sweep-c.journal");
+        std::os::unix::fs::symlink(&record, &link).unwrap();
+        assert!(hold_record(&link, "c", "test").is_none());
+        assert!(hold_record(&dir.join("sweep-d.journal"), "d", "test").is_none());
+        assert!(!waited_on("a"), "a free record is not waited on");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // classification over a real state dir must find stash without deleting it.
