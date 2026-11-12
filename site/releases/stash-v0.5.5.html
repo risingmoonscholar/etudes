@@ -33,7 +33,7 @@
           <li><code>--progress-json</code> now covers <code>stash</code>, <code>stash select</code>, <code>stash pop</code> and <code>restore</code>. They used to refuse the flag with exit 2.</li>
           <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
         </ul>
-        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The stash capability declaration is version 14.</p>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The stash capability declaration is version 15; it lists the refusal code <code>journal_times_tied</code> for <code>stash pop</code>.</p>
       </div>
     </article>
 
