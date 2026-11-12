@@ -3,12 +3,12 @@
 # and a command the tools print for you to run next must do what was shown.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
-W=$(workdir) || exit 1; trap 'rm -rf "$W"' EXIT
+W=$(workdir) || exit 1; trap 'rm -rf "${W:?}"' EXIT
 OLD=202001010101
 TOOLS=$(dirname "$SWEEP")
 
 fresh_folder() {  # fresh_folder DIR: three old files at the top, one level down two more
-  rm -rf "$1"; mkdir -p "$1/sub"
+  rm -rf "${1:?}"; mkdir -p "$1/sub"
   printf 'one' > "$1/a.txt"; printf 'two' > "$1/b.txt"; printf 'five' > "$1/e.txt"
   printf 'three' > "$1/sub/c.pdf"; printf 'four' > "$1/sub/d.pdf"
   touch -t "$OLD" "$1/a.txt" "$1/b.txt" "$1/e.txt" "$1/sub/c.pdf" "$1/sub/d.pdf"
@@ -74,6 +74,41 @@ case "$OUT" in
   *"sweep apply <path> --yes"*) pass "--quiet keeps a placeholder in the footer" ;;
   *) fail "--quiet footer is missing" ;;
 esac
+
+# --- a folder name with a tab and an escape: each printed step works as pasted ---
+# A placeholder such as <path> would be read by the shell as redirects, and
+# could make a file named --yes where the step is pasted.
+C="$W/tab"$'\t'"esc"$'\e'"name"
+fresh_folder "$C"
+mkdir -p "$W/paste"
+OUT=$("$SWEEP" "$C" 2>&1)
+step() { printf '%s\n' "$OUT" | sed -n "s/^$1: *//p"; }
+for name in Review Apply Save; do
+  LINE=$(step "$name")
+  case "$LINE" in
+    *"<"*|*">"*|"") fail "the $name step for a name with a tab and an escape is not pasteable: $(printf '%q' "$LINE")" ;;
+    *) pass "the $name step quotes a name with a tab and an escape" ;;
+  esac
+done
+LINE=$(step Review)
+RUN=$(cd "$W/paste" && PATH="$TOOLS:$PATH" bash -c "$LINE" 2>&1 </dev/null)
+case "$RUN" in
+  *"review needs a terminal"*) pass "the pasted Review step reaches review for that folder" ;;
+  *) fail "the pasted Review step did not reach review: ${RUN%%$'\n'*}" ;;
+esac
+LINE=$(step Save)
+(cd "$W/paste" && PATH="$TOOLS:$PATH" bash -c "$LINE" >/dev/null 2>&1 </dev/null)
+assert_eq 0 "$?" "the pasted Save step runs"
+[ -f "$HOME/sweep.plan" ] && pass "the pasted Save step saved the plan" || fail "the pasted Save step saved no plan"
+[ -f "$C/a.txt" ] && pass "Review and Save moved nothing" || fail "Review or Save moved a file"
+LINE=$(step Apply)
+(cd "$W/paste" && PATH="$TOOLS:$PATH" bash -c "$LINE" >/dev/null 2>&1 </dev/null)
+assert_eq 0 "$?" "the pasted Apply step runs"
+[ ! -f "$C/a.txt" ] && pass "the pasted Apply step moved the files the scan showed" \
+  || fail "the pasted Apply step moved nothing"
+assert_eq "" "$(ls -A "$W/paste")" "pasting the steps left no stray file where they were pasted"
+assert_exit 0 "undo restores that apply" -- "$SWEEP" undo "$C"
+rm -f "${HOME:?}/sweep.plan"
 
 # --- two batches: pop names the choices, and each one works ---
 B="$W/batches"
