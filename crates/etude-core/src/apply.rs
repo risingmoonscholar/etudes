@@ -705,6 +705,9 @@ fn apply_plan_with_structured_progress(
     let mut durable_journal_id = None;
     let mut copy_left = None;
     let mut created_directories = HashMap::new();
+    // Set once any move of this attempt has completed, even one later put
+    // back. A journal that ever held a done move is never emptied.
+    let mut any_moved = false;
     let result = (|| {
         validate(&mut durable_journal_id)?;
         if let Some(hook) = faults.after_validate.as_mut() {
@@ -1005,6 +1008,7 @@ fn apply_plan_with_structured_progress(
             };
             j.entries[i].method = method;
             j.entries[i].state = EntryState::Moved;
+            any_moved = true;
             moved += 1;
             event.completed = moved;
             // Append a sealed done-record (index + corrected method). The base
@@ -1118,6 +1122,15 @@ fn apply_plan_with_structured_progress(
             sealer,
             &created_directories,
         );
+        if !any_moved && copy_left.is_none() && !plan.applies_tags() {
+            refuse_unmoved_attempt(
+                plan,
+                tool,
+                sealer,
+                durable_journal_id.as_deref(),
+                &created_directories,
+            );
+        }
     }
     let mut created_folders: Vec<PathBuf> = if result.is_err() && moved > 0 {
         created_directories
@@ -1173,6 +1186,48 @@ fn remove_folders_of_a_failed_attempt(
             let _ = fs::remove_dir(path);
         }
     }
+}
+
+/// Empty the saved journal of an attempt that failed with no move done and no
+/// copy left behind. A failure like that took nothing from its place (see
+/// `ApplyFailure::moved`). Its entries all read planned, and once a contender
+/// has moved those files their destinations are taken and their sources gone,
+/// which is how a move without its record looks. Left as it was, the record
+/// would read as interrupted and damaged. Emptied, it reads refused, as the
+/// record of an attempt beaten before its journal was saved does. A folder
+/// this attempt made that is still there, the same folder, stays in the
+/// record, so that undo can still remove it once it is empty. If the rewrite
+/// fails the record stays as it was, which undo still reads correctly.
+fn refuse_unmoved_attempt(
+    plan: &Plan,
+    tool: &str,
+    sealer: Option<&dyn Sealer>,
+    own_journal: Option<&str>,
+    created: &HashMap<PathBuf, (u64, u64)>,
+) {
+    let (Some(sl), Some(id)) = (sealer, own_journal) else {
+        return;
+    };
+    let mut created_directories: Vec<CreatedDirectory> = created
+        .iter()
+        .filter(|(path, identity)| directory_matches(path, **identity))
+        .map(|(path, (device, inode))| CreatedDirectory {
+            path: path.clone(),
+            device: *device,
+            inode: *inode,
+        })
+        .collect();
+    created_directories.sort_by(|a, b| a.path.cmp(&b.path));
+    let _ = Journal {
+        id: id.to_string(),
+        tool: tool.to_string(),
+        root: plan.root.clone(),
+        entries: Vec::new(),
+        created_directories,
+        validated_directories: Vec::new(),
+        progress_tail_damaged: false,
+    }
+    .save_sealed(sl);
 }
 
 /// Apply a tag plan: add each tag to its files, in place.

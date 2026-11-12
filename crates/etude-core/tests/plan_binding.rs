@@ -769,6 +769,169 @@ fn group_folder_made_after_the_journal_is_a_recorded_conflict() {
     assert_recorded_conflict(failure);
 }
 
+/// Run a live apply whose files a contender moves to their own destinations
+/// after this attempt saved its journal, the way the winner of two applies of
+/// one folder does. `taken` picks which entries the contender moves. With
+/// `aside`, it moves them to a name in the root instead, leaving the
+/// destinations free.
+#[cfg(unix)]
+fn beaten_after_journal(taken: impl Fn(usize) -> bool, aside: bool) -> apply::ApplyFailure {
+    let fixture = Fixture::new();
+    let out = scan::scan(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let mut hook = |_: usize, root: &std::path::Path| {
+        let mut index = 0;
+        for group in &bound.groups {
+            let destination = root.join(&group.name);
+            for member in &group.members {
+                if taken(index) && aside {
+                    std::fs::rename(member, root.join(format!("taken {index}.png"))).unwrap();
+                } else if taken(index) {
+                    std::fs::create_dir_all(&destination).unwrap();
+                    std::fs::rename(member, destination.join(member.file_name().unwrap())).unwrap();
+                }
+                index += 1;
+            }
+        }
+    };
+    apply::apply_bound_with_faults_for_tests(
+        &bound,
+        &Fixture::context(),
+        Some(&TagSeal),
+        apply::ApplyFaults {
+            after_journal: Some(&mut hook),
+            ..Default::default()
+        },
+    )
+    .expect_err("the beaten apply must not succeed")
+}
+
+/// The contender moved every file after this attempt saved its journal and
+/// before it tried a move. Nothing moved, so the saved journal must read
+/// refused: not interrupted, not damaged, and with nothing for undo to do.
+#[cfg(unix)]
+#[test]
+fn files_moved_by_a_contender_after_the_journal_leave_a_refused_record() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-moved-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
+    let failure = beaten_after_journal(|_| true, false);
+    assert_eq!(failure.moved, 0);
+    let id = failure.durable_journal_id.expect("the record was durable");
+    let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
+    assert_eq!(
+        journal.summary().state,
+        etude_core::journal::JournalState::Refused
+    );
+    assert_eq!(apply::unrecorded_moves(&journal), 0);
+    assert!(!journal.progress_tail_damaged);
+    assert!(!apply::has_undo_work(&journal, &TestSeal));
+}
+
+/// The contender moved every file into the folder this attempt had just made,
+/// after the checks and before the first rename. The rename was tried and
+/// moved nothing, so the record must read refused. It still names the folder
+/// this attempt made, so undo can remove it once the contender's files leave.
+#[cfg(unix)]
+#[test]
+fn files_taken_at_the_first_rename_leave_a_refused_record_that_keeps_its_folder() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-rename-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
+    let fixture = Fixture::new();
+    let out = scan::scan(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let folder = fixture.0.join(&bound.groups[0].name);
+    let mut hook = |index: usize, _: &std::path::Path| {
+        if index == 0 {
+            for member in &bound.groups[0].members {
+                std::fs::rename(member, folder.join(member.file_name().unwrap())).unwrap();
+            }
+        }
+    };
+    let failure = apply::apply_bound_with_faults_for_tests(
+        &bound,
+        &Fixture::context(),
+        Some(&TagSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut hook),
+            ..Default::default()
+        },
+    )
+    .expect_err("the beaten apply must not succeed");
+    assert_eq!(failure.moved, 0);
+    assert!(failure.copy_left.is_none());
+    let id = failure.durable_journal_id.expect("the record was durable");
+    let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
+    assert_eq!(
+        journal.summary().state,
+        etude_core::journal::JournalState::Refused
+    );
+    assert_eq!(apply::unrecorded_moves(&journal), 0);
+    assert_eq!(journal.created_directories.len(), 1);
+    assert_eq!(
+        std::fs::canonicalize(&journal.created_directories[0].path).unwrap(),
+        std::fs::canonicalize(&folder).unwrap()
+    );
+    assert!(
+        !apply::has_undo_work(&journal, &TestSeal),
+        "the folder is not empty"
+    );
+    for member in &bound.groups[0].members {
+        std::fs::rename(folder.join(member.file_name().unwrap()), member).unwrap();
+    }
+    assert!(
+        apply::has_undo_work(&journal, &TestSeal),
+        "the empty folder is this attempt's"
+    );
+}
+
+/// The contender took only a later file, so this attempt moved the first one
+/// before it stopped. That record holds a done move and must be kept whole.
+#[cfg(unix)]
+#[test]
+fn a_record_with_a_done_move_is_kept_when_a_contender_takes_a_later_file() {
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-later-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
+    let failure = beaten_after_journal(|index| index == 1, true);
+    assert_eq!(failure.moved, 1);
+    let id = failure.durable_journal_id.expect("the record was durable");
+    let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
+    let summary = journal.summary();
+    assert_eq!(
+        summary.state,
+        etude_core::journal::JournalState::Interrupted
+    );
+    assert_eq!(summary.moved, 1);
+    assert!(apply::has_undo_work(&journal, &TestSeal));
+}
+
 /// A file lands on the destination between the check and the rename. Nothing
 /// moved, so the message must say a file, not a folder, and the journal must
 /// read refused rather than interrupted.
