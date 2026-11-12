@@ -45,11 +45,9 @@ fn is_forbidden(sym: &str) -> bool {
 /// networking. `connect` in particular collides with iterator adaptors and
 /// symbol names inside unrelated crates, so the scan is exact-match only.
 fn binary_path() -> Option<std::path::PathBuf> {
-    // The test binary lives in target/<profile>/deps/; the sweep binary is two
-    // levels up in target/<profile>/.
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?.parent()?;
-    let p = dir.join("sweep");
+    // Cargo names the built tool for this test. The test binary's own place
+    // moves between Cargo versions, so it is not used to find the tool.
+    let p = std::path::PathBuf::from(env!("CARGO_BIN_EXE_sweep"));
     p.exists().then_some(p)
 }
 
