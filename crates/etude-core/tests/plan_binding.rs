@@ -910,6 +910,68 @@ fn files_taken_at_the_first_rename_leave_a_refused_record_that_keeps_its_folder(
     );
 }
 
+/// The first rename failed with an error that does not say the item stayed
+/// (here the destination folder refuses writes). Nothing is known to have
+/// moved, but the record must keep its planned entries for undo, as before.
+#[cfg(unix)]
+#[test]
+fn a_move_that_failed_for_another_reason_keeps_its_planned_record() {
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = state_lock();
+    let state = std::env::temp_dir().join(format!("etudes-beaten-eacces-{}", std::process::id()));
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+    let _state_cleanup = StateDir(state.clone());
+    let fixture = Fixture::new();
+    let out = scan::scan(
+        &fixture.0,
+        &ScanConfig {
+            grace: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut proposal = plan::build(&out);
+    for group in &mut proposal.groups {
+        group.accepted = true;
+    }
+    let bound = BoundPlan::from_live_plan(proposal, Fixture::context()).unwrap();
+    let folder = fixture.0.join(&bound.groups[0].name);
+    let mut hook = |index: usize, _: &std::path::Path| {
+        if index == 0 {
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+        }
+    };
+    let failure = apply::apply_bound_with_faults_for_tests(
+        &bound,
+        &Fixture::context(),
+        Some(&TagSeal),
+        apply::ApplyFaults {
+            before_rename: Some(&mut hook),
+            ..Default::default()
+        },
+    )
+    .expect_err("a refused rename must not succeed");
+    // The empty folder this attempt made may already be removed again.
+    let _ = std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755));
+    assert_eq!(failure.moved, 0);
+    assert!(
+        matches!(&failure.error, ApplyError::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+        "{:?}",
+        failure.error
+    );
+    let id = failure.durable_journal_id.expect("the record was durable");
+    let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
+    let summary = journal.summary();
+    assert_eq!(
+        summary.state,
+        etude_core::journal::JournalState::Interrupted
+    );
+    assert_eq!(
+        summary.planned,
+        bound.groups.iter().map(|g| g.members.len()).sum::<usize>()
+    );
+}
+
 /// The contender took only a later file, so this attempt moved the first one
 /// before it stopped. That record holds a done move and must be kept whole.
 #[cfg(unix)]

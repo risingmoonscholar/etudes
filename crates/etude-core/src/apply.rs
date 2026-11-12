@@ -708,6 +708,9 @@ fn apply_plan_with_structured_progress(
     // Set once any move of this attempt has completed, even one later put
     // back. A journal that ever held a done move is never emptied.
     let mut any_moved = false;
+    // Set when a move failed in a way that does not prove the item stayed.
+    // Such a journal keeps its entries, so undo can still find the item.
+    let mut move_outcome_unknown = false;
     let result = (|| {
         validate(&mut durable_journal_id)?;
         if let Some(hook) = faults.after_validate.as_mut() {
@@ -1004,7 +1007,19 @@ fn apply_plan_with_structured_progress(
                     }
                     continue;
                 }
-                Err(error) => return Err(ApplyError::Io(error)),
+                Err(error) => {
+                    // Gone at the source, or taken at the destination: the
+                    // item never left. Any other error from the move itself
+                    // (a network volume that timed out, say) may hide a move
+                    // that took effect, so the record must keep its entries.
+                    if !matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::AlreadyExists
+                    ) {
+                        move_outcome_unknown = true;
+                    }
+                    return Err(ApplyError::Io(error));
+                }
             };
             j.entries[i].method = method;
             j.entries[i].state = EntryState::Moved;
@@ -1122,7 +1137,7 @@ fn apply_plan_with_structured_progress(
             sealer,
             &created_directories,
         );
-        if !any_moved && copy_left.is_none() && !plan.applies_tags() {
+        if !any_moved && !move_outcome_unknown && copy_left.is_none() && !plan.applies_tags() {
             refuse_unmoved_attempt(
                 plan,
                 tool,
@@ -1189,8 +1204,9 @@ fn remove_folders_of_a_failed_attempt(
 }
 
 /// Empty the saved journal of an attempt that failed with no move done and no
-/// copy left behind. A failure like that took nothing from its place (see
-/// `ApplyFailure::moved`). Its entries all read planned, and once a contender
+/// copy left behind, before any move or at a move that failed because its
+/// source was gone or its destination taken. A failure like that took nothing
+/// from its place. Its entries all read planned, and once a contender
 /// has moved those files their destinations are taken and their sources gone,
 /// which is how a move without its record looks. Left as it was, the record
 /// would read as interrupted and damaged. Emptied, it reads refused, as the
