@@ -4481,7 +4481,7 @@ fn newest_undoable(
     sl: &dyn etude_core::journal::Sealer,
 ) -> Result<Option<etude_core::Journal>, RecordError> {
     // An apply made after this undo started is not one it was asked to undo.
-    sweep_journal_matching(sl, |j| before_this_undo(&j.id))
+    sweep_journal_matching(sl, |j| before_this_undo(j, sl))
 }
 
 /// The newest other folder with an apply left to reverse. A record that will not
@@ -4821,8 +4821,46 @@ fn applied_before(id: &str, started: Option<u128>) -> bool {
     }
 }
 
-fn before_this_undo(id: &str) -> bool {
-    applied_before(id, UNDO_STARTED.get().copied())
+/// The start time to hold choices to: only once this undo has waited. With no
+/// wait the request is now, and a clock that stepped back must not make undo
+/// pass over a record without a word.
+fn cutoff() -> Option<u128> {
+    cutoff_after(UNDO_STARTED.get().copied(), waited_at_all())
+}
+
+fn cutoff_after(started: Option<u128>, waited: bool) -> Option<u128> {
+    if waited { started } else { None }
+}
+
+/// Applies with work left that this undo passed over because they were made
+/// after it started. Each is named when undo ends, with its step.
+static LEFT_ALONE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether a choice by folder or with no folder may take `j`. A record it may
+/// not take, with work left, is noted so undo can say it was left alone.
+fn before_this_undo(j: &etude_core::Journal, sl: &dyn etude_core::journal::Sealer) -> bool {
+    if applied_before(&j.id, cutoff()) {
+        return true;
+    }
+    if !journal_is_fully_undone(j, sl)
+        && let Ok(mut ids) = LEFT_ALONE.lock()
+        && !ids.contains(&j.id)
+    {
+        ids.push(j.id.clone());
+    }
+    false
+}
+
+/// The lines naming each apply this undo left alone.
+fn left_alone_lines(ids: &[String]) -> Vec<String> {
+    ids.iter()
+        .map(|id| {
+            format!(
+                "An apply made after this undo started was left alone. To undo it, run: {}",
+                undo_id_step(id)
+            )
+        })
+        .collect()
 }
 
 /// After another undo restored `waited`, whether this undo goes on to `next`:
@@ -4841,6 +4879,11 @@ fn cmd_undo(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let code = undo_with(args, &sl);
+    if let Ok(ids) = LEFT_ALONE.lock() {
+        for line in left_alone_lines(&ids) {
+            println!("{line}");
+        }
+    }
     // After the undo, not before: when the person brings back the key that
     // opens an old record, the run that uses it must still find that record.
     prune_old_records(&sl);
@@ -4883,8 +4926,8 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
                 |j: &Option<etude_core::Journal>| j.as_ref().map(|j| j.id.as_str()),
                 || {
                     sweep_journal_matching(sl, |j| {
-                        before_this_undo(&j.id)
-                            && j.root.canonicalize().is_ok_and(|root| root == target)
+                        j.root.canonicalize().is_ok_and(|root| root == target)
+                            && before_this_undo(j, sl)
                     })
                 },
             )
@@ -4952,7 +4995,7 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     let any = !candidates.is_empty();
     let Some((newest, _)) = candidates
         .into_iter()
-        .find(|(candidate, _)| before_this_undo(&candidate.id))
+        .find(|(candidate, _)| applied_before(&candidate.id, cutoff()))
     else {
         if any {
             eprintln!("sweep: nothing to undo. No apply was on record when this undo started.");
@@ -5012,6 +5055,11 @@ static SAID_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 /// The records this run waited on while another undo held them.
 static WAITED_ON: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// Whether this run has waited for another run that held a record.
+fn waited_at_all() -> bool {
+    WAITED_ON.lock().is_ok_and(|ids| !ids.is_empty())
+}
+
 fn waited_on(id: &str) -> bool {
     WAITED_ON
         .lock()
@@ -5037,6 +5085,20 @@ fn hold_for_undo(id: &str, doing: &str) -> Option<std::fs::File> {
     let path = etude_core::journal::state_dir().join(format!("sweep-{id}.journal"));
     hold_record(&path, id, doing)
 }
+
+/// What undo says while another run holds the record it needs. An apply holds
+/// its record while it moves files and an undo while it restores them, and
+/// this run cannot tell which, so the words fit either.
+fn waiting_words(doing: &str) -> String {
+    format!(
+        "sweep: another `sweep apply` or `sweep undo` {doing} now. Waiting for it to finish.\n\
+         \x20      Press Ctrl-C to stop waiting; that changes nothing."
+    )
+}
+
+/// What the holder is doing, in [`waiting_words`].
+const WORKING_ON_THESE_FILES: &str = "is working on these files";
+const WRITING_A_RECORD: &str = "is writing an undo record that this undo reads";
 
 /// The hold of [`hold_for_undo`] on the record file at `path`.
 fn hold_record(path: &Path, id: &str, doing: &str) -> Option<std::fs::File> {
@@ -5084,10 +5146,7 @@ fn hold_record(path: &Path, id: &str, doing: &str) -> Option<std::fs::File> {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 if !SAID_WAITING.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!(
-                        "sweep: another `sweep undo` {doing} now. Waiting for it to finish.\n\
-                         \x20      Press Ctrl-C to stop waiting; that changes nothing."
-                    );
+                    eprintln!("{}", waiting_words(doing));
                 }
                 if let Ok(mut ids) = WAITED_ON.lock() {
                     ids.push(id.to_owned());
@@ -5145,10 +5204,7 @@ fn choose_waiting<T>(
     choose_waiting_with(
         choose,
         |id| {
-            drop(hold_for_undo(
-                id,
-                "is writing an undo record that this one reads",
-            ));
+            drop(hold_for_undo(id, WRITING_A_RECORD));
             waited_on(id)
         },
         |id| {
@@ -5249,7 +5305,7 @@ fn finish_undo(
     // Held until undo returns. Read the record again under the hold: another
     // undo may have restored files since it was first read. Every caller
     // passes a record with work left.
-    let hold = hold_for_undo(&j.id, "is restoring these files");
+    let hold = hold_for_undo(&j.id, WORKING_ON_THESE_FILES);
     // Not through choose_waiting: this run holds the record, and a second
     // hold on it from this run would wait for itself.
     *j = match etude_core::Journal::load_sealed_exact("sweep", &j.id, sl) {
@@ -5270,7 +5326,7 @@ fn finish_undo(
         // undo started.
         drop(hold);
         return match choose_again() {
-            Ok(Some(mut next)) if goes_on_to(&next.id, &j.id, UNDO_STARTED.get().copied()) => {
+            Ok(Some(mut next)) if goes_on_to(&next.id, &j.id, cutoff()) => {
                 finish_undo(&mut next, sl, asked, choose_again)
             }
             Err(record) => refuse_unreadable_record(&record, sl, asked),
@@ -7053,6 +7109,35 @@ mod tests {
             || panic!("no pause"),
         );
         assert!(matches!(read, Err(JournalError::NotFound)));
+    }
+
+    #[test]
+    fn the_wait_lines_fit_an_apply_or_an_undo_and_say_how_to_stop() {
+        assert_eq!(
+            waiting_words(WORKING_ON_THESE_FILES),
+            "sweep: another `sweep apply` or `sweep undo` is working on these files now. Waiting for it to finish.\n       Press Ctrl-C to stop waiting; that changes nothing."
+        );
+        assert_eq!(
+            waiting_words(WRITING_A_RECORD),
+            "sweep: another `sweep apply` or `sweep undo` is writing an undo record that this undo reads now. Waiting for it to finish.\n       Press Ctrl-C to stop waiting; that changes nothing."
+        );
+    }
+
+    #[test]
+    fn the_start_time_holds_choices_only_after_a_wait() {
+        let started = 1_794_483_027_356_466_000;
+        let later = "1794483027356467000-64805-0-33f103d5913ee078";
+        // No wait: a record that looks newer than the undo, as after the
+        // clock stepped back, is still a choice.
+        assert!(applied_before(later, cutoff_after(Some(started), false)));
+        // After a wait it is left alone.
+        assert!(!applied_before(later, cutoff_after(Some(started), true)));
+        assert_eq!(
+            left_alone_lines(&[later.to_owned()]),
+            vec![format!(
+                "An apply made after this undo started was left alone. To undo it, run: sweep undo --id {later}"
+            )]
+        );
     }
 
     #[test]

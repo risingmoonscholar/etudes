@@ -80,7 +80,7 @@ undo record was written last. Every undo writes its record again, so after an
 undo that stops part way, by folder or by `--id`, `sweep undo FOLDER` goes back
 to that same apply. Two undos of one apply at the same time do not both move
 the files: where the state folder's volume supports advisory locks, the second
-says another `sweep undo` is restoring these files and waits. If the first
+says another `sweep apply` or `sweep undo` is working on these files and waits. If the first
 restored every file, the second says "Nothing to undo. Another `sweep undo`
 restored these files." and exits 1 with `nothing_to_do`; if the first stopped
 part way, the second restores the rest. `stash pop` does the same for two pops

@@ -184,11 +184,11 @@ trial() {  # trial MODE: folder, json, newest or id
   else
     fail "$mode: files moved while the first undo was stopped: $(home "$D") home, $restored when it stopped"
   fi
-  if grep -q 'another `sweep undo` is restoring these files now' "$O/b.err" \
+  if grep -q 'another `sweep apply` or `sweep undo` is working on these files now' "$O/b.err" \
     && grep -q 'Press Ctrl-C to stop waiting; that changes nothing.' "$O/b.err"; then
-    pass "$mode: second undo names the other undo and says how to stop waiting"
+    pass "$mode: second undo says another apply or undo is working on these files, and how to stop waiting"
   else
-    fail "$mode: second undo does not say another undo is restoring these files: $(head -3 "$O/b.err")"
+    fail "$mode: second undo does not say another apply or undo is working on these files: $(head -3 "$O/b.err")"
   fi
 
   kill -CONT "$A"
@@ -398,8 +398,8 @@ by_hand() {
 # An apply made while a plain `sweep undo` waits is not one it was asked to
 # undo. The first undo is stopped part way; the second, with no folder, waits
 # for it; then a new apply of another folder runs to the end. When the first
-# finishes, the second must say the other undo restored the files and leave
-# the new apply in place.
+# finishes, the second must say the other undo restored the files, leave the
+# new apply in place, and name it with a step that undoes it.
 apply_while_waiting() {
   local attempt O D L restored said code_a code_b out_b start later_moved
   for attempt in 1 2 3 4; do
@@ -468,11 +468,18 @@ apply_while_waiting() {
   else
     fail "apply while waiting: the new apply was undone ($(home "$L") of 30 home, $later_moved moved by it)"
   fi
+  # It says the new apply was left alone, with a step that undoes it.
+  step=$(sed -n 's/^An apply made after this undo started was left alone. To undo it, run: //p' <<<"$out_b")
+  if [ "$(grep -c . <<<"$step")" = 1 ] && [[ "$step" == "sweep undo --id "* ]]; then
+    pass "apply while waiting: the plain undo says the new apply was left alone, with its step"
+  else
+    fail "apply while waiting: the plain undo does not name the new apply it left alone: $(grep -v 'items$' <<<"$out_b" | head -4)"
+  fi
   snapshot_tree "$D" "$W/late-notes-after.json"
   assert_snapshot_eq "$W/late-notes-before.json" "$W/late-notes-after.json" \
     "apply while waiting: the first folder equals its original"
-  out=$("$SWEEP" undo 2>&1 </dev/null); code=$?
-  assert_eq 0 "$code" "apply while waiting: a later plain undo undoes the new apply (exit $code)"
+  out=$(PATH="$(dirname "$SWEEP"):$PATH" bash -c "$step" 2>&1 </dev/null); code=$?
+  assert_eq 0 "$code" "apply while waiting: the printed step undoes the new apply (exit $code)"
   snapshot_tree "$L" "$W/late-later-after.json"
   assert_snapshot_eq "$W/late-later-before.json" "$W/late-later-after.json" \
     "apply while waiting: the new folder then equals its original"
