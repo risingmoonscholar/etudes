@@ -42,7 +42,7 @@
           <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
           <li>On macOS each journal record is ordered behind its move with a barrier sync instead of a full drive flush. On 9,999 small files apply measured 50.3–56.7 s before and 19.4–21.3 s after.</li>
         </ul>
-        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The sweep capability declaration is version 17; it lists routing under <code>routing</code>.</p>
+        <p><strong>JSON:</strong> the result envelope stays at <code>schema_version: 4</code>. The sweep capability declaration is version 18; it lists routing under <code>routing</code> and the refusal code <code>journal_times_tied</code> for <code>sweep undo</code>.</p>
         <p><strong>Plans:</strong> an exported plan written by an earlier version still reads. A plan that holds a saved-route group needs 0.5.5 to read: an earlier sweep refuses it.</p>
       </div>
     </article>

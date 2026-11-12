@@ -204,4 +204,39 @@ else
   bad "no captured help for: $helps. That tool's API panel on the site is empty. Re-run scripts/capture-demos.sh"
 fi
 
+# Each tool's capability declaration version, read from contract.rs, against
+# every page that names the current one. The 0.5.5 release pages said 17
+# (sweep) and 14 (stash) after the code had moved to 18 and 15.
+contract=crates/etude-cli-support/src/contract.rs
+base=$(grep -oE 'pub const SCHEMA_VERSION: u32 = [0-9]+' "$contract" | grep -oE '[0-9]+$')
+for tool in sweep stash unpack; do
+  Tool="$(tr '[:lower:]' '[:upper:]' <<<"${tool:0:1}")${tool:1}"
+  expr=$(grep -oE "Tool::$Tool => (SCHEMA_VERSION \+ )?[0-9]+," "$contract" | head -1)
+  if [ -z "$expr" ] || [ -z "$base" ]; then
+    bad "could not read the $tool declaration version from $contract"; continue
+  fi
+  decl=$(grep -oE '[0-9]+' <<<"$expr" | tail -1)
+  case "$expr" in *SCHEMA_VERSION*) decl=$((base + decl)) ;; esac
+  claim docs/contracts/README.md "\`v[0-9]+/$tool\.json\`.*are the\$" '[0-9]+' "current $tool declaration pin" "$decl"
+  case $tool in
+    stash) claim docs/contracts/README.md 'declaration is version [0-9]+ and its surrounding' '[0-9]+' "current stash declaration" "$decl"
+           claim docs/contracts/README.md 'declaration is version [0-9]+ in `v[0-9]+/stash' '[0-9]+' "current stash declaration" "$decl"
+           claim docs/contracts/README.md 'declaration is version [0-9]+ in `v[0-9]+/stash' 'v[0-9]+' "current stash pin" "v$decl" ;;
+    unpack) claim docs/contracts/README.md 'under `details.schema_version` is version [0-9]+' '[0-9]+$' "current unpack declaration" "$decl"
+            claim docs/contracts/README.md '`v[0-9]+/unpack\.json` pins the' 'v[0-9]+' "current unpack pin" "v$decl"
+            claim docs/unpack.md 'unpack capability declaration is version [0-9]+' '[0-9]+$' "current unpack declaration" "$decl"
+            claim docs/unpack.md '`docs/contracts/v[0-9]+/unpack\.json` is the canonical pin' 'v[0-9]+' "current unpack pin" "v$decl" ;;
+  esac
+  # A tagged release's page describes what shipped; a later bump leaves it alone.
+  ver=$(grep -m1 '^version' "crates/$tool-cli/Cargo.toml" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  page="site/releases/$tool-v$ver.html"
+  if git rev-parse -q --verify "refs/tags/$tool-v$ver" >/dev/null; then
+    ok "$tool v$ver is tagged; its release page describes what shipped, so its declaration is not checked"
+  elif [ ! -f "$page" ]; then
+    ok "$tool v$ver has no release page yet, so no page states its declaration"
+  else
+    claim "$page" "$tool capability declaration is version [0-9]+" '[0-9]+$' "$tool declaration version" "$decl"
+  fi
+done
+
 exit $status

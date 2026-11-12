@@ -75,7 +75,7 @@
   "110-final-message-consistency": 438,
   "111-sweep-undo-id": 303,
   "112-locked-items": 53,
-  "113-shared-progress": 22,
+  "113-shared-progress": 24,
   "114-unpack-staging-recovery": 42,
   "115-non-utf8-arguments": 98,
   "116-moves-into-checked-folders": 18,
@@ -88,5 +88,10 @@
   "129-unpack-private-copy-code": 20,
   "130-undo-says-what-remains": 43,
   "131-same-time-records": 91,
-  "132-sweep-footer-lines": 21
+  "132-sweep-footer-lines": 21,
+  "133-stash-status-steps-paste": 636,
+  "134-unpack-parent-moved-mid-extraction": 28,
+  "135-two-pops-at-once": 29,
+  "136-lost-apply-race-leaves-no-damaged-record": 33,
+  "137-two-undos-at-once": 68
 }

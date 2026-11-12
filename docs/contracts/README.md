@@ -327,8 +327,8 @@ journal entries. Recovery verification remains unproven by the envelope. Unpack 
 
 ## Unpack quarantine declaration (introduced in version 3)
 
-Unpack's capability declaration under `details.schema_version` is version 8;
-its surrounding result envelope is version 4. `v8/unpack.json` pins the
+Unpack's capability declaration under `details.schema_version` is version 9;
+its surrounding result envelope is version 4. `v9/unpack.json` pins the
 current declaration and `v1/unpack.json` mirrors that current fixture. Earlier
 unpack pins stay unchanged. Sweep and stash use their own declaration
 versions, while the shared result envelope uses version 4.
@@ -363,7 +363,7 @@ integrity or complete access coverage. See [plan binding](../plan-binding.md).
 ## Stash explicit selection introduced in declaration version 3
 
 Explicit selection was introduced in stash declaration version 3; the current
-declaration is version 14 and its surrounding result envelope is version 4.
+declaration is version 15 and its surrounding result envelope is version 4.
 `v3/stash.json` pins declaration version 3; `v1/stash.json`
 tracks the current declaration. The preceding `v2/stash.json` stays unchanged. The `stash` operation scope declares
 conditional legacy folder scanning and explicit selection access separately.
@@ -394,7 +394,7 @@ retained.
 ## Stash batch declaration version 5
 
 Stash's batch capability was introduced in declaration version 5. The current
-declaration is version 14 in `v14/stash.json`; `v1/stash.json` mirrors it, while
+declaration is version 15 in `v15/stash.json`; `v1/stash.json` mirrors it, while
 earlier versions remain pinned.
 Every journalled stash has a persistent `stash_id`, separate
 from the per-invocation result `operation_id`. Exact-ID restore refuses missing,
