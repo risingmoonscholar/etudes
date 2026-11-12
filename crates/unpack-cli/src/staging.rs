@@ -6,6 +6,7 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 const MARKER: &str = "unpack staging lock v1";
@@ -27,6 +28,21 @@ pub struct Staging {
     /// None on a volume without advisory locks. Such a folder has no lock file,
     /// so a later run can never prove it abandoned and leaves it in place.
     pub lock: Option<ExclusiveLock>,
+    /// The folder itself, held open. Its parent can be moved while unpack
+    /// works, and the folder goes with it; this is how it is found again.
+    folder: File,
+}
+
+/// Where the private folder is now.
+pub enum Whereabouts {
+    /// The name there was just proved to be this folder.
+    At(PathBuf),
+    /// The folder may be at this name, but the name could not be checked, so
+    /// it is never removed: something else may be there.
+    Unchecked { path: PathBuf, error: io::Error },
+    /// Not at its path, and its new place could not be read or did not prove
+    /// to be this folder. It may be gone, or anywhere.
+    Unknown,
 }
 
 pub fn lock_path(stage: &Path) -> Option<PathBuf> {
@@ -67,6 +83,44 @@ impl Staging {
                 std::fs::remove_dir(&path)?;
                 continue;
             }
+            // Hold the folder just made and prove the name still holds it
+            // before anything is written or removed by that name. What is
+            // there otherwise is not proved ours, so nothing there is removed.
+            let opened = File::open(&path).and_then(|folder| {
+                let md = folder.metadata()?;
+                Ok((folder, md))
+            });
+            let (folder, held) = match opened {
+                Ok((folder, md))
+                    if md.is_dir() && path.symlink_metadata().is_ok_and(|now| same(&md, &now)) =>
+                {
+                    (folder, md)
+                }
+                Ok((_, md)) => {
+                    return Err(match path.symlink_metadata() {
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            io::Error::other("the folder unpack had just made there is gone")
+                        }
+                        Err(error) => io::Error::other(format!(
+                            "the folder unpack had just made there could not be checked ({}), \
+                             and nothing there was removed",
+                            plain_io_error(&error)
+                        )),
+                        Ok(now) if md.is_dir() && same(&md, &now) => io::Error::other(
+                            "the folder unpack had just made there changed while it was \
+                             checked, and nothing there was removed",
+                        ),
+                        Ok(_) => io::Error::other(
+                            "the folder unpack had just made there was replaced, and nothing \
+                             there was removed",
+                        ),
+                    });
+                }
+                Err(error) => {
+                    left_unproved(&path);
+                    return Err(error);
+                }
+            };
             let initialized = (|| -> io::Result<Option<ExclusiveLock>> {
                 let file = File::options()
                     .read(true)
@@ -96,7 +150,11 @@ impl Staging {
                 Ok(Some(lock))
             })();
             return match initialized {
-                Ok(lock) => Ok(Self { path, lock }),
+                Ok(lock) => Ok(Self { path, lock, folder }),
+                Err(error) if !path.symlink_metadata().is_ok_and(|md| same(&held, &md)) => {
+                    left_unproved(&path);
+                    Err(error)
+                }
                 Err(error) => {
                     if let cleanup @ (super::Cleanup::Remains { .. }
                     | super::Cleanup::Unverified { .. }) = super::cleanup_destination(&path)
@@ -121,6 +179,87 @@ impl Staging {
             return Err(io::Error::other("the private lock file changed"));
         }
         std::fs::remove_file(path)
+    }
+
+    /// Where the folder is now: at its path, or wherever it was moved to,
+    /// such as with its parent folder. A place counts only when the name
+    /// there is this same folder, by device and inode.
+    pub fn whereabouts(&self) -> Whereabouts {
+        let Ok(held) = self.folder.metadata() else {
+            return Whereabouts::Unknown;
+        };
+        let unchecked = match self.path.symlink_metadata() {
+            Ok(md) if same(&held, &md) => return Whereabouts::At(self.path.clone()),
+            // Something else has this name now. It is not ours to remove.
+            Ok(_) => None,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => Some(error),
+        };
+        // Any failure at the old name, such as a file now holding the old
+        // parent's name, can mean the folder moved, so ask where it is.
+        match current_path(&self.folder) {
+            Some(now) => match now.symlink_metadata() {
+                Ok(md) if same(&held, &md) => Whereabouts::At(now),
+                // A name that cannot be checked, such as under a parent that
+                // lost its search permission, may still hold the folder. The
+                // system can also give a removed folder's last path, where
+                // another folder may sit now, so it is not removed.
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    Whereabouts::Unchecked { path: now, error }
+                }
+                // A removed folder can still report its last path, so a
+                // missing name there does not prove it is gone.
+                _ => Whereabouts::Unknown,
+            },
+            // Only when the system gives no place at all, and the old name
+            // could not be checked, may the folder still be there.
+            None => match unchecked {
+                Some(error) => Whereabouts::Unchecked {
+                    path: self.path.clone(),
+                    error,
+                },
+                // The old name was missing or held another folder.
+                None => Whereabouts::Unknown,
+            },
+        }
+    }
+}
+
+/// The path the system has for an open folder now, following renames of the
+/// folder or of any folder above it.
+#[cfg(target_os = "macos")]
+fn current_path(folder: &File) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    unsafe extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    // F_GETPATH is 50 in the platform's sys/fcntl.h, and it fills a buffer
+    // of MAXPATHLEN (1024, sys/param.h) bytes.
+    let mut buffer = vec![0_u8; 1024];
+    // SAFETY: the descriptor is open for the life of `folder`, and the buffer
+    // holds MAXPATHLEN bytes, as F_GETPATH requires.
+    if unsafe { fcntl(folder.as_raw_fd(), 50, buffer.as_mut_ptr()) } == -1 {
+        return None;
+    }
+    let end = buffer.iter().position(|&byte| byte == 0)?;
+    buffer.truncate(end);
+    Some(PathBuf::from(std::ffi::OsString::from_vec(buffer)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_path(folder: &File) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/self/fd/{}", folder.as_raw_fd())).ok()
+}
+
+/// Say that a name this run made is left alone because the folder there can
+/// no longer be proved the one it made. A missing name needs no word.
+fn left_unproved(path: &Path) {
+    if path.symlink_metadata().is_ok() {
+        eprintln!(
+            "unpack: left {} in place: unpack could not prove it is the folder it had just \
+             made, so nothing there was removed.",
+            shown(path)
+        );
     }
 }
 
@@ -520,6 +659,34 @@ mod tests {
         let error = Staging::reserve_with(&dest, &[], |_| Err(io::Error::from_raw_os_error(5)));
         assert!(error.is_err());
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_reserve_removes_nothing_that_took_the_folders_name() {
+        let (root, stray) = new_stage("replaced");
+        std::fs::remove_dir(&stray).unwrap();
+        let dest = root.join("out");
+        let error = Staging::reserve_with(&dest, &[], |_| {
+            // Another program moves the new folder away and puts its own
+            // folder at that name before the lock is taken.
+            let made = std::fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| path.extension().is_some_and(|ext| ext == "partial"))
+                .unwrap();
+            std::fs::rename(&made, root.join("moved")).unwrap();
+            std::fs::create_dir(&made).unwrap();
+            std::fs::write(made.join("keep"), b"keep").unwrap();
+            Err(io::Error::from_raw_os_error(5))
+        });
+        assert!(error.is_err());
+        let kept = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "partial"))
+            .expect("the other folder stays");
+        assert_eq!(std::fs::read(kept.join("keep")).unwrap(), b"keep");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
