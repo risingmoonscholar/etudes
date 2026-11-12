@@ -2,12 +2,15 @@
 //!
 //! Sources (CONTRIBUTING.md requires them for platform claims):
 //!
-//! - The localized words macOS starts a capture file name with, in every
-//!   language it ships: `/System/Library/CoreServices/screencaptureui.app/
-//!   Contents/Resources/Localizable.loctable`, keys `Screenshot` and
-//!   `Screen Recording`, read directly with `plutil` on macOS 27.0.1
-//!   (26A434). Primary. The table is generated from it by
-//!   `scripts/gen-capture-names.sh`; see `capture_names.rs`.
+//! - The text macOS starts a capture file name with, in every language it
+//!   ships: `/System/Library/CoreServices/screencaptureui.app/Contents/
+//!   Resources/Localizable.loctable`, keys `Screenshot` and
+//!   `Screen Recording` (the words), `%@ %@ at %@` (the name format) and
+//!   `yyyy-MM-dd` (the date format), read directly with `plutil` on macOS
+//!   27.0.1 (26A434). Primary. The table is generated from it by
+//!   `scripts/gen-capture-names.sh`; see `capture_names.rs`. The name format
+//!   is read from the table only; it has not yet been checked against a real
+//!   captured file.
 //! - The output formats: `man screencapture` lists `-t` with `png` (the
 //!   default), `pdf`, `jpg`, `tiff` "and other formats", and `-v` for video.
 //!   Primary. `heic` comes from the English rule sweep already shipped.
@@ -15,7 +18,7 @@
 //! Nothing here touches the filesystem. Recognition is a pure function of
 //! the file name, so it reads no attributes and no contents.
 
-use super::capture_names::{RECORDING_WORDS, STILL_WORDS};
+use super::capture_names::{RECORDING_PREFIXES, STILL_PREFIXES};
 use std::path::Path;
 
 /// What a screen capture holds.
@@ -37,7 +40,7 @@ pub enum CaptureKind {
 pub enum CaptureBasis {
     /// macOS marked the file as a screen capture with an attribute.
     OsAttribute,
-    /// The name starts with the word macOS itself uses, in some language.
+    /// The name starts the way macOS itself writes it, in some language.
     OsName,
     /// The name matches the English rule sweep used before it knew the OS
     /// words. It also covers CleanShot, which is not part of macOS.
@@ -70,11 +73,11 @@ pub fn capture_kind_for_extension(ext: &str) -> Option<CaptureKind> {
 
 /// Recognise a screen capture from its file name alone.
 ///
-/// The OS words are compared as exact code points and exact case, the way
-/// macOS writes them. Nothing is stripped or normalised: the Dutch word
-/// carries a soft hyphen (U+00AD) and the French word a typographic
-/// apostrophe (U+2019), and a name typed without them was not written by
-/// macOS.
+/// The OS prefixes are compared as exact code points and exact case, the
+/// way macOS writes them. Nothing is stripped or normalised: the Dutch word
+/// carries a soft hyphen (U+00AD), the French word a typographic apostrophe
+/// (U+2019), Russian a no-break space (U+00A0) and Arabic right-to-left
+/// marks (U+200F), and a name typed without them was not written by macOS.
 pub fn recognise_by_name(file_name: &str) -> Option<Capture> {
     // The same split the scan uses, so `.png` alone has no extension here
     // either.
@@ -87,11 +90,11 @@ pub fn recognise_by_name(file_name: &str) -> Option<Capture> {
     // one, because it is stronger. It needs a filesystem probe, so it lives
     // with the caller that has the path, not in this pure name check.
 
-    let words = match kind {
-        CaptureKind::Still => STILL_WORDS,
-        CaptureKind::Recording => RECORDING_WORDS,
+    let prefixes = match kind {
+        CaptureKind::Still => STILL_PREFIXES,
+        CaptureKind::Recording => RECORDING_PREFIXES,
     };
-    if words.iter().any(|word| starts_os_name(stem, word)) {
+    if prefixes.iter().any(|prefix| starts_os_name(stem, prefix)) {
         return Some(Capture {
             kind,
             basis: CaptureBasis::OsName,
@@ -107,16 +110,14 @@ pub fn recognise_by_name(file_name: &str) -> Option<Capture> {
     None
 }
 
-/// macOS names a capture as the word, a space, then the date. Requiring the
-/// digit keeps an ordinary title that happens to start with the word, such
-/// as "Screenshot ideas.png", out. The space is optional because some
-/// languages (Chinese, Thai) write the date straight after the word.
-fn starts_os_name(stem: &str, word: &str) -> bool {
-    let Some(rest) = stem.strip_prefix(word) else {
-        return false;
-    };
-    let rest = rest.strip_prefix(' ').unwrap_or(rest);
-    rest.as_bytes().first().is_some_and(u8::is_ascii_digit)
+/// macOS names a capture as the prefix, then the date. The prefix already
+/// holds everything the OS writes before the date's first digit, so the next
+/// character must be that digit. Requiring it keeps an ordinary title that
+/// happens to start with the word, such as "Screenshot ideas.png", out.
+fn starts_os_name(stem: &str, prefix: &str) -> bool {
+    stem.strip_prefix(prefix)
+        .and_then(|rest| rest.as_bytes().first())
+        .is_some_and(u8::is_ascii_digit)
 }
 
 /// The English rule sweep shipped before P5, reproduced exactly so no file
@@ -125,7 +126,7 @@ fn starts_os_name(stem: &str, word: &str) -> bool {
 ///
 /// It keeps its own narrower extension list (png, jpg, jpeg, heic), not the
 /// whole capture set. Widening it would change which files today's builds
-/// group, and that is not this rule's job; the OS words cover the other
+/// group, and that is not this rule's job; the OS prefixes cover the other
 /// formats.
 fn is_known_name(file_name: &str, ext: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
@@ -142,18 +143,18 @@ fn is_known_name(file_name: &str, ext: &str) -> bool {
 mod tests {
     use super::*;
 
-    const STILL_TAIL: &str = " 2026-11-12 at 09.41.12.png";
-    const RECORDING_TAIL: &str = " 2026-11-12 at 09.41.12.mov";
+    const STILL_TAIL: &str = "2026-11-12 at 09.41.12.png";
+    const RECORDING_TAIL: &str = "2026-11-12 at 09.41.12.mov";
 
     fn capture(kind: CaptureKind, basis: CaptureBasis) -> Option<Capture> {
         Some(Capture { kind, basis })
     }
 
     #[test]
-    fn every_still_word_is_recognised_by_the_os_name() {
-        assert!(!STILL_WORDS.is_empty());
-        for word in STILL_WORDS {
-            let name = format!("{word}{STILL_TAIL}");
+    fn every_still_prefix_is_recognised_by_the_os_name() {
+        assert!(!STILL_PREFIXES.is_empty());
+        for prefix in STILL_PREFIXES {
+            let name = format!("{prefix}{STILL_TAIL}");
             assert_eq!(
                 recognise_by_name(&name),
                 capture(CaptureKind::Still, CaptureBasis::OsName),
@@ -163,10 +164,10 @@ mod tests {
     }
 
     #[test]
-    fn every_recording_word_is_recognised_by_the_os_name() {
-        assert!(!RECORDING_WORDS.is_empty());
-        for word in RECORDING_WORDS {
-            let name = format!("{word}{RECORDING_TAIL}");
+    fn every_recording_prefix_is_recognised_by_the_os_name() {
+        assert!(!RECORDING_PREFIXES.is_empty());
+        for prefix in RECORDING_PREFIXES {
+            let name = format!("{prefix}{RECORDING_TAIL}");
             assert_eq!(
                 recognise_by_name(&name),
                 capture(CaptureKind::Recording, CaptureBasis::OsName),
@@ -177,11 +178,31 @@ mod tests {
 
     #[test]
     fn a_german_screenshot_is_recognised() {
-        assert!(STILL_WORDS.contains(&"Bildschirmfoto"));
+        assert!(STILL_PREFIXES.contains(&"Bildschirmfoto "));
         assert_eq!(
             recognise_by_name("Bildschirmfoto 2026-11-12 um 09.41.12.png"),
             capture(CaptureKind::Still, CaptureBasis::OsName)
         );
+    }
+
+    #[test]
+    fn a_russian_screenshot_is_recognised() {
+        // Russian writes a no-break space and a dash between the word and the
+        // date, so a bare-word match never saw these names.
+        let word =
+            "\u{421}\u{43d}\u{438}\u{43c}\u{43e}\u{43a} \u{44d}\u{43a}\u{440}\u{430}\u{43d}\u{430}";
+        let prefix = STILL_PREFIXES
+            .iter()
+            .find(|p| p.starts_with(word))
+            .expect("the table has the Russian still prefix");
+        assert_eq!(&prefix[word.len()..], "\u{a0}\u{2014} ");
+        let name = format!("{prefix}12.11.2026 \u{432}\u{a0}09.41.12.png");
+        assert_eq!(
+            recognise_by_name(&name),
+            capture(CaptureKind::Still, CaptureBasis::OsName)
+        );
+        // The bare word with a plain space is not how macOS names it.
+        assert_eq!(recognise_by_name(&format!("{word} 12.11.2026.png")), None);
     }
 
     #[test]
@@ -208,7 +229,7 @@ mod tests {
             recognise_by_name("screen shot of the bug.JPG"),
             capture(CaptureKind::Still, CaptureBasis::KnownName)
         );
-        // ...but it never covered the formats the OS words added.
+        // ...but it never covered the formats the OS prefixes added.
         assert_eq!(recognise_by_name("screenshot of the bug.gif"), None);
     }
 
@@ -252,9 +273,10 @@ mod tests {
         assert!(CaptureBasis::OsName < CaptureBasis::KnownName);
     }
 
-    /// The committed table must hold every word the running OS uses. A new
-    /// or changed word fails here, and `scripts/gen-capture-names.sh`
-    /// regenerates the table.
+    /// The committed table must hold every prefix the running OS writes. A
+    /// new or changed word or format fails here, and
+    /// `scripts/gen-capture-names.sh` regenerates the table. The prefixes are
+    /// derived here the same way the script derives them.
     #[cfg(target_os = "macos")]
     #[test]
     fn capture_names_match_the_os() {
@@ -279,29 +301,90 @@ mod tests {
         let mut missing = Vec::new();
         let mut seen = 0;
         for (lang, table) in &languages {
+            // "LocProvenance" is bookkeeping, not a language.
             let json::Value::Object(table) = table else {
                 continue;
             };
-            for (key, words) in [
-                ("Screenshot", STILL_WORDS),
-                ("Screen Recording", RECORDING_WORDS),
+            if lang == "LocProvenance" {
+                continue;
+            }
+            let get = |key: &str| match table.iter().find(|(k, _)| k == key) {
+                Some((_, json::Value::String(value))) if !value.is_empty() => value.as_str(),
+                _ => panic!("language {lang} has no string for key {key:?}"),
+            };
+            let (before, between) = split_name_format(lang, get("%@ %@ at %@"));
+            let lead = date_lead(lang, get("yyyy-MM-dd"));
+            for (key, prefixes) in [
+                ("Screenshot", STILL_PREFIXES),
+                ("Screen Recording", RECORDING_PREFIXES),
             ] {
-                let Some((_, json::Value::String(word))) = table.iter().find(|(k, _)| k == key)
-                else {
-                    continue;
-                };
+                let prefix = format!("{before}{}{between}{lead}", get(key));
                 seen += 1;
-                if !words.contains(&word.as_str()) {
-                    missing.push(format!("{lang} {key:?}: {word:?}"));
+                if !prefixes.contains(&prefix.as_str()) {
+                    missing.push(format!("{lang} {key:?}: {prefix:?}"));
                 }
             }
         }
         assert!(seen > 0, "no language in {SOURCE} has the capture keys");
         assert!(
             missing.is_empty(),
-            "the OS has capture words the table lacks; run scripts/gen-capture-names.sh:\n{}",
+            "the OS has capture prefixes the table lacks; run scripts/gen-capture-names.sh:\n{}",
             missing.join("\n")
         );
+    }
+
+    /// The text before the word and between the word and the date in a name
+    /// format of three arguments (word, date, time). `%@` and Thai's
+    /// `%[tt]@` are the only placeholders handled; anything else, such as a
+    /// positional `%1$@` that could reorder the arguments, fails rather than
+    /// being guessed at.
+    #[cfg(target_os = "macos")]
+    fn split_name_format(lang: &str, format: &str) -> (String, String) {
+        let mut parts = vec![String::new()];
+        let mut rest = format;
+        while let Some(ch) = rest.chars().next() {
+            if let Some(after) = rest
+                .strip_prefix("%@")
+                .or_else(|| rest.strip_prefix("%[tt]@"))
+            {
+                parts.push(String::new());
+                rest = after;
+            } else if let Some(after) = rest.strip_prefix("%%") {
+                parts.last_mut().unwrap().push('%');
+                rest = after;
+            } else if ch == '%' {
+                panic!("language {lang}: cannot parse placeholder in {format:?}");
+            } else {
+                parts.last_mut().unwrap().push(ch);
+                rest = &rest[ch.len_utf8()..];
+            }
+        }
+        assert_eq!(
+            parts.len(),
+            4,
+            "language {lang}: expected three placeholders in {format:?}"
+        );
+        (parts[0].clone(), parts[1].clone())
+    }
+
+    /// The text a date format writes before its first number.
+    #[cfg(target_os = "macos")]
+    fn date_lead<'a>(lang: &str, format: &'a str) -> &'a str {
+        let at = format
+            .find(['y', 'Y', 'M', 'd'])
+            .unwrap_or_else(|| panic!("language {lang}: no date field in {format:?}"));
+        let (lead, fields) = format.split_at(at);
+        let field = fields.chars().next().unwrap();
+        let run = fields.chars().take_while(|c| *c == field).count();
+        assert!(
+            !(field == 'M' && run > 2),
+            "language {lang}: date {format:?} starts with a month name, not a number"
+        );
+        assert!(
+            !lead.chars().any(|c| c.is_ascii_alphabetic() || c == '\''),
+            "language {lang}: cannot parse the text before the date in {format:?}"
+        );
+        lead
     }
 
     /// Just enough JSON to read plutil's output, because the crate takes no
