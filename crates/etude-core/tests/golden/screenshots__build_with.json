@@ -5,6 +5,8 @@
     {
       "name": "Screenshots",
       "signal": "named \"Screenshot ...\"",
+      "capture_kind": "still",
+      "capture_basis": "known_name",
       "accepted": false,
       "count": 4,
       "members": [

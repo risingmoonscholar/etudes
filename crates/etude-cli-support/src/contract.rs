@@ -141,7 +141,7 @@ pub fn declaration(
         (
             "schema_version",
             j::num(match tool {
-                Tool::Sweep => SCHEMA_VERSION + 14,
+                Tool::Sweep => SCHEMA_VERSION + 15,
                 Tool::Stash => 15,
                 Tool::Unpack => SCHEMA_VERSION + 5,
             }),
@@ -497,6 +497,20 @@ pub fn declaration(
             ("counter", j::str("plan.skipped.aliases_skipped")),
             ("unreadable", j::str("hold_and_count_unreadable;_scan_incomplete")),
             ("platform", j::str("macos_only")),
+        ])));
+        fields.push(("screen_captures", j::obj(&[
+            ("attribute", j::str("com.apple.metadata:kMDItemIsScreenCapture")),
+            ("read_scope", j::str("selected_tree_metadata;_presence_of_the_attribute_on_files_with_a_still-capture_extension,_asked_through_a_zero-length_buffer_so_no_value_is_read;_screen_capture_presence_observation_category")),
+            ("observed", j::str("screencapture_-x_wrote_the_attribute_on_a_still_on_macOS_15.8.2;_a_screencapture_-v_recording_there_carried_no_attribute,_so_recordings_are_never_probed")),
+            ("extensions", j::str("stills_png_jpg_jpeg_heic_tiff_tif_gif_pdf_bmp;_recordings_mov;_any_other_extension_is_never_a_capture_and_is_never_probed")),
+            ("evidence", j::str("first_match_wins:_the_attribute_(stills_only),_then_a_name_that_starts_with_the_os's_own_localized_prefix_then_an_ascii_digit,_then_a_name_that_starts_with_the_known_names_screenshot,_screen_shot_or_cleanshot,_ignoring_ascii_case_(png_jpg_jpeg_heic_only);_prefixes_are_compared_as_exact_code_points")),
+            ("probe_limits", j::str("files_with_a_still-capture_extension_only;_never_for_a_folder,_a_recording_or_an_entry_a_scan-time_rule_already_holds;_at_most_once_per_file_per_scan;_never_follows_symlinks;_never_opens_the_file")),
+            ("probe_failure", j::str("read_as_absent_and_counted_failed;_the_file_is_judged_by_its_name_alone")),
+            ("groups", j::str("stills_form_Screenshots;_recordings_form_Screen_Recordings;_both_use_the_three-file_new-folder_floor;_both_names_are_reserved_destinations;_a_capture_is_exempt_from_the_near-project-document_hold")),
+            ("describe", j::str("the_group_names_its_weakest_basis:_marked_by_macOS,_named_by_macOS,_or_named_Screenshot_...;_recordings_say_screen_recordings_or_Screen_Recording_...")),
+            ("json", j::str("a_screen-capture_group_adds_capture_kind_still|recording_and_capture_basis_os_attribute|os_name|known_name")),
+            ("capture_plans", j::str("an exported plan marks a screen-capture group with plan signal tag 9; plans written by earlier versions read unchanged and tag 0 still decodes; a plan that holds tag 9 needs declaration 19 or later; artifact_schema_version stays 1")),
+            ("platform", j::str("the_attribute_is_asked_on_macOS_only;_the_name_table_is_compiled_in,_so_os_names_and_known_names_match_on_every_platform")),
         ])));
         fields.push(("locked_items", j::obj(&[
             ("flag", j::str("st_flags_UF_IMMUTABLE_or_SF_IMMUTABLE")),

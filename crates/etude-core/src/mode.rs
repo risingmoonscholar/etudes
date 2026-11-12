@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::Untouched;
-use crate::evidence::Facts;
+use crate::evidence::{CaptureBasis, CaptureKind, Facts};
 use crate::plan::{Group, MapSpec, Signal, TagSpec};
 use crate::scan::{Entry, ScanOutcome};
 
@@ -189,14 +189,26 @@ impl<'m> Rule<'m> {
                 })
                 .collect(),
             // Structural detectors, highest precision first.
-            Rule::ScreenCaptures => vec![Proposal {
-                folder: "Screenshots".to_string(),
-                basis: Basis::Screenshot,
+            //
+            // Stills and recordings are different things to macOS: its
+            // word for each differs in every language it ships, and
+            // `man screencapture` lists video as its own capture type. So
+            // each kind is its own group, and a folder named Screenshots
+            // never holds a video.
+            Rule::ScreenCaptures => [
+                (CaptureKind::Still, "Screenshots"),
+                (CaptureKind::Recording, "Screen Recordings"),
+            ]
+            .into_iter()
+            .map(|(kind, folder)| Proposal {
+                folder: folder.to_string(),
+                basis: Basis::ScreenCapture(kind),
                 members: open()
-                    .filter(|f| f.capture.is_some())
+                    .filter(|f| f.capture.is_some_and(|c| c.kind == kind))
                     .map(|f| f.entry)
                     .collect(),
-            }],
+            })
+            .collect(),
             Rule::CameraBurst => {
                 let burst = camera_burst(open().filter(|f| f.camera).map(|f| f.entry).collect());
                 let folder = match date_range(&burst) {
@@ -336,7 +348,7 @@ struct Proposal<'a, 'm> {
 /// Why a proposed group exists. It becomes the group's `Signal` once `settle`
 /// knows which files move.
 enum Basis<'m> {
-    Screenshot,
+    ScreenCapture(CaptureKind),
     CameraBurst,
     Installer,
     Family,
@@ -355,7 +367,18 @@ impl Basis<'_> {
     /// extensions of those files, not of the files already in its folder.
     fn signal(&self, moving: &[&Entry]) -> Signal {
         match self {
-            Basis::Screenshot => Signal::Screenshot,
+            // The weakest evidence among the files that move, so the line
+            // printed never claims more than its weakest file supports.
+            // Every member is a capture of this kind; were one not, the
+            // weakest basis is the honest answer.
+            Basis::ScreenCapture(kind) => Signal::ScreenCapture {
+                kind: *kind,
+                basis: moving
+                    .iter()
+                    .map(|e| e.capture.map_or(CaptureBasis::KnownName, |c| c.basis))
+                    .max()
+                    .unwrap_or(CaptureBasis::KnownName),
+            },
             Basis::CameraBurst => Signal::CameraBurst { days: BURST_DAYS },
             Basis::Installer => Signal::Installer,
             Basis::Family => Signal::TypeFamily {
@@ -717,6 +740,7 @@ mod tests {
             modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs)),
             is_dir: false,
             is_package: false,
+            capture: None,
         };
         let a = at("a.jpg", 1_577_836_800); // 2020-01-01
         let b = at("b.jpg", 1_767_225_600); // 2026-01-01

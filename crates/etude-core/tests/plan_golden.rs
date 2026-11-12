@@ -654,7 +654,7 @@ fn cases() -> Vec<Case> {
                         .extension()
                         .map(|e| e.to_string_lossy().to_ascii_lowercase())
                         .unwrap_or_default();
-                    scan.entries.push(etude_core::Entry {
+                    let mut entry = etude_core::Entry {
                         path,
                         name,
                         ext,
@@ -662,7 +662,14 @@ fn cases() -> Vec<Case> {
                         modified: meta.modified().ok(),
                         is_dir: false,
                         is_package: false,
-                    });
+                        capture: None,
+                    };
+                    // As the scan would have recognised it.
+                    entry.capture = etude_core::evidence::capture::recognise(
+                        &entry,
+                        etude_core::scan::has_screen_capture_mark,
+                    );
+                    scan.entries.push(entry);
                 }
                 scan.entries.sort_by(|a, b| a.path.cmp(&b.path));
             },
@@ -986,6 +993,10 @@ impl Rewrite<'_> {
                     self.text();
                     self.byte();
                     self.text();
+                }
+                9 => {
+                    self.byte(); // kind
+                    self.byte(); // basis
                 }
                 tag => panic!("unknown signal tag {tag}; teach this rewriter the new layout"),
             }

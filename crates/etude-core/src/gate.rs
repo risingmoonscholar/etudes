@@ -75,11 +75,13 @@ pub fn gate<'a>(
     // the families the document could point at protects a flat project
     // folder while the PDFs and installers beside it still sort.
     //
-    // Screenshot-named files are exempt from the hold. On macOS screenshots
-    // land on the Desktop -- the folder most likely to also hold a stray
-    // project file -- and a project referencing a file named
+    // Screen captures are exempt from the hold. On macOS screenshots land on
+    // the Desktop -- the folder most likely to also hold a stray project
+    // file -- and a project referencing a file named
     // "Screenshot 2026-08-12 at 9.15.11 AM.png" is not a real layout. The
-    // name pattern is the same one the Screenshots detector uses.
+    // evidence is the scan's (`Entry::capture`): the same answer the walk's
+    // own project-document hold used, and the one the screen-capture groups
+    // read.
     let first_document = facts
         .iter()
         .map(|f| f.entry)
@@ -197,6 +199,7 @@ mod tests {
             modified,
             is_dir: false,
             is_package: false,
+            capture: crate::evidence::capture::recognise_by_name(name),
         }
     }
 
