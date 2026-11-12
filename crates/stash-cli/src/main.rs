@@ -2134,8 +2134,17 @@ fn cmd_pop(args: &[String]) -> ExitCode {
                 .filter(|entry| entry.is_moved())
                 .filter_map(|entry| entry.from.parent().map(Path::to_path_buf))
                 .collect();
-            print_restore_failure(error, &folder_phrase(going_home), &j);
+            let not_in_place = matches!(
+                error,
+                etude_core::apply::ApplyError::DestinationDirectoryChanged(_)
+            ) && !holding_in_place(&j);
+            if not_in_place {
+                eprintln!("{}", not_in_place_text(&j));
+            } else {
+                print_restore_failure(error, &folder_phrase(going_home), &j);
+            }
             match saved {
+                Ok(()) if not_in_place => {}
                 Ok(()) => eprintln!("Fix that, then run: {step}"),
                 Err(save_err) => eprintln!(
                     "stash: the undo record could not be updated either: {}. {next_pop_corrects}",
@@ -2324,6 +2333,14 @@ fn pop_one_item(
         }
         let this_item = format!("{whole_stash} --item {shown_item}");
         if let Some(error) = report.error {
+            if matches!(
+                error,
+                etude_core::apply::ApplyError::DestinationDirectoryChanged(_)
+            ) && !holding_in_place(journal)
+            {
+                eprintln!("{}", not_in_place_text(journal));
+                return fail(apply_reason(&error));
+            }
             print_restore_failure(&error, &going_home, journal);
             eprintln!("{still_held} Fix that, then run: {this_item}");
             return fail(apply_reason(&error));
@@ -2726,7 +2743,16 @@ fn cmd_status(args: &[String]) -> ExitCode {
                             j::bool(due.is_some_and(|value| value <= now_secs()))
                         ),
                         ("elsewhere", "null".into()),
-                        ("stashes", j::arr(rows))
+                        ("stashes", j::arr(rows)),
+                        (
+                            "not_restorable_here",
+                            j::arr(
+                                batches
+                                    .iter()
+                                    .filter(|batch| !holding_in_place(batch))
+                                    .map(|batch| j::str(&batch.id))
+                            )
+                        )
                     ])
                 );
             } else {
@@ -2736,6 +2762,13 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     etude_cli_support::counted(batches.len(), "operation", "operations"),
                 );
                 for batch in &batches {
+                    if !holding_in_place(batch) {
+                        println!(
+                            "  {}: its folder was moved or replaced, so stash pop cannot restore it here.",
+                            batch.id
+                        );
+                        continue;
+                    }
                     match damage_note(batch) {
                         Some(note) if etude_core::apply::unrecorded_moves(batch) > 1 => {
                             println!("{note}")
@@ -2810,6 +2843,10 @@ fn cmd_status(args: &[String]) -> ExitCode {
             .unwrap_or(0);
             let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
             let moved = moved_here(&dir, &sealer);
+            let moved_record = match &moved {
+                Found::Moved(record) => Some(record),
+                _ => None,
+            };
             if flag(args, "--json") {
                 use etude_core::json as j;
                 let due = deadline_of(name);
@@ -2828,25 +2865,29 @@ fn cmd_status(args: &[String]) -> ExitCode {
                         ("overdue", j::bool(due.is_some_and(|t| t <= now_secs()))),
                         ("elsewhere", "null".into()),
                         ("holding", j::path(&dir)),
-                        ("undo_record", j::bool(moved.is_some())),
+                        ("undo_record", j::bool(matches!(moved, Found::Moved(_)))),
+                        (
+                            "named_by_record",
+                            match &moved {
+                                Found::NotThisOne(from) => j::path(from),
+                                _ => "null".into(),
+                            },
+                        ),
                         (
                             "moved_from",
-                            moved
-                                .as_ref()
+                            moved_record
                                 .map(|m| j::path(&m.from))
                                 .unwrap_or_else(|| "null".into()),
                         ),
                         (
                             "operation_id",
-                            moved
-                                .as_ref()
+                            moved_record
                                 .map(|m| j::str(&m.id))
                                 .unwrap_or_else(|| "null".into()),
                         ),
                         (
                             "way_back",
-                            moved
-                                .as_ref()
+                            moved_record
                                 .map(|m| j::str(m.way_back.code()))
                                 .unwrap_or_else(|| "null".into()),
                         ),
@@ -2862,7 +2903,7 @@ fn cmd_status(args: &[String]) -> ExitCode {
                     &dir,
                     n,
                     due.map(|(t, over)| (human_time(t), over)),
-                    moved.as_ref()
+                    &moved
                 )
             );
             ExitCode::SUCCESS
@@ -3160,27 +3201,94 @@ impl WayBack {
 /// The live record that made `holding`, found by the holding folder's device
 /// and inode, which the record keeps from when stash created it. A name alone
 /// is not enough: a copy or a look-alike folder must not be taken for it.
-fn moved_here(holding: &Path, sealer: &dyn etude_core::journal::Sealer) -> Option<MovedHere> {
+fn moved_here(holding: &Path, sealer: &dyn etude_core::journal::Sealer) -> Found {
     use std::os::unix::fs::MetadataExt;
-    let here = std::fs::symlink_metadata(holding).ok()?;
-    let (batches, _) = batches::survey(sealer).ok()?;
-    batches.into_iter().find_map(|batch| {
-        let recorded = batches::holding(&batch).ok()?;
+    let Ok(here) = std::fs::symlink_metadata(holding) else {
+        return Found::Nothing;
+    };
+    let Ok((batches, _)) = batches::survey(sealer) else {
+        return Found::Nothing;
+    };
+    let mut found = Found::Nothing;
+    for batch in batches {
+        let Ok(recorded) = batches::holding(&batch) else {
+            continue;
+        };
         if recorded.file_name() != holding.file_name() {
-            return None;
+            continue;
         }
-        batch
+        let Some(made) = batch
             .created_directories
             .iter()
-            .any(|made| {
-                made.path == recorded && made.device == here.dev() && made.inode == here.ino()
-            })
-            .then(|| MovedHere {
+            .find(|made| made.path == recorded)
+        else {
+            continue;
+        };
+        if made.device == here.dev() && made.inode == here.ino() {
+            return Found::Moved(MovedHere {
                 way_back: WayBack::of(&batch.root),
                 from: batch.root,
                 id: batch.id,
-            })
-    })
+            });
+        }
+        found = Found::NotThisOne(batch.root);
+    }
+    found
+}
+
+/// What the undo records say about a holding folder that no record matches by
+/// this folder's path.
+enum Found {
+    /// No live record made a holding folder of this name.
+    Nothing,
+    /// A live record made a holding folder of this name in the folder given,
+    /// and this holding folder is not the one it made: it is a copy, or it
+    /// came from another volume.
+    NotThisOne(PathBuf),
+    /// The live record that made this holding folder, before it was moved.
+    Moved(MovedHere),
+}
+
+/// Whether `batch`'s holding folder is where its record says, and is the folder
+/// stash made there. When it is not, the stashed folder was moved or replaced
+/// and pop cannot restore it from this path.
+fn holding_in_place(batch: &etude_core::Journal) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(recorded) = batches::holding(batch) else {
+        return false;
+    };
+    let Ok(meta) = std::fs::symlink_metadata(&recorded) else {
+        return false;
+    };
+    meta.is_dir()
+        && batch
+            .created_directories
+            .iter()
+            .filter(|made| made.path == recorded)
+            .all(|made| made.device == meta.dev() && made.inode == meta.ino())
+}
+
+/// What pop says when the folder a stash was made in is not that folder any
+/// more. Moving the stashed folder back is the only way to restore it, so no
+/// step is printed: run again after that.
+fn not_in_place_text(journal: &etude_core::Journal) -> String {
+    use etude_cli_support::{quoted_path, shown};
+    let root = &journal.root;
+    let first = format!(
+        "stash: could not restore into {}: the folder that was stashed is not there any more. It was moved or replaced after it was stashed.",
+        shown(root)
+    );
+    if std::fs::symlink_metadata(root).is_ok() {
+        format!(
+            "{first}\nIf you still have that folder, move what is at {} now out of the way, move that folder back there, and run this again.",
+            quoted_path(root)
+        )
+    } else {
+        format!(
+            "{first}\nIf you still have that folder, move it back to {}, and run this again.",
+            quoted_path(root)
+        )
+    }
 }
 
 /// What `status` says about a holding folder that no undo record matches by
@@ -3194,7 +3302,7 @@ fn unrecorded_here(
     holding: &Path,
     n: usize,
     due: Option<(String, bool)>,
-    moved: Option<&MovedHere>,
+    found: &Found,
 ) -> String {
     use etude_cli_support::{counted, quoted_path, shown};
     let when = match due {
@@ -3207,11 +3315,21 @@ fn unrecorded_here(
         counted(n, "item", "items"),
         shown(root)
     );
-    let Some(moved) = moved else {
-        return format!(
-            "{head}There is no undo record for this stash, so stash pop cannot restore it.\nThe items are in: {}\nMove them back by hand.",
-            quoted_path(holding)
-        );
+    let moved = match found {
+        Found::Moved(moved) => moved,
+        Found::Nothing | Found::NotThisOne(_) => {
+            let named = match found {
+                Found::NotThisOne(from) => format!(
+                    "\nAn undo record names {}, but this folder is not the one it recorded.",
+                    quoted_path(from)
+                ),
+                _ => String::new(),
+            };
+            return format!(
+                "{head}No undo record matches this stash, so stash pop cannot restore it.{named}\nThe items are in: {}\nMove them back by hand.",
+                quoted_path(holding)
+            );
+        }
     };
     let from = quoted_path(&moved.from);
     let id = &moved.id;
@@ -3640,7 +3758,7 @@ mod tests {
             Path::new("/tmp/bad\u{1b}[31mname/.stash-0-x"),
             2,
             Some(("2 hours ago".to_owned(), true)),
-            None,
+            &Found::Nothing,
         );
         assert!(
             !told.contains('\u{1b}'),
@@ -3664,10 +3782,26 @@ mod tests {
             Path::new("/tmp/d/.stash-0-x"),
             1,
             None,
-            None,
+            &Found::Nothing,
         );
         assert!(told.contains("1 item stashed from /tmp/d.\n  No deadline set.\n"));
-        assert!(told.contains("The items are in: '/tmp/d/.stash-0-x'\n"));
+        assert!(told.contains("\n\nNo undo record matches this stash, so stash pop cannot restore it.\nThe items are in: '/tmp/d/.stash-0-x'\n"));
+
+        // A record names a holding folder of this name in another folder, but
+        // this one is not the folder it made: a copy, or one from another volume.
+        let told = unrecorded_here(
+            Path::new("/tmp/d"),
+            Path::new("/tmp/d/.stash-0-x"),
+            1,
+            None,
+            &Found::NotThisOne(PathBuf::from("/tmp/old place")),
+        );
+        assert!(told.contains("No undo record matches this stash, so stash pop cannot restore it.\nAn undo record names '/tmp/old place', but this folder is not the one it recorded.\nThe items are in: '/tmp/d/.stash-0-x'\nMove them back by hand."));
+        assert!(
+            !told
+                .replace("so stash pop cannot", "")
+                .contains("stash pop")
+        );
     }
 
     #[test]
@@ -3679,7 +3813,13 @@ mod tests {
         };
         let here = Path::new("/tmp/bad\u{1b}name");
         let holding = here.join(".stash-0-x");
-        let told = unrecorded_here(here, &holding, 1, None, Some(&moved(WayBack::Clear)));
+        let told = unrecorded_here(
+            here,
+            &holding,
+            1,
+            None,
+            &Found::Moved(moved(WayBack::Clear)),
+        );
         assert!(
             !told.contains('\u{1b}'),
             "a raw escape reached the terminal"
@@ -3695,7 +3835,7 @@ mod tests {
         assert!(told.ends_with("Then restore it with: stash pop --id 1-2-0-ab"));
 
         for way_back in [WayBack::Taken, WayBack::NoParent] {
-            let told = unrecorded_here(here, &holding, 1, None, Some(&moved(way_back)));
+            let told = unrecorded_here(here, &holding, 1, None, &Found::Moved(moved(way_back)));
             assert!(!told.contains("mv "), "offered a move that cannot work");
             assert!(
                 !told.contains("stash pop"),
