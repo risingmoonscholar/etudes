@@ -3906,6 +3906,20 @@ mod tests {
     }
 
     #[test]
+    fn a_private_folder_is_found_when_a_file_took_its_parents_name() {
+        let (root, staged) = reserved_in("fileparent");
+        std::fs::rename(root.join("p1"), root.join("p2")).expect("move parent");
+        std::fs::write(root.join("p1"), b"").expect("a file takes the old name");
+
+        let cleanup = cleanup_staging(&staged);
+
+        assert!(matches!(cleanup, Cleanup::Removed));
+        assert_eq!(std::fs::read_dir(root.join("p2")).unwrap().count(), 0);
+        assert_eq!(std::fs::read(root.join("p1")).unwrap(), b"");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_folder_that_took_the_old_name_is_not_removed() {
         let (root, staged) = reserved_in("impostor");
         let moved = root.join("p1/elsewhere");

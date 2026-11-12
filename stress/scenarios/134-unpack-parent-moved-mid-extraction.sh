@@ -2,8 +2,11 @@
 # Moving the destination's parent folder while unpack extracts takes unpack's
 # private folder with it. Whatever unpack then says about what was left must
 # be true of the disk: nothing anywhere, or the printed place really holds it
-# and the printed step removes it. Both unpack and the system extractor are
-# stopped, and seen stopped, before the move.
+# and the printed step removes it, or, when the folder cannot be found again,
+# a message that says so instead of claiming nothing was left. Three changes
+# are made: the parent is moved; the parent is moved and a file takes its
+# name; the private folder is moved away and deleted. Each time unpack and the
+# system extractor are stopped, and seen stopped, before the change.
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 require zip "the fixture needs zip" || exit 0
 require pgrep "stopping the system extractor needs pgrep" || exit 0
@@ -67,66 +70,104 @@ mkdir -p "$W/control/.out.unpack-00000000000000000000000000000000.partial"
   || fail "control: the detector missed a planted private folder"
 rm -rf "$W/control"
 
-"$UNPACK" "$W/input.zip" --into "$W/p1/out" >"$W/run.out" 2>"$W/run.err" &
-PID=$!
-STOPPED=()
-MOVED=
-for _ in $(seq 1 3000); do
-  STAGE=$(find "$W/p1" -maxdepth 1 -type d -name '.out.unpack-*.partial' -print -quit 2>/dev/null)
-  n=0
-  [ -n "$STAGE" ] && n=$(find "$STAGE" -type f -name 'chunk_*.bin' 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$n" -gt 0 ] && [ "$n" -lt "$TOTAL" ]; then
-    # Stop the supervisor first so it cannot start or reap a writer, then the
-    # system extractor, so nothing writes while the parent moves.
-    stop "$PID" && STOPPED+=("$PID")
-    KIDS=$(pgrep -P "$PID" || true)
-    ok=${STOPPED[0]:+1}
-    [ -n "$KIDS" ] || ok=
-    for kid in $KIDS; do
-      if stop "$kid"; then STOPPED+=("$kid"); else ok=; fi
-    done
-    n=$(find "$STAGE" -type f -name 'chunk_*.bin' 2>/dev/null | wc -l | tr -d ' ')
-    if [ -n "$ok" ] && [ "$n" -lt "$TOTAL" ] && mv "$W/p1" "$W/p2"; then
-      MOVED=$n
+# run_case LABEL INJECT: extract into p1/out, stop unpack and its extractor
+# while the private folder holds part of the archive, make one change, resume
+# both, and check that what unpack says was left is true of the disk.
+#   moved       the parent folder p1 is moved to p2
+#   file        p1 is moved to p2 and a file takes the name p1
+#   removed     the private folder is moved away and deleted
+run_case() {
+  local label="$1" inject="$2" stage n ok kid rc err left step i done_at=""
+  local stopped=()
+  rm -rf "$W/p1" "$W/p2" "$W/gone"; mkdir "$W/p1"
+  "$UNPACK" "$W/input.zip" --into "$W/p1/out" >"$W/run.out" 2>"$W/run.err" &
+  local pid=$!
+  for _ in $(seq 1 3000); do
+    stage=$(find "$W/p1" -maxdepth 1 -type d -name '.out.unpack-*.partial' -print -quit 2>/dev/null)
+    n=0
+    [ -n "$stage" ] && n=$(find "$stage" -type f -name 'chunk_*.bin' 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$n" -gt 0 ] && [ "$n" -lt "$TOTAL" ]; then
+      # Stop the supervisor first so it cannot start or reap a writer, then
+      # the system extractor, so nothing writes during the change.
+      stop "$pid" && stopped+=("$pid")
+      local kids; kids=$(pgrep -P "$pid" || true)
+      ok=${stopped[0]:+1}
+      [ -n "$kids" ] || ok=
+      for kid in $kids; do
+        if stop "$kid"; then stopped+=("$kid"); else ok=; fi
+      done
+      n=$(find "$stage" -type f -name 'chunk_*.bin' 2>/dev/null | wc -l | tr -d ' ')
+      if [ -n "$ok" ] && [ "$n" -lt "$TOTAL" ]; then
+        case "$inject" in
+          moved) mv "$W/p1" "$W/p2" && done_at=$n ;;
+          file) mv "$W/p1" "$W/p2" && : > "$W/p1" && done_at=$n ;;
+          removed) mv "$stage" "$W/gone" && rm -rf "$W/gone" && done_at=$n ;;
+        esac
+      fi
+      break
     fi
-    break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.01
+  done
+  # Resume the extractor before the supervisor, which then sees what it did.
+  for (( i=${#stopped[@]}-1; i>=0; i-- )); do kill -CONT "${stopped[$i]}" 2>/dev/null || true; done
+  wait "$pid"; rc=$?
+
+  if [ -z "$done_at" ]; then
+    unproven "$label" "no confirmed stop of both processes while extraction was partial"
+    return
   fi
-  kill -0 "$PID" 2>/dev/null || break
-  sleep 0.01
-done
-# Resume the extractor before the supervisor, which then sees what it did.
-for (( i=${#STOPPED[@]}-1; i>=0; i-- )); do kill -CONT "${STOPPED[$i]}" 2>/dev/null || true; done
-wait "$PID"; rc=$?
+  pass "$label: changed with $done_at of $TOTAL files in the private folder, both processes stopped"
+  err=$(cat "$W/run.err")
+  assert_no_panic "$label" "$err"
+  [ "$rc" -ne 0 ] && pass "$label: exit is non-zero ($rc)" || fail "$label: exit was 0"
+  [ ! -e "$W/p2/out" ] && [ ! -e "$W/p1/out" ] && pass "$label: nothing was published" \
+    || fail "$label: a destination was published"
+  case "$inject" in
+    moved) [ ! -e "$W/p1" ] && pass "$label: the old parent was not made again" \
+      || fail "$label: $W/p1 was made again" ;;
+    file) [ -f "$W/p1" ] && [ ! -s "$W/p1" ] && pass "$label: the file that took the old name is untouched" \
+      || fail "$label: the file at $W/p1 changed" ;;
+  esac
 
-if [ -z "$MOVED" ]; then
-  unproven "parent moved mid-extraction" "no confirmed stop of both processes while extraction was partial"
-  exit 0
-fi
-pass "the parent folder moved with $MOVED of $TOTAL files in the private folder, both processes stopped"
-ERR=$(cat "$W/run.err")
-assert_no_panic "parent moved" "$ERR"
-[ "$rc" -ne 0 ] && pass "parent moved: exit is non-zero ($rc)" || fail "parent moved: exit was 0"
-[ ! -e "$W/p2/out" ] && [ ! -e "$W/p1/out" ] && pass "parent moved: nothing was published" \
-  || fail "parent moved: a destination was published"
-[ ! -e "$W/p1" ] && pass "parent moved: the old parent was not made again" \
-  || fail "parent moved: $W/p1 was made again"
+  case "$err" in
+    *"Nothing was left behind."*)
+      assert_eq 0 "$(leftovers)" "$label: 'Nothing was left behind' is true of the disk"
+      ;;
+    *"The partial extraction remains at "*)
+      left=$(printf '%s\n' "$err" | sed -n 's/.*The partial extraction remains at \(.*\): could not remove it.*/\1/p' | head -1)
+      if [ -d "$left" ] && [ -n "$(find "$left" -type f -name 'chunk_*.bin' -print -quit)" ]; then
+        pass "$label: the printed place holds what was left"
+      else
+        fail "$label: the printed place holds nothing: $left"
+      fi
+      step=$(step_after 'To delete it: ' "$err")
+      assert_exit 0 "$label: the printed step works" -- bash -c "$step"
+      assert_eq 0 "$(leftovers)" "$label: the printed step removed what was left"
+      ;;
+    *"The partial extraction is no longer at $stage: it was moved or removed while unpack worked"*)
+      [ ! -e "$stage" ] && pass "$label: the private folder is no longer at the printed place" \
+        || fail "$label: something is still at $stage"
+      case "$err" in
+        *"look in the new place for a hidden folder named ${stage##*/} and delete it."*)
+          pass "$label: names the hidden folder to look for" ;;
+        *) fail "$label: does not name the hidden folder: $err" ;;
+      esac
+      ;;
+    *)
+      fail "$label: says nothing true about what was left: $err"
+      ;;
+  esac
+  # A folder that is gone cannot be found again, so unpack must not claim to
+  # have removed it.
+  if [ "$inject" = removed ]; then
+    case "$err" in
+      *"Nothing was left behind."*) fail "$label: claims to have removed a folder it could not find" ;;
+      *) pass "$label: does not claim to have removed a folder it could not find" ;;
+    esac
+  fi
+}
 
-case "$ERR" in
-  *"Nothing was left behind."*)
-    assert_eq 0 "$(leftovers)" "parent moved: 'Nothing was left behind' is true of the disk"
-    ;;
-  *"The partial extraction remains at "*)
-    LEFT=$(printf '%s\n' "$ERR" | sed -n 's/.*The partial extraction remains at \(.*\): could not remove it.*/\1/p' | head -1)
-    if [ -d "$LEFT" ] && [ -n "$(find "$LEFT" -type f -name 'chunk_*.bin' -print -quit)" ]; then
-      pass "parent moved: the printed place holds what was left"
-    else
-      fail "parent moved: the printed place holds nothing: $LEFT"
-    fi
-    STEP=$(step_after 'To delete it: ' "$ERR")
-    assert_exit 0 "parent moved: the printed step works" -- bash -c "$STEP"
-    assert_eq 0 "$(leftovers)" "parent moved: the printed step removed what was left"
-    ;;
-  *)
-    fail "parent moved: says nothing true about what was left: $ERR"
-    ;;
-esac
+run_case "parent moved" moved
+run_case "parent moved, a file took its name" file
+run_case "private folder removed" removed

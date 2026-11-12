@@ -79,11 +79,18 @@ impl Staging {
                 std::fs::remove_dir(&path)?;
                 continue;
             }
+            // Set when the name no longer holds the folder just made. What is
+            // there then is not ours, so nothing is removed by that name.
+            let mut replaced = false;
             let initialized = (|| -> io::Result<(Option<ExclusiveLock>, File)> {
                 let folder = File::open(&path)?;
                 let held = folder.metadata()?;
-                if !held.is_dir() || !same(&held, &path.symlink_metadata()?) {
-                    return Err(io::Error::other("the private folder changed"));
+                if !held.is_dir() || !path.symlink_metadata().is_ok_and(|md| same(&held, &md)) {
+                    replaced = true;
+                    return Err(io::Error::other(
+                        "the folder unpack had just made there was replaced, and nothing \
+                         there was removed",
+                    ));
                 }
                 let file = File::options()
                     .read(true)
@@ -114,6 +121,7 @@ impl Staging {
             })();
             return match initialized {
                 Ok((lock, folder)) => Ok(Self { path, lock, folder }),
+                Err(error) if replaced => Err(error),
                 Err(error) => {
                     if let cleanup @ (super::Cleanup::Remains { .. }
                     | super::Cleanup::Unverified { .. }) = super::cleanup_destination(&path)
@@ -147,19 +155,22 @@ impl Staging {
         let Ok(held) = self.folder.metadata() else {
             return Whereabouts::Unknown;
         };
-        match self.path.symlink_metadata() {
+        let unchecked = match self.path.symlink_metadata() {
             Ok(md) if same(&held, &md) => return Whereabouts::At(self.path.clone()),
             // Something else has this name now. It is not ours to remove.
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            // The name cannot be checked, so the folder may still be there.
-            // Removal will fail the same way and say so for this path.
-            Err(_) => return Whereabouts::At(self.path.clone()),
-        }
+            Ok(_) => false,
+            Err(error) => error.kind() != io::ErrorKind::NotFound,
+        };
+        // Any failure at the old name, such as a file now holding the old
+        // parent's name, can mean the folder moved, so ask where it is.
         match current_path(&self.folder) {
             Some(now) if now.symlink_metadata().is_ok_and(|md| same(&held, &md)) => {
                 Whereabouts::At(now)
             }
+            // Only when the system gives no place at all, and the old name
+            // could not be checked, may the folder still be there. Removal
+            // will fail the same way and say so for that path.
+            None if unchecked => Whereabouts::At(self.path.clone()),
             // A removed folder can still report its last path, so a missing
             // name there does not prove it is gone.
             _ => Whereabouts::Unknown,
