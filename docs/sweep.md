@@ -75,6 +75,51 @@ already inside it are reported as in place. A `--map` folder follows the same
 rule. Fewer than three files with no folder of their own stay where they are,
 and the plan says which folder would take them.
 
+### Screenshots and screen recordings
+
+A screen capture is a still or a recording that macOS saved. Stills (`png`,
+`jpg`, `jpeg`, `heic`, `tiff`, `tif`, `gif`, `pdf`, `bmp`) form `Screenshots`.
+Recordings (`mov`) form `Screen Recordings`, apart from the stills. A file
+with any other extension is never a screen capture, whatever its name. Sweep
+checks three kinds of evidence, in this order, and the first one that matches
+decides:
+
+- **The screen-capture attribute.** Sweep asks whether the file has the
+  attribute `com.apple.metadata:kMDItemIsScreenCapture`. It asks through a
+  zero-length buffer, so it learns only that the attribute is there. It reads
+  no value and opens no file. <!-- P5: attribute claim depends on observation --> macOS sets this attribute on a capture it saves, and the attribute stays when you rename the file.
+- **The name macOS gives it, in your Mac's language.** The name starts with
+  the exact text macOS writes before the date, in any of the 43 languages it
+  ships: `Bildschirmfoto 2026-…` in German, `Capture d’écran 2026-…` in French.
+  Sweep compares every character. The Dutch word holds an invisible soft
+  hyphen and the French word a curly apostrophe, and a name typed without them
+  was not written by macOS. The list comes from macOS's own string table and
+  is not typed by hand.
+- **The English names sweep always knew.** The name starts with `Screenshot`,
+  `Screen Shot` or `CleanShot`, in any case. They cover older Macs, which
+  wrote `Screen Shot`, and CleanShot, which is not part of macOS. On Linux
+  they are the only evidence.
+
+The plan line says how sure sweep is. It names the weakest evidence in the
+group: "marked by macOS as screen captures", "named by macOS as screen
+captures", or `named "Screenshot ..."`. It never claims more than its weakest
+file supports.
+
+The two folder names are the same on a Mac in every language. Sweep does not
+make a folder name from the localized word. Like `Images` or `Documents`, the
+name says what kind of file is inside and nothing about what a file holds.
+`sweep review` lets you choose another name. The attribute check is a metadata read, the same kind as the Finder tag
+check: it reads no contents, and the safety holds run before it. A screenshot
+that looks like a personal record is still left alone.
+
+Sources: `man screencapture` lists `png` (the default), `pdf`, `jpg` and `tiff`
+under `-t`, `-v` for a video recording, and `video` as a capture type. The
+words and the name format come from
+`/System/Library/CoreServices/screencaptureui.app/Contents/Resources/Localizable.loctable`,
+read with `plutil` on macOS 27.0.1 (26A434); `scripts/gen-capture-names.sh`
+builds the list from it, and a macOS-only test fails when the OS and the list
+disagree. `heic` and the CleanShot name come from sweep's earlier rule.
+
 ### Tag files, move nothing
 
 `sweep --scheme tags` adds Finder tags and moves nothing. You name the tag for

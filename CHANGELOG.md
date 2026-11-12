@@ -10,6 +10,18 @@ reviewers were pointed at the tools before anyone else could be.
 
 ## [Unreleased]
 
+### Added
+
+- **sweep:** screen recordings get their own group (issue #223). Before, a recording that macOS saved went into `Media` with every other video, in every language. Now three or more recordings (`mov`) form `Screen Recordings`, apart from the stills in `Screenshots`. `Screen Recordings` is a reserved name, like `Screenshots`.
+
+### Fixed
+
+- **sweep:** screenshots are grouped on a Mac in any language (issue #222). Before, sweep knew only names that start with `Screenshot`, `Screen Shot` or `CleanShot`, so on a German Mac three files named `Bildschirmfoto 2026-…png` went into `Images`. Now sweep checks three kinds of evidence, in this order: the attribute `com.apple.metadata:kMDItemIsScreenCapture`, asked through a zero-length buffer so no value is read; a name that starts with the exact text macOS writes before the date, in any of the 43 languages it ships; and the English names it already knew. The names come from macOS's own string table, `screencaptureui.app/Contents/Resources/Localizable.loctable`, and are compared character by character, so the soft hyphen in the Dutch word and the curly apostrophe in the French word count. Stills are `png`, `jpg`, `jpeg`, `heic`, `tiff`, `tif`, `gif`, `pdf` and `bmp`, after `man screencapture`. The plan line names the weakest evidence in the group: "marked by macOS as screen captures", "named by macOS as screen captures", or `named "Screenshot ..."`. A screenshot that looks like a personal record is still left alone. The attribute check is counted in the new `screen_capture_presence` observation category. Sweep capability declaration version 19 adds it to `selected_tree_metadata` and describes the rules under `screen_captures`.
+
+### Other changes
+
+- A plan exported by an earlier sweep build is now refused as stale. The capability declaration changed, and an exported plan is bound to its digest. Run the scan again and export a new plan. An exported plan that holds a screen-capture group marks it with plan signal tag 9 and needs declaration 19 or later; plans written earlier still read.
+
 ## [0.5.5] candidate — sweep, stash and unpack
 
 This version is prepared but not published. No release date or completed
