@@ -381,7 +381,7 @@ fn refuse_ambiguous_pop(
     let folder = root
         .to_str()
         .and_then(etude_cli_support::shell_word)
-        .unwrap_or_else(|| "PATH".to_owned());
+        .unwrap_or_else(|| etude_cli_support::quoted_path(&root));
     eprintln!("Or restore the newest: stash pop {folder} --latest");
     refuse(etude_cli_support::reason::Code::InvalidArguments)
 }
@@ -3059,14 +3059,15 @@ fn stash_elsewhere(here: &Path) -> Option<PathBuf> {
 /// What `status` says when this folder is clear. Split out so both wordings are
 /// covered by a test without reaching for the keychain.
 fn nothing_here(here: &Path, elsewhere: Option<&Path>) -> String {
+    use etude_cli_support::{quoted_path, shown};
     match elsewhere {
-        None => format!("Nothing stashed in {}.", here.display()),
+        None => format!("Nothing stashed in {}.", shown(here)),
         Some(there) => format!(
             "Nothing stashed in {}.\n\n  There is a stash in {}.\n  See it with: stash status {}\n  Restore it with: stash pop {}",
-            here.display(),
-            there.display(),
-            there.display(),
-            there.display()
+            shown(here),
+            shown(there),
+            quoted_path(there),
+            quoted_path(there)
         ),
     }
 }
@@ -3437,6 +3438,27 @@ mod tests {
             "did not say where the stash is"
         );
         assert!(told.contains("stash pop"), "did not say how to get it back");
+    }
+
+    #[test]
+    fn status_steps_for_another_folder_paste_as_one_word() {
+        // A space split the printed step into two arguments, and pop refused it.
+        // A control character went to the terminal raw.
+        let told = nothing_here(Path::new("/tmp/here"), Some(Path::new("/tmp/my desk")));
+        assert!(told.contains("  See it with: stash status '/tmp/my desk'\n"));
+        assert!(told.ends_with("  Restore it with: stash pop '/tmp/my desk'"));
+
+        let told = nothing_here(
+            Path::new("/tmp/h\u{1b}ere"),
+            Some(Path::new("/tmp/bad\u{1b}[31mname")),
+        );
+        assert!(
+            !told.contains('\u{1b}'),
+            "a raw escape reached the terminal"
+        );
+        assert!(told.starts_with("Nothing stashed in /tmp/h?ere."));
+        assert!(told.contains("There is a stash in /tmp/bad?[31mname."));
+        assert!(told.ends_with(r"Restore it with: stash pop $'/tmp/bad\x1b[31mname'"));
     }
 
     #[test]
