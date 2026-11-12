@@ -366,8 +366,8 @@ fn watch_apply(args: &[String]) -> ExitCode {
 /// trial root, hold no move, and every source must still be in place.
 /// Anything else resumes the apply and reports the window as missed.
 fn watch_apply_saved(args: &[String]) -> ExitCode {
-    if args.len() != 4 {
-        eprintln!("usage: journal-dump --watch-apply-saved <state-dir> <root> <pid>");
+    if !(4..=5).contains(&args.len()) {
+        eprintln!("usage: journal-dump --watch-apply-saved <state-dir> <root> <pid> [sweep|stash]");
         return ExitCode::from(2);
     }
     let Ok(pid) = args[3].parse::<i32>() else {
@@ -376,6 +376,12 @@ fn watch_apply_saved(args: &[String]) -> ExitCode {
     if pid <= 0 {
         return ExitCode::from(2);
     }
+    let tool = args.get(4).map_or("sweep", String::as_str);
+    if tool != "sweep" && tool != "stash" {
+        eprintln!("journal-dump: the tool must be sweep or stash");
+        return ExitCode::from(2);
+    }
+    let prefix = format!("{tool}-");
     let state_dir = Path::new(&args[1]);
     let Ok(root) = std::fs::canonicalize(&args[2]) else {
         eprintln!("journal-dump: trial root unavailable; injection unproven");
@@ -395,7 +401,7 @@ fn watch_apply_saved(args: &[String]) -> ExitCode {
                     .filter_map(|file| {
                         file.file_name()
                             .to_str()
-                            .and_then(|s| s.strip_prefix("sweep-"))
+                            .and_then(|s| s.strip_prefix(prefix.as_str()))
                             .and_then(|s| s.strip_suffix(".journal"))
                             .map(str::to_string)
                     })
@@ -420,7 +426,7 @@ fn watch_apply_saved(args: &[String]) -> ExitCode {
         let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
             break;
         };
-        let Ok(paused) = etude_core::Journal::load_sealed_exact("sweep", &id, &sealer) else {
+        let Ok(paused) = etude_core::Journal::load_sealed_exact(tool, &id, &sealer) else {
             eprintln!(
                 "journal-dump: the new journal did not load while stopped; injection unproven"
             );

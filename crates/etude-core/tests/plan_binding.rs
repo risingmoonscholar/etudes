@@ -829,6 +829,11 @@ fn files_moved_by_a_contender_after_the_journal_leave_a_refused_record() {
     let _state_cleanup = StateDir(state.clone());
     let failure = beaten_after_journal(|_| true, false);
     assert_eq!(failure.moved, 0);
+    assert!(
+        matches!(&failure.error, ApplyError::StalePlan(e) if e.to_string().contains("was moved after the plan")),
+        "{:?}",
+        failure.error
+    );
     let id = failure.durable_journal_id.expect("the record was durable");
     let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
     assert_eq!(
@@ -885,6 +890,11 @@ fn files_taken_at_the_first_rename_leave_a_refused_record_that_keeps_its_folder(
     .expect_err("the beaten apply must not succeed");
     assert_eq!(failure.moved, 0);
     assert!(failure.copy_left.is_none());
+    assert!(
+        matches!(&failure.error, ApplyError::StalePlan(_)),
+        "{:?}",
+        failure.error
+    );
     let id = failure.durable_journal_id.expect("the record was durable");
     let journal = etude_core::journal::Journal::load_sealed("test", &id, &TagSeal).unwrap();
     assert_eq!(

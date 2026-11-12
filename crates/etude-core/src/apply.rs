@@ -179,6 +179,10 @@ pub struct ApplyFailure {
     /// one, so undo removes it once it is empty. Empty when nothing moved: a
     /// failure that moved nothing removes the folders it made.
     pub created_folders: Vec<PathBuf>,
+    /// The attempt took nothing from its place and its saved journal, if
+    /// any, now reads refused. Only then can a vanished source be reported
+    /// as a stale plan.
+    nothing_taken: bool,
 }
 
 impl std::fmt::Display for ApplyError {
@@ -560,6 +564,19 @@ fn apply_bound_with_faults(
             failure.error = refuse_saved_attempt(bound, context, sealer, &failure);
             Err(failure)
         }
+        // A contender moved a file this attempt was about to move. Nothing
+        // left its place and the saved journal reads refused, so this ends
+        // as a stale plan too, the same as a destination taken above.
+        Err(mut failure)
+            if failure.nothing_taken
+                && matches!(&failure.error, ApplyError::Io(error)
+                    if error.kind() == io::ErrorKind::NotFound) =>
+        {
+            failure.error = ApplyError::StalePlan(io::Error::other(
+                "conflict: a file it was to move was moved after the plan was made; no moves from this attempt, existing journals remain recoverable",
+            ));
+            Err(failure)
+        }
         other => other,
     }
 }
@@ -711,6 +728,7 @@ fn apply_plan_with_structured_progress(
     // Set when a move failed in a way that does not prove the item stayed.
     // Such a journal keeps its entries, so undo can still find the item.
     let mut move_outcome_unknown = false;
+    let mut nothing_taken = false;
     let result = (|| {
         validate(&mut durable_journal_id)?;
         if let Some(hook) = faults.after_validate.as_mut() {
@@ -1138,7 +1156,7 @@ fn apply_plan_with_structured_progress(
             &created_directories,
         );
         if !any_moved && !move_outcome_unknown && copy_left.is_none() && !plan.applies_tags() {
-            refuse_unmoved_attempt(
+            nothing_taken = refuse_unmoved_attempt(
                 plan,
                 tool,
                 sealer,
@@ -1163,6 +1181,7 @@ fn apply_plan_with_structured_progress(
         moved,
         copy_left,
         created_folders,
+        nothing_taken,
     })
 }
 
@@ -1214,15 +1233,16 @@ fn remove_folders_of_a_failed_attempt(
 /// this attempt made that is still there, the same folder, stays in the
 /// record, so that undo can still remove it once it is empty. If the rewrite
 /// fails the record stays as it was, which undo still reads correctly.
+/// Returns whether the attempt now has no record that reads otherwise.
 fn refuse_unmoved_attempt(
     plan: &Plan,
     tool: &str,
     sealer: Option<&dyn Sealer>,
     own_journal: Option<&str>,
     created: &HashMap<PathBuf, (u64, u64)>,
-) {
+) -> bool {
     let (Some(sl), Some(id)) = (sealer, own_journal) else {
-        return;
+        return true;
     };
     let mut created_directories: Vec<CreatedDirectory> = created
         .iter()
@@ -1234,7 +1254,7 @@ fn refuse_unmoved_attempt(
         })
         .collect();
     created_directories.sort_by(|a, b| a.path.cmp(&b.path));
-    let _ = Journal {
+    Journal {
         id: id.to_string(),
         tool: tool.to_string(),
         root: plan.root.clone(),
@@ -1243,7 +1263,8 @@ fn refuse_unmoved_attempt(
         validated_directories: Vec::new(),
         progress_tail_damaged: false,
     }
-    .save_sealed(sl);
+    .save_sealed(sl)
+    .is_ok()
 }
 
 /// Apply a tag plan: add each tag to its files, in place.
