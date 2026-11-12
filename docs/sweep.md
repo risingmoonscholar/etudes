@@ -272,7 +272,7 @@ says it cannot tell. When two undo records that undo could choose have the same
 time, sweep cannot tell which one is newer, so it moves nothing and prints
 `sweep undo --id ID` for each one. Where the state folder's volume supports
 advisory locks, one undo of an apply runs at a time: a second undo of the same
-apply says another `sweep undo` is restoring these files, waits for it to
+apply says another `sweep apply` or `sweep undo` is working on these files, waits for it to
 finish, then restores only what is still moved. Where it does not, two undos of
 one apply are not kept apart. See [undo, status and journals](undo-and-journals.md).
 
