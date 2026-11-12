@@ -41,9 +41,10 @@ ids and which items remain held, then `stash pop --id ID --item ITEM` to restore
 one item. Each selected restore is durably recorded, and inspection reports the
 actual held count after partial restores. Where the
 state folder's volume supports advisory locks, one pop of a stash runs at a
-time: a second pop of the same stash says another pop is restoring it, waits
-for that pop to finish, then restores only what is still held. Where it does
-not, two pops of one stash are not kept apart. Pop uses the original absolute parents
+time, and not while the stash is still moving items: a pop that starts then
+says a `stash` or `stash pop` is running on this stash, waits for it to finish,
+then restores only what is still held. Where the volume has no such locks, they
+are not kept apart. Pop uses the original absolute parents
 stored in the encrypted journal, and removes only empty holding directories
 authenticated by that journal. Selected directories retain the existing opaque
 directory fingerprint behavior; this is not a recursive content-integrity

@@ -140,10 +140,10 @@ trial() {  # trial MODE: MODE is text or json for the second pop
   else
     fail "$mode: files moved while the first pop was stopped: $(home "$D") home, $restored when it stopped"
   fi
-  if grep -q 'another `stash pop` is restoring this stash now' "$W/b.err"; then
-    pass "$mode: second pop names the other pop"
+  if grep -q 'a `stash` or `stash pop` is running on this stash now' "$W/b.err"; then
+    pass "$mode: second pop says a stash or pop is running on this stash"
   else
-    fail "$mode: second pop does not say another pop is restoring this stash: $(head -3 "$W/b.err")"
+    fail "$mode: second pop does not say a stash or pop is running on this stash: $(head -3 "$W/b.err")"
   fi
 
   kill -CONT "$A"
@@ -205,3 +205,127 @@ PY_JSON
 
 trial text
 trial json
+
+# A second command that starts while the first pop is still running, not
+# stopped. The pop appends to its record as it goes, so a read made then can
+# find the record changing. That is not a damaged record, and nothing may say
+# so. Where the two overlap is not under the scenario's control, so each case
+# runs more than once, and the overlap is witnessed by the waiting line.
+FALSE_DAMAGE='damaged|cannot be repaired|changed after discovery|cannot be opened'
+no_false_damage() {  # LABEL FILE
+  local bad
+  bad=$(grep -E -i "$FALSE_DAMAGE" "$2" | head -2)
+  if [ -z "$bad" ]; then
+    pass "$1: no claim that a record is damaged or cannot be opened"
+  else
+    fail "$1: called a record being written damaged: $bad"
+  fi
+}
+OVERLAP=0
+live_case() {  # live_case N KIND: KIND is pop, pop-id-json, pop-latest, status-all, status, status-id
+  local n="$1" kind="$2" D id code_a code_b
+  D="$W/live-$n/Notes"
+  export ETUDE_STATE_DIR="$W/live-$n/state"; mkdir -p "$ETUDE_STATE_DIR"
+  make_tree "$D"
+  snapshot_tree "$D" "$W/live-before.json"
+  id=$("$STASH" "$D" 2>/dev/null | sed -n 's/.*Operation id: \([0-9a-f-]*\)\..*/\1/p')
+  [ -n "$id" ] || { fail "live $n: setup stash printed no operation id"; return; }
+  "$STASH" pop "$D" >"$W/a.out" 2>&1 &
+  A=$!
+  # Start the second command once the first has restored some files.
+  for _ in $(seq 1 3000); do
+    [ "$(home "$D")" -gt 100 ] && break
+    kill -0 "$A" 2>/dev/null || break
+    sleep 0.005
+  done
+  case "$kind" in
+    pop) "$STASH" pop "$D" >"$W/b.out" 2>&1 ;;
+    pop-id-json) "$STASH" pop --id "$id" --json >"$W/b.out" 2>&1 ;;
+    pop-latest) "$STASH" pop --latest "$D" >"$W/b.out" 2>&1 ;;
+    status-all) "$STASH" status --all >"$W/b.out" 2>&1 ;;
+    status) "$STASH" status "$D" >"$W/b.out" 2>&1 ;;
+    status-id) "$STASH" status --id "$id" >"$W/b.out" 2>&1 ;;
+  esac
+  code_b=$?
+  wait "$A"; code_a=$?; A=""
+  no_false_damage "live $n $kind" "$W/b.out"
+  assert_eq 0 "$code_a" "live $n $kind: the first pop exits 0 (exit $code_a)"
+  case "$kind" in
+    pop*)
+      if grep -q 'Waiting for it to finish' "$W/b.out"; then
+        OVERLAP=$((OVERLAP + 1))
+        if [ "$code_b" = 1 ] && grep -q 'Nothing to restore. Another `stash pop` restored this stash.' "$W/b.out"; then
+          pass "live $n $kind: the second pop waited, then said another pop restored the stash (exit 1)"
+        else
+          fail "live $n $kind: the second pop waited, then exit $code_b: $(grep -v -e 'items$' -e '^{' "$W/b.out" | head -3)"
+        fi
+      else
+        # The first pop finished before the second read anything.
+        if [ "$code_b" = 1 ] && ! grep -q '^Restored' "$W/b.out"; then
+          pass "live $n $kind: the second pop did not wait, and restores nothing (exit 1)"
+        else
+          fail "live $n $kind: the second pop did not wait, and exit $code_b: $(grep -v -e 'items$' -e '^{' "$W/b.out" | head -3)"
+        fi
+      fi
+      no_false_claim "live $n $kind" "$(cat "$W/b.out")"
+      ;;
+    *)
+      if [ "$code_b" != 3 ]; then
+        pass "live $n $kind: status during a pop does not fail on the record (exit $code_b)"
+      else
+        fail "live $n $kind: status during a pop exit 3: $(head -3 "$W/b.out")"
+      fi
+      ;;
+  esac
+  snapshot_tree "$D" "$W/live-after.json"
+  assert_snapshot_eq "$W/live-before.json" "$W/live-after.json" "live $n $kind: the folder equals its original"
+}
+n=0
+for kind in pop pop-id-json pop-latest status-all status status-id pop pop-id-json pop-latest; do
+  n=$((n + 1))
+  live_case "$n" "$kind"
+done
+if [ "$OVERLAP" -gt 0 ]; then
+  pass "a second pop overlapped a running first pop in $OVERLAP of 6 runs"
+else
+  unproven "a second pop during a running first pop" "no run overlapped in 6 tries"
+fi
+
+# A pop that starts while the stash itself is still running. The stash holds
+# its record from its first recorded move, so the pop waits for it, then
+# restores everything. It must not restore around the stash, or say the
+# record is damaged or missing entries.
+DURING=0
+for n in 1 2 3; do
+  D="$W/during-stash-$n/Notes"
+  export ETUDE_STATE_DIR="$W/during-stash-$n/state"; mkdir -p "$ETUDE_STATE_DIR"
+  make_tree "$D"
+  snapshot_tree "$D" "$W/stash-before.json"
+  "$STASH" "$D" >"$W/a.out" 2>&1 &
+  A=$!
+  for _ in $(seq 1 3000); do
+    if ls "$ETUDE_STATE_DIR" 2>/dev/null | grep -q '^stash-.*\.journal$' && [ "$(home "$D")" -lt $((TOTAL - 100)) ]; then
+      break
+    fi
+    kill -0 "$A" 2>/dev/null || break
+    sleep 0.005
+  done
+  "$STASH" pop "$D" >"$W/b.out" 2>&1; code_b=$?
+  wait "$A"; code_a=$?; A=""
+  no_false_damage "pop during stash $n" "$W/b.out"
+  assert_eq 0 "$code_a" "pop during stash $n: the stash exits 0 (exit $code_a)"
+  grep -q 'Waiting for it to finish' "$W/b.out" && DURING=$((DURING + 1))
+  if [ "$code_b" = 0 ] && grep -qx "Restored $TOTAL items." "$W/b.out" && ! grep -q -i 'missing' "$W/b.out"; then
+    pass "pop during stash $n: the pop restored every item once the stash finished (exit 0)"
+  else
+    fail "pop during stash $n: exit $code_b: $(grep -v 'items$' "$W/b.out" | head -4)"
+    "$STASH" pop "$D" >/dev/null 2>&1
+  fi
+  snapshot_tree "$D" "$W/stash-after.json"
+  assert_snapshot_eq "$W/stash-before.json" "$W/stash-after.json" "pop during stash $n: the folder equals its original"
+done
+if [ "$DURING" -gt 0 ]; then
+  pass "a pop started during a running stash and waited for it in $DURING of 3 runs"
+else
+  unproven "a pop during a running stash" "no pop overlapped the stash in 3 tries"
+fi

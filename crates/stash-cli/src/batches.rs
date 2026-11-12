@@ -2,6 +2,7 @@
 use etude_core::journal::{self, Journal, JournalError, Sealer};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub enum Selector {
     Id(String),
     Root(PathBuf),
@@ -107,6 +108,47 @@ pub fn inventory(sealer: &dyn Sealer) -> Result<Vec<Journal>, JournalError> {
     match unreadable.pop() {
         Some(record) => Err(record.error),
         None => Ok(live),
+    }
+}
+/// Whether a read of a record failed because the record changed while it was
+/// read. etude-core says so only by this message (`JournalCandidate::load`),
+/// so a test reads the real error and checks it is still recognized here.
+pub fn changed_while_read(error: &JournalError) -> bool {
+    matches!(
+        error,
+        JournalError::Malformed("journal changed after discovery")
+    )
+}
+/// The file of the stash record `id`.
+pub fn record_path(id: &str) -> PathBuf {
+    journal::state_dir().join(format!("stash-{id}.journal"))
+}
+/// Whether a record could not be read because it is being written now: the
+/// read found it changing, and it is a regular file. etude-core gives the same
+/// error for something else named like a record, which no wait will fix.
+pub fn being_written(id: &str, error: &JournalError) -> bool {
+    changed_while_read(error)
+        && std::fs::symlink_metadata(record_path(id)).is_ok_and(|metadata| metadata.is_file())
+}
+/// [`survey`], read again for up to `patience` while a record is being
+/// written. A stash or a pop writes its record as it goes, so a read made
+/// then finds it changing; that is not a record that will not open.
+pub fn survey_settled(
+    sealer: &dyn Sealer,
+    patience: std::time::Duration,
+) -> Result<(Vec<Journal>, Vec<Unreadable>), JournalError> {
+    let started = std::time::Instant::now();
+    loop {
+        let read = survey(sealer)?;
+        if started.elapsed() >= patience
+            || !read
+                .1
+                .iter()
+                .any(|record| being_written(&record.id, &record.error))
+        {
+            return Ok(read);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 /// A saved record that could not be opened or does not make sense.
