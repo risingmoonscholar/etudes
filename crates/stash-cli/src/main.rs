@@ -1042,7 +1042,10 @@ fn execute_stash(
             }
             if matches!(e, etude_core::apply::ApplyError::StalePlan(_)) && moved == 0 {
                 let root = &bound.root;
-                if bound.is_live() {
+                // Only a plan saved with --export-plan and run with --plan can
+                // be old. A plain `stash FOLDER` scanned just now, so another
+                // run changed the folder, and running it again scans again.
+                if bound.is_live() || value(args, "--plan").is_none() {
                     eprintln!(
                         "{}",
                         etude_cli_support::problems::folder_changed_just_now("stash", root)

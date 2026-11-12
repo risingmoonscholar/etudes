@@ -41,10 +41,11 @@ Two applies on one folder at once are not held apart. One wins. The other ends
 in one of two ways, and timing decides which:
 
 - **Refused before it moved anything** (exit 2, `plan_stale`): the folder
-  changed under its plan. Nothing of its own needs undoing, and `sweep status`
-  reports its record as `refused`. Scan and apply again.
-- **Stopped part-way** (exit 3, `operation_incomplete`): it had started and
-  then collided. `recovery.operation` is an id that `sweep status --id` reports
+  changed under its plan, including when the other apply moved its files
+  first. Nothing of its own needs undoing, and `sweep status` reports its
+  record as `refused`. Scan and apply again.
+- **Stopped part-way** (exit 3, `operation_incomplete`): it had moved at least
+  one file and then collided. `recovery.operation` is an id that `sweep status --id` reports
   as `interrupted`. Run `sweep undo` on the folder before planning again.
 
 After the part-way ending, run `sweep undo` on the folder until it says there
