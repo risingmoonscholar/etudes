@@ -394,5 +394,90 @@ by_hand() {
   assert_snapshot_eq "$W/hand-before.json" "$W/hand-after.json" "by hand: the folder equals its original"
 }
 
+
+# An apply made while a plain `sweep undo` waits is not one it was asked to
+# undo. The first undo is stopped part way; the second, with no folder, waits
+# for it; then a new apply of another folder runs to the end. When the first
+# finishes, the second must say the other undo restored the files and leave
+# the new apply in place.
+apply_while_waiting() {
+  local attempt O D L restored said code_a code_b out_b start later_moved
+  for attempt in 1 2 3 4; do
+    O="$W/late-$attempt"
+    D="$O/Notes"; L="$O/Later"
+    export ETUDE_STATE_DIR="$O/state"
+    mkdir -p "$ETUDE_STATE_DIR"
+    make_tree "$D" "$TOTAL" note
+    make_tree "$L" 30 later
+    snapshot_tree "$D" "$W/late-notes-before.json"
+    snapshot_tree "$L" "$W/late-later-before.json"
+    if ! "$SWEEP" apply "$D" --since 0 --yes >"$O/apply.out" 2>&1 </dev/null; then
+      fail "apply while waiting: setup apply exits 0: $(head -3 "$O/apply.out")"
+      return
+    fi
+    start=$(home "$D")
+    "$SWEEP" undo "$D" >"$O/a.out" 2>"$O/a.err" </dev/null &
+    A=$!
+    if restored=$(pause_part_way "$D" "$A" "$start"); then
+      break
+    fi
+    kill -CONT "$A" 2>/dev/null || true
+    wait "$A" 2>/dev/null || true
+    A=""
+    echo "    attempt  apply while waiting: attempt $attempt did not stop the first undo part way"
+  done
+  if [ -z "$A" ]; then
+    unproven "apply while waiting" "the first undo finished before it could be stopped, in four attempts"
+    return
+  fi
+  fresh "apply while waiting" "$O"
+  "$SWEEP" undo >"$O/b.out" 2>"$O/b.err" </dev/null &
+  B=$!
+  said=""
+  for _ in $(seq 1 600); do
+    if grep -q 'Waiting for it to finish' "$O/b.err" 2>/dev/null; then said=1; break; fi
+    kill -0 "$B" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [ -n "$said" ] && kill -0 "$B" 2>/dev/null; then
+    pass "apply while waiting: the plain undo waits for the stopped one"
+  else
+    fail "apply while waiting: the plain undo did not wait: $(cat "$O/b.out" "$O/b.err" | grep -v 'items$' | head -4)"
+  fi
+  # The new apply runs to the end while the second undo waits.
+  if "$SWEEP" apply "$L" --since 0 --yes >"$O/later.out" 2>&1 </dev/null; then
+    pass "apply while waiting: a new apply of another folder runs while the undo waits"
+  else
+    fail "apply while waiting: the new apply did not run: $(head -3 "$O/later.out")"
+  fi
+  later_moved=$((30 - $(home "$L")))
+  kill -CONT "$A"
+  wait "$A"; code_a=$?; A=""
+  wait "$B"; code_b=$?; B=""
+  out_b=$(cat "$O/b.out" "$O/b.err")
+  assert_eq 0 "$code_a" "apply while waiting: first undo exits 0 (exit $code_a)"
+  assert_eq 1 "$code_b" "apply while waiting: the plain undo exits 1, nothing to do (exit $code_b)"
+  if grep -q 'Nothing to undo. Another `sweep undo` restored these files.' <<<"$out_b" \
+    && ! grep -q '^Restored' <<<"$out_b"; then
+    pass "apply while waiting: the plain undo says another undo restored the files, and restores nothing"
+  else
+    fail "apply while waiting: the plain undo did not say what happened: $(grep -v 'items$' <<<"$out_b" | head -4)"
+  fi
+  if [ "$later_moved" -gt 0 ] && [ "$((30 - $(home "$L")))" = "$later_moved" ]; then
+    pass "apply while waiting: the new apply is still in place ($later_moved files moved)"
+  else
+    fail "apply while waiting: the new apply was undone ($(home "$L") of 30 home, $later_moved moved by it)"
+  fi
+  snapshot_tree "$D" "$W/late-notes-after.json"
+  assert_snapshot_eq "$W/late-notes-before.json" "$W/late-notes-after.json" \
+    "apply while waiting: the first folder equals its original"
+  out=$("$SWEEP" undo 2>&1 </dev/null); code=$?
+  assert_eq 0 "$code" "apply while waiting: a later plain undo undoes the new apply (exit $code)"
+  snapshot_tree "$L" "$W/late-later-after.json"
+  assert_snapshot_eq "$W/late-later-before.json" "$W/late-later-after.json" \
+    "apply while waiting: the new folder then equals its original"
+}
+
 two_applies
 by_hand
+apply_while_waiting

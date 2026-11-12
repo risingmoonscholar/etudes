@@ -18,7 +18,9 @@ files. The answer gives a state (`refused`, `completed`, `interrupted`,
 items. `refused` is an apply that was turned away before it moved anything. It never
 lists file names. An id that no journal holds gives exit 1 with the code
 `unknown_operation`. `reversed` means nothing is still moved; `partly_reversed`
-means some files are back and some are not.
+means some files are back and some are not. In `sweep status`, `in_progress` means a `sweep apply` is
+running on that record now; its counts are what it has recorded so far, and it
+gives no undo step until the apply returns.
 
 In `sweep status`, `planned`, `moved` and `reversed` are states of each file: each
 is a count of the files now in that state.

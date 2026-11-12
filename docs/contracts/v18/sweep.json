@@ -747,7 +747,8 @@
         "completed",
         "interrupted",
         "reversed",
-        "partly_reversed"
+        "partly_reversed",
+        "in_progress"
       ],
       "counts": [
         "planned",
@@ -761,7 +762,8 @@
       "side_effects": "none;_no_key_creation_migration_pruning_or_file_content_reads",
       "disclosure": "path_query_returns_newest_first_without_file_names",
       "command": "undo_by_that_row's_id;_null_when_nothing_is_left_to_reverse",
-      "same_time": "records_with_the_same_modification_time_are_still_listed;_each_such_row_adds_same_time_as_with_the_other_ids;_absent_otherwise;_their_order_is_by_id_and_says_nothing_about_which_is_newer"
+      "same_time": "records_with_the_same_modification_time_are_still_listed;_each_such_row_adds_same_time_as_with_the_other_ids;_absent_otherwise;_their_order_is_by_id_and_says_nothing_about_which_is_newer",
+      "in_progress": "a_record_another_sweep_holds_an_advisory_lock_on_now;_an_apply_holds_its_own_record_from_its_first_recorded_move_until_it_returns;_counts_are_what_it_has_recorded_so_far;_damaged_false;_command_null;_without_advisory_locks_the_state_is_read_from_the_record_as_before"
     },
     "undo_lookup": {
       "queries": [

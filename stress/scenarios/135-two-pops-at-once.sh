@@ -47,20 +47,20 @@ print({2: "R", 3: "S", 4: "T", 5: "Z"}.get(int.from_bytes(info.raw[4:8], "little
 PY_STATE
 }
 home() { find "$1" -maxdepth 1 -type f | wc -l | tr -d ' '; }
-# pause_part_way DIR PID: stop PID once some but not all files are home in DIR,
-# confirm it is stopped, and count again. Prints the count; fails if the pop
-# finished first.
+# pause_part_way DIR PID [MOST]: stop PID once some but at most MOST (default
+# all but one) files are home in DIR, confirm it is stopped, and count again.
+# Prints the count; fails if the run finished first.
 pause_part_way() {
-  local dir="$1" pid="$2" n s=""
+  local dir="$1" pid="$2" most="${3:-$((TOTAL - 1))}" n s=""
   for _ in $(seq 1 2000); do
     n=$(home "$dir")
-    if [ "$n" -gt 0 ] && [ "$n" -lt "$TOTAL" ] && kill -STOP "$pid" 2>/dev/null; then
+    if [ "$n" -gt 0 ] && [ "$n" -le "$most" ] && kill -STOP "$pid" 2>/dev/null; then
       for _ in $(seq 1 300); do
         s=$(state "$pid") || { s=""; break; }
         [ "$s" != T ] || break
       done
       n=$(home "$dir")
-      if [ "${s:-}" = T ] && [ "$n" -gt 0 ] && [ "$n" -lt "$TOTAL" ]; then
+      if [ "${s:-}" = T ] && [ "$n" -gt 0 ] && [ "$n" -le "$most" ]; then
         printf '%s\n' "$n"; return 0
       fi
       kill -CONT "$pid" 2>/dev/null || true
@@ -329,3 +329,133 @@ if [ "$DURING" -gt 0 ]; then
 else
   unproven "a pop during a running stash" "no pop overlapped the stash in 3 tries"
 fi
+
+# Status while a stash is stopped part way, after its first recorded move, so
+# it holds its record. Every form says a run is going on now, with the counts
+# so far, and none says damaged or interrupted. --json, whose states cannot
+# say running, waits for the stash and then gives the finished state.
+D="$W/status-during-stash/Notes"
+export ETUDE_STATE_DIR="$W/status-during-stash/state"; mkdir -p "$ETUDE_STATE_DIR"
+make_tree "$D"
+"$STASH" "$D" >"$W/a.out" 2>&1 &
+A=$!
+if left=$(pause_part_way "$D" "$A" $((TOTAL - 2))); then
+  pass "status during stash: the stash is stopped with $((TOTAL - left)) of $TOTAL moved"
+  id=$(ls "$ETUDE_STATE_DIR" | sed -n 's/^stash-\(.*\)\.journal$/\1/p' | head -1)
+  for form in folder all id; do
+    case "$form" in
+      folder) out=$("$STASH" status "$D" 2>&1); code=$? ;;
+      all) out=$("$STASH" status --all 2>&1); code=$? ;;
+      id) out=$("$STASH" status --id "$id" 2>&1); code=$? ;;
+    esac
+    if [ "$code" = 0 ] && grep -q 'a `stash` or `stash pop` is running on it now; so far' <<<"$out" \
+        && ! grep -E -i -q 'damaged|interrupted|refuse' <<<"$out"; then
+      pass "status during stash: status $form says a run is going on now, with counts so far (exit 0)"
+    else
+      fail "status during stash: status $form exit $code: $(head -3 <<<"$out")"
+    fi
+  done
+  "$STASH" status --id "$id" --json >"$W/j.out" 2>"$W/j.err" &
+  J=$!
+  for _ in $(seq 1 600); do
+    grep -q 'Waiting for it to finish' "$W/j.err" 2>/dev/null && break
+    kill -0 "$J" 2>/dev/null || break
+    sleep 0.05
+  done
+  if kill -0 "$J" 2>/dev/null && grep -q 'running on this stash now' "$W/j.err"; then
+    pass "status during stash: status --id --json waits for the stash, and says so"
+  else
+    fail "status during stash: status --id --json did not wait: $(cat "$W/j.err" | head -2) $(tail -c 300 "$W/j.out")"
+  fi
+  kill -CONT "$A"
+  wait "$A"; code=$?; A=""
+  assert_eq 0 "$code" "status during stash: the stash exits 0 (exit $code)"
+  wait "$J"; code=$?
+  if [ "$code" = 0 ] && python3 - "$W/j.out" "$TOTAL" <<'PY_ID'
+import json, sys
+doc = json.loads([l for l in open(sys.argv[1]) if l.startswith("{")][-1])
+d = doc.get("details", doc)
+sys.exit(0 if d["state"] == "completed" and d["moved"] == int(sys.argv[2]) else 1)
+PY_ID
+  then
+    pass "status during stash: status --id --json then gives state completed with every item moved"
+  else
+    fail "status during stash: status --id --json exit $code: $(tail -c 300 "$W/j.out")"
+  fi
+  "$STASH" pop "$D" >/dev/null 2>&1
+else
+  unproven "status during stash" "the stash finished before it could be stopped"
+  wait "$A" 2>/dev/null; A=""
+fi
+
+# A pop --latest that waits never goes on to a stash made after it started.
+# The first pop of one folder is stopped part way; pop --latest waits on it;
+# meanwhile another folder is stashed. When the first pop finishes, pop
+# --latest says that pop restored the stash, and the newer stash stays held.
+X="$W/latest/First"; Y="$W/latest/Second"
+export ETUDE_STATE_DIR="$W/latest/state"; mkdir -p "$ETUDE_STATE_DIR"
+make_tree "$X"; make_tree "$Y"
+"$STASH" "$X" >/dev/null 2>&1
+"$STASH" pop "$X" >"$W/a.out" 2>&1 &
+A=$!
+if restored=$(pause_part_way "$X" "$A"); then
+  pass "latest: the first pop is stopped with $restored of $TOTAL home"
+  "$STASH" pop --latest >"$W/b.out" 2>&1 &
+  B=$!
+  for _ in $(seq 1 600); do
+    grep -q 'Waiting for it to finish' "$W/b.out" 2>/dev/null && break
+    kill -0 "$B" 2>/dev/null || break
+    sleep 0.05
+  done
+  if kill -0 "$B" 2>/dev/null && grep -q 'running on this stash now' "$W/b.out"; then
+    pass "latest: pop --latest waits on the stash being restored, and says so"
+  else
+    fail "latest: pop --latest did not wait: $(grep -v 'items$' "$W/b.out" | head -3)"
+  fi
+  "$STASH" "$Y" >"$W/s.out" 2>&1; code=$?
+  assert_eq 0 "$code" "latest: another folder is stashed while pop --latest waits (exit $code)"
+  kill -CONT "$A"
+  wait "$A"; code=$?; A=""
+  assert_eq 0 "$code" "latest: the first pop exits 0 (exit $code)"
+  wait "$B"; code=$?; B=""
+  if [ "$code" = 1 ] && grep -q 'Nothing to restore. Another `stash pop` restored this stash.' "$W/b.out"; then
+    pass "latest: pop --latest says another pop restored the stash (exit 1)"
+  else
+    fail "latest: pop --latest exit $code: $(grep -v 'items$' "$W/b.out" | head -3)"
+  fi
+  assert_eq 0 "$(home "$Y")" "latest: the stash made after pop --latest started is still held"
+  "$STASH" pop "$Y" >/dev/null 2>&1
+  assert_eq "$TOTAL" "$(home "$Y")" "latest: that stash then restores by its folder"
+else
+  unproven "latest" "the first pop finished before it could be stopped"
+  wait "$A" 2>/dev/null; A=""
+fi
+
+# pop --latest FOLDER while a pop of another folder runs. It may read the
+# other record while it is written and wait; if it does, it says it is reading
+# a record to choose a stash, not that its own stash is in use. It then
+# restores its own folder.
+for n in 1 2 3; do
+  X="$W/other-$n/First"; Y="$W/other-$n/Second"
+  export ETUDE_STATE_DIR="$W/other-$n/state"; mkdir -p "$ETUDE_STATE_DIR"
+  make_tree "$X"; make_tree "$Y"
+  "$STASH" "$Y" >/dev/null 2>&1
+  "$STASH" "$X" >/dev/null 2>&1
+  "$STASH" pop "$X" >"$W/a.out" 2>&1 &
+  A=$!
+  for _ in $(seq 1 3000); do
+    [ "$(home "$X")" -gt 100 ] && break
+    kill -0 "$A" 2>/dev/null || break
+    sleep 0.005
+  done
+  "$STASH" pop --latest "$Y" >"$W/b.out" 2>&1; code=$?
+  wait "$A"; A=""
+  if [ "$code" = 0 ] && grep -qx "Restored $TOTAL items." "$W/b.out" \
+      && ! grep -q 'running on this stash now' "$W/b.out"; then
+    pass "other $n: pop --latest FOLDER restores its own folder, and never says its stash is in use"
+  else
+    fail "other $n: pop --latest FOLDER exit $code: $(grep -v 'items$' "$W/b.out" | head -3)"
+  fi
+  grep -q 'to choose a stash' "$W/b.out" && echo "    note     other $n: it waited while reading another folder's record"
+  assert_eq "$TOTAL" "$(home "$X")" "other $n: the other pop restored its folder"
+done

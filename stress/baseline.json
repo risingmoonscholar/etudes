@@ -91,7 +91,7 @@
   "132-sweep-footer-lines": 21,
   "133-stash-status-steps-paste": 686,
   "134-unpack-parent-moved-mid-extraction": 28,
-  "135-two-pops-at-once": 85,
-  "136-lost-apply-race-leaves-no-damaged-record": 33,
-  "137-two-undos-at-once": 76
+  "135-two-pops-at-once": 105,
+  "136-lost-apply-race-leaves-no-damaged-record": 43,
+  "137-two-undos-at-once": 86
 }
