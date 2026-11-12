@@ -4567,14 +4567,19 @@ fn sweep_journal_for_root(
 /// one that will not open cannot stand in the way.
 fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
     use etude_core::journal::{Journal, JournalError};
-    let read = choose_waiting(|| {
-        Journal::load_sealed_exact("sweep", id, sl).map_err(|error| RecordError {
-            id: Some(id.to_owned()),
-            error,
-        })
-    });
+    let read = choose_waiting(
+        sl,
+        |j| j.id == id,
+        || {
+            Journal::load_sealed_exact("sweep", id, sl).map_err(|error| RecordError {
+                id: Some(id.to_owned()),
+                error,
+            })
+        },
+    );
     let mut journal = match read {
-        Ok(journal) => journal,
+        Ok(Chose::Restored(journal)) => return restored_by_another(&journal, sl),
+        Ok(Chose::Chosen(journal)) => journal,
         Err(RecordError {
             error: JournalError::NotFound,
             ..
@@ -4591,9 +4596,6 @@ fn undo_by_id(id: &str, sl: &dyn etude_core::journal::Sealer) -> ExitCode {
         Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Id),
     };
     etude_cli_support::envelope::recovery_operation(&journal.id);
-    if journal_is_fully_undone(&journal, sl) && waited_on(&journal.id) {
-        return restored_by_another(&journal, sl);
-    }
     if journal_is_fully_undone(&journal, sl) {
         println!("\nNothing to undo. That apply was already restored, or moved nothing.");
         etude_cli_support::envelope::reason(etude_cli_support::reason::Reason::nothing_to_do());
@@ -4644,15 +4646,16 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
                     .report();
             }
         };
-        return match choose_waiting(|| sweep_journal_for_root(sl, &target)) {
+        let read = choose_waiting(
+            sl,
+            |j| j.root.canonicalize().is_ok_and(|root| root == target),
+            || sweep_journal_for_root(sl, &target),
+        );
+        return match read {
             Err(record) => refuse_unreadable_record(&record, sl, UndoAsked::Folder),
-            Ok(Some(mut j)) => finish_undo(&mut j, sl, UndoAsked::Folder),
-            Ok(None) => {
-                if let Some(j) = waited_and_restored(sl, |j| {
-                    j.root.canonicalize().is_ok_and(|root| root == target)
-                }) {
-                    return restored_by_another(&j, sl);
-                }
+            Ok(Chose::Restored(j)) => restored_by_another(&j, sl),
+            Ok(Chose::Chosen(Some(mut j))) => finish_undo(&mut j, sl, UndoAsked::Folder),
+            Ok(Chose::Chosen(None)) => {
                 eprintln!(
                     "sweep: nothing to undo for {}. No apply of that folder is still\nreversible.",
                     etude_cli_support::shown(&target)
@@ -4673,9 +4676,13 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
     // apply before it stays unreachable forever, which is issue #8 wearing a
     // different hat: the first fix let you name a folder, this one lets you
     // just run it twice.
-    match choose_waiting(|| newest_undoable(sl)) {
-        Ok(Some(mut j)) => return finish_undo(&mut j, sl, UndoAsked::Newest),
-        Ok(None) => {}
+    // A record read while another undo wrote it, and waited on, was this
+    // undo's first choice: records are read newest first, and the first with
+    // work is chosen. The other undo was undoing it, so it had work.
+    match choose_waiting(sl, |_| true, || newest_undoable(sl)) {
+        Ok(Chose::Restored(j)) => return restored_by_another(&j, sl),
+        Ok(Chose::Chosen(Some(mut j))) => return finish_undo(&mut j, sl, UndoAsked::Newest),
+        Ok(Chose::Chosen(None)) => {}
         Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     }
     // Everything readable has been reversed, or nothing is on record. Which of
@@ -4699,21 +4706,23 @@ fn undo_with(args: &[String], sl: &KeychainSeal) -> ExitCode {
         etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
         return ExitCode::from(1);
     };
-    let read = choose_waiting(|| {
-        etude_core::Journal::load_sealed_exact("sweep", &newest.id, sl).map_err(|error| {
-            RecordError {
-                id: Some(newest.id.clone()),
-                error,
-            }
-        })
-    });
+    let read = choose_waiting(
+        sl,
+        |j| j.id == newest.id,
+        || {
+            etude_core::Journal::load_sealed_exact("sweep", &newest.id, sl).map_err(|error| {
+                RecordError {
+                    id: Some(newest.id.clone()),
+                    error,
+                }
+            })
+        },
+    );
     let mut j = match read {
-        Ok(j) => j,
+        Ok(Chose::Restored(j)) => return restored_by_another(&j, sl),
+        Ok(Chose::Chosen(j)) => j,
         Err(record) => return refuse_unreadable_record(&record, sl, UndoAsked::Newest),
     };
-    if journal_is_fully_undone(&j, sl) && waited_on(&j.id) {
-        return restored_by_another(&j, sl);
-    }
     if journal_is_fully_undone(&j, sl) {
         // Say which operation this is about. The newest journal being already
         // restored is a fact about an earlier run, and a user who just applied
@@ -4842,25 +4851,77 @@ fn hold_record(path: &Path, id: &str, doing: &str) -> Option<std::fs::File> {
     None
 }
 
+/// Whether a read of a record failed because the record changed while it was
+/// read. etude-core says so only by this message (`JournalCandidate::load`),
+/// so a test reads the real error and checks it is still recognized here.
+fn changed_while_read(error: &etude_core::journal::JournalError) -> bool {
+    matches!(
+        error,
+        etude_core::journal::JournalError::Malformed("journal changed after discovery")
+    )
+}
+
+/// What choosing a record came to after any wait.
+enum Chose<T, R> {
+    /// What `choose` returned.
+    Chosen(T),
+    /// A record this run waited on, now with nothing left to undo, that fits
+    /// what was asked. The undo that held it restored its files.
+    Restored(R),
+}
+
 /// Choose a record, and choose again after waiting when a record changed while
 /// it was being read. Another undo writes its record as it goes, so a read
 /// made then finds it changed; that is not a record that will not open. The
-/// wait ends when that undo does, and the next read sees what it did.
-fn choose_waiting<T>(mut choose: impl FnMut() -> Result<T, RecordError>) -> Result<T, RecordError> {
+/// wait ends when that undo does. If the record waited on is now restored and
+/// is the one asked for, that is the answer: choosing again would pass over it
+/// to an older apply, which this undo was never asked to reach.
+fn choose_waiting<T>(
+    sl: &dyn etude_core::journal::Sealer,
+    fits: impl Fn(&etude_core::Journal) -> bool,
+    choose: impl FnMut() -> Result<T, RecordError>,
+) -> Result<Chose<T, etude_core::Journal>, RecordError> {
+    choose_waiting_with(
+        choose,
+        |id| {
+            drop(hold_for_undo(
+                id,
+                "is writing an undo record that this one reads",
+            ));
+            waited_on(id)
+        },
+        |id| {
+            etude_core::Journal::load_sealed_exact("sweep", id, sl)
+                .ok()
+                .filter(|j| fits(j) && journal_is_fully_undone(j, sl))
+        },
+    )
+}
+
+/// [`choose_waiting`] with its effects passed in. `wait` waits for the undo
+/// holding a record and says whether there was one; `restored` gives the
+/// record when it fits what was asked and has nothing left to undo.
+fn choose_waiting_with<T, R>(
+    mut choose: impl FnMut() -> Result<T, RecordError>,
+    mut wait: impl FnMut(&str) -> bool,
+    restored: impl Fn(&str) -> Option<R>,
+) -> Result<Chose<T, R>, RecordError> {
     for _ in 0..8 {
         match choose() {
             Err(RecordError {
                 id: Some(id),
-                error:
-                    etude_core::journal::JournalError::Malformed("journal changed after discovery"),
-            }) => drop(hold_for_undo(
-                &id,
-                "is writing an undo record that this one reads",
-            )),
-            other => return other,
+                error,
+            }) if changed_while_read(&error) => {
+                if wait(&id)
+                    && let Some(record) = restored(&id)
+                {
+                    return Ok(Chose::Restored(record));
+                }
+            }
+            other => return other.map(Chose::Chosen),
         }
     }
-    choose()
+    choose().map(Chose::Chosen)
 }
 
 /// Nothing to undo, because another undo restored this record's files while
@@ -4880,18 +4941,6 @@ fn restored_by_another(j: &etude_core::Journal, sl: &dyn etude_core::journal::Se
     etude_cli_support::envelope::status("nothing_to_do");
     etude_cli_support::progress::finish_without_work("sweep undo", "undo", ExitCode::from(1));
     ExitCode::from(1)
-}
-
-/// A record this run waited on, now with nothing left to undo, that `fits`
-/// what was asked. Its files were restored by the undo that held it.
-fn waited_and_restored(
-    sl: &dyn etude_core::journal::Sealer,
-    fits: impl Fn(&etude_core::Journal) -> bool,
-) -> Option<etude_core::Journal> {
-    let ids = WAITED_ON.lock().ok()?.clone();
-    ids.iter()
-        .filter_map(|id| etude_core::Journal::load_sealed_exact("sweep", id, sl).ok())
-        .find(|j| fits(j) && journal_is_fully_undone(j, sl))
 }
 
 /// The part of undo that is the same whether a path was named or not.
@@ -6528,6 +6577,133 @@ mod tests {
         );
     }
 
+    /// Tests that set ETUDE_STATE_DIR take this first.
+    static STATE_DIR_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn the_error_for_a_record_changed_while_read_is_recognized() {
+        // etude-core reports a record that changed while it was read, or that
+        // is not a regular file, with one error. Read the real one.
+        let state = std::env::temp_dir().join(format!(
+            "sweep-changed-while-read-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let id = "1794483027356464000-64803-0-33f103d5913ee078";
+        std::fs::create_dir_all(state.join(format!("sweep-{id}.journal"))).unwrap();
+        let read = {
+            let _env = STATE_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+            unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
+            // The read stops before anything is unsealed.
+            struct NoSeal;
+            impl etude_core::journal::Sealer for NoSeal {
+                fn seal(&self, _: &[u8]) -> Result<Vec<u8>, &'static str> {
+                    Err("not used")
+                }
+                fn open(&self, _: &[u8]) -> Result<Vec<u8>, &'static str> {
+                    Err("not used")
+                }
+            }
+            let read = etude_core::Journal::load_sealed_exact("sweep", id, &NoSeal);
+            unsafe { std::env::remove_var("ETUDE_STATE_DIR") };
+            read
+        };
+        let _ = std::fs::remove_dir_all(&state);
+        let Err(error) = read else {
+            panic!("a folder named like a record loaded");
+        };
+        assert!(
+            changed_while_read(&error),
+            "choose_waiting no longer recognizes {error}"
+        );
+        assert!(!changed_while_read(
+            &etude_core::journal::JournalError::NotFound
+        ));
+    }
+
+    fn changed(id: &str) -> RecordError {
+        RecordError {
+            id: Some(id.to_owned()),
+            error: etude_core::journal::JournalError::Malformed("journal changed after discovery"),
+        }
+    }
+
+    #[test]
+    fn a_waited_record_restored_by_another_undo_is_the_answer() {
+        // Choosing again would find the next, older record with work.
+        let mut calls = 0;
+        let read = choose_waiting_with(
+            || {
+                calls += 1;
+                if calls == 1 {
+                    Err(changed("a"))
+                } else {
+                    Ok("older")
+                }
+            },
+            |id| id == "a",
+            |id| (id == "a").then_some("a restored"),
+        );
+        assert!(matches!(read, Ok(Chose::Restored("a restored"))));
+        assert_eq!(calls, 1, "nothing is chosen after the wait");
+    }
+
+    #[test]
+    fn choosing_goes_on_when_the_waited_record_is_not_restored_or_not_asked_for() {
+        // Waited on, but work is left or it is another folder's record.
+        let mut calls = 0;
+        let read = choose_waiting_with(
+            || {
+                calls += 1;
+                if calls == 1 {
+                    Err(changed("a"))
+                } else {
+                    Ok("a again")
+                }
+            },
+            |_| true,
+            |_| None::<&str>,
+        );
+        assert!(matches!(read, Ok(Chose::Chosen("a again"))));
+        assert_eq!(calls, 2);
+        // No undo held it: nothing is claimed about another undo.
+        let mut calls = 0;
+        let read = choose_waiting_with(
+            || {
+                calls += 1;
+                if calls == 1 {
+                    Err(changed("a"))
+                } else {
+                    Ok("a again")
+                }
+            },
+            |_| false,
+            |_| Some("never"),
+        );
+        assert!(matches!(read, Ok(Chose::Chosen("a again"))));
+        // Any other error is the answer as it is, with no wait.
+        let read = choose_waiting_with(
+            || -> Result<(), RecordError> {
+                Err(RecordError {
+                    id: Some("a".to_owned()),
+                    error: etude_core::journal::JournalError::NotFound,
+                })
+            },
+            |_| panic!("no wait for another error"),
+            |_| Some(()),
+        );
+        assert!(matches!(
+            read,
+            Err(RecordError {
+                error: etude_core::journal::JournalError::NotFound,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn an_undo_hold_is_taken_only_on_a_record_file() {
         let dir = std::env::temp_dir().join(format!(
@@ -6577,6 +6753,7 @@ mod tests {
         std::fs::write(state.join("stash-bbb.journal"), b"t").unwrap();
         std::fs::write(state.join("noise.txt"), b"x").unwrap();
 
+        let _env = STATE_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("ETUDE_STATE_DIR", &state) };
 
         let dir = etude_core::journal::state_dir();
