@@ -1,5 +1,5 @@
 {
-  "_about": "The shared docs pages on the site, in sidebar order. Only the files listed here and in tools.json are published; nothing else from the repo goes on the site.",
+  "_about": "The shared docs pages on the site, in sidebar order. Only the files listed here and in tools.json are published; nothing else from the repo goes on the site. A page with \"reference\" in place of \"source\" is a generated command reference; see site/reference.json.",
   "sections": [
     {
       "title": "Using the tools",
@@ -21,6 +21,18 @@
     {
       "title": "Reference",
       "pages": [
+        {
+          "reference": "sweep",
+          "title": "sweep reference"
+        },
+        {
+          "reference": "stash",
+          "title": "stash reference"
+        },
+        {
+          "reference": "unpack",
+          "title": "unpack reference"
+        },
         {
           "source": "docs/json-and-exit-codes.md",
           "title": "JSON and exit codes"

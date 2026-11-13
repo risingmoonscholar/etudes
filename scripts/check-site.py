@@ -12,6 +12,9 @@ Fails when:
     not on the page it names (links that leave the site are not fetched);
   - a stylesheet's url() names a file that is not in the build (a font, say);
   - a page has two elements with the same id, or an empty id;
+  - a command reference page in site/docs.json was not built, is not what
+    the build renders, or a help entry or contract operation has no command
+    in site/reference.json (the build refuses that);
   - a docs page shows raw Markdown: **, ```, |--- or ]( outside code;
   - the published demo page or transcripts.json differs from site/, so the
     panels check-transcripts-reproduce.sh proves are the panels published;
@@ -358,6 +361,23 @@ def check_entries(folder=None):
     return problems, notes
 
 
+def check_references(out, references):
+    """Each command reference page is what the build renders from its sources today."""
+    problems = []
+    build = load_build()
+    try:
+        pages = build.public_pages()
+        want = {name: build.build_reference(name, pages) for name in references}
+    except Exception as error:  # the build's own error says what is wrong
+        return [f"the command reference could not be rendered for comparison: {error}"], []
+    for name, page_html in want.items():
+        page = out / "docs/reference" / name / "index.html"
+        if page.is_file() and page.read_text(encoding="utf-8") != page_html:
+            problems.append(f"the published docs/reference/{name}/index.html is not what "
+                            "scripts/build-site.py renders from the captured help and the contract")
+    return problems, [f"{len(want)} command reference pages are what the build renders"]
+
+
 def check_changelog(out):
     """The entries, and every changelog page as the build renders it."""
     problems, notes = check_entries()
@@ -395,17 +415,29 @@ def check(out):
     # The public list, from the same data the build reads.
     tools = json.loads((ROOT / "site/tools.json").read_text())["tools"]
     sections = json.loads((ROOT / "site/docs.json").read_text())["sections"]
-    sources = [t["docs"] for t in tools] + [p["source"] for s in sections for p in s["pages"]]
+    sources = [t["docs"] for t in tools] + [p["source"] for s in sections for p in s["pages"] if "source" in p]
     slugs = {Path(s).stem.lower() for s in sources}
+    references = [p["reference"] for s in sections for p in s["pages"] if "reference" in p]
+
     for slug in sorted(slugs):
         if not (out / "docs" / slug / "index.html").is_file():
             problems.append(f"docs/{slug}/ was not built, though it is on the public list")
     if not (out / "docs/index.html").is_file():
         problems.append("docs/index.html was not built")
     for child in sorted((out / "docs").iterdir()) if (out / "docs").is_dir() else []:
-        if child.is_dir() and child.name not in slugs:
+        if child.is_dir() and child.name not in slugs and not (child.name == "reference" and references):
             problems.append(f"docs/{child.name}/ is published but is not on the public list")
-    notes.append(f"{len(slugs)} public docs pages, each built")
+    for name in references:
+        if not (out / "docs/reference" / name / "index.html").is_file():
+            problems.append(f"docs/reference/{name}/ was not built, though site/docs.json lists it")
+    if (out / "docs/reference").is_dir():
+        for child in sorted((out / "docs/reference").iterdir()):
+            if child.name not in references:
+                problems.append(f"docs/reference/{child.name} is published but site/docs.json does not list it")
+    notes.append(f"{len(slugs) + len(references)} public docs pages, each built")
+    ref_problems, ref_notes = check_references(out, references)
+    problems += ref_problems
+    notes += ref_notes
 
     # Links and anchors, on every page in the build.
     cache = {}

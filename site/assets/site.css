@@ -400,3 +400,14 @@ th { font-weight: 600; background: var(--code-bg); }
 @media (max-width: 768px) {
   .changelog .entry .term code { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+
+/* Command reference: the usage column keeps each flag readable at phone width. */
+.ref-usage td:first-child { width: 42%; }
+.ref-usage td:first-child code { white-space: normal; overflow-wrap: normal; word-break: normal; }
+.ref-usage td:first-child code span { white-space: nowrap; }
+.ref-list { list-style: none; padding-left: 0; }
+.ref-list li { padding: 10px 0; border-top: 1px solid var(--border); }
+.ref-list li:last-child { border-bottom: 1px solid var(--border); }
+.ref-list .ref-name { font-weight: 600; }
+.ref-list .ref-retry { color: var(--muted); font-size: 14px; }
+.ref-list p { margin: 4px 0 0; }

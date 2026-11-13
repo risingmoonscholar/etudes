@@ -245,6 +245,12 @@ def load_check():
     return mod
 
 
+    def test_hand_edited_reference_page_fails(self):
+        out = self.copy("ref-edit")
+        self.edit(out / "docs/reference/sweep/index.html", "move one group", "move every group")
+        self.assertFails(self.check(out), "docs/reference/sweep/index.html is not what")
+
+
 class EntryTest(unittest.TestCase):
     """The pages job has the tags the release state is read from."""
 
@@ -863,6 +869,78 @@ class ConverterTest(unittest.TestCase):
     def test_link_to_missing_repo_file_stops_the_build(self):
         with self.assertRaises(self.mod.BuildError):
             self.convert("See [gone](no-such-file.md).\n")
+
+
+class ReferenceTest(unittest.TestCase):
+    """The command reference holds every help entry and contract operation, or stops the build."""
+
+    HELP = ("tool: a test\n\nUSAGE\n"
+            "    tool run PATH        do the thing\n"
+            "    tool run PATH --only NAME move one\n"
+            "    --deep N             go deeper\n"
+            "                         and say so\n\n"
+            "FLAGS\n    --json   results as JSON\n\nKEY\n    NOT_AN_ENTRY  ignored\n")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_build()
+
+    def test_every_entry_goes_to_its_longest_claim(self):
+        entries = self.mod.help_entries(self.HELP)
+        self.assertEqual([e[0] for e in entries], ["USAGE", "USAGE", "USAGE", "FLAGS"])
+        won = self.mod.assign_entries("tool", entries,
+                                      ["tool run PATH", "tool run PATH --only NAME", "--deep N", "--json"])
+        self.assertEqual(won["tool run PATH"], ["tool run PATH        do the thing"])
+        self.assertEqual(won["tool run PATH --only NAME"], ["tool run PATH --only NAME move one"])
+        self.assertEqual(self.mod.split_entry("tool run PATH --only NAME", won["tool run PATH --only NAME"][0]),
+                         ("tool run PATH --only NAME", ["move one"]))
+        self.assertEqual(self.mod.split_entry("--deep N", won["--deep N"][0]),
+                         ("--deep N", ["go deeper", "and say so"]))
+
+    def test_a_longer_usage_cannot_hide_under_a_shorter_claim(self):
+        entries = self.mod.help_entries(self.HELP.replace("--only NAME move one", "--only NAME  move one"))
+        with self.assertRaises(self.mod.BuildError) as caught:
+            self.mod.assign_entries("tool", entries, ["tool run PATH", "--deep N", "--json"])
+        self.assertIn("longer than the claim 'tool run PATH'", str(caught.exception))
+        self.assertIn("--only NAME", str(caught.exception))
+
+    def test_a_new_flag_stops_the_build(self):
+        entries = self.mod.help_entries(self.HELP + "")
+        entries.append(("FLAGS", "--new       a flag added later", "--new       a flag added later"))
+        with self.assertRaises(self.mod.BuildError) as caught:
+            self.mod.assign_entries("tool", entries,
+                                    ["tool run PATH", "tool run PATH --only NAME", "--deep N", "--json"])
+        self.assertIn("belongs to no command", str(caught.exception))
+
+    def test_a_claim_with_no_entry_stops_the_build(self):
+        entries = self.mod.help_entries(self.HELP)
+        with self.assertRaises(self.mod.BuildError) as caught:
+            self.mod.assign_entries("tool", entries, ["tool run PATH", "tool run PATH --only NAME",
+                                                      "--deep N", "--json", "--gone"])
+        self.assertIn("--gone", str(caught.exception))
+
+    def test_every_tool_reference_builds_from_the_committed_help_and_contract(self):
+        pages = self.mod.public_pages()
+        for page in pages:
+            if page["source"] is None:
+                html = self.mod.build_reference(page["reference"], pages)
+                self.assertIn("reference", html)
+
+    def test_a_contract_operation_with_no_command_stops_the_build(self):
+        real = self.mod.reference_data
+
+        def without_undo(name):
+            data = json.loads(json.dumps(real(name)))
+            for command in data["commands"]:
+                command["operations"] = [op for op in command["operations"] if op != "undo"]
+            return data
+        self.mod.reference_data = without_undo
+        try:
+            with self.assertRaises(self.mod.BuildError) as caught:
+                self.mod.build_reference("sweep", self.mod.public_pages())
+            self.assertIn("'undo'", str(caught.exception))
+        finally:
+            self.mod.reference_data = real
 
 
 if __name__ == "__main__":
