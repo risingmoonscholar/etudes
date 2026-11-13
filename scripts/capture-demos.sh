@@ -8,7 +8,8 @@
 # makes that true. It said so here for weeks while nothing enforced it, which is
 # the shape of defect this repo keeps finding in its own checkers.
 #
-# Fixture paths and volatile operation IDs are substituted as declared in substitution_rule.
+# Fixture paths, volatile operation IDs and the per-run values in --json results
+# are substituted as declared in substitution_rule.
 # All other captured output remains unchanged.
 #
 # No file of yours is read. The fixture is generated, used, and deleted.
@@ -28,7 +29,8 @@ export ETUDE_JOURNAL_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(
 echo "building release binaries"
 cargo build --release --quiet
 
-bin="$root/target/release"
+# CARGO_TARGET_DIR is honoured so a capture can reuse an existing build.
+bin="${CARGO_TARGET_DIR:-$root/target}/release"
 caps="$work/captures"
 mkdir -p "$caps"
 
@@ -45,6 +47,20 @@ export HOME="$home"
 "$bin/mkfx" "$home/Desktop" >/dev/null
 
 n=0
+# capture_json records stdout only: a --json result is one JSON document on
+# stdout, and the human lines and progress a command writes to stderr would
+# make it unparseable.
+capture_json() {
+  local label="$1" display="$2"; shift 2
+  n=$((n + 1))
+  local d="$caps/$(printf '%02d' "$n")-$label"
+  mkdir -p "$d"
+  printf '%s' "$display" > "$d/command"
+  set +e
+  "$@" > "$d/output" 2>/dev/null
+  printf '%s' "$?" > "$d/exit"
+  set -e
+}
 capture() {
   local label="$1" display="$2"; shift 2
   n=$((n + 1))
@@ -74,6 +90,27 @@ capture unpack-help   'unpack help'                    "$bin/unpack" help
 cp -R "$home/Desktop" "$home/Stashable"
 capture stash-put     'stash ~/Desktop --for 3d'       "$bin/stash" "$home/Stashable" --for 3d
 
+# One --json result per command for the command reference. These run after
+# every capture above, so none of those changes. sweep applies and undoes its
+# own Desktop; stash reads, pops and stashes again the folder stash-put held.
+capture_json sweep-apply-json  'sweep apply ~/Desktop --yes --json' "$bin/sweep" apply "$home/Desktop" --yes --json
+capture_json sweep-status-json 'sweep status ~/Desktop --json'      "$bin/sweep" status "$home/Desktop" --json
+capture_json sweep-undo-json   'sweep undo ~/Desktop --json'        "$bin/sweep" undo "$home/Desktop" --json
+capture_json stash-status-json 'stash status ~/Desktop --json'      "$bin/stash" status "$home/Stashable" --json
+capture_json stash-pop-json    'stash pop ~/Desktop --json'         "$bin/stash" pop "$home/Stashable" --json
+capture_json stash-put-json    'stash ~/Desktop --for 3d --json'    "$bin/stash" "$home/Stashable" --for 3d --json
+
+# mkfx's archives are deliberately broken, so unpack gets a small real ZIP
+# with fixed file times, built here with no extra fields (-X).
+mkdir -p "$work/zipsrc/notes" "$home/Downloads"
+printf 'hello\n' > "$work/zipsrc/notes/README.txt"
+printf -- '- one\n- two\n' > "$work/zipsrc/notes/todo.md"
+touch -t 202601011200 "$work/zipsrc/notes" "$work/zipsrc/notes/README.txt" "$work/zipsrc/notes/todo.md"
+(cd "$work/zipsrc" && /usr/bin/zip -qrX "$home/Downloads/notes.zip" notes)
+capture_json unpack-list-json  'unpack ~/Downloads/notes.zip --list --json' "$bin/unpack" "$home/Downloads/notes.zip" --list --json
+capture_json unpack-json       'unpack ~/Downloads/notes.zip --into ~/Downloads/notes --json' \
+  "$bin/unpack" "$home/Downloads/notes.zip" --into "$home/Downloads/notes" --json
+
 mkdir -p site
 python3 - "$caps" "$home" "$work" site/transcripts.json "$bin" <<'PY'
 import json, os, re, subprocess, sys
@@ -98,12 +135,29 @@ rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
 
 # Declared, reversible substitutions. Longest first so nested paths win.
 subs = [
+    (os.path.realpath(f"{home}/Downloads"), "~/Downloads"),
+    (f"{home}/Downloads",                   "~/Downloads"),
     (os.path.realpath(f"{home}/Stashable"), "~/Desktop"),
     (os.path.realpath(f"{home}/Desktop"),   "~/Desktop"),
     (f"{home}/Stashable",                   "~/Desktop"),
     (f"{home}/Desktop",                     "~/Desktop"),
     (os.path.realpath(work),                "~"),
     (work,                                  "~"),
+]
+
+# Values in a --json result that differ on every run, each replaced by a
+# named placeholder. Declared in substitution_rule below; nothing else changes.
+# A placeholder in NUMBER_PLACEHOLDERS stands for a JSON number, so a reader of
+# the capture (the command reference) can still say the value is a number.
+NUMBER_PLACEHOLDERS = ["<inode>", "<due-seconds>"]
+JSON_SUBS = [
+    (r"\b[0-9]{19}-[0-9]+-[0-9]+-[0-9a-f]{1,16}\b", "<record-id>"),
+    (r'"plan_digest":"[0-9a-f]{64}"', '"plan_digest":"<plan-digest>"'),
+    (r'"root_inode":[0-9]+', '"root_inode":"<inode>"'),
+    (r'"due":[0-9]+', '"due":"<due-seconds>"'),
+    (r'"(due|due_iso)":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"', r'"\1":"<due>"'),
+    (r"\.stash-[0-9]{10}-", ".stash-<due-seconds>-"),
+    (r'"profile":"stash-metadata-v1;[^"]*"', '"profile":"stash-metadata-v1;<profile-hash>"'),
 ]
 
 transcripts = []
@@ -115,8 +169,11 @@ for name in sorted(os.listdir(caps)):
     label = name.split("-", 1)[1]
     if label.endswith("-json"):
         captured = json.loads(text)
-        operation_id = json.dumps(captured["operation_id"])
-        text = text.replace(operation_id, json.dumps("<per-invocation>"), 1)
+        operation_id = captured["operation_id"]
+        text = text.replace(operation_id, "<per-invocation>")
+        for pattern, to in JSON_SUBS:
+            text = re.sub(pattern, to, text)
+        json.loads(text)
     if label == "stash-put":
         match = re.search(r"  Operation id: ([0-9]+-[0-9]+-[0-9]+-[0-9a-f]+)\. Restore with: stash pop --id \1", text)
         if match is None:
@@ -139,11 +196,18 @@ payload = {
              "synthetic mkfx fixture with temporary journal state and a disposable "
              "supplied key. Not hand-written; does not test login-keychain access."),
     "substitution_rule": ("The temporary directory the fixture was built in is "
-                          "rendered as ~/Desktop. Only the volatile envelope operation_id "
+                          "rendered as ~/Desktop, and the folder holding the unpack archive as ~/Downloads. "
+                          "The volatile envelope operation_id "
                           "is additionally rendered as <per-invocation>; the stash-put persistent "
-                          "operation id in its operation/restore line is rendered as <stash-operation>; all other "
+                          "operation id in its operation/restore line is rendered as <stash-operation>. "
+                          "In --json results only, undo-record ids are rendered as <record-id>, "
+                          "plan_digest as <plan-digest>, root_inode as <inode>, a due time in seconds "
+                          "(a number, or in a .stash- holding folder name) as <due-seconds>, a due time "
+                          "as a date as <due>, and the hash in a stash "
+                          "binding profile as <profile-hash>. All other "
                           "output bytes are retained. The real path is a mktemp name "
                           "and is not recorded."),
+    "number_placeholders": NUMBER_PLACEHOLDERS,
     "transcripts": transcripts,
 }
 json.dump(payload, open(out, "w"), indent=2)
