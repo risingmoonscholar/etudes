@@ -149,11 +149,12 @@ subs = [
 # named placeholder. Declared in substitution_rule below; nothing else changes.
 # A placeholder in NUMBER_PLACEHOLDERS stands for a JSON number, so a reader of
 # the capture (the command reference) can still say the value is a number.
-NUMBER_PLACEHOLDERS = ["<inode>", "<due-seconds>"]
+NUMBER_PLACEHOLDERS = ["<inode>", "<device>", "<due-seconds>"]
 JSON_SUBS = [
     (r"\b[0-9]{19}-[0-9]+-[0-9]+-[0-9a-f]{1,16}\b", "<record-id>"),
     (r'"plan_digest":"[0-9a-f]{64}"', '"plan_digest":"<plan-digest>"'),
     (r'"root_inode":[0-9]+', '"root_inode":"<inode>"'),
+    (r'"root_device":[0-9]+', '"root_device":"<device>"'),
     (r'"due":[0-9]+', '"due":"<due-seconds>"'),
     (r'"(due|due_iso)":"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"', r'"\1":"<due>"'),
     (r"\.stash-[0-9]{10}-", ".stash-<due-seconds>-"),
@@ -201,7 +202,7 @@ payload = {
                           "is additionally rendered as <per-invocation>; the stash-put persistent "
                           "operation id in its operation/restore line is rendered as <stash-operation>. "
                           "In --json results only, undo-record ids are rendered as <record-id>, "
-                          "plan_digest as <plan-digest>, root_inode as <inode>, a due time in seconds "
+                          "plan_digest as <plan-digest>, root_inode as <inode>, root_device (which differs by machine) as <device>, a due time in seconds "
                           "(a number, or in a .stash- holding folder name) as <due-seconds>, a due time "
                           "as a date as <due>, and the hash in a stash "
                           "binding profile as <profile-hash>. All other "
