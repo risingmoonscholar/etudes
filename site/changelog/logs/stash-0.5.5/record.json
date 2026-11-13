@@ -1,0 +1,112 @@
+{
+  "tool": "stash",
+  "version": "0.5.5",
+  "fixture": "stash-0.5.5.fixture",
+  "runs_sha256": "18fdd3ba7de94ba5a453b126b0dc375bf9fc98ed5894d94293b2dd7cb0d6ebcd",
+  "env": [
+    "PATH=<scratch>/bin:/usr/bin:/bin:/usr/sbin:/sbin (bin holds a security that only refuses)",
+    "HOME=<scratch>/home",
+    "ETUDE_STATE_DIR=<scratch>/state",
+    "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
+    "TMPDIR=<scratch>/tmp/",
+    "LANG=en_US.UTF-8",
+    "stdin closed",
+    "sandbox-exec: no file writes outside the scratch folder, no exec of /usr/bin/security"
+  ],
+  "logs": "each log is the command's output with the scratch folder's path written as <scratch>",
+  "builds": {
+    "before": {
+      "ref": "stash-v0.5.4",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "commit": "de8f307",
+      "tag": "stash-v0.5.4",
+      "build": "cargo build --release --locked -p stash-cli",
+      "version_output": "stash 0.5.4",
+      "sha256": "4da97b041eaec523edb8a04622b8e8bac911b62cf217b296a07acc00cd2b107a"
+    },
+    "after": {
+      "ref": "HEAD",
+      "rev": "dd3b0f67e29a19dc59760c6a927cdf51599a2825",
+      "commit": "dd3b0f6",
+      "tag": null,
+      "build": "cargo build --release --locked -p stash-cli",
+      "version_output": "stash 0.5.5",
+      "sha256": "7161c0519e267e7be95610b662fbbb93b72a13788d00f4682574b2238e2821c7"
+    }
+  },
+  "sides": {
+    "before": {
+      "listing_before": [
+        "my desk/",
+        "my desk/note1.txt",
+        "my desk/note2.txt",
+        "my desk/note3.txt"
+      ],
+      "runs": [
+        {
+          "command": "stash 'my desk'",
+          "exit": 0,
+          "log": "before-1.txt",
+          "sha256": "13486414a3fc55328091a4cdda97c500216b6b55707739889a46da29836f64d3"
+        },
+        {
+          "command": "stash status",
+          "exit": 1,
+          "log": "before-2.txt",
+          "sha256": "e82862f4a8383a8471a687f36ff62a7b18b0bacc6b704a6fc84a6e8e2c747f7f"
+        }
+      ],
+      "result_files": [
+        "note1.txt",
+        "note2.txt",
+        "note3.txt"
+      ],
+      "listing_after": [
+        "my desk/",
+        "my desk/.stash-0-stash-36652-1794492839559020000/",
+        "my desk/.stash-0-stash-36652-1794492839559020000/note1.txt",
+        "my desk/.stash-0-stash-36652-1794492839559020000/note2.txt",
+        "my desk/.stash-0-stash-36652-1794492839559020000/note3.txt"
+      ]
+    },
+    "after": {
+      "listing_before": [
+        "my desk/",
+        "my desk/note1.txt",
+        "my desk/note2.txt",
+        "my desk/note3.txt"
+      ],
+      "runs": [
+        {
+          "command": "stash 'my desk'",
+          "exit": 0,
+          "log": "after-1.txt",
+          "sha256": "bf5a9a715345f78f35ed90e9c4749df396aa8bb4c5f3b0fe0de238b3a85766f3"
+        },
+        {
+          "command": "stash status",
+          "exit": 1,
+          "log": "after-2.txt",
+          "sha256": "8b840a4a7887f83c4a35a41ebb108c32c6b18f79ed729042dd91d4a1f440a6b2"
+        }
+      ],
+      "result_files": [
+        "note1.txt",
+        "note2.txt",
+        "note3.txt"
+      ],
+      "listing_after": [
+        "my desk/",
+        "my desk/note1.txt",
+        "my desk/note2.txt",
+        "my desk/note3.txt"
+      ]
+    }
+  },
+  "next": {
+    "command": "stash pop 'my desk'",
+    "exit": 0,
+    "log": "next.txt",
+    "sha256": "18e310a2459a679e0e8ed1336601937cff8b912f2bbe45fe7ab24da93ffbbf31"
+  }
+}

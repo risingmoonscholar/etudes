@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>unpack v0.5.5 candidate — leftover cleanup and progress · études</title>
+  <title>unpack v0.5.5 — leftover cleanup and progress · études</title>
   <meta name="description" content="Unpack 0.5.5 removes a folder left by a killed extraction only when it can prove it, reports progress, and no longer calls a safe ZIP damaged when several runs work at once.">
-  <meta property="og:title" content="unpack v0.5.5 candidate — leftover cleanup and progress">
+  <meta property="og:title" content="unpack v0.5.5 — leftover cleanup and progress">
   <meta property="og:description" content="A proven leftover from a killed extraction is removed and named; anything unproved stays in place.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/unpack-safety.gif">
   <link rel="stylesheet" href="release.css">
@@ -18,13 +18,14 @@
     </header>
 
     <article>
-      <p class="release-id">unpack · v0.5.5 candidate</p>
-      <h1>unpack v0.5.5 candidate — leftover cleanup and progress</h1>
+      <p class="release-id">unpack · v0.5.5</p>
+      <h1>unpack v0.5.5 — leftover cleanup and progress</h1>
       <div class="release-copy">
         <p>A later extraction cleans up after a killed one, but only what it can prove is its own leftover.</p>
         <ul>
           <li>A later extraction into the same destination removes a folder left by a killed extraction, and names it on stderr. It first checks the exact name, that the folder is a real directory you own, that its lock file names that very folder by device and inode, and that the lock is free. A running extraction holds the lock.</li>
           <li>A symlink, a copy of a leftover, a folder from an older version and anything else unproved stay in place, and each is named with a step that works. A failed removal does not block the extraction. <code>--json</code> adds <code>leftover_folders_removed</code> and <code>leftover_folders_kept</code> under <code>effects</code> when not zero.</li>
+          <li>When the destination's parent folder was moved while unpack extracted, unpack failed and said "Nothing was left behind." That was false: its hidden <code>.NAME.unpack-….partial</code> folder, with every file extracted so far, had moved with the parent. unpack now holds that folder open, finds it where it went, checks by device and inode that it is the same folder, and removes it there. A folder that took the old name is not touched. If unpack cannot find the folder again, it names the old place and the hidden folder to look for, instead of saying nothing was left.</li>
           <li><code>--progress-json</code> now covers extraction and <code>--list</code>. Progress comes from the judged listing and the private staging folder, not from extractor output. Redirected runs of 100 or more members print milestones on stderr.</li>
           <li><code>SECURITY.md</code> now states that code running as you can forge the staging marker that this cleanup checks.</li>
           <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
@@ -45,13 +46,13 @@
 
     <section class="install" aria-labelledby="install-title">
       <h2 id="install-title">Install unpack 0.5.5</h2>
-      <p>0.5.5 is a release candidate. This pin works only after the tag is published:</p>
+      <p>Install the pinned release:</p>
       <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag unpack-v0.5.5 unpack-cli</code></pre>
     </section>
 
     <footer class="footer">
       <a href="../demo/">All tool demos</a>
-      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Source</a>
     </footer>
   </main>
 </body>

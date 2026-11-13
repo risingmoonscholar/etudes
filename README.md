@@ -17,10 +17,8 @@ and use each tool separately.
 
 You need Rust and Cargo. Get them from <https://rustup.rs>.
 
-**Caution: 0.5.5 is a release candidate, not a published release.** The
-commands below use the 0.5.5 tags. They will work only when the project
-publishes those tags. For the published versions, see
-[Releases](https://github.com/risingmoonscholar/etudes/releases).
+Install the published 0.5.5 releases. See
+[Releases](https://github.com/risingmoonscholar/etudes/releases) for the notes.
 
 ```sh
 cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.5 sweep-cli
@@ -31,7 +29,7 @@ cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag u
 The `--tag` flag pins each tool to a tagged version. Without `--tag`, you get
 the current state of `main`.
 
-To install this candidate from a clone of this repository, run
+To install from a clone of this repository, run
 `cargo install --path crates/sweep-cli --locked`. For the other tools, use
 `crates/stash-cli` or `crates/unpack-cli`.
 

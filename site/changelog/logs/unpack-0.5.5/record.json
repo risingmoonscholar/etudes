@@ -1,0 +1,101 @@
+{
+  "tool": "unpack",
+  "version": "0.5.5",
+  "fixture": "unpack-0.5.5.fixture",
+  "runs_sha256": "c00abe3659fb86bd12d20e647fce6e79af37de7a2e1f1602ad2082eac8bdfecb",
+  "env": [
+    "PATH=<scratch>/bin:/usr/bin:/bin:/usr/sbin:/sbin (bin holds a security that only refuses)",
+    "HOME=<scratch>/home",
+    "ETUDE_STATE_DIR=<scratch>/state",
+    "ETUDE_JOURNAL_KEY=<64 random hex, not recorded>",
+    "TMPDIR=<scratch>/tmp/",
+    "LANG=en_US.UTF-8",
+    "stdin closed",
+    "sandbox-exec: no file writes outside the scratch folder, no exec of /usr/bin/security"
+  ],
+  "logs": "each log is the command's output with the scratch folder's path written as <scratch>",
+  "builds": {
+    "before": {
+      "ref": "unpack-v0.5.4",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "commit": "de8f307",
+      "tag": "unpack-v0.5.4",
+      "build": "cargo build --release --locked -p unpack-cli",
+      "version_output": "unpack 0.5.4",
+      "sha256": "6956e6258ea1c2a12287ebd20c9a10375d50b0f9bbc8254137ade3e9fa96a400"
+    },
+    "after": {
+      "ref": "HEAD",
+      "rev": "dd3b0f67e29a19dc59760c6a927cdf51599a2825",
+      "commit": "dd3b0f6",
+      "tag": null,
+      "build": "cargo build --release --locked -p unpack-cli",
+      "version_output": "unpack 0.5.5",
+      "sha256": "53f33cd30f599610b43a84d2aa2c8b505be633b998952c1a5a57c66df8bf6c49"
+    }
+  },
+  "sides": {
+    "before": {
+      "listing_before": [
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/.unpack-0123456789abcdef0123456789abcdef.lock",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/photos/",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/photos/photo1.jpg",
+        "photos.zip"
+      ],
+      "runs": [
+        {
+          "command": "unpack photos.zip",
+          "exit": 0,
+          "log": "before-1.txt",
+          "sha256": "24f9895482b8bb5b304bcceb5b7a8434ce14cf9b3fcb1691a7f440c77ad57f32"
+        }
+      ],
+      "result_files": [
+        "photo1.jpg"
+      ],
+      "listing_after": [
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/.unpack-0123456789abcdef0123456789abcdef.lock",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/photos/",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/photos/photo1.jpg",
+        "photos.zip",
+        "photos/",
+        "photos/photo1.jpg",
+        "photos/photo2.jpg",
+        "photos/photo3.jpg"
+      ]
+    },
+    "after": {
+      "listing_before": [
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/.unpack-0123456789abcdef0123456789abcdef.lock",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/photos/",
+        ".photos.unpack-0123456789abcdef0123456789abcdef.partial/photos/photo1.jpg",
+        "photos.zip"
+      ],
+      "runs": [
+        {
+          "command": "unpack photos.zip",
+          "exit": 0,
+          "log": "after-1.txt",
+          "sha256": "da62abd4eab784926e8a0ca9248bfb493711f2c6529b3f09c6fa165a7990fd67"
+        }
+      ],
+      "result_files": [],
+      "listing_after": [
+        "photos.zip",
+        "photos/",
+        "photos/photo1.jpg",
+        "photos/photo2.jpg",
+        "photos/photo3.jpg"
+      ]
+    }
+  },
+  "next": {
+    "command": "unpack photos.zip --list",
+    "exit": 0,
+    "log": "next.txt",
+    "sha256": "e5f46276fbdecd85727dc8685c02f0ee0673bad2e2d78106dd381fa16784be36"
+  }
+}

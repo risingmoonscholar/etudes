@@ -22,16 +22,16 @@
       "tag": "sweep-v0.5.4",
       "build": "cargo build --release --locked -p sweep-cli",
       "version_output": "sweep 0.5.4",
-      "sha256": "49ccc1f9ffcb34f3f82b02f04a7de108dabfb57ba490aa739c3dcd9d89bbffe1"
+      "sha256": "ddacbde47cb8c6397d50b4352a356982b9e41e4790cfae7f578a38b7e7d9521b"
     },
     "after": {
-      "ref": "a0ea3af",
-      "rev": "a0ea3afa8d826adffe447f8b78f8c6b79e99f1a0",
-      "commit": "a0ea3af",
+      "ref": "HEAD",
+      "rev": "469f0d9221420a9664c63cf634ff4cfc2ef24af9",
+      "commit": "469f0d9",
       "tag": null,
       "build": "cargo build --release --locked -p sweep-cli",
       "version_output": "sweep 0.5.5",
-      "sha256": "4baa751954e8dd00eebf6b24ff57cbec7cceb190281b2a5d54000f37c57930d0"
+      "sha256": "5ca574983a38cef6d625bfacf945488d1c1e16c70aad4fde1493a1bb00bc06f6"
     }
   },
   "sides": {
@@ -88,13 +88,13 @@
           "command": "sweep inbox",
           "exit": 0,
           "log": "after-1.txt",
-          "sha256": "b9dce323670a55c94672f42af92f796256a555c0e4048c7c902d599991831cf2"
+          "sha256": "e69d7eff8894dc9dc986a82d4aac82489c21e53224d3ccc9a237358c3b7c0510"
         },
         {
           "command": "sweep apply inbox --yes",
           "exit": 0,
           "log": "after-2.txt",
-          "sha256": "83772db2a658b692d1568f2ff5e43081f16ddcf06f9e8cda3f364ce09c5c0ed5"
+          "sha256": "758d8c26e6e6360e5211153654734cf54686df53b50531b56dbf1982e4fffaab"
         }
       ],
       "result_files": [

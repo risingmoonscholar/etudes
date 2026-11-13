@@ -1,0 +1,52 @@
+{
+  "_about": "The test folder and commands for the unpack 0.5.5 entry. scripts/release-runs.py runs setup with /bin/sh -eu inside an empty scratch folder, once per build, then each command in that folder in order. show lists, per build, the whole lines of the output the page shows: each regular expression picks the next line it matches. result names the files listed under each side after its commands; new means only files that were not there before the commands ran. next runs on the after build only, after its commands.",
+  "folder": "photos.zip",
+  "kind": "synthetic archive",
+  "describe": "a zip archive of 3 photos, and beside it the hidden folder that an extraction stopped part way leaves behind",
+  "setup": [
+    "# photos.zip holds photo1.jpg to photo3.jpg. Beside it is the hidden folder an",
+    "# extraction into photos/ leaves when it is killed part way: one file extracted so",
+    "# far, and the lock file that names that folder by device and inode.",
+    "mkdir src",
+    "for n in 1 2 3; do printf 'photo %s\\n' \"$n\" > \"src/photo$n.jpg\"; done",
+    "(cd src && /usr/bin/zip -q ../photos.zip photo1.jpg photo2.jpg photo3.jpg)",
+    "rm -r src",
+    "id=0123456789abcdef0123456789abcdef",
+    "p=\".photos.unpack-$id.partial\"",
+    "mkdir -p \"$p/photos\"",
+    "printf 'photo 1\\n' > \"$p/photos/photo1.jpg\"",
+    "printf 'unpack staging lock v1\\n%s\\n' \"$(stat -f '%d:%i' \"$p\")\" > \"$p/.unpack-$id.lock\""
+  ],
+  "runs": [
+    {
+      "command": "unpack photos.zip",
+      "show": {
+        "before": [
+          "^  Extracted to ",
+          "^  3 entries$"
+        ],
+        "after": [
+          "^unpack: removed ",
+          "^  Extracted to ",
+          "^  3 entries$"
+        ]
+      }
+    }
+  ],
+  "result": {
+    "before": {
+      "label": "Left in the hidden folder",
+      "glob": ".photos.unpack-*/photos/*"
+    },
+    "after": {
+      "label": "Hidden folder removed",
+      "glob": ".photos.unpack-*/photos/*"
+    }
+  },
+  "next": {
+    "command": "unpack photos.zip --list",
+    "show": [
+      "entries in photos$"
+    ]
+  }
+}

@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>stash v0.5.5 candidate — locked items and checked moves · études</title>
+  <title>stash v0.5.5 — locked items and checked moves · études</title>
   <meta name="description" content="Stash 0.5.5 leaves locked items in place and says the folder is not clear, and moves each item into the folder it checked.">
-  <meta property="og:title" content="stash v0.5.5 candidate — locked items and checked moves">
+  <meta property="og:title" content="stash v0.5.5 — locked items and checked moves">
   <meta property="og:description" content="A locked item stays and the folder is not called clear; a folder swapped during a stash is refused, not followed.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/stash-custody.gif">
   <link rel="stylesheet" href="release.css">
@@ -18,8 +18,8 @@
     </header>
 
     <article>
-      <p class="release-id">stash · v0.5.5 candidate</p>
-      <h1>stash v0.5.5 candidate — locked items and checked moves</h1>
+      <p class="release-id">stash · v0.5.5</p>
+      <h1>stash v0.5.5 — locked items and checked moves</h1>
       <div class="release-copy">
         <p>Stash no longer calls a folder clear while a locked item is still in it.</p>
         <ul>
@@ -29,6 +29,13 @@
           <li>On macOS each move also takes the item from the folder that was checked. A folder swapped during the move stops the stash with <code>plan_stale</code> and nothing more is moved out of it. The Finder tag check and the locked-flag check still read by path.</li>
           <li>A move that failed after its copy to another disk landed no longer leaves that copy behind while saying nothing moved. If the copy cannot be removed, the message names it and gives the step; <code>--json</code> adds <code>details.copy_left</code>.</li>
           <li>A stash kept longer than 30 days keeps its undo record for as long as it holds anything, so <code>stash pop</code> still finds it. Before, the next sweep run deleted it. A popped stash's record expires 30 days after the pop. A record that does not open with the current key is never removed by the tools, and <code>stash status --all</code> names it as unreadable.</li>
+          <li><code>stash status</code> in a folder with nothing stashed points to a stash in another folder, and its steps now work when pasted. The path is quoted, so a name with a space, a quote or a control character stays one word. When that folder holds two or more stashes, it says how many and prints <code>stash pop FOLDER --latest</code> instead of a bare pop that refuses.</li>
+          <li><code>stash status</code> no longer prints a <code>stash pop</code> step that cannot work. A holding folder with no undo record (made with <code>--no-journal</code>, or the record is gone) is named, with a note to move the items back by hand. A stashed folder that was moved or renamed is found by device and inode: status says where the stash was made and prints <code>mv NEW OLD</code> and <code>stash pop --id ID</code>.</li>
+          <li>Two <code>stash pop</code> of one stash at the same time no longer both move the same items back. The second says a <code>stash</code> or <code>stash pop</code> is running on this stash and waits. A pop that starts while the stash itself is still moving items waits the same way, because <code>stash</code> holds its undo record from its first recorded move. If the first restored everything, the second says "Nothing to restore. Another `stash pop` restored this stash." and exits 1 with <code>nothing_to_do</code>. If the first stopped part way, the second restores the rest. This needs advisory locks on the volume that holds the undo records.</li>
+          <li><code>stash status</code> and <code>stash pop</code> no longer call a record damaged because a run is writing it. <code>stash status</code> of a stash that is still moving says a <code>stash</code> or <code>stash pop</code> is running on it now, with how many items are in its holding folder so far, and gives the step to see it again; <code>stash status --id ID --json</code> waits for that run. A pop that waited never restores a stash made after it started: it says so and restores nothing.</li>
+          <li>When a stash's holding folder is gone and files with its items' names, sizes and times are back in the folder, <code>stash status</code> says so and gives <code>stash pop --id ID</code>, which checks them against the record and says they are "already back in place". Files that only share the names are not taken for the items.</li>
+          <li>A <code>stash FOLDER</code> that loses a race with another run of the same folder now exits 2 with <code>plan_stale</code> and says "FOLDER changed just now, perhaps by another run. Nothing was moved. Run it again." Before, it exited 3 with <code>missing_input</code> and printed a <code>--export-plan NEW_PLAN_FILE</code> step that named a plan you never made.</li>
+          <li>When the newest live stashes have the same time, <code>stash pop --latest</code> moves nothing, exits 3 with <code>journal_times_tied</code> and prints <code>stash pop --id ID</code> for each one. <code>stash pop FOLDER</code> chooses by folder, so a tie no longer blocks it.</li>
           <li>A duration you typed for <code>stash --for</code> is shown as you typed it in messages, without debug quotes and backslashes.</li>
           <li><code>--progress-json</code> now covers <code>stash</code>, <code>stash select</code>, <code>stash pop</code> and <code>restore</code>. They used to refuse the flag with exit 2.</li>
           <li>An argument that is not valid UTF-8 is refused with exit 2 and <code>invalid_arguments</code>. It used to panic.</li>
@@ -47,13 +54,13 @@
 
     <section class="install" aria-labelledby="install-title">
       <h2 id="install-title">Install stash 0.5.5</h2>
-      <p>0.5.5 is a release candidate. This pin works only after the tag is published:</p>
+      <p>Install the pinned release:</p>
       <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag stash-v0.5.5 stash-cli</code></pre>
     </section>
 
     <footer class="footer">
       <a href="../demo/">All tool demos</a>
-      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Source</a>
     </footer>
   </main>
 </body>

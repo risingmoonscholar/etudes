@@ -50,6 +50,11 @@ in one of two ways, and timing decides which:
   one file and then collided. `recovery.operation` is an id that `sweep status --id` reports
   as `interrupted`. Run `sweep undo` on the folder before planning again.
 
+The refused one says "FOLDER changed just now, perhaps by another run. Nothing
+was moved. Scan and apply again." A `stash FOLDER` that loses the same race
+before it moves anything also exits 2 with `plan_stale`, and says "Run it
+again."
+
 After the part-way ending, run `sweep undo` on the folder until it says there
 is nothing left to undo. It reverses the apply that recorded the remaining
 moves first, then the stopped apply, restoring every original path and byte.
@@ -73,7 +78,13 @@ Each apply is undone separately. One `sweep undo FOLDER` reverses one apply of
 that folder: of the applies that still have something to undo, the one whose
 undo record was written last. Every undo writes its record again, so after an
 undo that stops part way, by folder or by `--id`, `sweep undo FOLDER` goes back
-to that same apply. After an undo, sweep looks at what the next `sweep undo FOLDER` will
+to that same apply. Two undos of one apply at the same time do not both move
+the files: where the state folder's volume supports advisory locks, the second
+says another `sweep apply` or `sweep undo` is working on these files and waits. If the first
+restored every file, the second says "Nothing to undo. Another `sweep undo`
+restored these files." and exits 1 with `nothing_to_do`; if the first stopped
+part way, the second restores the rest. `stash pop` does the same for two pops
+of one stash. After an undo, sweep looks at what the next `sweep undo FOLDER` will
 reach, and says so after the "Restored" line:
 
 ```console
@@ -113,6 +124,30 @@ in it. A folder needed as an origin or guard by another live journal is kept;
 unreadable history also keeps the folder. Undo reports how many empty folders
 it retained for journals. A folder with anything inside it, or one that was
 replaced, is left alone. Undo never deletes or overwrites a file.
+
+If you moved files back by hand before running `sweep undo`, undo finds them
+in place and says "N files were already back in place; the undo record now says
+so." `stash pop` says the same for items. The record cannot tell a hand move
+from an interrupted restore, so neither tool claims which one happened.
+
+A `sweep status` that runs while an apply or undo is writing the record it
+reads tries again for about a second. If the record is still changing, it says
+an apply or undo is writing that record at this moment, that it is not damaged
+and nothing was changed, and to run the same command again when that finishes.
+It still exits 3 with `journal_unreadable`, retry `after_change`. A record that
+a running `sweep apply` holds is listed as `in_progress`, with the line "sweep
+is working on this record now. These counts are what it has recorded so far."
+and no undo step. `stash status` of a stash that a running `stash` or `stash
+pop` holds says "a `stash` or `stash pop` is running on it now; so far N of M
+are in its holding folder" and gives `stash status --id ID` to see it again
+when that finishes; `stash status --id ID --json` waits for that run instead.
+A record that changes while `stash status` reads it is read again for up to 10
+seconds. Neither tool calls such a record damaged.
+
+A `sweep undo` or `stash pop` that waited for another run never acts on an
+apply or stash made after it started, such as one that finished while it
+waited. pop then says "the stash this pop would restore now was made
+after this pop started, so nothing was restored."
 
 ## Where journals live
 

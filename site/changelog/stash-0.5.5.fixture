@@ -1,0 +1,53 @@
+{
+  "_about": "The test folder and commands for the stash 0.5.5 entry. scripts/release-runs.py runs setup with /bin/sh -eu inside an empty scratch folder, once per build, then each command in that folder in order. show lists, per build, the whole lines of the output the page shows: each regular expression picks the next line it matches. result names the files listed under each side after its commands; new means only files that were not there before the commands ran. next runs on the after build only, after its commands.",
+  "folder": "my desk",
+  "describe": "a folder named my desk, with a space in its name, holding 3 small text files",
+  "setup": [
+    "# my desk: a folder whose name has a space, with 3 small text files.",
+    "mkdir 'my desk'",
+    "for n in 1 2 3; do printf 'note %s\\n' \"$n\" > \"my desk/note$n.txt\"; done",
+    "touch -t 202610010900 'my desk'/*.txt"
+  ],
+  "runs": [
+    {
+      "command": "stash 'my desk'",
+      "show": {
+        "before": [
+          "^Stashed "
+        ],
+        "after": [
+          "^Stashed "
+        ]
+      }
+    },
+    {
+      "command": "stash status",
+      "show": {
+        "before": [
+          "^Nothing stashed in ",
+          "^  Restore it with: "
+        ],
+        "after": [
+          "^Nothing stashed in ",
+          "^  Restore it with: "
+        ]
+      }
+    }
+  ],
+  "result": {
+    "before": {
+      "label": "In the holding folder",
+      "glob": "my desk/.stash-*/*"
+    },
+    "after": {
+      "label": "In the holding folder",
+      "glob": "my desk/.stash-*/*"
+    }
+  },
+  "next": {
+    "command": "stash pop 'my desk'",
+    "show": [
+      "^Restored "
+    ]
+  }
+}

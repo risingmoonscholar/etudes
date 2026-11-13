@@ -95,12 +95,12 @@
       "tag": "sweep-v0.5.4",
       "commit": "de8f307",
       "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
-      "sha256": "49ccc1f9ffcb34f3f82b02f04a7de108dabfb57ba490aa739c3dcd9d89bbffe1"
+      "sha256": "ddacbde47cb8c6397d50b4352a356982b9e41e4790cfae7f578a38b7e7d9521b"
     },
     "after": {
-      "commit": "a0ea3af",
-      "rev": "a0ea3afa8d826adffe447f8b78f8c6b79e99f1a0",
-      "sha256": "4baa751954e8dd00eebf6b24ff57cbec7cceb190281b2a5d54000f37c57930d0"
+      "commit": "469f0d9",
+      "rev": "469f0d9221420a9664c63cf634ff4cfc2ef24af9",
+      "sha256": "5ca574983a38cef6d625bfacf945488d1c1e16c70aad4fde1493a1bb00bc06f6"
     }
   },
   "runs_note": "Each ran the same commands on a fresh copy of one synthetic folder, inbox: a Documents folder with 3 PDFs, and 2 new PDFs loose next to it. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."

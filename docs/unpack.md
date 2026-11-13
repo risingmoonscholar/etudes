@@ -15,6 +15,12 @@ are accepted; links, special files, setuid/setgid modes and unreadable members
 refuse publication. The requested destination appears with one rename after
 the final audit. Failed runs remove staging; if removal fails, the diagnostic
 names the remaining staging path or explicitly says its state is unverified.
+Unpack holds the staging folder open while it works. If the destination's
+parent is moved during extraction, the staging folder moves with it; unpack
+finds it where it went, checks by device and inode that it is the same folder,
+and removes it there. A folder that took the old name is not touched. If unpack
+cannot find the staging folder again, it does not say nothing was left: it
+names the old place and the hidden folder to look for.
 
 SIGKILL itself still leaves a private folder until a later extraction into the same
 destination under the same parent. That run removes the folder only when its name is exactly

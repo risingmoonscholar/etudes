@@ -5,6 +5,11 @@ Scanned 2 items  ·  filesystem and Finder organization metadata  ·  no content
 
 Nothing has been moved.  Nothing left this machine.
 Note: this listing is in your terminal scrollback.
+sweep cannot tell if a file is still in use by a program. Check the plan before you apply it.
 Review: sweep review inbox
+        This scans again, shows each group, and moves only the groups you accept.
 Apply:  sweep apply inbox --yes
+        This scans again and moves what it finds then. That can differ from this plan.
+Save:   sweep inbox --export-plan ~/sweep.plan
+        This scans again and saves that plan to ~/sweep.plan, outside this folder. It prints the command that moves only that plan.
 Applying reads the first and last 4 KiB of each file it moves, so undo can tell if one changed.

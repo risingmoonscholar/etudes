@@ -1,0 +1,116 @@
+{
+  "_about": "One release entry in the release format, written by scripts/release-runs.py from real runs of two builds. The commands, output lines, exit codes, result files and builds come from the raw record in site/changelog/logs/; whole lines are cut to fit by the fixture, no line is edited. Only label, headline, lead, next.note and film are written by hand. Whether the release is tagged, and its date, come from git when the site is built.",
+  "tool": "stash",
+  "version": "0.5.5",
+  "label": "Fix",
+  "headline": "stash status now prints a restore step you can paste",
+  "lead": [
+    {
+      "text": "When "
+    },
+    {
+      "code": "stash status"
+    },
+    {
+      "text": " finds nothing stashed in the current folder, it points to a stash in another folder and prints the step to restore it. In 0.5.5 that step puts the path in quotes, so it works when you paste it, even when the folder name has a space. Version 0.5.4 printed the path bare. Pasted, the space split it into two words, and "
+    },
+    {
+      "code": "stash pop"
+    },
+    {
+      "text": " refused with exit code 2."
+    }
+  ],
+  "folder": "my desk",
+  "before": {
+    "build": "stash 0.5.4",
+    "runs": [
+      {
+        "command": "stash 'my desk'",
+        "output": [
+          "Stashed 3 items."
+        ],
+        "exit": 0
+      },
+      {
+        "command": "stash status",
+        "output": [
+          "Nothing stashed in <scratch>/work.",
+          "  Restore it with: stash pop <scratch>/work/my desk"
+        ],
+        "exit": 1
+      }
+    ],
+    "result": {
+      "label": "In the holding folder",
+      "files": [
+        "note1.txt",
+        "note2.txt",
+        "note3.txt"
+      ]
+    },
+    "exit": 0
+  },
+  "after": {
+    "build": "stash 0.5.5",
+    "runs": [
+      {
+        "command": "stash 'my desk'",
+        "output": [
+          "Stashed 3 items."
+        ],
+        "exit": 0
+      },
+      {
+        "command": "stash status",
+        "output": [
+          "Nothing stashed in <scratch>/work.",
+          "  Restore it with: stash pop '<scratch>/work/my desk'"
+        ],
+        "exit": 1
+      }
+    ],
+    "result": {
+      "label": "In the holding folder",
+      "files": [
+        "note1.txt",
+        "note2.txt",
+        "note3.txt"
+      ]
+    },
+    "exit": 0
+  },
+  "next": {
+    "note": [
+      {
+        "text": "No flag needed. You can also restore by folder name: run "
+      },
+      {
+        "code": "stash pop 'my desk'"
+      },
+      {
+        "text": "."
+      }
+    ],
+    "command": "stash pop 'my desk'",
+    "output": [
+      "Restored 3 items."
+    ],
+    "exit": 0
+  },
+  "builds": {
+    "before": {
+      "name": "tag stash-v0.5.4",
+      "tag": "stash-v0.5.4",
+      "commit": "de8f307",
+      "rev": "de8f307358a1304d4de1599fe0b1be3088731459",
+      "sha256": "4da97b041eaec523edb8a04622b8e8bac911b62cf217b296a07acc00cd2b107a"
+    },
+    "after": {
+      "commit": "dd3b0f6",
+      "rev": "dd3b0f67e29a19dc59760c6a927cdf51599a2825",
+      "sha256": "7161c0519e267e7be95610b662fbbb93b72a13788d00f4682574b2238e2821c7"
+    }
+  },
+  "runs_note": "Each ran the same commands on a fresh copy of one synthetic folder, my desk: a folder named my desk, with a space in its name, holding 3 small text files. Output is shortened to fit by cutting whole lines. Every command ran in a sandbox that let it write only inside its scratch folder and could not run /usr/bin/security."
+}
