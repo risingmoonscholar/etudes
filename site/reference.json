@@ -1,0 +1,161 @@
+{
+  "_about": "The command reference: one page per tool, at docs/reference/<tool>/. Nothing here restates the tool. Each command names its help entries by their opening words, and the page shows those entries as the tool prints them, from that tool's captured help in site/transcripts.json. An entry belongs to the claim that matches the most of its opening words. Every entry in the help's USAGE and FLAGS blocks must belong to exactly one claim, and every claim must win an entry, so a new command or flag in the help stops the build until it has a place here. operations names the capability-contract operations the command runs; the page lists their refusal codes and their reads and writes from the newest docs/contracts/v<N>/<tool>.json, and every operation in that contract must belong to a command. says is the one sentence written here.",
+  "tools": [
+    {
+      "tool": "sweep",
+      "help": "sweep-help",
+      "common": ["--json", "--progress-json", "--quiet", "--version"],
+      "commands": [
+        {
+          "title": "Plan",
+          "says": "Scans a folder and shows the plan. Nothing moves.",
+          "claims": ["sweep [PATH] [FLAGS]", "--depth N", "--since N[h|d]", "--scheme folders", "--scheme existing",
+                     "--map EXT=Folder", "--explain", "--allow-sync", "--include-tagged", "--inspect-content"],
+          "operations": ["scan", "scan_with_inspect_content"]
+        },
+        {
+          "title": "Review",
+          "says": "Walks each group in a terminal, so you can rename or skip it, then applies.",
+          "claims": ["sweep review PATH"],
+          "operations": ["review"]
+        },
+        {
+          "title": "Apply",
+          "says": "Scans again and moves every group it finds then.",
+          "claims": ["sweep apply PATH --yes", "sweep apply PATH --only NAME", "--save-routes", "--no-journal"],
+          "operations": ["apply"]
+        },
+        {
+          "title": "Saved plans",
+          "says": "Saves a plan to a file, then moves exactly that plan.",
+          "claims": ["sweep PATH --export-plan F", "sweep apply --plan F --plan-digest SHA --yes",
+                     "--export-plan F", "apply --plan F --plan-digest SHA --yes"],
+          "operations": ["export_plan", "apply_exported_plan"]
+        },
+        {
+          "title": "Finder tags",
+          "says": "Plans Finder tags to add, by extension. Nothing moves.",
+          "claims": ["sweep PATH --scheme tags --map EXT=TAG --export-plan F", "--scheme tags", "--map EXT=TAG"],
+          "operations": ["export_plan", "apply_exported_plan"]
+        },
+        {
+          "title": "Propose",
+          "says": "Checks per-file folder decisions against a saved plan and writes a new plan.",
+          "claims": ["sweep propose --plan F --plan-digest SHA --proposal P --export-plan OUT", "--proposal P"],
+          "operations": ["propose"]
+        },
+        {
+          "title": "Undo",
+          "says": "Moves the files of one apply back.",
+          "claims": ["sweep undo [PATH]", "sweep undo --id ID"],
+          "operations": ["undo"]
+        },
+        {
+          "title": "Status",
+          "says": "Reports undo records as JSON.",
+          "claims": ["sweep status --id ID --json", "sweep status PATH --json"],
+          "operations": ["status"]
+        },
+        {
+          "title": "Forget",
+          "says": "Removes sweep's undo records.",
+          "claims": ["sweep forget"],
+          "operations": ["forget"]
+        },
+        {
+          "title": "Verify",
+          "says": "Prints sweep's own privacy posture.",
+          "claims": ["sweep verify"],
+          "operations": ["verify"]
+        },
+        {
+          "title": "Contract",
+          "says": "Prints the versioned capability contract as JSON. It reads no application files and changes no application state.",
+          "claims": ["sweep contract --json"],
+          "operations": []
+        },
+        {
+          "title": "Lesson",
+          "says": "Runs seven exercises against a folder you can throw away.",
+          "claims": ["sweep lesson [N]"],
+          "operations": ["lesson"]
+        }
+      ]
+    },
+    {
+      "tool": "stash",
+      "help": "stash-help",
+      "common": ["--json", "--progress-json", "--version", "stash help"],
+      "commands": [
+        {
+          "title": "Stash a folder",
+          "says": "Moves the folder's visible items into a hidden holding folder in the same folder.",
+          "claims": ["stash [PATH] [--for DURATION]", "--no-journal", "--allow-home"],
+          "operations": ["stash"]
+        },
+        {
+          "title": "Select",
+          "says": "Stashes only the items you name.",
+          "claims": ["stash select PATH...", "stash select --from0 FILE|-", "--into FOLDER"],
+          "operations": ["select"]
+        },
+        {
+          "title": "Saved plans",
+          "says": "Saves a plan to a file, then stashes exactly that plan.",
+          "claims": ["--export-plan FILE", "--plan FILE --plan-digest SHA"],
+          "operations": ["export_plan", "apply_exported_plan"]
+        },
+        {
+          "title": "Pop",
+          "says": "Moves stashed items back where they were.",
+          "claims": ["stash pop --id ID", "stash pop --id ID --item ITEM", "stash pop ID", "stash pop [PATH]",
+                     "stash pop [PATH] --latest", "stash pop [PATH] --if-due"],
+          "operations": ["pop"]
+        },
+        {
+          "title": "Status",
+          "says": "Shows what is stashed, and when it is due back.",
+          "claims": ["stash status [PATH]", "stash status --all"],
+          "operations": ["status", "status_all"]
+        },
+        {
+          "title": "Inspect",
+          "says": "Lists the item ids of one stash and what it still holds.",
+          "claims": ["stash inspect --id ID"],
+          "operations": ["inspect"]
+        },
+        {
+          "title": "Contract",
+          "says": "Prints the versioned capability contract as JSON. It reads no application files and changes no application state.",
+          "claims": ["stash contract --json"],
+          "operations": []
+        }
+      ]
+    },
+    {
+      "tool": "unpack",
+      "help": "unpack-help",
+      "common": ["--json", "--progress-json", "--version", "unpack help"],
+      "commands": [
+        {
+          "title": "Extract",
+          "says": "Opens an archive into one new folder, or places nothing.",
+          "claims": ["unpack ARCHIVE [--into DIR]", "--max-size N[G|M]"],
+          "operations": ["extract"]
+        },
+        {
+          "title": "List",
+          "says": "Shows what an archive holds. Nothing is placed.",
+          "claims": ["unpack ARCHIVE --list"],
+          "operations": ["list"]
+        },
+        {
+          "title": "Contract",
+          "says": "Prints the versioned capability contract as JSON. It reads no application files and changes no application state.",
+          "claims": ["unpack contract --json"],
+          "operations": []
+        }
+      ]
+    }
+  ]
+}

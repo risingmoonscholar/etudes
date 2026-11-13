@@ -63,7 +63,7 @@ CHANGELOG_FILE_URL = BLOB_URL + "CHANGELOG.md"
 # folder from someone else's before it deletes anything.
 GENERATOR = '<meta name="generator" content="scripts/build-site.py">'
 # Read by the build, not by any page.
-BUILD_ONLY = ("tools.json", "docs.json", ".DS_Store")
+BUILD_ONLY = ("tools.json", "docs.json", "reference.json", ".DS_Store")
 # Folders under site/ the build reads and does not publish as they are.
 BUILD_ONLY_DIRS = ("changelog",)
 SCHEMES = ("http", "https", "mailto")
@@ -104,10 +104,19 @@ def public_pages():
                       "tool": True, "description": tool["description"]})
     for section in sections:
         for page in section.get("pages", []):
+            if "reference" in page:
+                # A generated command reference: no Markdown source.
+                pages.append({"source": None, "reference": page["reference"], "title": page["title"],
+                              "group": section["title"], "tool": False,
+                              "slug": f"reference/{page['reference']}",
+                              "dir": f"docs/reference/{page['reference']}"})
+                continue
             pages.append({"source": page["source"], "title": page["title"],
                           "group": section["title"], "tool": False})
-    seen = set()
+    seen = {p["slug"] for p in pages if p["source"] is None}
     for page in pages:
+        if page["source"] is None:
+            continue
         if not (ROOT / page["source"]).is_file():
             raise BuildError(f"public doc {page['source']} does not exist")
         page["slug"] = slug_for(page["source"])
@@ -128,7 +137,7 @@ def rel_dir(from_dir, to_dir):
 
 class Linker:
     def __init__(self, pages):
-        self.by_source = {p["source"]: p for p in pages}
+        self.by_source = {p["source"]: p for p in pages if p["source"]}
 
     def repo_path(self, source, target):
         """The repo path a relative link names, or None for a scheme or anchor."""
@@ -1218,6 +1227,230 @@ def build_index(pages):
                   page_dir="docs", pages=pages, content=content, headings=headings)
 
 
+# --- command reference ------------------------------------------------------
+
+# One page per tool, at docs/reference/<tool>/, built from three sources and
+# no hand-written copy of the tool. The usage and flag text is the tool's own
+# help, captured in site/transcripts.json and reproduced in CI by
+# check-transcripts-reproduce.sh. The refusal codes, reads and writes come from
+# the newest docs/contracts/v<N>/<tool>.json, which check-tool-contracts.py
+# holds to the binary. site/reference.json only groups entries into commands
+# and adds one sentence each. A help entry or contract operation with no place
+# in site/reference.json stops the build, so the page cannot leave one out.
+
+HELP_BLOCKS = ("USAGE", "FLAGS")
+
+EXIT_CODES = [
+    ("0", "done", "The whole request was done."),
+    ("1", "nothing to do", "There was nothing to do."),
+    ("2", "refused", "A safety rule stopped the request. The reason code says which."),
+    ("3", "error", "Something failed. The reason code says what."),
+]
+
+
+def help_entries(text):
+    """[(block, first line, entry text)] for each entry in the USAGE and FLAGS blocks.
+
+    A block starts at a heading line with no indent. An entry starts at a line
+    indented by exactly four spaces; deeper lines continue it."""
+    entries, block = [], None
+    for line in text.splitlines():
+        if not line.strip():
+            block = None
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            block = line.strip() if line.strip() in HELP_BLOCKS else None
+            continue
+        if block is None:
+            continue
+        if indent == 4:
+            entries.append([block, line[4:], line[4:]])
+        elif entries and entries[-1][0] == block:
+            entries[-1][2] += "\n" + line[4:]
+        else:
+            raise BuildError(f"captured help: a {block} line continues no entry: {line.strip()!r}")
+    return [tuple(e) for e in entries]
+
+
+def split_entry(claim, body):
+    """(usage, description) of one help entry, both in the tool's own words.
+
+    The usage runs to the first gap of two or more spaces at or after the end
+    of the claim; with no such gap, the claim is the usage. The rest of the
+    first line and every continuation line are the description, one line each."""
+    first, _, rest = body.partition("\n")
+    gap = re.compile(r" {2,}").search(first, len(claim))
+    if gap:
+        usage, says = first[:gap.start()], first[gap.end():]
+    else:
+        usage, says = claim, first[len(claim):]
+    lines = [says.strip()] + [line.strip() for line in rest.splitlines()]
+    return usage.strip(), [line for line in lines if line]
+
+
+def claim_matches(claim, first_line):
+    return first_line == claim or (first_line.startswith(claim) and first_line[len(claim)].isspace())
+
+
+def assign_entries(tool, entries, claims):
+    """{claim: [entry text]}; each entry goes to the claim matching most of it.
+
+    The claim must be the entry's whole usage, so a new variant of a command
+    (a longer usage line) cannot hide under the shorter claim it starts with."""
+    won = {claim: [] for claim in claims}
+    for block, first, body in entries:
+        matching = [c for c in claims if claim_matches(c, first)]
+        if not matching:
+            raise BuildError(f"site/reference.json: {tool}: the help entry {first.strip()!r} "
+                             f"({block}) belongs to no command; add it to a command's claims")
+        claim = max(matching, key=len)
+        usage = split_entry(claim, body)[0]
+        if usage != claim:
+            raise BuildError(f"site/reference.json: {tool}: the help entry {usage!r} ({block}) is longer "
+                             f"than the claim {claim!r}; claim it in full")
+        won[claim].append(body)
+    dead = [c for c, bodies in won.items() if not bodies]
+    if dead:
+        raise BuildError(f"site/reference.json: {tool}: {dead[0]!r} names no entry of the captured help")
+    return won
+
+
+def latest_contract(tool):
+    """(schema version, details) of the newest docs/contracts/v<N>/<tool>.json."""
+    found = []
+    for path in (ROOT / "docs" / "contracts").glob(f"v*/{tool}.json"):
+        m = re.fullmatch(r"v(\d+)", path.parent.name)
+        if m:
+            found.append((int(m.group(1)), path))
+    if not found:
+        raise BuildError(f"no docs/contracts/v<N>/{tool}.json for the {tool} reference")
+    version, path = max(found)
+    details = json.loads(path.read_text(encoding="utf-8"))["details"]
+    if details.get("schema_version") != version or details.get("tool") != tool:
+        raise BuildError(f"{path.relative_to(ROOT)} does not declare {tool} schema {version}")
+    return version, path.relative_to(ROOT).as_posix(), details
+
+
+def reference_data(tool_name):
+    tools = {t["tool"]: t for t in load_json("reference.json").get("tools", [])}
+    if tool_name not in tools:
+        raise BuildError(f"site/docs.json names a {tool_name} reference that site/reference.json does not have")
+    return tools[tool_name]
+
+
+def build_reference(tool_name, pages):
+    data = reference_data(tool_name)
+    captured = {t["label"]: t for t in load_json("transcripts.json").get("transcripts", [])}
+    meta = load_json("transcripts.json")
+    help_capture = captured.get(data["help"])
+    if help_capture is None:
+        raise BuildError(f"site/reference.json: {tool_name}: no captured help {data['help']!r}")
+    version = meta.get("versions", {}).get(tool_name)
+    if not version:
+        raise BuildError(f"site/transcripts.json does not say which {tool_name} version it captured")
+
+    commands = data.get("commands", [])
+    claims = list(data.get("common", []))
+    for command in commands:
+        claims += command["claims"]
+    duplicate = next((c for c in claims if claims.count(c) > 1), None)
+    if duplicate:
+        raise BuildError(f"site/reference.json: {tool_name}: {duplicate!r} is claimed twice")
+    entries = help_entries(help_capture["output"])
+    won = assign_entries(tool_name, entries, claims)
+
+    schema, contract_path, contract = latest_contract(tool_name)
+    codes = contract.get("refusal_codes", [])
+    scopes = {op["operation"]: op for op in contract.get("mutation_scope", {}).get("operations", [])}
+    known = set(scopes) | {o for c in codes for o in c["operations"]}
+    used = set()
+    for command in commands:
+        for op in command["operations"]:
+            if op not in known:
+                raise BuildError(f"site/reference.json: {tool_name}: {command['title']}: {contract_path} "
+                                 f"has no operation {op!r}")
+            used.add(op)
+    missing = sorted(known - used)
+    if missing:
+        raise BuildError(f"site/reference.json: {tool_name}: no command runs the {contract_path} "
+                         f"operation {missing[0]!r}")
+
+    page_dir = f"docs/reference/{tool_name}"
+    contract_url = BLOB_URL + contract_path
+    domains_url = BLOB_URL + "docs/contracts/README.md"
+    ids = Ids()
+    title_id = ids.make(f"{tool_name} reference")
+    headings, parts = [], []
+
+    def section(title, body):
+        hid = ids.make(title)
+        headings.append((2, hid, esc(title)))
+        parts.append(f'<section class="ref-cmd" aria-labelledby="{hid}">'
+                     f'<h2 id="{hid}"><a class="anchor" href="#{hid}">{esc(title)}</a></h2>{body}</section>')
+
+    def help_block(claim_list):
+        order = [e[2] for e in entries]
+        rows = sorted(((c, b) for c in claim_list for b in won[c]), key=lambda cb: order.index(cb[1]))
+        cells = "".join(f'<tr><td><code>{" ".join(f"<span>{esc(w)}</span>" for w in usage.split())}</code></td><td>{"<br>".join(esc(line) for line in says)}</td></tr>'
+                        for usage, says in (split_entry(c, b) for c, b in rows))
+        return ('<div class="table-wrap"><table class="ref-usage"><thead><tr><th>Usage</th>'
+                f'<th>What the help says</th></tr></thead><tbody>{cells}</tbody></table></div>')
+
+    def code_list(names):
+        return ", ".join(f"<code>{esc(n)}</code>" for n in names) if names else "nothing"
+
+    exit_rows = "".join(f"<tr><td><code>{c}</code></td><td>{esc(s)}</td><td>{esc(m)}</td></tr>"
+                        for c, s, m in EXIT_CODES)
+    section("Exit codes",
+            '<p>Every command of every tool uses the same exit codes. With <code>--json</code>, '
+            'the result also carries a reason code, listed under each command below.</p>'
+            f'<div class="table-wrap"><table><thead><tr><th>Exit</th><th>Status</th><th>Meaning</th></tr></thead>'
+            f'<tbody>{exit_rows}</tbody></table></div>')
+    if data.get("common"):
+        section("Flags for every command", help_block(data["common"]))
+
+    for command in commands:
+        body = f'<p>{code_text(command["says"])}</p>' + help_block(command["claims"])
+        ops = command["operations"]
+        if ops:
+            access = "".join(
+                f'<li><span class="ref-name"><code>{esc(op)}</code></span>'
+                f'<p>Reads {code_list(scopes[op]["reads"])}.</p>'
+                f'<p>Writes {code_list(scopes[op]["writes"])}.</p></li>'
+                for op in ops if op in scopes)
+            if access:
+                body += ('<h3>Reads and writes</h3>'
+                         f'<p>From the contract. The <a href="{domains_url}">contract specification</a> '
+                         f'explains each name.</p><ul class="ref-list">{access}</ul>')
+            mine = [c for c in codes if set(c["operations"]) & set(ops)]
+            if mine:
+                items = "".join(
+                    f'<li><span class="ref-name"><code>{esc(c["code"])}</code></span> '
+                    f'<span class="ref-retry">retry: <code>{esc(c["retry"])}</code></span>'
+                    f'<p>{esc(c["why"])}</p></li>' for c in mine)
+                body += f'<h3>Reason codes</h3><ul class="ref-list">{items}</ul>'
+        section(command["title"], body)
+
+    section("Full help text",
+            f'<p>What <code>{esc(help_capture["command"])}</code> prints, in full.</p>'
+            f'<pre class="ref-help"><code>{html.escape(help_capture["output"].rstrip(), quote=False)}</code></pre>')
+
+    lead = (f'<p class="lead">Every command and flag of <code>{esc(tool_name)}</code> {esc(version)}. '
+            f'The usage and flag text is the help that {esc(tool_name)} {esc(version)} prints. '
+            f'The reason codes, reads and writes come from its capability contract, schema {schema}. '
+            'CI checks both against the tool.</p>')
+    foot = (f'<p class="pagefoot">This page is built from <a href="{BLOB_URL}site/reference.json">'
+            f'<code>site/reference.json</code></a>, the help captured in '
+            f'<a href="{BLOB_URL}site/transcripts.json"><code>site/transcripts.json</code></a> and '
+            f'<a href="{contract_url}"><code>{esc(contract_path)}</code></a>.</p>')
+    content = (f'<h1 id="{title_id}"><code>{esc(tool_name)}</code> reference</h1>\n{lead}\n'
+               + "\n".join(parts) + "\n" + foot)
+    return layout(title=f"{tool_name} reference",
+                  description=f"Every command, flag and reason code of {tool_name} {version}.",
+                  page_dir=page_dir, pages=pages, content=content, headings=headings)
+
+
 # --- changelog --------------------------------------------------------------
 
 # /changelog/ lists every entry, newest first, then the release pages that have
@@ -1331,7 +1564,8 @@ def prepare_out(out):
 def build(out):
     pages = public_pages()
     linker = Linker(pages)
-    rendered = {page["dir"]: build_doc(page, pages, linker) for page in pages}
+    rendered = {page["dir"]: build_reference(page["reference"], pages) if page["source"] is None
+                else build_doc(page, pages, linker) for page in pages}
     rendered["docs"] = build_index(pages)
     rendered[""] = build_home(pages)
     entries = changelog_entries()
