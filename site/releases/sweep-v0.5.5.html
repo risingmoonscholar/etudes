@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sweep v0.5.5 candidate — remembered routes and checked moves · études</title>
+  <title>sweep v0.5.5 — remembered routes and checked moves · études</title>
   <meta name="description" content="Sweep 0.5.5 can remember --map routes, moves any number of files into a saved route or a folder that is already there, and moves each file from and into the folders it checked.">
-  <meta property="og:title" content="sweep v0.5.5 candidate — remembered routes and checked moves">
+  <meta property="og:title" content="sweep v0.5.5 — remembered routes and checked moves">
   <meta property="og:description" content="Save a validated route after a complete apply; a folder swapped during apply is refused, not followed.">
   <meta property="og:image" content="https://risingmoonscholar.github.io/etudes/gifs/sweep-progress.gif">
   <link rel="stylesheet" href="release.css">
@@ -18,8 +18,8 @@
     </header>
 
     <article>
-      <p class="release-id">sweep · v0.5.5 candidate</p>
-      <h1>sweep v0.5.5 candidate — remembered routes and checked moves</h1>
+      <p class="release-id">sweep · v0.5.5</p>
+      <h1>sweep v0.5.5 — remembered routes and checked moves</h1>
       <div class="release-copy">
         <p>Sweep can now remember a route you chose, and each move takes the file from the folder it checked and puts it into the folder it checked.</p>
         <p><strong>Two limits to know.</strong> <code>sweep apply FOLDER --yes</code> scans the folder again and moves what it finds then. It does not apply the plan you previewed, and it can move different files if the folder changed. To apply exactly what you previewed, save the plan with <code>sweep FOLDER --export-plan FILE</code> and run the <code>sweep apply --plan FILE --plan-digest SHA --yes</code> line it prints; that apply refuses if anything changed. And a file's age does not prove that no program is using it: the one-day guard (<code>--since</code>, default <code>1d</code>) only skips files changed in the last day. Check the plan before you apply it.</p>
@@ -67,13 +67,13 @@
 
     <section class="install" aria-labelledby="install-title">
       <h2 id="install-title">Install sweep 0.5.5</h2>
-      <p>0.5.5 is a release candidate. This pin works only after the tag is published:</p>
+      <p>Install the pinned release:</p>
       <pre><code>cargo install --locked --git https://github.com/risingmoonscholar/etudes --tag sweep-v0.5.5 sweep-cli</code></pre>
     </section>
 
     <footer class="footer">
       <a href="../demo/">All tool demos</a>
-      <a href="https://github.com/risingmoonscholar/etudes">Candidate source</a>
+      <a href="https://github.com/risingmoonscholar/etudes">Source</a>
     </footer>
   </main>
 </body>

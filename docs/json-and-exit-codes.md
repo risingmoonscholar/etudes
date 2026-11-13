@@ -76,6 +76,15 @@ the command again), and `journal_write_failed` means one cannot be saved.
 the same time, so the tool cannot tell which one is newer and guesses nothing;
 `details.same_time_records` lists each tied id with the `--id` step that opens
 only that record. See [records with the same time](undo-and-journals.md#records-with-the-same-time).
+**Waits with no time limit (0.5.5).** `sweep undo`, `stash pop` and
+`stash status --id ID --json` wait while another run holds the same undo
+record, and the wait has no time limit. A script that must not block should run these
+commands with its own timeout.
+
+`stash status --id ID --json` gives `"resume_or_undo": null` when `stash pop`
+cannot restore the stash from where its record says. Before 0.5.5 the key
+always held a `stash pop --id ID` step.
+
 `sweep status` reports a record's state as `refused`, `completed`, `interrupted`,
 `reversed`, `partly_reversed` or, while an apply is still running on it,
 `in_progress` (with `damaged` false and `command` null); sweep declaration 18
