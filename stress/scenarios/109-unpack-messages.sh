@@ -230,6 +230,20 @@ say "--max-size 1 --into" 2 refused size_limit_exceeded "the limit is 1 byte," -
 has "--max-size --into: the step keeps --into" "$LAST" "--into '$W/kept' --max-size SIZE"
 leftovers "size limit"
 
+# --- an --into name with control characters ---------------------------------
+# The success line names the folder. A name typed with ESC or a bell must not
+# reach the terminal raw, where it can recolour or rewrite what follows.
+ESCDIR="$W/esc$(printf '\033')[31mred$(printf '\a')"
+OUT=$("$UNPACK" "$A/good.zip" --into "$ESCDIR" 2>&1); rc=$?
+assert_eq 0 "$rc" "--into with ESC: exit"
+case "$OUT" in
+  *$'\033'* | *$'\a'*) fail "--into with ESC: a raw control character reached the output" ;;
+  *) pass "--into with ESC: no raw control character in the output" ;;
+esac
+has "--into with ESC: names the folder" "$OUT" "Extracted to $W/esc?[31mred?/"
+if [ -f "$ESCDIR/p.txt" ]; then pass "--into with ESC: extracted there"; else fail "--into with ESC: nothing extracted"; fi
+rm -rf "$ESCDIR"
+
 # --- options and their values (rows 98, 99, 100) --------------------------------
 OPTIONS='unknown option --frob. It handles --list, --json, --progress-json, --into DIR and --max-size SIZE. Run `unpack help`.'
 say "--frob after" 2 refused unknown_option "$OPTIONS" -- "$A/good.zip" --frob

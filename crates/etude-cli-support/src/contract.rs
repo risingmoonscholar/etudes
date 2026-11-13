@@ -509,7 +509,7 @@ pub fn declaration(
         fields.push(("status_lookup", j::obj(&[
             ("support", j::str("read_only")),
             ("queries", strings(&["status --id OPERATION", "status PATH"])),
-            ("states", strings(&["refused", "completed", "interrupted", "reversed", "partly_reversed"])),
+            ("states", strings(&["refused", "completed", "interrupted", "reversed", "partly_reversed", "in_progress"])),
             ("counts", strings(&["planned", "moved", "reversed", "not_as_left"])),
             ("damaged", j::str("true_when_the_record_lost_entries_so_its_counts_may_be_low")),
             ("folder", j::str("the_folder_the_apply_was_made_in;_the_folder_undo_--id_touches;_control_characters_shown_as_?_in_text_and_json")),
@@ -518,6 +518,7 @@ pub fn declaration(
             ("disclosure", j::str("path_query_returns_newest_first_without_file_names")),
             ("command", j::str("undo_by_that_row's_id;_null_when_nothing_is_left_to_reverse")),
             ("same_time", j::str("records_with_the_same_modification_time_are_still_listed;_each_such_row_adds_same_time_as_with_the_other_ids;_absent_otherwise;_their_order_is_by_id_and_says_nothing_about_which_is_newer")),
+            ("in_progress", j::str("a_record_another_sweep_holds_an_advisory_lock_on_now;_an_apply_holds_its_own_record_from_its_first_recorded_move_until_it_returns;_counts_are_what_it_has_recorded_so_far;_damaged_false;_command_null;_without_advisory_locks_the_state_is_read_from_the_record_as_before")),
         ])));
         fields.push(("undo_lookup", j::obj(&[
             ("queries", strings(&["undo", "undo PATH", "undo --id OPERATION"])),

@@ -42,6 +42,9 @@ fn main() -> ExitCode {
     if args.first().is_some_and(|arg| arg == "--watch-apply") {
         return watch_apply(&args);
     }
+    if args.first().is_some_and(|arg| arg == "--watch-apply-saved") {
+        return watch_apply_saved(&args);
+    }
     // A decrypted journal is the full pathname history of everything the
     // tools ever moved. That answers only to a person at a terminal, for the
     // same reason stash's --paths does: the reach of the read is the whole
@@ -352,6 +355,102 @@ fn watch_apply(args: &[String]) -> ExitCode {
         std::thread::sleep(Duration::from_millis(1));
     }
     eprintln!("journal-dump: no stopped apply with a pending target; injection unproven");
+    ExitCode::from(1)
+}
+
+/// Stop an apply after its journal is saved and before its first move, for a
+/// contender to act in that window. The journal file appears only when its
+/// bytes are complete (written to a temp name, then renamed), and the save
+/// then syncs the folder, so the apply is stopped inside that sync or soon
+/// after. Under the confirmed stop the journal is reloaded: it must be for the
+/// trial root, hold no move, and every source must still be in place.
+/// Anything else resumes the apply and reports the window as missed.
+fn watch_apply_saved(args: &[String]) -> ExitCode {
+    if !(4..=5).contains(&args.len()) {
+        eprintln!("usage: journal-dump --watch-apply-saved <state-dir> <root> <pid> [sweep|stash]");
+        return ExitCode::from(2);
+    }
+    let Ok(pid) = args[3].parse::<i32>() else {
+        return ExitCode::from(2);
+    };
+    if pid <= 0 {
+        return ExitCode::from(2);
+    }
+    let tool = args.get(4).map_or("sweep", String::as_str);
+    if tool != "sweep" && tool != "stash" {
+        eprintln!("journal-dump: the tool must be sweep or stash");
+        return ExitCode::from(2);
+    }
+    let prefix = format!("{tool}-");
+    let state_dir = Path::new(&args[1]);
+    let Ok(root) = std::fs::canonicalize(&args[2]) else {
+        eprintln!("journal-dump: trial root unavailable; injection unproven");
+        return ExitCode::from(1);
+    };
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", state_dir) };
+    let Ok(key) = etude_keep::key() else {
+        eprintln!("journal-dump: apply journal key unavailable; injection unproven");
+        return ExitCode::from(1);
+    };
+    let sealer = KeychainSeal { key };
+    let journal_ids = || -> Vec<String> {
+        std::fs::read_dir(state_dir)
+            .map(|files| {
+                files
+                    .flatten()
+                    .filter_map(|file| {
+                        file.file_name()
+                            .to_str()
+                            .and_then(|s| s.strip_prefix(prefix.as_str()))
+                            .and_then(|s| s.strip_suffix(".journal"))
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // Records already there belong to earlier runs, not to this apply.
+    let earlier = journal_ids();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        // No ps(1) here: it takes milliseconds, longer than the window. An
+        // apply that has exited fails kill(pid, 0), or, as a zombie, fails
+        // the confirmed stop below.
+        if !signal_process(pid, 0) {
+            break;
+        }
+        let Some(id) = journal_ids().into_iter().find(|id| !earlier.contains(id)) else {
+            std::thread::sleep(Duration::from_micros(50));
+            continue;
+        };
+        let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
+            break;
+        };
+        let Ok(paused) = etude_core::Journal::load_sealed_exact(tool, &id, &sealer) else {
+            eprintln!(
+                "journal-dump: the new journal did not load while stopped; injection unproven"
+            );
+            return ExitCode::from(1);
+        };
+        let moved = paused.entries.iter().filter(|e| e.is_moved()).count();
+        let pending = !paused.entries.is_empty()
+            && paused.entries.iter().all(|entry| {
+                entry.state == etude_core::journal::EntryState::Planned
+                    && entry.from.is_file()
+                    && !entry.to.exists()
+            });
+        if paused.root == root && moved == 0 && !paused.progress_tail_damaged && pending {
+            // The caller owns resume from this point.
+            stopped.resume_on_drop = false;
+            println!("{moved} {}", paused.entries.len());
+            return ExitCode::SUCCESS;
+        }
+        eprintln!(
+            "journal-dump: apply was not stopped before its first move ({moved} moved); injection unproven"
+        );
+        return ExitCode::from(1);
+    }
+    eprintln!("journal-dump: no stopped apply with a saved journal; injection unproven");
     ExitCode::from(1)
 }
 
