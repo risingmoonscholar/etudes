@@ -1316,6 +1316,49 @@ def assign_entries(tool, entries, claims):
     return won
 
 
+def json_type(value, numbers=()):
+    if isinstance(value, str) and value in numbers:
+        return "number"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "object"
+
+
+def json_sample(value, limit=60):
+    """A short, true description of one captured value."""
+    if isinstance(value, list):
+        return f"{len(value)} item" + ("" if len(value) == 1 else "s")
+    if isinstance(value, dict):
+        keys = ", ".join(value)
+        return "keys " + (keys if len(keys) <= limit else keys[:limit].rsplit(", ", 1)[0] + ", …")
+    text = json.dumps(value, ensure_ascii=False)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def json_example(tool, label, captured):
+    """(capture, parsed result) of one --json capture named in site/reference.json."""
+    run = captured.get(label)
+    if run is None:
+        raise BuildError(f"site/reference.json: {tool}: no captured run {label!r} in site/transcripts.json")
+    if not label.endswith("-json") or not run["command"].startswith(tool + " ") or "--json" not in run["command"].split():
+        raise BuildError(f"site/reference.json: {tool}: {label!r} is not a {tool} --json capture")
+    try:
+        result = json.loads(run["output"])
+    except json.JSONDecodeError as error:
+        raise BuildError(f"site/transcripts.json: {label} is not one JSON document: {error}") from error
+    if not isinstance(result, dict) or not isinstance(result.get("details"), dict):
+        raise BuildError(f"site/transcripts.json: {label} has no details object")
+    return run, result
+
+
 def latest_contract(tool):
     """(schema version, details) of the newest docs/contracts/v<N>/<tool>.json."""
     found = []
@@ -1410,8 +1453,45 @@ def build_reference(tool_name, pages):
     if data.get("common"):
         section("Flags for every command", help_block(data["common"]))
 
+    examples = {label: json_example(tool_name, label, captured)
+                for command in commands for label in command.get("examples", [])}
+    envelopes = {tuple(k for k in result if k != "details") for _, result in examples.values()}
+    if len(envelopes) > 1:
+        raise BuildError(f"site/transcripts.json: the {tool_name} --json captures do not share one envelope")
+
+    numbers = meta.get("number_placeholders", [])
+
+    def json_block(label):
+        run, result = examples[label]
+        rows = "".join(
+            f'<tr><td><code>{esc(key)}</code></td><td>{json_type(value, numbers)}</td>'
+            f'<td><code>{esc(json_sample(value))}</code></td></tr>'
+            for key, value in result["details"].items())
+        pretty = json.dumps(result, indent=2, ensure_ascii=False)
+        return ('<h3>JSON output</h3>'
+                f'<p>Captured from <code>{esc(run["command"])}</code>, exit {int(run["exit"])}, '
+                'on the synthetic fixture. These are the keys under <code>details</code>.</p>'
+                '<div class="table-wrap"><table class="ref-json"><thead><tr><th>Key</th><th>Type</th>'
+                f'<th>Captured value</th></tr></thead><tbody>{rows}</tbody></table></div>'
+                f'<details class="ref-full"><summary>The full captured result</summary>'
+                f'<pre><code>{html.escape(pretty, quote=False)}</code></pre></details>')
+
+    if examples:
+        keys = next(iter(envelopes))
+        section("The JSON result",
+                '<p>With <code>--json</code>, every command prints one JSON document on stdout. '
+                'Every result has the same top-level keys:</p>'
+                f'<p>{code_list(list(keys) + ["details"])}.</p>'
+                '<p>The keys under <code>details</code> depend on the command. Each command below '
+                'shows them from a captured run. Values that change on every run are shown as '
+                'placeholders such as <code>&lt;record-id&gt;</code>. The '
+                f'<a href="{rel_dir(page_dir, "docs/json-and-exit-codes")}">JSON and exit codes</a> '
+                'page explains the envelope.</p>')
+
     for command in commands:
         body = f'<p>{code_text(command["says"])}</p>' + help_block(command["claims"])
+        for label in command.get("examples", []):
+            body += json_block(label)
         ops = command["operations"]
         if ops:
             access = "".join(

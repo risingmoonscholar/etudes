@@ -926,6 +926,23 @@ class ReferenceTest(unittest.TestCase):
                 html = self.mod.build_reference(page["reference"], pages)
                 self.assertIn("reference", html)
 
+    def test_a_number_placeholder_keeps_its_type(self):
+        self.assertEqual(self.mod.json_type("<due-seconds>", ["<due-seconds>"]), "number")
+        self.assertEqual(self.mod.json_type("<due>", ["<due-seconds>"]), "string")
+
+    def test_an_example_must_be_a_json_capture_of_that_tool(self):
+        captured = {"sweep-plan": {"command": "sweep ~/Desktop", "exit": 0, "output": "plan"},
+                    "stash-x-json": {"command": "stash x --json", "exit": 0, "output": "{}"}}
+        for label in ("missing-json", "sweep-plan", "stash-x-json"):
+            with self.assertRaises(self.mod.BuildError):
+                self.mod.json_example("sweep", label, captured)
+
+    def test_every_example_is_shown_with_its_details_keys(self):
+        pages = self.mod.public_pages()
+        page = self.mod.build_reference("stash", pages)
+        self.assertIn("Captured from <code>stash ~/Desktop --for 3d --json</code>", page)
+        self.assertIn("<code>held_cross_volume</code>", page)
+
     def test_a_contract_operation_with_no_command_stops_the_build(self):
         real = self.mod.reference_data
 

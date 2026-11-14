@@ -411,3 +411,8 @@ th { font-weight: 600; background: var(--code-bg); }
 .ref-list .ref-name { font-weight: 600; }
 .ref-list .ref-retry { color: var(--muted); font-size: 14px; }
 .ref-list p { margin: 4px 0 0; }
+.ref-json td:last-child code { white-space: normal; overflow-wrap: anywhere; }
+.ref-full { margin: 0 0 20px; }
+.ref-full summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }
+.ref-full summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.ref-json td:first-child code { overflow-wrap: normal; word-break: normal; white-space: nowrap; }
