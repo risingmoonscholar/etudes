@@ -412,7 +412,7 @@ def check_changelog(out):
 
 
 CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-CSS_HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+CSS_HEX = re.compile(r"(?<![&\w])#[0-9a-fA-F]{3,8}\b")
 CSS_TOKEN = re.compile(r"--([a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\b")
 
 
@@ -470,9 +470,25 @@ def check_brand(out):
                                 f"site/brand.json gives {value} for {theme}")
         for name in sorted(set(have) - set(want)):
             problems.append(f"assets/site.css sets --{name} in {key}, which site/brand.json does not name")
+    held = {v.lower() for group in (brand["themes"], brand["home"]) for theme in group.values() for v in theme.values()}
+    held |= {v.lower() for v in brand["meaning"].values()}
+    styled = 0
+    for page in sorted(out.rglob("*")):
+        if page.suffix == ".css" and page != css:
+            text = page.read_text()
+        elif page.suffix == ".html":
+            text = "".join(re.findall(r"<style[^>]*>(.*?)</style>", page.read_text(), re.S))
+        else:
+            continue
+        if not text:
+            continue
+        styled += 1
+        for hexcode in sorted({h.lower() for h in CSS_HEX.findall(CSS_COMMENT.sub("", text))} - held):
+            problems.append(f"{page.relative_to(out)} uses {hexcode}, which site/brand.json does not hold")
     if problems:
         return problems, []
-    return [], [f"site.css colours are the {len(light)} light and {len(dark)} dark tokens of site/brand.json"]
+    return [], [f"site.css colours are the {len(light)} light and {len(dark)} dark tokens of site/brand.json",
+                f"{styled} other styled files use only colours from site/brand.json"]
 
 
 def check(out):
