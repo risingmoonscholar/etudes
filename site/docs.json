@@ -2,8 +2,12 @@
   "_about": "The shared docs pages on the site, in sidebar order. Only the files listed here and in tools.json are published; nothing else from the repo goes on the site. A page with \"reference\" in place of \"source\" is a generated command reference; see site/reference.json.",
   "sections": [
     {
-      "title": "Using the tools",
+      "title": "Guides",
       "pages": [
+        {
+          "source": "docs/agents.md",
+          "title": "Driving the tools from a program"
+        },
         {
           "source": "docs/stash-batches.md",
           "title": "Stash batches"
@@ -15,6 +19,10 @@
         {
           "source": "docs/plan-binding.md",
           "title": "Plan binding"
+        },
+        {
+          "source": "docs/progress.md",
+          "title": "Progress"
         }
       ]
     },
