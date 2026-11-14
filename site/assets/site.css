@@ -34,9 +34,9 @@
   --code-bg: #f6f6f6;
   --hover-bg: #f2f2f2;
   --link: #000000;
-  --code-fg: #5a6aa8;
-  --code-tint: #f3f5fb;
-  --code-border: #e2e6f3;
+  --code-fg: #b8445a;
+  --code-tint: #fdf3f3;
+  --code-border: #f5dfe1;
   --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --serif: "Geist Serif", ui-serif, Georgia, serif;
@@ -55,9 +55,9 @@
     --code-bg: #161616;
     --hover-bg: #1a1a1a;
     --link: #ededed;
-    --code-fg: #a9b8f0;
-    --code-tint: #151924;
-    --code-border: #262c40;
+    --code-fg: #f4a2a6;
+    --code-tint: #24161a;
+    --code-border: #3d2429;
   }
 }
 :root[data-theme="dark"] {
@@ -70,9 +70,9 @@
     --code-bg: #161616;
     --hover-bg: #1a1a1a;
     --link: #ededed;
-    --code-fg: #a9b8f0;
-    --code-tint: #151924;
-    --code-border: #262c40;
+    --code-fg: #f4a2a6;
+    --code-tint: #24161a;
+    --code-border: #3d2429;
 }
 
 * { box-sizing: border-box; }
@@ -171,7 +171,7 @@ pre {
   font-size: 13.5px; line-height: 1.6;
 }
 pre code { color: inherit; background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; white-space: pre; }
-/* Code blocks in the docs take the same slate blue; terminal output keeps its own colours. */
+/* Code blocks in the docs take the same guava; terminal output keeps its own colours. */
 .content pre:not(.term):not(.line) { background: var(--code-tint); border-color: var(--code-border); }
 .content pre:not(.term):not(.line) code { color: var(--code-fg); }
 /* Code used as a name in navigation and headings stays the colour of its text. */
