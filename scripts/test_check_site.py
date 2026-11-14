@@ -117,8 +117,8 @@ class CheckSiteTest(unittest.TestCase):
 
     def test_unlisted_page_fails(self):
         out = self.copy("unlisted")
-        shutil.copytree(out / "docs/sweep", out / "docs/progress")
-        self.assertFails(self.check(out), "docs/progress/ is published but is not on the public list")
+        shutil.copytree(out / "docs/sweep", out / "docs/stress-release-account")
+        self.assertFails(self.check(out), "docs/stress-release-account/ is published but is not on the public list")
 
     def test_drifted_transcripts_fail(self):
         out = self.copy("drift")
