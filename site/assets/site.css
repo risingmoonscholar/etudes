@@ -34,6 +34,9 @@
   --code-bg: #f6f6f6;
   --hover-bg: #f2f2f2;
   --link: #000000;
+  --code-fg: #5a6aa8;
+  --code-tint: #f3f5fb;
+  --code-border: #e2e6f3;
   --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --serif: "Geist Serif", ui-serif, Georgia, serif;
@@ -52,6 +55,9 @@
     --code-bg: #161616;
     --hover-bg: #1a1a1a;
     --link: #ededed;
+    --code-fg: #a9b8f0;
+    --code-tint: #151924;
+    --code-border: #262c40;
   }
 }
 :root[data-theme="dark"] {
@@ -64,6 +70,9 @@
     --code-bg: #161616;
     --hover-bg: #1a1a1a;
     --link: #ededed;
+    --code-fg: #a9b8f0;
+    --code-tint: #151924;
+    --code-border: #262c40;
 }
 
 * { box-sizing: border-box; }
@@ -150,7 +159,8 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--fg); outline-o
 .content .anchor:hover { text-decoration: underline; text-decoration-color: var(--border-strong); }
 code {
   font-family: var(--mono); font-size: 0.86em;
-  background: var(--code-bg); border: 1px solid var(--border);
+  color: var(--code-fg);
+  background: var(--code-tint); border: 1px solid var(--code-border);
   padding: 0.1em 0.32em; border-radius: 5px;
   overflow-wrap: anywhere;
 }
@@ -160,7 +170,12 @@ pre {
   overflow-x: auto; -webkit-overflow-scrolling: touch;
   font-size: 13.5px; line-height: 1.6;
 }
-pre code { background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; white-space: pre; }
+pre code { color: inherit; background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; white-space: pre; }
+/* Code blocks in the docs take the same slate blue; terminal output keeps its own colours. */
+.content pre:not(.term):not(.line) { background: var(--code-tint); border-color: var(--code-border); }
+.content pre:not(.term):not(.line) code { color: var(--code-fg); }
+/* Code used as a name in navigation and headings stays the colour of its text. */
+.navgroup a code, .tool h3 code, .result code, h1 code, h2 code, h3 code { color: inherit; }
 .table-wrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--border); border-radius: 8px; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.55; }
 th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--border); }
