@@ -40,8 +40,8 @@
   },
   "home": {
     "light": {
-      "before": "#e5484d",
-      "after": "#30a46c",
+      "before": "#FF383C",
+      "after": "#34C759",
       "before-bg": "#fdf1f1",
       "after-bg": "#eefaf3"
     },

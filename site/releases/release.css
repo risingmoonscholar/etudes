@@ -1,16 +1,48 @@
+@font-face{font-family:"Geist";src:url("../assets/fonts/Geist-Variable.ttf") format("truetype");font-weight:100 900;font-display:swap}
+@font-face{font-family:"Geist Mono";src:url("../assets/fonts/GeistMono-Variable.ttf") format("truetype");font-weight:100 900;font-display:swap}
+@font-face{font-family:"Geist Serif";src:url("../assets/fonts/GeistSerif-Regular.ttf") format("truetype");font-weight:400;font-display:swap}
 :root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #000000;
+  --dim: #5f5f5f;
+  --line: #ebebeb;
+  --line-strong: #d4d4d4;
+  --accent: #b8445a;
+  --accent-soft: #fdf3f3;
+  --terminal-bg: #f6f6f6;
+  --pre-bg: #fdf3f3;
+  --pre-border: #f5dfe1;
+  --serif:"Geist Serif",ui-serif,Georgia,serif;
+  --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0a0a;
+    --fg: #ededed;
+    --dim: #a1a1a1;
+    --line: #262626;
+    --line-strong: #3a3a3a;
+    --accent: #f4a2a6;
+    --accent-soft: #24161a;
+    --terminal-bg: #161616;
+    --pre-bg: #24161a;
+    --pre-border: #3d2429;
+  }
+}
+:root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #131009;
-  --fg: #ece4d2;
-  --dim: #a89d84;
-  --line: #2c2519;
-  --line-strong: #3c3320;
-  --accent: #d3a355;
-  --accent-soft: #d3a35522;
-  --terminal-bg: #e9edf4;
-  --serif: ui-serif, "New York", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --bg: #0a0a0a;
+  --fg: #ededed;
+  --dim: #a1a1a1;
+  --line: #262626;
+  --line-strong: #3a3a3a;
+  --accent: #f4a2a6;
+  --accent-soft: #24161a;
+  --terminal-bg: #161616;
+  --pre-bg: #24161a;
+  --pre-border: #3d2429;
 }
 
 * { box-sizing: border-box; }
@@ -19,13 +51,16 @@ body {
   margin: 0;
   color: var(--fg);
   background: var(--bg);
-  font-family: var(--serif);
-  font-size: 19px;
+  font-family: var(--sans);
+  font-size: 18px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 ::selection { background: var(--accent-soft); color: var(--fg); }
+code { font-family: var(--mono); font-size: .88em; color: var(--accent); }
+pre code { font-size: inherit; color: inherit; }
+h1 code, h2 code, h3 code { color: inherit; }
 a { color: inherit; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 a:hover { text-decoration-color: var(--accent); }
 a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
@@ -54,7 +89,7 @@ h1 { max-width: 38rem; margin: 0 0 1.5rem; font-size: clamp(2rem, 7vw, 2.65rem);
 .demo figcaption { margin-top: .75rem; color: var(--dim); font-family: var(--sans); font-size: .8rem; line-height: 1.5; }
 .install { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
 .install p { margin: 0 0 .9rem; color: var(--dim); font-size: .9rem; }
-pre { overflow-x: auto; margin: 0; padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 6px; background: #0a0805; color: #e4dcc4; font: .78rem/1.7 var(--mono); white-space: pre; }
+pre { overflow-x: auto; margin: 0; padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 6px; background: var(--pre-bg); color: var(--accent); border-color: var(--pre-border); font: .78rem/1.7 var(--mono); white-space: pre; }
 .footer { display: flex; flex-wrap: wrap; gap: .5rem 1.3rem; margin-top: 3.2rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--dim); font-family: var(--mono); font-size: .72rem; }
 @media (max-width: 34rem) {
   body { font-size: 17px; }

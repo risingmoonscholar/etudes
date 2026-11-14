@@ -262,6 +262,16 @@ class CheckSiteTest(unittest.TestCase):
                   "* { box-sizing: border-box; }\n.x { color: #123456; }")
         self.assertFails(self.check(out), "assets/site.css writes a colour in .x")
 
+    def test_off_brand_colour_on_another_page_fails(self):
+        out = self.copy("brand-release")
+        self.edit(out / "releases/release.css", "--accent: #b8445a;", "--accent: #d3a355;")
+        self.assertFails(self.check(out), "releases/release.css uses #d3a355, which site/brand.json does not hold")
+
+    def test_off_brand_inline_style_fails(self):
+        out = self.copy("brand-demo")
+        self.edit(out / "demo/index.html", "--bg:#ffffff;", "--bg:#f7f3ea;")
+        self.assertFails(self.check(out), "demo/index.html uses #f7f3ea, which site/brand.json does not hold")
+
     def test_unnamed_token_fails(self):
         out = self.copy("brand-extra")
         self.edit(out / "assets/site.css", "--code-fg: #b8445a;", "--code-fg: #b8445a;\n  --promo: #00ff00;")
