@@ -562,6 +562,50 @@ class Converter:
 
 # --- layout -----------------------------------------------------------------
 
+# The theme toggle. With no saved choice the page follows the system setting
+# through prefers-color-scheme. A click sets data-theme on <html> to the other
+# theme and saves it; site.css already styles both values of data-theme. The
+# head script applies a saved choice before the first paint, so the page does
+# not flash the other theme. Storage can be missing or throw (a private
+# window), so every access is guarded and the page works without it.
+THEME_KEY = "etudes-theme"
+THEME_HEAD = ("<script>(function(){var d=document.documentElement;d.classList.add(\"has-theme-toggle\");"
+              f"try{{var t=localStorage.getItem(\"{THEME_KEY}\");"
+              "if(t===\"light\"||t===\"dark\")d.setAttribute(\"data-theme\",t);}catch(e){}})();</script>")
+THEME_SCRIPT = """
+(function () {
+  var root = document.documentElement;
+  var button = document.querySelector("[data-theme-toggle]");
+  if (!button) return;
+  var dark = window.matchMedia("(prefers-color-scheme: dark)");
+  function current() {
+    var t = root.getAttribute("data-theme");
+    return t === "light" || t === "dark" ? t : (dark.matches ? "dark" : "light");
+  }
+  function label() {
+    var next = current() === "dark" ? "light" : "dark";
+    button.setAttribute("aria-label", "Switch to the " + next + " theme");
+    button.setAttribute("title", "Switch to the " + next + " theme");
+    button.setAttribute("data-showing", current());
+  }
+  button.addEventListener("click", function () {
+    var next = current() === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("%s", next); } catch (e) {}
+    label();
+  });
+  if (dark.addEventListener) dark.addEventListener("change", label);
+  label();
+})();
+""" % THEME_KEY
+
+THEME_ICONS = (
+    '<svg class="icon-sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/>'
+    '<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M3 13l1.4-1.4M11.6 4.4L13 3"/></svg>'
+    '<svg class="icon-moon" viewBox="0 0 16 16" aria-hidden="true">'
+    '<path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/></svg>')
+
+
 def topbar(root, current):
     """The bar every page shares. CURRENT is "home", "docs" or "changelog"."""
     brand_cur = ' aria-current="page"' if current == "home" else ""
@@ -575,7 +619,10 @@ def topbar(root, current):
             f'<a href="{root}changelog/"{log_cur}>Changelog</a>\n'
             f'<a href="{REPO_URL}">GitHub</a>\n'
             f'</nav>\n'
-            f'</header>')
+            f'<button class="theme-toggle" type="button" data-theme-toggle '
+            f'aria-label="Switch theme">{THEME_ICONS}</button>\n'
+            f'</header>\n'
+            f'<script>{THEME_SCRIPT}</script>')
 
 
 def sidebar(pages, current_dir, first=None):
@@ -629,6 +676,7 @@ def layout(*, title, description, page_dir, pages, content, headings, current="d
 {GENERATOR}
 <link rel="stylesheet" href="{root}assets/site.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
+{THEME_HEAD}
 </head>
 <body{body}>
 {topbar(root, current)}
@@ -1102,6 +1150,7 @@ def build_home(pages):
 {GENERATOR}
 <link rel="stylesheet" href="assets/site.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9679;</text></svg>">
+{THEME_HEAD}
 </head>
 <body class="home">
 {topbar(root, "home")}

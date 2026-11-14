@@ -431,3 +431,20 @@ th { font-weight: 600; background: var(--code-bg); }
 .ref-full summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }
 .ref-full summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .ref-json td:first-child code { overflow-wrap: normal; word-break: normal; white-space: nowrap; }
+
+/* Theme toggle: shown only when the head script ran, since it needs JavaScript. */
+.theme-toggle {
+  display: none; align-items: center; justify-content: center;
+  width: 32px; height: 32px; margin-right: -6px; padding: 0;
+  background: none; border: 1px solid transparent; border-radius: 8px;
+  color: var(--muted); cursor: pointer;
+}
+.has-theme-toggle .theme-toggle { display: inline-flex; }
+.theme-toggle:hover { color: var(--fg); background: var(--hover-bg); }
+.theme-toggle:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.theme-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle .icon-moon { fill: currentColor; stroke: none; }
+/* The icon names the theme a click switches to: the moon in light, the sun in dark. */
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle[data-showing="dark"] .icon-sun { display: block; }
+.theme-toggle[data-showing="dark"] .icon-moon { display: none; }
