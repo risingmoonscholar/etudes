@@ -41,7 +41,10 @@ Fails when:
     before commit;
   - a changelog page is not what the build renders, or the changelog's data,
     fixtures or logs are published;
-  - fonts are published without their license.
+  - fonts are published without their license;
+  - a colour token in the published site.css differs from site/brand.json,
+    is missing from one theme, is not in site/brand.json, or a colour is
+    written outside the token blocks.
 
 Standard library only. Exit 0 checked and clean, 1 a failure, 2 could not run.
 """
@@ -408,6 +411,70 @@ def check_changelog(out):
     return problems, notes
 
 
+CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+CSS_HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+CSS_TOKEN = re.compile(r"--([a-z0-9-]+)\s*:\s*(#[0-9a-fA-F]{3,8})\b")
+
+
+def css_blocks(text):
+    """(selector path, declarations) for every rule in a stylesheet."""
+    text = CSS_COMMENT.sub("", text)
+    stack, blocks, start = [], [], 0
+    for i, ch in enumerate(text):
+        if ch == "{":
+            stack.append((" ".join(text[start:i].split()), i + 1))
+            start = i + 1
+        elif ch == "}" and stack:
+            selector, body = stack.pop()
+            inner = text[body:i]
+            blocks.append((tuple(s for s, _ in stack) + (selector,), re.sub(r"\{[^{}]*\}", "", inner)))
+            start = i + 1
+        elif ch == ";" and not stack:
+            start = i + 1
+    return blocks
+
+
+def check_brand(out):
+    """The published site.css uses the colours in site/brand.json and no others."""
+    brand = json.loads((ROOT / "site/brand.json").read_text())
+    light = {**brand["themes"]["light"], **brand["home"]["light"]}
+    dark = {**brand["themes"]["dark"], **brand["home"]["dark"]}
+    contexts = {
+        ":root": ("light", light),
+        '@media (prefers-color-scheme: dark) :root:not([data-theme="light"])': ("dark", dark),
+        ':root[data-theme="dark"]': ("dark", dark),
+    }
+    css = out / "assets/site.css"
+    if not css.is_file():
+        return [f"{css.relative_to(out)} was not built"], []
+    found = {key: {} for key in contexts}
+    problems = []
+    for path, body in css_blocks(css.read_text()):
+        key = " ".join(path)
+        tokens = dict(CSS_TOKEN.findall(body))
+        loose = len(CSS_HEX.findall(body)) - len(tokens)
+        if key in contexts:
+            found[key].update({k.lower(): v.lower() for k, v in tokens.items()})
+        elif tokens or loose:
+            loose += len(tokens)
+        if loose > 0:
+            problems.append(f"assets/site.css writes a colour in {key or 'the top level'}; "
+                            "use a var() of a token in site/brand.json")
+    for key, (theme, want) in contexts.items():
+        have = found[key]
+        for name, value in sorted(want.items()):
+            if name not in have:
+                problems.append(f"assets/site.css has no --{name} in {key}; site/brand.json gives it {value} for {theme}")
+            elif have[name] != value.lower():
+                problems.append(f"assets/site.css sets --{name} to {have[name]} in {key}; "
+                                f"site/brand.json gives {value} for {theme}")
+        for name in sorted(set(have) - set(want)):
+            problems.append(f"assets/site.css sets --{name} in {key}, which site/brand.json does not name")
+    if problems:
+        return problems, []
+    return [], [f"site.css colours are the {len(light)} light and {len(dark)} dark tokens of site/brand.json"]
+
+
 def check(out):
     problems = []
     notes = []
@@ -438,6 +505,9 @@ def check(out):
     ref_problems, ref_notes = check_references(out, references)
     problems += ref_problems
     notes += ref_notes
+    brand_problems, brand_notes = check_brand(out)
+    problems += brand_problems
+    notes += brand_notes
 
     # Links and anchors, on every page in the build.
     cache = {}

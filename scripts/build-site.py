@@ -63,7 +63,7 @@ CHANGELOG_FILE_URL = BLOB_URL + "CHANGELOG.md"
 # folder from someone else's before it deletes anything.
 GENERATOR = '<meta name="generator" content="scripts/build-site.py">'
 # Read by the build, not by any page.
-BUILD_ONLY = ("tools.json", "docs.json", "reference.json", ".DS_Store")
+BUILD_ONLY = ("tools.json", "docs.json", "reference.json", "brand.json", ".DS_Store")
 # Folders under site/ the build reads and does not publish as they are.
 BUILD_ONLY_DIRS = ("changelog",)
 SCHEMES = ("http", "https", "mailto")
