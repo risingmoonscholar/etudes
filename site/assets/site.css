@@ -34,6 +34,9 @@
   --code-bg: #f6f6f6;
   --hover-bg: #f2f2f2;
   --link: #000000;
+  --code-fg: #b8445a;
+  --code-tint: #fdf3f3;
+  --code-border: #f5dfe1;
   --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --serif: "Geist Serif", ui-serif, Georgia, serif;
@@ -52,6 +55,9 @@
     --code-bg: #161616;
     --hover-bg: #1a1a1a;
     --link: #ededed;
+    --code-fg: #f4a2a6;
+    --code-tint: #24161a;
+    --code-border: #3d2429;
   }
 }
 :root[data-theme="dark"] {
@@ -64,6 +70,9 @@
     --code-bg: #161616;
     --hover-bg: #1a1a1a;
     --link: #ededed;
+    --code-fg: #f4a2a6;
+    --code-tint: #24161a;
+    --code-border: #3d2429;
 }
 
 * { box-sizing: border-box; }
@@ -150,7 +159,8 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--fg); outline-o
 .content .anchor:hover { text-decoration: underline; text-decoration-color: var(--border-strong); }
 code {
   font-family: var(--mono); font-size: 0.86em;
-  background: var(--code-bg); border: 1px solid var(--border);
+  color: var(--code-fg);
+  background: var(--code-tint); border: 1px solid var(--code-border);
   padding: 0.1em 0.32em; border-radius: 5px;
   overflow-wrap: anywhere;
 }
@@ -160,7 +170,12 @@ pre {
   overflow-x: auto; -webkit-overflow-scrolling: touch;
   font-size: 13.5px; line-height: 1.6;
 }
-pre code { background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; white-space: pre; }
+pre code { color: inherit; background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; white-space: pre; }
+/* Code blocks in the docs take the same guava; terminal output keeps its own colours. */
+.content pre:not(.term):not(.line) { background: var(--code-tint); border-color: var(--code-border); }
+.content pre:not(.term):not(.line) code { color: var(--code-fg); }
+/* Code used as a name in navigation and headings stays the colour of its text. */
+.navgroup a code, .tool h3 code, .result code, h1 code, h2 code, h3 code { color: inherit; }
 .table-wrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--border); border-radius: 8px; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.55; }
 th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--border); }
@@ -416,3 +431,20 @@ th { font-weight: 600; background: var(--code-bg); }
 .ref-full summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }
 .ref-full summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .ref-json td:first-child code { overflow-wrap: normal; word-break: normal; white-space: nowrap; }
+
+/* Theme toggle: shown only when the head script ran, since it needs JavaScript. */
+.theme-toggle {
+  display: none; align-items: center; justify-content: center;
+  width: 32px; height: 32px; margin-right: -6px; padding: 0;
+  background: none; border: 1px solid transparent; border-radius: 8px;
+  color: var(--muted); cursor: pointer;
+}
+.has-theme-toggle .theme-toggle { display: inline-flex; }
+.theme-toggle:hover { color: var(--fg); background: var(--hover-bg); }
+.theme-toggle:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.theme-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle .icon-moon { fill: currentColor; stroke: none; }
+/* The icon names the theme a click switches to: the moon in light, the sun in dark. */
+.theme-toggle .icon-sun { display: none; }
+.theme-toggle[data-showing="dark"] .icon-sun { display: block; }
+.theme-toggle[data-showing="dark"] .icon-moon { display: none; }
