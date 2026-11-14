@@ -237,18 +237,42 @@ class CheckSiteTest(unittest.TestCase):
         shutil.copy(ROOT / "site/tools.json", out / "tools.json")
         self.assertFails(self.check(out), "tools.json is published")
 
+    def test_hand_edited_reference_page_fails(self):
+        out = self.copy("ref-edit")
+        self.edit(out / "docs/reference/sweep/index.html", "move one group", "move every group")
+        self.assertFails(self.check(out), "docs/reference/sweep/index.html is not what")
+
+    def test_off_brand_token_fails(self):
+        out = self.copy("brand-token")
+        self.edit(out / "assets/site.css", "--code-fg: #b8445a;", "--code-fg: #3b82f6;")
+        self.assertFails(self.check(out), "sets --code-fg to #3b82f6 in :root")
+
+    def test_off_brand_dark_token_fails(self):
+        # Both dark blocks are held, so the toggle and the system setting agree.
+        out = self.copy("brand-dark")
+        css = out / "assets/site.css"
+        text = css.read_text()
+        head, sep, tail = text.partition(':root[data-theme="dark"] {')
+        css.write_text(head + sep + tail.replace("--code-fg: #f4a2a6;", "--code-fg: #93c5fd;", 1))
+        self.assertFails(self.check(out), 'sets --code-fg to #93c5fd in :root[data-theme="dark"]')
+
+    def test_colour_outside_the_tokens_fails(self):
+        out = self.copy("brand-loose")
+        self.edit(out / "assets/site.css", "* { box-sizing: border-box; }",
+                  "* { box-sizing: border-box; }\n.x { color: #123456; }")
+        self.assertFails(self.check(out), "assets/site.css writes a colour in .x")
+
+    def test_unnamed_token_fails(self):
+        out = self.copy("brand-extra")
+        self.edit(out / "assets/site.css", "--code-fg: #b8445a;", "--code-fg: #b8445a;\n  --promo: #00ff00;")
+        self.assertFails(self.check(out), "sets --promo in :root, which site/brand.json does not name")
+
 
 def load_check():
     spec = importlib.util.spec_from_file_location("check_site", CHECK)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-    def test_hand_edited_reference_page_fails(self):
-        out = self.copy("ref-edit")
-        self.edit(out / "docs/reference/sweep/index.html", "move one group", "move every group")
-        self.assertFails(self.check(out), "docs/reference/sweep/index.html is not what")
 
 
 class EntryTest(unittest.TestCase):

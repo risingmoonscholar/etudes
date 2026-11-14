@@ -1,0 +1,63 @@
+{
+  "_about": "The brand: one copy of the colours, type and title cards that the site and the release films share. scripts/check-site.py fails when a colour token in site/assets/site.css differs from this file, so the site cannot drift from it. The release films read their hexes and card text from here too. code is the colour of code text on any surface: inline code on the site, code planes and command lines in a film. meaning hues carry one meaning each and never decorate; the films use them as they are.",
+  "fonts": {
+    "sans": "Geist",
+    "mono": "Geist Mono",
+    "serif": "Geist Serif",
+    "roles": {
+      "headline": "serif",
+      "labels and body": "sans",
+      "code": "mono"
+    }
+  },
+  "themes": {
+    "light": {
+      "bg": "#ffffff",
+      "fg": "#000000",
+      "muted": "#5f5f5f",
+      "border": "#ebebeb",
+      "border-strong": "#d4d4d4",
+      "code-bg": "#f6f6f6",
+      "hover-bg": "#f2f2f2",
+      "link": "#000000",
+      "code-fg": "#b8445a",
+      "code-tint": "#fdf3f3",
+      "code-border": "#f5dfe1"
+    },
+    "dark": {
+      "bg": "#0a0a0a",
+      "fg": "#ededed",
+      "muted": "#a1a1a1",
+      "border": "#262626",
+      "border-strong": "#3a3a3a",
+      "code-bg": "#161616",
+      "hover-bg": "#1a1a1a",
+      "link": "#ededed",
+      "code-fg": "#f4a2a6",
+      "code-tint": "#24161a",
+      "code-border": "#3d2429"
+    }
+  },
+  "home": {
+    "light": {
+      "before": "#e5484d",
+      "after": "#30a46c",
+      "before-bg": "#fdf1f1",
+      "after-bg": "#eefaf3"
+    },
+    "dark": {
+      "before-bg": "#1f1414",
+      "after-bg": "#121c16"
+    }
+  },
+  "meaning": {
+    "tagged": "#FF8D28",
+    "held": "#34C759",
+    "harm": "#FF383C"
+  },
+  "slate": {
+    "intro": ["{tool} {version}", "by @risingmoonscholar"],
+    "transition": ["{tool} {old} → {new}", "Same command, same test folder."],
+    "transition_note": "Show the second transition line only when the release's real runs show it is true."
+  }
+}
