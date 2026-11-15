@@ -9,13 +9,11 @@
 #   1. (deterministic, always exercised) A volume filled to the real ENOSPC
 #      floor: apply must refuse honestly, move nothing, and cost nothing that
 #      undo cannot reverse.
-#   2. (best-effort, host-dependent) A volume with a *narrow* margin above
-#      that floor, engineered to let apply move some files and then run out
-#      mid-loop. Whether a given amount of headroom yields a partial split
-#      depends on APFS's internal metadata cost per move, which is not
-#      something this script controls precisely -- so several margins are
-#      tried, and if none of them lands on a genuine partial split the
-#      deeper assertion is marked unproven, honestly, rather than skipped.
+#   2. (deterministic) An apply stopped mid-loop after a known number of
+#      journalled moves. While it is confirmed stopped, the volume is filled
+#      to the same floor; then the apply resumes and runs out of space on a
+#      later move. Moved plus remaining must equal the original count, and
+#      the output must not claim success.
 #
 # Every image is detached in a trap so a failure here never leaves a mounted
 # volume behind.
@@ -26,6 +24,11 @@ require hdiutil "full-volume scenarios need a real disk image" || exit 0
 IMG=""
 MNT=""
 cleanup() {
+  if [ -n "${APPLY_PID:-}" ]; then
+    kill -CONT "$APPLY_PID" 2>/dev/null || true
+    kill -TERM "$APPLY_PID" 2>/dev/null || true
+    wait "$APPLY_PID" 2>/dev/null || true
+  fi
   detach_registered_mounts
   [ -n "$IMG" ] && [ -f "$IMG" ] && rm -f "$IMG"
   [ -n "${W:-}" ] && rm -rf "$W"
@@ -102,37 +105,54 @@ assert_intact "$PROJ" "$BEFORE" "full-volume undo preserves every file"
 FINAL=$(find "$PROJ" -type f | wc -l | tr -d ' ')
 assert_eq "$BEFORE" "$FINAL" "full volume: file count intact after apply-then-undo on a full disk"
 
-# --- Part 2: best-effort search for a genuine mid-loop partial split. ------
-# Rebuild fresh each attempt: recreating the source files is cheap, and a
-# stale widget/ directory from a previous attempt would corrupt the next.
+# --- Part 2: a mid-loop ENOSPC partial split, by pause-then-inject. -------
+# Stop the apply after a known number of journalled moves, fill the volume to
+# the real ENOSPC floor while the apply is confirmed stopped, then resume it.
+# Nothing here depends on how fast APFS reclaims freed blocks or what one move
+# costs in metadata: the fault is in place before the next move starts.
 find "$MNT" -maxdepth 1 -type f -name 'filler_*' -delete
 PROJ2="$MNT/proj2"
+DUMP="$(dirname "$SWEEP")/journal-dump"
+STOP_AFTER=50
 PARTIAL_FOUND=0
-PARTIAL_APPLY_OUT=""
-for free_kb in 20 40 60 90 130 180; do
-  rm -rf "$PROJ2"; mkdir -p "$PROJ2"
-  for n in $(seq 1 500); do : > "$PROJ2/widget_$n.txt"; done
-
-  # Fill to the true floor again (cheap: a handful of ms per KB on local SSD).
+APPLY_PID=""
+if [ ! -x "$DUMP" ]; then
+  unproven "full volume: a genuine mid-loop partial-apply split (some moved, some not)" \
+    "dev-only journal watcher unavailable"
+  exit 0
+fi
+rm -rf "$PROJ2"; mkdir -p "$PROJ2"
+for n in $(seq 1 500); do : > "$PROJ2/widget_$n.txt"; done
+# Start the apply stopped, before its first move, so it cannot finish before
+# the watcher sees it. The watcher's first resume lets the shell exec it.
+sh -c 'kill -STOP $$; exec "$0" apply "$1" --yes' "$SWEEP" "$PROJ2" >"$W/partial-apply.out" 2>&1 &
+APPLY_PID=$!
+if WITNESS=$("$DUMP" --watch-apply-stepped "$ETUDE_STATE_DIR" "$PROJ2" "$APPLY_PID" "$STOP_AFTER" 2>"$W/step.err"); then
+  read -r JOURNAL_MOVED JOURNAL_TOTAL <<< "$WITNESS"
+  pass "full volume: apply confirmed stopped after $JOURNAL_MOVED of $JOURNAL_TOTAL journalled moves"
+  # Fill to the true floor while the apply cannot move anything.
   i=0
   while : ; do
     i=$((i+1))
     dd if=/dev/zero of="$MNT/filler_$i" bs=1024 count=1 >/dev/null 2>&1 || { rm -f "$MNT/filler_$i"; break; }
   done
-  # Free exactly free_kb worth of the filler back up.
-  ls "$MNT" | grep '^filler_' | head -n "$free_kb" | while read -r f; do rm -f "$MNT/$f"; done
-
-  PARTIAL_APPLY_OUT=$("$SWEEP" apply "$PROJ2" --yes 2>&1)
+  kill -CONT "$APPLY_PID" 2>/dev/null || true
+  wait "$APPLY_PID" 2>/dev/null
+  APPLY_PID=""
+  PARTIAL_APPLY_OUT=$(cat "$W/partial-apply.out")
   moved=$(find "$PROJ2" -mindepth 2 -type f 2>/dev/null | wc -l | tr -d ' ')
   remain=$(find "$PROJ2" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
   if [ "$moved" -gt 0 ] && [ "$remain" -gt 0 ]; then
     PARTIAL_FOUND=1
     PARTIAL_MOVED=$moved
     PARTIAL_REMAIN=$remain
-    break
   fi
-  find "$MNT" -maxdepth 1 -type f -name 'filler_*' -delete
-done
+else
+  cat "$W/step.err" >&2
+  kill -CONT "$APPLY_PID" 2>/dev/null || true
+  wait "$APPLY_PID" 2>/dev/null || true
+  APPLY_PID=""
+fi
 
 if [ "$PARTIAL_FOUND" = 1 ]; then
   TOTAL=$((PARTIAL_MOVED + PARTIAL_REMAIN))
@@ -144,7 +164,7 @@ if [ "$PARTIAL_FOUND" = 1 ]; then
   fi
 else
   unproven "full volume: a genuine mid-loop partial-apply split (some moved, some not)" \
-    "APFS's per-move metadata cost was too small/variable on this host to land in the narrow free-space band between 'refuses immediately' and 'succeeds completely' across the tried margins (20-180KB); this was reproduced by hand during development (see report) but is not guaranteed byte-for-byte on every host"
+    "no apply was stopped mid-loop, or the apply finished every move after the volume was filled while it was stopped"
 fi
 
 exit 0
