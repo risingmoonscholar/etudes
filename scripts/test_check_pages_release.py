@@ -211,8 +211,11 @@ class PagesReleaseWorkflowTests(unittest.TestCase):
     def test_deployment_checks_event_action_and_exact_per_tool_tag(self):
         step = step_containing(named_steps(), "Refuse invalid Pages release events")
         self.assertIn('if [ "$GITHUB_EVENT_NAME" != "release" ]; then', step)
-        self.assertIn('"$GITHUB_EVENT_ACTION" != "published"', step)
-        self.assertIn('"$GITHUB_EVENT_ACTION" != "released"', step)
+        self.assertIn("RELEASE_ACTION: ${{ github.event.action }}", step)
+        self.assertIn('"$RELEASE_ACTION" != "published"', step)
+        self.assertIn('"$RELEASE_ACTION" != "released"', step)
+        # GitHub sets no GITHUB_EVENT_ACTION; reading it refused every release.
+        self.assertNotIn("GITHUB_EVENT_ACTION", step)
         self.assertIn(r"^refs/tags/(sweep|stash|unpack)-v[0-9]+\.[0-9]+\.[0-9]+$", step)
         self.assertIn("exit 1", step)
 

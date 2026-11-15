@@ -46,13 +46,18 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - name: Refuse invalid Pages release events
+        # GitHub sets no default variable for the event's action, so the
+        # action is passed in from the event payload. Without this the value
+        # is empty and every release is refused.
+        env:
+          RELEASE_ACTION: ${{ github.event.action }}
         run: |
           if [ "$GITHUB_EVENT_NAME" != "release" ]; then
             echo "Pages may deploy only after a published release; event was $GITHUB_EVENT_NAME"
             exit 1
           fi
-          if [ "$GITHUB_EVENT_ACTION" != "published" ] && [ "$GITHUB_EVENT_ACTION" != "released" ]; then
-            echo "Unsupported Pages release action: $GITHUB_EVENT_ACTION"
+          if [ "$RELEASE_ACTION" != "published" ] && [ "$RELEASE_ACTION" != "released" ]; then
+            echo "Unsupported Pages release action: $RELEASE_ACTION"
             exit 1
           fi
           if [[ ! "$GITHUB_REF" =~ ^refs/tags/(sweep|stash|unpack)-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
