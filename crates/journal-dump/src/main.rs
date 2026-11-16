@@ -45,6 +45,12 @@ fn main() -> ExitCode {
     if args.first().is_some_and(|arg| arg == "--watch-apply-saved") {
         return watch_apply_saved(&args);
     }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "--watch-apply-stepped")
+    {
+        return step_apply(&args);
+    }
     // A decrypted journal is the full pathname history of everything the
     // tools ever moved. That answers only to a person at a terminal, for the
     // same reason stash's --paths does: the reach of the read is the whole
@@ -106,9 +112,9 @@ fn main() -> ExitCode {
     }
 }
 
-/// Observe undo progress, confirm the process is stopped, then reload the
-/// journal to witness a durable partial state. This is a
-/// stress-only diagnostic: it emits counts and never prints journal paths.
+/// Step an undo between confirmed stops until its journal, read only while
+/// the undo is stopped, records the target count of durable restores. This
+/// is a stress-only diagnostic: it emits counts and never prints journal paths.
 fn watch_undo(args: &[String]) -> ExitCode {
     if args.len() != 4 {
         eprintln!("usage: journal-dump --watch-undo <journal> <target> <pid>");
@@ -156,95 +162,76 @@ fn watch_undo(args: &[String]) -> ExitCode {
     // The larger late fixture can take over ten seconds on a loaded host.
     // Bound observation without confusing slow progress with a tool failure.
     let deadline = started + Duration::from_secs(30);
+    // Pause, then read. A journal load refuses a file that changes while it
+    // is read, and a running undo appends a record per restored file. Reading
+    // a running undo therefore races its writes: on a CI host, every read of
+    // the 2000-file fixture overlapped an append, and the undo finished
+    // unobserved.
+    // So the undo runs only in short slices between confirmed stops, and the
+    // journal is read only while the undo is stopped. Each slice is short
+    // against the work left after the target (see `Slices`), so the undo
+    // cannot pass the target and finish unobserved.
+    let mut slices = Slices::new();
     let mut first_progress = false;
+    let mut stops = 0u64;
     while Instant::now() < deadline {
-        let Some(state) = process_state(pid) else {
+        let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
             eprintln!(
-                "journal-dump: elapsed_us={} undo exited; interruption unproven",
+                "journal-dump: elapsed_us={} undo exited or did not stop; interruption unproven",
                 started.elapsed().as_micros()
             );
             return ExitCode::from(1);
         };
-        if state.contains('Z') {
-            eprintln!(
-                "journal-dump: elapsed_us={} undo exited (zombie); interruption unproven",
-                started.elapsed().as_micros()
-            );
-            return ExitCode::from(1);
-        }
-        let reload_started = Instant::now();
-        let observed = etude_core::Journal::load_sealed_exact(tool, id, &sealer);
-        eprintln!(
-            "journal-dump: elapsed_us={} reload_us={}",
-            started.elapsed().as_micros(),
-            reload_started.elapsed().as_micros()
-        );
-        let Ok(observed) = observed else {
-            std::thread::sleep(Duration::from_millis(1));
+        slices.stopped();
+        stops += 1;
+        let paused = etude_core::Journal::load_sealed_exact(tool, id, &sealer);
+        // A stop inside a journal write leaves a torn tail or a file that is
+        // mid-change. Dropping the guard resumes the undo for another slice.
+        let Ok(paused) = paused else {
+            slices.run(stopped, None, target);
             continue;
         };
-        let reversed = observed
+        if paused.progress_tail_damaged {
+            slices.run(stopped, None, target);
+            continue;
+        }
+        let reversed = paused
             .entries
             .iter()
             .filter(|entry| entry.state == etude_core::journal::EntryState::Reversed)
             .count();
+        let moved = paused
+            .entries
+            .iter()
+            .filter(|entry| entry.is_moved())
+            .count();
         if reversed > 0 && !first_progress {
             eprintln!(
-                "journal-dump: elapsed_us={} first_progress={reversed}/{}",
+                "journal-dump: elapsed_us={} stops={stops} first_progress={reversed}/{}",
                 started.elapsed().as_micros(),
-                observed.entries.len()
+                paused.entries.len()
             );
             first_progress = true;
         }
-        if reversed == observed.entries.len() {
+        if reversed == paused.entries.len() || (reversed > 0 && moved == 0) {
             eprintln!("journal-dump: undo already fully reversed; interruption unproven");
             return ExitCode::from(1);
         }
-        if reversed >= target && reversed > 0 {
-            let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
-                continue;
-            };
-            let reload_started = Instant::now();
-            let paused = etude_core::Journal::load_sealed_exact(tool, id, &sealer);
+        if reversed >= target && reversed > 0 && moved > 0 {
             eprintln!(
-                "journal-dump: elapsed_us={} stopped_reload_us={} pre_stop_count={reversed}",
+                "journal-dump: elapsed_us={} stops={stops} confirmed_stopped_count={reversed}/{}",
                 started.elapsed().as_micros(),
-                reload_started.elapsed().as_micros()
+                paused.entries.len()
             );
-            let Ok(paused) = paused else {
-                // Drop resumes a child stopped inside a journal write.
-                continue;
-            };
-            if paused.progress_tail_damaged {
-                continue;
-            }
-            let reversed = paused
-                .entries
-                .iter()
-                .filter(|entry| entry.state == etude_core::journal::EntryState::Reversed)
-                .count();
-            let moved = paused
-                .entries
-                .iter()
-                .filter(|entry| entry.is_moved())
-                .count();
-            if reversed >= target && reversed > 0 && moved > 0 {
-                eprintln!(
-                    "journal-dump: elapsed_us={} confirmed_stopped_count={reversed}/{}",
-                    started.elapsed().as_micros(),
-                    paused.entries.len()
-                );
-                stopped.resume_on_drop = false;
-                println!("{reversed} {}", paused.entries.len());
-                return ExitCode::SUCCESS;
-            }
-            eprintln!("journal-dump: no real partial undo while stopped; interruption unproven");
-            return ExitCode::from(1);
+            // The caller owns resume and termination from this point.
+            stopped.resume_on_drop = false;
+            println!("{reversed} {}", paused.entries.len());
+            return ExitCode::SUCCESS;
         }
-        std::thread::sleep(Duration::from_millis(1));
+        slices.run(stopped, Some(reversed), target);
     }
     eprintln!(
-        "journal-dump: elapsed_us={} no stopped partial undo before deadline; interruption unproven",
+        "journal-dump: elapsed_us={} stops={stops} no stopped partial undo before deadline; interruption unproven",
         started.elapsed().as_micros()
     );
     ExitCode::from(1)
@@ -358,6 +345,111 @@ fn watch_apply(args: &[String]) -> ExitCode {
     ExitCode::from(1)
 }
 
+/// Stop an apply once its journal records at least `moves` moves and at
+/// least one entry is still planned with its source in place. The journal is
+/// read only while the apply is confirmed stopped: a load refuses a file that
+/// changes during the read, and a running apply appends a record per move.
+/// Between stops the apply runs for a slice that is short against the work
+/// left (see `Slices`), so it cannot finish unobserved. Success leaves the apply stopped for the caller and prints
+/// `<moved> <total>`. Every miss resumes it and exits 1.
+fn step_apply(args: &[String]) -> ExitCode {
+    use etude_core::journal::EntryState;
+    if args.len() != 5 {
+        eprintln!("usage: journal-dump --watch-apply-stepped <state-dir> <root> <pid> <moves>");
+        return ExitCode::from(2);
+    }
+    let Ok(pid) = args[3].parse::<i32>() else {
+        return ExitCode::from(2);
+    };
+    let Ok(moves) = args[4].parse::<usize>() else {
+        return ExitCode::from(2);
+    };
+    if pid <= 0 || moves == 0 {
+        return ExitCode::from(2);
+    }
+    let state_dir = Path::new(&args[1]);
+    let Ok(root) = std::fs::canonicalize(&args[2]) else {
+        eprintln!("journal-dump: trial root unavailable; injection unproven");
+        return ExitCode::from(1);
+    };
+    unsafe { std::env::set_var("ETUDE_STATE_DIR", state_dir) };
+    let Ok(key) = etude_keep::key() else {
+        eprintln!("journal-dump: apply journal key unavailable; injection unproven");
+        return ExitCode::from(1);
+    };
+    let sealer = KeychainSeal { key };
+    let journal_ids = || -> Vec<String> {
+        std::fs::read_dir(state_dir)
+            .map(|files| {
+                files
+                    .flatten()
+                    .filter_map(|file| {
+                        file.file_name()
+                            .to_str()
+                            .and_then(|s| s.strip_prefix("sweep-"))
+                            .and_then(|s| s.strip_suffix(".journal"))
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // Records already there belong to earlier runs, not to this apply.
+    let earlier = journal_ids();
+    let mut slices = Slices::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut stops = 0u64;
+    while Instant::now() < deadline {
+        let Some(mut stopped) = StoppedProcess::stop(pid, deadline) else {
+            eprintln!("journal-dump: apply exited or did not stop; injection unproven");
+            return ExitCode::from(1);
+        };
+        slices.stopped();
+        stops += 1;
+        let mut progress = None;
+        let ids: Vec<String> = journal_ids()
+            .into_iter()
+            .filter(|id| !earlier.contains(id))
+            .collect();
+        for id in &ids {
+            let Ok(paused) = etude_core::Journal::load_sealed_exact("sweep", id, &sealer) else {
+                continue;
+            };
+            if paused.root != root || paused.progress_tail_damaged {
+                continue;
+            }
+            let moved = paused.entries.iter().filter(|e| e.is_moved()).count();
+            if moved < moves {
+                progress = Some(moved);
+                continue;
+            }
+            let pending = paused
+                .entries
+                .iter()
+                .any(|e| e.state == EntryState::Planned && e.from.is_file() && !e.to.exists());
+            if !pending {
+                eprintln!(
+                    "journal-dump: apply had no pending entry when stopped ({moved} moved); injection unproven"
+                );
+                return ExitCode::from(1);
+            }
+            eprintln!(
+                "journal-dump: stops={stops} confirmed_stopped_moves={moved}/{}",
+                paused.entries.len()
+            );
+            // The caller owns resume and termination from this point.
+            stopped.resume_on_drop = false;
+            println!("{moved} {}", paused.entries.len());
+            return ExitCode::SUCCESS;
+        }
+        slices.run(stopped, progress, moves);
+    }
+    eprintln!(
+        "journal-dump: stops={stops} no stopped apply with {moves} moves before deadline; injection unproven"
+    );
+    ExitCode::from(1)
+}
+
 /// Stop an apply after its journal is saved and before its first move, for a
 /// contender to act in that window. The journal file appears only when its
 /// bytes are complete (written to a temp name, then renamed), and the save
@@ -454,6 +546,86 @@ fn watch_apply_saved(args: &[String]) -> ExitCode {
     ExitCode::from(1)
 }
 
+/// How long a stepped process runs between two confirmed stops. Before the
+/// first progress the slice doubles from 1 ms to at most 8 ms. After it, the
+/// slice is half the time the measured rate needs to reach the target, from
+/// 1 ms to 50 ms. A fixed 1 ms slice spent most of the deadline on stopped
+/// journal reads when the host was loaded. Half the time to the target stops
+/// the process near the target, far from the end of its work.
+struct Slices {
+    ran: Duration,
+    next: Duration,
+    resumed: Option<Instant>,
+}
+
+impl Slices {
+    fn new() -> Self {
+        Self {
+            ran: Duration::ZERO,
+            next: Duration::from_millis(1),
+            resumed: None,
+        }
+    }
+
+    /// Count the time since the last resume as run time.
+    fn stopped(&mut self) {
+        if let Some(resumed) = self.resumed.take() {
+            self.ran += resumed.elapsed();
+        }
+    }
+
+    /// Resume the stopped process for one slice. `done` is the progress seen
+    /// in this stop, or `None` when the journal could not be read.
+    fn run(&mut self, stopped: StoppedProcess, done: Option<usize>, target: usize) {
+        const MIN: Duration = Duration::from_millis(1);
+        match done {
+            Some(done) if done > 0 => {
+                let per_item = self.ran / u32::try_from(done).unwrap_or(u32::MAX);
+                let left = u32::try_from(target.saturating_sub(done)).unwrap_or(u32::MAX);
+                self.next = (per_item * left / 2).clamp(MIN, Duration::from_millis(50));
+            }
+            Some(_) => self.next = (self.next * 2).min(Duration::from_millis(8)),
+            None => self.next = MIN,
+        }
+        drop(stopped);
+        self.resumed = Some(Instant::now());
+        std::thread::sleep(self.next);
+    }
+}
+
+/// The process state as ps(1) prints its first letter: R, S, T or Z.
+/// On macOS this asks the kernel with proc_pidinfo(2). Starting ps takes
+/// milliseconds, and a stepped undo confirms thousands of stops.
+#[cfg(target_os = "macos")]
+fn process_state(pid: i32) -> Option<String> {
+    // struct proc_bsdinfo is 136 bytes; pbi_status (p_stat) is at offset 4.
+    const PROC_PIDTBSDINFO: i32 = 3;
+    const SIZE: i32 = 136;
+    let mut info = [0u8; SIZE as usize];
+    // SAFETY: the buffer is exactly the size the flavor writes.
+    let written = unsafe { proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, info.as_mut_ptr(), SIZE) };
+    if written != SIZE {
+        return None;
+    }
+    let status = u32::from_le_bytes(info[4..8].try_into().ok()?);
+    // p_stat: SIDL 1, SRUN 2, SSLEEP 3, SSTOP 4, SZOMB 5.
+    Some(
+        match status {
+            2 => "R",
+            4 => "T",
+            5 => "Z",
+            _ => "S",
+        }
+        .to_string(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut u8, size: i32) -> i32;
+}
+
+#[cfg(not(target_os = "macos"))]
 fn process_state(pid: i32) -> Option<String> {
     let output = std::process::Command::new("ps")
         .args(["-o", "state=", "-p", &pid.to_string()])

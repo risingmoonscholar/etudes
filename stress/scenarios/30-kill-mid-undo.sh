@@ -33,9 +33,11 @@ for i in range(1, n + 1):
 PY_TREE
 }
 
-# The journal durably records each restored entry. The dev-only watcher reads
-# that record stream, confirms SIGSTOP, then reloads before reporting a real
-# partial state. A stale observation is an unproven attempt, never a pass.
+# The journal durably records each restored entry. The dev-only watcher stops
+# the undo first and reads the journal only while the undo is confirmed
+# stopped, then lets it run for about a millisecond and stops it again. A read
+# of a running undo races its appends and fails, so the watcher never reads
+# one. An undo that finishes first is an unproven attempt, never a pass.
 wait_for_partial() {
   local target="$1" pid="$2" journal dump
   dump="$(dirname "$SWEEP")/journal-dump"
@@ -74,10 +76,17 @@ for percent in $PERCENTAGES; do
     fi
 
     target=$((TOTAL * percent / 100))
-    "$SWEEP" undo >"$W/undo.out" 2>"$W/undo.err" &
-    pid=$!
     if [ "$CONTROL" = --control-late ]; then
+      # Force the late interleaving: the undo finishes before the watcher.
+      "$SWEEP" undo >"$W/undo.out" 2>"$W/undo.err" &
+      pid=$!
       wait "$pid" 2>/dev/null || true
+    else
+      # Start the undo stopped, before its first restore. The shell stops
+      # itself and the watcher's first resume lets it exec the undo, so no
+      # restore happens before the watcher can see it.
+      sh -c 'kill -STOP $$; exec "$0" undo' "$SWEEP" >"$W/undo.out" 2>"$W/undo.err" &
+      pid=$!
     fi
     if witness=$(wait_for_partial "$target" "$pid" 2>"$W/watch.err"); then
       cat "$W/watch.err" >&2
